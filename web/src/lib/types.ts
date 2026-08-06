@@ -35,9 +35,19 @@ export interface CreateNotePayload {
   url?: string
 }
 
+export interface AskReference {
+  index: number
+  note_id: string
+}
+
+export interface AskHistoryMessage {
+  role: "user" | "assistant"
+  content: string
+}
+
 export interface AskResponse {
   answer: string
-  note_ids: string[]
+  references?: AskReference[]
   notes: Note[]
 }
 

@@ -10,9 +10,10 @@ export interface IngestResponse {
 }
 
 export interface AskResponse {
-  ok: boolean
+  /** 后端 /api/ask 成功响应不带 ok 字段，缺省视为成功 */
+  ok?: boolean
   answer?: string
-  note_ids?: string[]
+  references?: { index: number; note_id: string }[]
   error?: string
 }
 
