@@ -1,0 +1,9 @@
+/var/log/suinian-bridge/bridge.log {
+    weekly
+    rotate 8
+    size 20M
+    compress
+    missingok
+    notifempty
+    copytruncate
+}

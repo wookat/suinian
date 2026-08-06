@@ -17,14 +17,14 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@wechatbot/wechatbot": "^2.2.0",
-    "qrcode-terminal": "^0.12.0"
+    "@wechatbot/wechatbot": "2.2.0",
+    "qrcode-terminal": "0.12.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
-    "@types/qrcode-terminal": "^0.12.2",
-    "tsx": "^4.19.0",
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "@types/node": "22.20.1",
+    "@types/qrcode-terminal": "0.12.2",
+    "tsx": "4.23.8",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
   }
 }
