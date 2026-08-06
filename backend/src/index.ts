@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
 import { triageNote, loadTopTags, FALLBACK_TRIAGE } from "./triage";
-import { extractUrl, fetchLinkMeta } from "./linkmeta";
+import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
+import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { clusterNote, refreshThreads } from "./threads";
 import { generateWeeklyReport, generateAllWeeklyReports } from "./reports";
@@ -16,6 +17,18 @@ app.onError((err, c) => {
   console.error("unhandled error:", err);
   return c.json({ error: "internal error" }, 500);
 });
+
+app.notFound((c) => c.json({ error: "not found" }, 404));
+
+const MAX_CONTENT_CHARS = 20_000;
+
+function contentTooLong(c: { json: (o: object, s: 413) => Response }, content: string): Response | null {
+  if (content.length <= MAX_CONTENT_CHARS) return null;
+  return c.json(
+    { error: `内容过长：最多 ${MAX_CONTENT_CHARS} 字符，当前 ${content.length} 字符。请拆成多条或精简后再发。` },
+    413
+  );
+}
 
 app.get("/", (c) => c.json({ name: "suinian-api", status: "ok" }));
 app.get("/health", (c) => c.json({ ok: true }));
@@ -34,7 +47,27 @@ app.use("/api/*", async (c, next) => {
 });
 
 function noteToJson(n: NoteRow) {
-  return { ...n, tags: JSON.parse(n.tags || "[]") as string[], is_sensitive: !!n.is_sensitive, todo_done: !!n.todo_done };
+  return {
+    ...n,
+    tags: JSON.parse(n.tags || "[]") as string[],
+    url_titles: n.url_titles ? (JSON.parse(n.url_titles) as { url: string; title: string | null }[]) : null,
+    is_sensitive: !!n.is_sensitive,
+    todo_done: !!n.todo_done,
+    content_enc: undefined,
+  };
+}
+
+/** Decrypt an encrypted sensitive note's content for an authorized response; never throws. */
+async function decryptNoteRow(env: Env, n: NoteRow): Promise<NoteRow> {
+  if (n.is_sensitive && n.content_enc && env.SUINIAN_ENC_KEY) {
+    const plain = await decryptContent(env.SUINIAN_ENC_KEY, n.content_enc);
+    if (plain !== null) return { ...n, content: plain };
+  }
+  return n;
+}
+
+async function noteToJsonDecrypted(env: Env, n: NoteRow) {
+  return noteToJson(await decryptNoteRow(env, n));
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -44,28 +77,36 @@ const CATEGORY_LABEL: Record<string, string> = {
   data: "资料",
 };
 
-async function applyTriage(env: Env, noteId: string, triage: TriageResult): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE notes SET category = ?, tags = ?, title = ?, is_sensitive = ?, todo_due = ?, updated_at = datetime('now') WHERE id = ?`
-  )
-    .bind(
-      triage.category,
-      JSON.stringify(triage.tags),
-      triage.title || null,
-      triage.is_sensitive ? 1 : 0,
-      triage.todo_due ?? null,
-      noteId
-    )
+async function applyTriage(env: Env, noteId: string, triage: TriageResult, content: string): Promise<void> {
+  const sets = ["category = ?", "tags = ?", "title = ?", "is_sensitive = ?", "todo_due = ?"];
+  const binds: unknown[] = [
+    triage.category,
+    JSON.stringify(triage.tags),
+    triage.title || null,
+    triage.is_sensitive ? 1 : 0,
+    triage.todo_due ?? null,
+  ];
+  if (triage.is_sensitive && env.SUINIAN_ENC_KEY) {
+    // encrypt-at-rest: ciphertext into content_enc, plaintext replaced by a placeholder
+    const enc = await encryptContent(env.SUINIAN_ENC_KEY, content);
+    sets.push("content = ?", "content_enc = ?");
+    binds.push(ENC_PLACEHOLDER, enc);
+  }
+  await env.DB.prepare(`UPDATE notes SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?`)
+    .bind(...binds, noteId)
     .run();
 }
 
-async function fetchLinkMetaInto(env: Env, noteId: string, url: string): Promise<void> {
-  const meta = await fetchLinkMeta(url);
-  if (meta.title || meta.description) {
+async function fetchLinkMetaInto(env: Env, noteId: string, urls: string[]): Promise<void> {
+  if (urls.length === 0) return;
+  const metas = await Promise.all(urls.map((u) => fetchLinkMeta(u)));
+  const first = metas[0];
+  const urlTitles = urls.map((u, i) => ({ url: u, title: metas[i].title }));
+  if (first.title || first.description || urlTitles.some((t) => t.title)) {
     await env.DB.prepare(
-      "UPDATE notes SET url_title = ?, url_summary = ?, updated_at = datetime('now') WHERE id = ?"
+      "UPDATE notes SET url_title = ?, url_summary = ?, url_titles = ?, updated_at = datetime('now') WHERE id = ?"
     )
-      .bind(meta.title, meta.description, noteId)
+      .bind(first.title, first.description, JSON.stringify(urlTitles), noteId)
       .run();
   }
 }
@@ -80,6 +121,7 @@ async function createNote(
   const id = crypto.randomUUID();
   const content = (body.content ?? "").trim();
   const url = body.url || extractUrl(content);
+  const urls = body.url && !content.includes(body.url) ? [body.url, ...extractUrls(content, 2)] : extractUrls(content, 3);
   const source = body.source || "api";
   const rawType = body.raw_type || (url && content === url ? "link" : "text");
 
@@ -97,12 +139,12 @@ async function createNote(
       const topTags = await loadTopTags(c.env.DB, userId).catch(() => [] as string[]);
       triage = await triageNote(content, c.env, topTags);
     }
-    await applyTriage(c.env, id, triage);
+    await applyTriage(c.env, id, triage, content);
     return triage;
   };
 
   // link metadata always in background
-  if (url) waitUntil(fetchLinkMetaInto(c.env, id, url));
+  if (urls.length > 0) waitUntil(fetchLinkMetaInto(c.env, id, urls));
 
   let triage: TriageResult | null = null;
   if (opts.syncTriage) {
@@ -131,6 +173,8 @@ async function createNote(
 app.post("/api/notes", async (c) => {
   const body = await c.req.json<{ source?: string; raw_type?: string; content?: string; url?: string }>().catch(() => null);
   if (!body || !(body.content ?? "").trim()) return c.json({ error: "content required" }, 400);
+  const tooLong = contentTooLong(c, body.content ?? "");
+  if (tooLong) return tooLong;
   // returns immediately; triage + link fetch + clustering backfill asynchronously
   const { note } = await createNote(c, c.get("userId"), body, (p) => c.executionCtx.waitUntil(p), { syncTriage: false });
   return c.json({ note: noteToJson(note) }, 201);
@@ -171,7 +215,8 @@ app.get("/api/notes", async (c) => {
   const hasMore = rows.length > limit;
   const page = rows.slice(0, limit);
   const next = hasMore && page.length > 0 ? encodeCursor(page[page.length - 1].created_at, page[page.length - 1].id) : null;
-  return c.json({ notes: page.map(noteToJson), next_cursor: next });
+  const notes = await Promise.all(page.map((n) => noteToJsonDecrypted(c.env, n)));
+  return c.json({ notes, next_cursor: next });
 });
 
 // ---- PATCH /api/notes/:id ----
@@ -181,11 +226,23 @@ app.patch("/api/notes/:id", async (c) => {
   const body = await c.req.json<Record<string, unknown>>().catch(() => null);
   if (!body) return c.json({ error: "invalid body" }, 400);
 
+  const existing = await c.env.DB.prepare("SELECT is_sensitive FROM notes WHERE id = ? AND user_id = ?")
+    .bind(id, userId)
+    .first<{ is_sensitive: number }>();
+  if (!existing) return c.json({ error: "not found" }, 404);
+
   const sets: string[] = [];
   const binds: unknown[] = [];
   if (typeof body.content === "string") {
-    sets.push("content = ?");
-    binds.push(body.content);
+    const tooLong = contentTooLong(c, body.content);
+    if (tooLong) return tooLong;
+    if (existing.is_sensitive && c.env.SUINIAN_ENC_KEY) {
+      sets.push("content = ?", "content_enc = ?");
+      binds.push(ENC_PLACEHOLDER, await encryptContent(c.env.SUINIAN_ENC_KEY, body.content));
+    } else {
+      sets.push("content = ?");
+      binds.push(body.content);
+    }
   }
   if (typeof body.todo_done === "boolean") {
     sets.push("todo_done = ?");
@@ -215,7 +272,7 @@ app.patch("/api/notes/:id", async (c) => {
     .run();
   if (!res.meta.changes) return c.json({ error: "not found" }, 404);
   const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
-  return c.json({ note: noteToJson(note!) });
+  return c.json({ note: await noteToJsonDecrypted(c.env, note!) });
 });
 
 // ---- DELETE /api/notes/:id ----
@@ -242,6 +299,8 @@ app.delete("/api/notes/:id", async (c) => {
 app.post("/api/ingest/wechat", async (c) => {
   const body = await c.req.json<{ content?: string; url?: string; raw_type?: string }>().catch(() => null);
   if (!body || !(body.content ?? "").trim()) return c.json({ error: "content required" }, 400);
+  const tooLong = contentTooLong(c, body.content ?? "");
+  if (tooLong) return tooLong;
   // wechat needs the category/tags in its confirmation text -> triage stays synchronous
   const { note, triage: triageResult } = await createNote(
     c,
@@ -254,7 +313,7 @@ app.post("/api/ingest/wechat", async (c) => {
   const label = CATEGORY_LABEL[triage.category] ?? triage.category;
   const tagStr = triage.tags.map((t) => `#${t}`).join(" ");
   const reply = `已存 · ${label}${tagStr ? " " + tagStr : ""}`;
-  return c.json({ note: noteToJson(note), reply }, 201);
+  return c.json({ note: await noteToJsonDecrypted(c.env, note), reply }, 201);
 });
 
 // ---- POST /api/ask ----
@@ -361,7 +420,8 @@ app.get("/api/threads/:id", async (c) => {
   )
     .bind(thread.id, userId)
     .all<NoteRow>();
-  return c.json({ thread, notes: (results ?? []).map(noteToJson) });
+  const notes = await Promise.all((results ?? []).map((n) => noteToJsonDecrypted(c.env, n)));
+  return c.json({ thread, notes });
 });
 
 // ---- GET /api/reports ----
@@ -400,7 +460,7 @@ app.get("/api/export", async (c) => {
     c.env.DB.prepare("SELECT * FROM threads WHERE user_id = ? ORDER BY updated_at DESC").bind(userId).all<ThreadRow>(),
     c.env.DB.prepare("SELECT * FROM weekly_reports WHERE user_id = ? ORDER BY week_start DESC").bind(userId).all<WeeklyReportRow>(),
   ]);
-  const notes = (notesR.results ?? []).map(noteToJson);
+  const notes = await Promise.all((notesR.results ?? []).map((n) => noteToJsonDecrypted(c.env, n)));
   const threads = threadsR.results ?? [];
   const reports = reportsR.results ?? [];
 

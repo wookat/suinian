@@ -3,6 +3,7 @@ export type Env = {
   AI?: Ai;
   DEEPSEEK_API_KEY: string;
   DEEPSEEK_BASE_URL: string;
+  SUINIAN_ENC_KEY?: string;
 };
 
 export interface ThreadRow {
@@ -41,11 +42,13 @@ export interface NoteRow {
   url: string | null;
   url_title: string | null;
   url_summary: string | null;
+  url_titles: string | null;
   category: Category | null;
   tags: string;
   title: string | null;
   thread_id: string | null;
   is_sensitive: number;
+  content_enc: string | null;
   todo_due: string | null;
   todo_done: number;
   created_at: string;

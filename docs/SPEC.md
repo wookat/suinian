@@ -21,6 +21,7 @@ notes(
   raw_type TEXT,                             -- text|link|image|voice|file
   content TEXT,                              -- 原文/转写文本
   url TEXT, url_title TEXT, url_summary TEXT,
+  url_titles TEXT NULL,                      -- 前 3 个 URL 的标题，JSON [{url,title}]
   category TEXT,                             -- idea|todo|collect|data (AI 分拣)
   tags TEXT,                                 -- JSON array
   thread_id TEXT NULL,                       -- 线索归属
@@ -72,7 +73,8 @@ note_embeddings(note_id, vector)  -- 聚类 embedding（JSON 数组）
 
 ## 安全
 - 单用户 token（R1）→ 多用户注册（R3）
-- 敏感 note：客户端标记或 AI 判定 → AES-GCM（密钥 = 用户口令派生，服务端不存明文）
+- 敏感 note：客户端标记或 AI 判定 → AES-256-GCM 加密存 content_enc，content 字段只存占位符 `[加密内容]`；密钥为 worker secret `SUINIAN_ENC_KEY`（不落仓库）；API 层对已授权 token 透明解密返回原文；敏感内容不进 AI prompt（周报/问答召回只见占位符）
+- 内容长度上限 20k 字符（POST /api/notes、ingest、PATCH），超出返回 413 + 人话错误
 - 不记录秘钥到日志；开源仓库不含任何真实凭据
 
 ## 轮次划分
