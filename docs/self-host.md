@@ -5,7 +5,7 @@
 ## 前置条件
 
 - [Cloudflare 账号](https://dash.cloudflare.com/)（免费版即可：Workers / D1 / Pages / Workers AI 免费额度足够个人使用）
-- [DeepSeek API Key](https://platform.deepseek.com/)（分拣/摘要/周报/问答用，按量付费，个人用量极低）
+- AI 供给（二选一）：直接用 Cloudflare Workers AI（推荐，无需额外账号），或 [DeepSeek API Key](https://platform.deepseek.com/) / 任意 OpenAI 兼容 API（按量付费，个人用量极低）
 - Node.js ≥ 20 与 npm
 - `git clone https://github.com/wookat/suinian.git`
 
@@ -44,10 +44,26 @@ npx wrangler d1 migrations apply suinian --remote
 
 ### 1.3 设置密钥
 
-```bash
-# DeepSeek API Key
-npx wrangler secret put DEEPSEEK_API_KEY
+AI 供给二选一：
 
+- **Workers AI（推荐，零外部依赖）**：不需要任何外部 key，设置模型即可：
+
+```bash
+printf 'workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast' | npx wrangler secret put AI_MODEL
+```
+
+- **DeepSeek / 任意 OpenAI 兼容 API**：
+
+```bash
+npx wrangler secret put DEEPSEEK_API_KEY
+# 可选：换模型/换 base url（默认 deepseek-chat @ https://api.deepseek.com）
+# printf 'your-model' | npx wrangler secret put AI_MODEL
+# printf 'https://your-provider.com/v1' | npx wrangler secret put AI_BASE_URL
+```
+
+其余密钥：
+
+```bash
 # 敏感内容加密密钥（32 随机字节 base64）。生成后务必备份——丢失将无法解密存量敏感笔记
 openssl rand -base64 32 | npx wrangler secret put SUINIAN_ENC_KEY
 ```
@@ -107,4 +123,5 @@ Docker / systemd 生产部署方式同样见 [skill/README.md](../skill/README.m
 - **周报没生成？** cron 在每周一 08:00（Asia/Shanghai）跑；可 `POST /api/reports/generate` 手动触发验证。
 - **线索没聚出来？** 聚类只对 `idea` 类笔记生效，需要至少两条相近主题的想法；可 `POST /api/threads/rebuild` 全量重建。
 - **Workers AI 不可用？** 聚类会自动降级为 DeepSeek 判断，功能不受影响。
-- **费用？** Cloudflare 免费额度 + DeepSeek 按量（个人每月通常 <1 美元）。
+- **费用？** Cloudflare 免费额度即可跑通；外接 DeepSeek 按量（个人每月通常 <1 美元）。
+- **AI 分拣失败？** 笔记会保持「分拣中」，每 10 分钟由 cron 自动补拣，无需手动处理。
