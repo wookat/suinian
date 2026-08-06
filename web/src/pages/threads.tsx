@@ -1,11 +1,22 @@
 import { useCallback, useEffect, useState } from "react"
-import { GitBranch, Loader2, ChevronLeft, RefreshCw } from "lucide-react"
+import { GitBranch, ChevronLeft, RefreshCw } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { NoteCard } from "@/components/note-card"
+import { NoteListSkeleton } from "@/components/ui/skeleton"
+import { EmptyState } from "@/components/empty-state"
 import { getThreads, getThread } from "@/lib/api"
 import { formatTime } from "@/lib/utils"
 import type { Thread, ThreadDetail } from "@/lib/types"
+
+function timelineDate(iso: string): string {
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, "0")
+  const date = `${pad(d.getMonth() + 1)}月${pad(d.getDate())}日`
+  return d.getFullYear() === new Date().getFullYear()
+    ? date
+    : `${d.getFullYear()}年${date}`
+}
 
 export function ThreadsPage() {
   const [threads, setThreads] = useState<Thread[]>([])
@@ -63,9 +74,7 @@ export function ThreadsPage() {
           <ChevronLeft className="size-4" /> 返回线索列表
         </Button>
         {detailLoading ? (
-          <div className="flex justify-center py-10 text-muted-foreground">
-            <Loader2 className="size-5 animate-spin" />
-          </div>
+          <NoteListSkeleton />
         ) : detailError ? (
           <Card className="flex flex-col items-center gap-3 p-8 text-center">
             <p className="text-sm text-destructive">{detailError}</p>
@@ -91,12 +100,23 @@ export function ThreadsPage() {
                 </p>
               </Card>
               <div className="relative space-y-3 pl-4 before:absolute before:inset-y-2 before:left-1 before:w-px before:bg-border">
-                {detail.notes.map((n) => (
-                  <div key={n.id} className="relative">
-                    <span className="absolute -left-[13.5px] top-5 size-2 rounded-full bg-primary/60" />
-                    <NoteCard note={n} />
-                  </div>
-                ))}
+                {detail.notes.map((n, i) => {
+                  const date = timelineDate(n.created_at)
+                  const prev = i > 0 ? timelineDate(detail.notes[i - 1].created_at) : null
+                  const showDate = date !== prev
+                  return (
+                    <div key={n.id} className="relative">
+                      {showDate && (
+                        <p className="relative mb-1.5 pt-1 text-xs font-medium text-muted-foreground">
+                          <span className="absolute -left-[13.5px] top-2 size-2 rounded-full bg-border" />
+                          {date}
+                        </p>
+                      )}
+                      <span className="absolute -left-[13.5px] top-5 size-2 rounded-full bg-primary/60" />
+                      <NoteCard note={n} />
+                    </div>
+                  )
+                })}
                 {detail.notes.length === 0 && (
                   <p className="py-4 text-sm text-muted-foreground">该线索还没有碎片</p>
                 )}
@@ -108,12 +128,7 @@ export function ThreadsPage() {
     )
   }
 
-  if (loading)
-    return (
-      <div className="flex justify-center py-10 text-muted-foreground">
-        <Loader2 className="size-5 animate-spin" />
-      </div>
-    )
+  if (loading) return <NoteListSkeleton />
 
   if (error)
     return (
@@ -127,13 +142,15 @@ export function ThreadsPage() {
 
   if (threads.length === 0)
     return (
-      <Card className="flex flex-col items-center gap-3 p-10 text-center">
-        <GitBranch className="size-8 text-muted-foreground" />
-        <h2 className="text-base font-medium">思考线索</h2>
-        <p className="max-w-sm text-sm text-muted-foreground">
-          AI 会把分散数周的同题想法碎片自动串成线索。持续记录，线索会自然浮现。
-        </p>
-      </Card>
+      <EmptyState
+        icon={GitBranch}
+        title="线索还在酦酿"
+        description="AI 会把分散数周的同题想法碎片自动串成线索。持续记录，线索会自然浮现。"
+        actionLabel="去首页记点想法"
+        onAction={() => {
+          window.location.hash = "#/"
+        }}
+      />
     )
 
   return (

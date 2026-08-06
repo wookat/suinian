@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Search, Sparkles, X, Loader2, Info, RefreshCw, Plus } from "lucide-react"
+import { Search, Sparkles, X, Loader2, Info, RefreshCw, Plus, PenLine, SearchX } from "lucide-react"
+import { NoteListSkeleton } from "@/components/ui/skeleton"
+import { EmptyState } from "@/components/empty-state"
 import { QuickInput } from "@/components/quick-input"
 import { NoteCard } from "@/components/note-card"
 import { Input } from "@/components/ui/input"
@@ -56,6 +58,7 @@ export function TimelinePage() {
   const [askError, setAskError] = useState<string | null>(null)
   const [askResult, setAskResult] = useState<AskResponse | null>(null)
   const [tagsExpanded, setTagsExpanded] = useState(false)
+  const [newIds, setNewIds] = useState<Set<string>>(() => new Set())
   const abortRef = useRef<AbortController | null>(null)
   const pollersRef = useRef<Map<string, number>>(new Map())
   const quickInputRef = useRef<HTMLDivElement>(null)
@@ -95,6 +98,21 @@ export function TimelinePage() {
   }, [load])
 
   useEffect(() => {
+    const applyHashTag = () => {
+      const query = window.location.hash.split("?")[1]
+      if (!query) return
+      const t = new URLSearchParams(query).get("tag")
+      if (t) {
+        setTag(t)
+        history.replaceState(null, "", `${window.location.pathname}#/`)
+      }
+    }
+    applyHashTag()
+    window.addEventListener("hashchange", applyHashTag)
+    return () => window.removeEventListener("hashchange", applyHashTag)
+  }, [])
+
+  useEffect(() => {
     const pollers = pollersRef.current
     return () => {
       for (const t of pollers.values()) window.clearTimeout(t)
@@ -124,6 +142,7 @@ export function TimelinePage() {
 
   const handleCreated = useCallback(
     (note: Note) => {
+      setNewIds((ids) => new Set(ids).add(note.id))
       setNotes((ns) => [note, ...ns])
       if (note.category === null) pollTriage(note.id)
     },
@@ -343,9 +362,7 @@ export function TimelinePage() {
       )}
 
       {loading ? (
-        <div className="flex justify-center py-10 text-muted-foreground">
-          <Loader2 className="size-5 animate-spin" />
-        </div>
+        <NoteListSkeleton />
       ) : error ? (
         <Card className="flex flex-col items-center gap-3 p-8 text-center">
           {error.kind === "auth" ? (
@@ -382,11 +399,31 @@ export function TimelinePage() {
           )}
         </Card>
       ) : notes.length === 0 ? (
-        <p className="py-10 text-center text-sm text-muted-foreground">
-          {search || tag || category
-            ? "没有找到匹配的笔记，换个条件试试"
-            : "还没有笔记，在上面记一条吧"}
-        </p>
+        search || tag || category ? (
+          <EmptyState
+            icon={SearchX}
+            title="没有找到匹配的笔记"
+            description="换个关键词、标签或分类试试，或清除筛选条件查看全部碎念。"
+            actionLabel="清除筛选"
+            onAction={() => {
+              setCategory("")
+              setTag("")
+              setSearchInput("")
+              setSearch("")
+            }}
+          />
+        ) : (
+          <EmptyState
+            icon={PenLine}
+            title="还没有碎念"
+            description="想法、待办、链接、资料，想到什么就丢进来，AI 会帮你自动分拣整理。"
+            actionLabel="记下第一条"
+            onAction={() => {
+              quickInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+              quickInputRef.current?.querySelector("textarea")?.focus()
+            }}
+          />
+        )
       ) : (
         <div className="space-y-4">
           {grouped.map((g) => (
@@ -400,6 +437,10 @@ export function TimelinePage() {
                 {g.notes.map((n) => (
                   <NoteCard
                     key={n.id}
+                    className={cn(
+                      newIds.has(n.id) &&
+                        "animate-in fade-in slide-in-from-top-2 duration-300",
+                    )}
                     note={n}
                     onToggleTodo={(note) => void toggleTodo(note)}
                     onTagClick={setTag}

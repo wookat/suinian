@@ -1,17 +1,25 @@
 import { useState } from "react"
-import { Check, Loader2, CircleCheck, CircleAlert } from "lucide-react"
+import { Check, Loader2, CircleCheck, CircleAlert, Sun, Moon, Monitor } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { testConnection, type TestConnectionResult } from "@/lib/api"
 import { loadSettings, saveSettings } from "@/lib/settings"
+import { loadTheme, setTheme, type ThemeMode } from "@/lib/theme"
 import { cn } from "@/lib/utils"
+
+const THEME_OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
+  { value: "light", label: "浅色", icon: Sun },
+  { value: "dark", label: "深色", icon: Moon },
+  { value: "system", label: "跟随系统", icon: Monitor },
+]
 
 export function SettingsPage() {
   const [settings, setSettings] = useState(loadSettings())
   const [saved, setSaved] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null)
+  const [theme, setThemeState] = useState<ThemeMode>(loadTheme)
 
   function save() {
     saveSettings(settings)
@@ -68,7 +76,12 @@ export function SettingsPage() {
           </label>
           <Input
             id="api-base"
-            type="url"
+            type="text"
+            inputMode="url"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
             placeholder="https://suinian-api.example.workers.dev"
             value={settings.apiBaseUrl}
             onChange={(e) => setSettings((s) => ({ ...s, apiBaseUrl: e.target.value }))}
@@ -131,6 +144,34 @@ export function SettingsPage() {
             {testResult.message}
           </p>
         )}
+      </Card>
+
+      <Card className="p-4">
+        <h2 className="text-sm font-medium">外观</h2>
+        <p className="mt-1 text-xs text-muted-foreground">主题设置保存在本机浏览器</p>
+        <div className="mt-2 flex gap-1 rounded-lg bg-secondary p-1">
+          {THEME_OPTIONS.map((opt) => {
+            const Icon = opt.icon
+            return (
+              <button
+                key={opt.value}
+                onClick={() => {
+                  setTheme(opt.value)
+                  setThemeState(opt.value)
+                }}
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  theme === opt.value
+                    ? "bg-card shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Icon className="size-3.5" />
+                {opt.label}
+              </button>
+            )
+          })}
+        </div>
       </Card>
 
       <Card className="p-4">

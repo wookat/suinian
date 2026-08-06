@@ -13,6 +13,11 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
+/** 前后端一致的输入限制（对齐 backend MAX_CONTENT_CHARS） */
+object NotesViewLimits {
+    const val MAX_CONTENT_CHARS = 20_000
+}
+
 /** 布尔字段容错序列化器：同时接受 JSON true/false 与 0/1（历史 D1 整型形态） */
 object FlexibleBooleanSerializer : KSerializer<Boolean> {
     override val descriptor: SerialDescriptor =
@@ -42,6 +47,8 @@ data class Note(
     val url: String? = null,
     @SerialName("url_title") val urlTitle: String? = null,
     @SerialName("url_summary") val urlSummary: String? = null,
+    @SerialName("url_titles") val urlTitles: List<UrlTitle>? = null,
+    val title: String? = null,
     val category: String? = null,            // idea|todo|collect|data
     val tags: List<String> = emptyList(),
     @SerialName("thread_id") val threadId: String? = null,
@@ -54,6 +61,13 @@ data class Note(
     val todoDone: Boolean? = null,
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("updated_at") val updatedAt: String? = null,
+)
+
+/** 多链接卡：url_titles 数组元素 */
+@Serializable
+data class UrlTitle(
+    val url: String,
+    val title: String? = null,
 )
 
 /** POST /api/notes 请求体：{source, raw_type, content, url?} */
@@ -70,4 +84,54 @@ data class CreateNoteRequest(
 data class NotesPage(
     val notes: List<Note> = emptyList(),
     @kotlinx.serialization.json.JsonNames("next_cursor") val cursor: String? = null,
+)
+
+/** GET /api/threads 元素 */
+@Serializable
+data class Thread(
+    val id: String,
+    val title: String = "",
+    val summary: String? = null,
+    @SerialName("note_count") val noteCount: Int = 0,
+    @SerialName("updated_at") val updatedAt: String = "",
+)
+
+@Serializable
+data class ThreadsPage(val threads: List<Thread> = emptyList())
+
+/** GET /api/threads/:id */
+@Serializable
+data class ThreadDetail(
+    val thread: Thread,
+    val notes: List<Note> = emptyList(),
+)
+
+/** GET /api/reports 元素（列表只有摘要字段） */
+@Serializable
+data class ReportSummary(
+    val id: String,
+    @SerialName("week_start") val weekStart: String = "",
+    @SerialName("created_at") val createdAt: String = "",
+)
+
+@Serializable
+data class ReportsPage(val reports: List<ReportSummary> = emptyList())
+
+/** GET /api/reports/:id */
+@Serializable
+data class Report(
+    val id: String,
+    @SerialName("week_start") val weekStart: String = "",
+    @SerialName("content_md") val contentMd: String = "",
+    @SerialName("created_at") val createdAt: String = "",
+)
+
+@Serializable
+data class ReportDetail(val report: Report)
+
+/** POST /api/ask 响应 */
+@Serializable
+data class AskResponse(
+    val answer: String = "",
+    val references: List<String> = emptyList(),
 )

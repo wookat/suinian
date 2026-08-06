@@ -82,10 +82,10 @@ Query：`category=idea|todo|collect|data`、`tag=标签`、`q=关键词`（LIKE 
 ### GET /api/threads/:id — 线索详情
 返回 `{thread, notes: [...]}`（按时间升序）。
 
-聚类机制：新 idea 入库后用 Workers AI `@cf/baai/bge-m3` embedding 与近 90 天 idea 做余弦相似度（阈值 0.78），命中则归入已有 thread 或与命中笔记建新 thread；Workers AI 不可用时降级为 DeepSeek 按线索标题判断。命中/新建 thread 时会**立即同步生成**一句话标题/摘要（不等每日 cron）；每日 cron（04:00 北京时间）仍会重整全部 thread 标题/摘要。
+### POST /api/threads/rebuild — 全量重建线索
+对当前用户近 90 天的 idea 笔记做全量重聚类（含冷启动两两配对）：先把它们从 thread 中摘出、删掉空 thread，再按时间顺序逐条重新聚类（同步执行，笔记多时耗时较长）。返回 `{ideas: 参与聚类的 idea 数, threads: [...最新线索列表]}`。聚类没生效或阈值调整后可用它重算。
 
-### POST /api/threads/rebuild — 重建线索
-对当前用户近 90 天的 idea 笔记做全量重聚类：先把它们从 thread 中摘出、删掉空 thread，再按时间顺序逐条重新聚类（同步执行，笔记多时耗时较长）。返回 `{ideas, threads: [...]}`（`ideas`=参与重聚类的笔记数，`threads`=重建后的线索列表）。无请求体。
+聚类机制：新 idea 入库后用 Workers AI `@cf/baai/bge-m3` embedding 与近 90 天 idea 做余弦相似度（阈值 0.78），命中则归入已有 thread 或与命中笔记建新 thread；Workers AI 不可用时降级为 DeepSeek 按线索标题判断。命中/新建 thread 时会**立即同步生成**一句话标题/摘要（不等每日 cron）；每日 cron（04:00 北京时间）仍会重整全部 thread 标题/摘要。
 
 ### 周报
 - `GET /api/reports` 列表 `{reports: [{id, week_start, created_at}...]}`
