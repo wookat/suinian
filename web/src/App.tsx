@@ -12,20 +12,61 @@ import { ThreadsPage } from "@/pages/threads"
 import { ReportsPage } from "@/pages/reports"
 import { SettingsPage } from "@/pages/settings"
 import { ReloadPrompt } from "@/components/reload-prompt"
+import { PageHeader } from "@/components/page-header"
+import { RightRail } from "@/components/right-rail"
 import { cn } from "@/lib/utils"
 
 const ROUTES = [
-  { path: "", label: "首页", icon: Home, page: TimelinePage },
-  { path: "todos", label: "待办", icon: CheckSquare, page: TodosPage },
-  { path: "threads", label: "线索", icon: GitBranch, page: ThreadsPage },
-  { path: "reports", label: "周报", icon: FileText, page: ReportsPage },
-  { path: "settings", label: "设置", icon: SettingsIcon, page: SettingsPage },
+  {
+    path: "",
+    label: "首页",
+    icon: Home,
+    page: TimelinePage,
+    title: "时间流",
+    description: "随手一丢的碎念都在这里，AI 自动分拣与打标签",
+  },
+  {
+    path: "todos",
+    label: "待办",
+    icon: CheckSquare,
+    page: TodosPage,
+    title: "待办",
+    description: "从碎念里自动识别出的待办事项，按期限分组",
+  },
+  {
+    path: "threads",
+    label: "线索",
+    icon: GitBranch,
+    page: ThreadsPage,
+    title: "思考线索",
+    description: "相似想法自动串成的思考线索，看见想法如何生长",
+  },
+  {
+    path: "reports",
+    label: "周报",
+    icon: FileText,
+    page: ReportsPage,
+    title: "每周思考报告",
+    description: "每周一自动生成，回顾「本周你在想什么」",
+  },
+  {
+    path: "settings",
+    label: "设置",
+    icon: SettingsIcon,
+    page: SettingsPage,
+    title: "设置",
+    description: "数据源、外观与连接配置",
+  },
 ] as const
 
+function parseRoute(): string {
+  return window.location.hash.replace(/^#\/?/, "").split("?")[0]
+}
+
 function useHashRoute(): string {
-  const [hash, setHash] = useState(() => window.location.hash.replace(/^#\/?/, ""))
+  const [hash, setHash] = useState(parseRoute)
   useEffect(() => {
-    const onChange = () => setHash(window.location.hash.replace(/^#\/?/, ""))
+    const onChange = () => setHash(parseRoute())
     window.addEventListener("hashchange", onChange)
     return () => window.removeEventListener("hashchange", onChange)
   }, [])
@@ -80,9 +121,22 @@ export default function App() {
         <h1 className="text-base font-semibold">{active.path === "" ? "碎念" : active.label}</h1>
       </header>
 
-      <main className="mx-auto max-w-2xl px-4 pb-24 pt-4 md:pb-8 md:pl-[13.5rem] md:pr-6 lg:mx-auto lg:max-w-3xl">
-        <Page />
-      </main>
+      <div className="md:pl-52">
+        <div className="mx-auto flex max-w-2xl gap-8 px-4 pb-24 pt-4 md:pb-8 md:pt-6 lg:max-w-3xl xl:max-w-6xl">
+          <main
+            key={active.path}
+            className="min-w-0 flex-1 space-y-5 animate-in fade-in duration-300 xl:max-w-3xl"
+          >
+            <PageHeader title={active.title} description={active.description} />
+            <Page />
+          </main>
+          <aside className="hidden w-72 shrink-0 pt-1 xl:block">
+            <div className="sticky top-6">
+              <RightRail />
+            </div>
+          </aside>
+        </div>
+      </div>
 
       {/* Mobile bottom nav */}
       <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t bg-card/95 backdrop-blur md:hidden">

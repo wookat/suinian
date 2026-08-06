@@ -15,6 +15,20 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         navigateFallbackDenylist: [/^\/api\//],
+        runtimeCaching: [
+          {
+            urlPattern: ({ url, request }) =>
+              request.method === 'GET' &&
+              /^\/api\/(notes|threads|reports)/.test(url.pathname),
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'suinian-api',
+              networkTimeoutSeconds: 5,
+              expiration: { maxEntries: 100, maxAgeSeconds: 7 * 24 * 3600 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
       },
       manifest: {
         lang: 'zh-CN',
