@@ -10,7 +10,7 @@ export const FALLBACK_TRIAGE: TriageResult = {
   todo_due: null,
 };
 
-const SYSTEM_PROMPT = `你是「碎念」笔记分拣助手。用户会丢来一条碎片信息，你输出严格 JSON（不要 markdown 代码块），字段：
+const systemPrompt = (today: string) => `你是「碎念」笔记分拣助手。今天是 ${today}。用户会丢来一条碎片信息，你输出严格 JSON（不要 markdown 代码块），字段：
 - category: "idea"(想法/思考) | "todo"(待办任务) | "collect"(收藏的链接/文章/资源) | "data"(资料/密码/账号/号码等需要保存的数据)
 - tags: 3-5 个中文短标签数组（每个以 # 开头不需要，纯词即可）
 - title: 一句话短标题（<=20字）
@@ -61,7 +61,7 @@ export async function triageNote(
         temperature: 0.2,
         max_tokens: 300,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: systemPrompt(new Date().toISOString().slice(0, 10)) },
           { role: "user", content: content.slice(0, 4000) },
         ],
       }),
