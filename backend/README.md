@@ -82,6 +82,9 @@ Query：`category=idea|todo|collect|data`、`tag=标签`、`q=关键词`（LIKE 
 ### GET /api/threads/:id — 线索详情
 返回 `{thread, notes: [...]}`（按时间升序）。
 
+### POST /api/threads/rebuild — 全量重建线索
+清空当前用户线索归属后，对全部 idea 笔记重新跑聚类（含冷启动两两配对）。返回 `{ideas: 参与聚类的 idea 数, threads: [...最新线索列表]}`。聚类没生效或阈值调整后可用它重算。
+
 聚类机制：新 idea 入库后用 Workers AI `@cf/baai/bge-m3` embedding 与近 90 天 idea 做余弦相似度（阈值 0.78），命中则归入已有 thread 或与命中笔记建新 thread；Workers AI 不可用时降级为 DeepSeek 按线索标题判断。每日 cron（04:00 北京时间）重整 thread 标题/摘要。
 
 ### 周报
