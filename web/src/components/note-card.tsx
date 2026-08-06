@@ -104,13 +104,23 @@ function formatDue(due: string): string {
   const d = new Date(due)
   const pad = (n: number) => String(n).padStart(2, "0")
   const date = `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-  return d.getFullYear() === new Date().getFullYear()
-    ? date
-    : `${d.getFullYear()}-${date}`
+  const withYear =
+    d.getFullYear() === new Date().getFullYear()
+      ? date
+      : `${d.getFullYear()}-${date}`
+  const hasTime = /[T ]\d{2}:\d{2}/.test(due)
+  return hasTime ? `${withYear} ${pad(d.getHours())}:${pad(d.getMinutes())}` : withYear
 }
 
 const MAX_TAGS = 3
 const CLAMP_THRESHOLD = 180
+const MAX_LINK_CARDS = 3
+
+function linkCards(note: Note): { url: string; title: string | null }[] {
+  if (Array.isArray(note.url_titles) && note.url_titles.length > 0)
+    return note.url_titles.slice(0, MAX_LINK_CARDS)
+  return note.url ? [{ url: note.url, title: note.url_title }] : []
+}
 
 interface NoteCardProps {
   note: Note
@@ -310,23 +320,26 @@ export function NoteCard({
             </Button>
           </div>
         ) : isLink ? (
-          <div className="min-w-0 flex-1">
-            <a
-              href={note.url!}
-              target="_blank"
-              rel="noreferrer"
-              className="group/link block rounded-lg border bg-muted/40 p-3 transition-colors hover:bg-muted"
-            >
-              <div className="flex items-center gap-1.5 text-sm font-medium group-hover/link:text-primary">
-                <LinkIcon className="size-3.5 shrink-0" />
-                <span className="truncate">{note.url_title ?? note.url}</span>
-              </div>
-              {note.url_summary && (
-                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                  {note.url_summary}
-                </p>
-              )}
-            </a>
+          <div className="min-w-0 flex-1 space-y-2">
+            {linkCards(note).map((card, i) => (
+              <a
+                key={card.url}
+                href={card.url}
+                target="_blank"
+                rel="noreferrer"
+                className="group/link block rounded-lg border bg-muted/40 p-3 transition-colors hover:bg-muted"
+              >
+                <div className="flex items-center gap-1.5 text-sm font-medium group-hover/link:text-primary">
+                  <LinkIcon className="size-3.5 shrink-0" />
+                  <span className="truncate">{card.title ?? card.url}</span>
+                </div>
+                {i === 0 && note.url_summary && (
+                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                    {note.url_summary}
+                  </p>
+                )}
+              </a>
+            ))}
             {note.content !== note.url && (
               <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
                 {note.content}

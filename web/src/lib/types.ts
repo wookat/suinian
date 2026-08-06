@@ -11,6 +11,7 @@ export interface Note {
   url: string | null
   url_title: string | null
   url_summary: string | null
+  url_titles?: { url: string; title: string | null }[] | null
   title?: string | null
   category: NoteCategory | null
   tags: string[]
