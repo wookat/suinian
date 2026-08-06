@@ -24,7 +24,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## 配置
 1. 打开 app → 右上角设置
-2. 填 API Base URL（如 `https://suinian.zalize.com`）与 API Token → 保存
+2. 填 API Base URL（如 `https://suinian-api.zalize.com`）与 API Token → 保存
 3. 后端就绪前保持「Mock 模式」开启，可用本地模拟数据体验完整流程；后端可用后关闭 Mock 即切到真实 API
 
 ## 与后端的接口约定（docs/SPEC.md）
