@@ -13,15 +13,16 @@ const replyQueue = new ReplyQueue(cfg.replyIntervalMs)
 const bot = new WeChatBot({
   storageDir: cfg.storageDir,
   logLevel: cfg.logLevel,
-  loginCallbacks: {
-    onQrUrl: (url: string) => {
-      console.log('\n请用微信扫码绑定（或在手机上打开链接）：\n' + url + '\n')
-      qrcode.generate(url, { small: true })
-    },
-    onScanned: () => console.log('已扫码，请在手机上确认…'),
-    onExpired: () => console.log('二维码已过期，正在刷新…'),
-  },
 })
+
+const loginCallbacks = {
+  onQrUrl: (url: string) => {
+    console.log('\n请用微信扫码绑定（或在手机上打开链接）：\n' + url + '\n')
+    qrcode.generate(url, { small: true })
+  },
+  onScanned: () => console.log('已扫码，请在手机上确认…'),
+  onExpired: () => console.log('二维码已过期，正在刷新…'),
+}
 
 bot.on('session:expired', () => console.warn('[suinian] iLink 会话过期，SDK 正在自动重新登录…'))
 bot.on('session:restored', () => console.log('[suinian] 会话已恢复'))
@@ -92,9 +93,23 @@ function guessMime(type: NormalizedMessage['type'], fileName?: string): string {
   }
 }
 
+/** 扫码可能超过单轮二维码有效期（约 60s），失败自动换新码重试 */
+async function loginWithRetry(maxAttempts = 10): Promise<void> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await bot.login({ callbacks: loginCallbacks })
+      return
+    } catch (err) {
+      if (attempt === maxAttempts) throw err
+      console.warn(`[suinian] 登录未完成（第 ${attempt} 次，可能是二维码超时未扫），正在换新二维码…`)
+      await new Promise((r) => setTimeout(r, 1000))
+    }
+  }
+}
+
 async function main() {
   console.log('[suinian] wechat bridge 启动，后端：' + cfg.apiUrl)
-  await bot.login()
+  await loginWithRetry()
   await bot.start()
   console.log('[suinian] 已上线，等待微信消息…（? 开头问答，其余入库）')
 }
