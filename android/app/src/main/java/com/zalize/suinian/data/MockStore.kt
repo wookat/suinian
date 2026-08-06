@@ -73,6 +73,9 @@ object MockStore {
     }
 
     @Synchronized
+    fun delete(id: String): Boolean = notes.removeAll { it.id == id }
+
+    @Synchronized
     fun list(category: String?, tag: String?, q: String?): NotesPage {
         var result = notes.toList()
         if (!category.isNullOrBlank()) result = result.filter { it.category == category }

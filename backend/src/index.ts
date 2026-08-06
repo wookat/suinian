@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
-import { triageNote, loadTopTags, FALLBACK_TRIAGE } from "./triage";
+import { triageNote, loadTopTags, normalizeTodoDue, FALLBACK_TRIAGE } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
@@ -47,9 +47,17 @@ app.use("/api/*", async (c, next) => {
   await next();
 });
 
+// Legacy rows stored todo_due without a UTC offset; those values are Asia/Shanghai local times.
+export function normalizeStoredTodoDue(v: string | null): string | null {
+  if (!v) return v;
+  const m = v.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2})?$/);
+  return m ? `${m[1]}T${m[2]}:00+08:00` : v;
+}
+
 function noteToJson(n: NoteRow) {
   return {
     ...n,
+    todo_due: normalizeStoredTodoDue(n.todo_due),
     tags: JSON.parse(n.tags || "[]") as string[],
     url_titles: n.url_titles ? (JSON.parse(n.url_titles) as { url: string; title: string | null }[]) : null,
     is_sensitive: !!n.is_sensitive,
@@ -261,7 +269,7 @@ app.patch("/api/notes/:id", async (c) => {
   }
   if (typeof body.todo_due === "string" || body.todo_due === null) {
     sets.push("todo_due = ?");
-    binds.push(body.todo_due);
+    binds.push(normalizeTodoDue(body.todo_due));
   }
   if (sets.length === 0) return c.json({ error: "no updatable fields" }, 400);
   sets.push("updated_at = datetime('now')");

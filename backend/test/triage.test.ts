@@ -46,11 +46,18 @@ describe("parseTriageJson", () => {
     expect(FALLBACK_TRIAGE.tags).toEqual([]);
   });
 
-  it("keeps a time-of-day in todo_due (YYYY-MM-DDTHH:mm)", () => {
+  it("normalizes a bare time-of-day todo_due to offset ISO (+08:00)", () => {
     const r = parseTriageJson(
       '{"category":"todo","tags":["会议"],"title":"开会","is_sensitive":false,"todo_due":"2026-08-07T15:30"}'
     );
-    expect(r?.todo_due).toBe("2026-08-07T15:30");
+    expect(r?.todo_due).toBe("2026-08-07T15:30:00+08:00");
+  });
+
+  it("keeps an offset todo_due as offset ISO", () => {
+    const r = parseTriageJson(
+      '{"category":"todo","tags":[],"title":"t","is_sensitive":false,"todo_due":"2026-08-08T15:30:00+08:00"}'
+    );
+    expect(r?.todo_due).toBe("2026-08-08T15:30:00+08:00");
   });
 
   it("keeps date-only todo_due as YYYY-MM-DD", () => {
@@ -60,10 +67,17 @@ describe("parseTriageJson", () => {
 });
 
 describe("normalizeTodoDue", () => {
-  it("normalizes space separator and trailing seconds/timezone", () => {
-    expect(normalizeTodoDue("2026-08-07 15:30")).toBe("2026-08-07T15:30");
-    expect(normalizeTodoDue("2026-08-07T15:30:00")).toBe("2026-08-07T15:30");
-    expect(normalizeTodoDue("2026-08-07T15:30+08:00")).toBe("2026-08-07T15:30");
+  it("normalizes timed values to canonical offset ISO 8601", () => {
+    expect(normalizeTodoDue("2026-08-07 15:30")).toBe("2026-08-07T15:30:00+08:00");
+    expect(normalizeTodoDue("2026-08-07T15:30:00")).toBe("2026-08-07T15:30:00+08:00");
+    expect(normalizeTodoDue("2026-08-07T15:30+08:00")).toBe("2026-08-07T15:30:00+08:00");
+    expect(normalizeTodoDue("2026-08-07T15:30:00+0800")).toBe("2026-08-07T15:30:00+08:00");
+    expect(normalizeTodoDue("2026-08-07T07:30:00Z")).toBe("2026-08-07T07:30:00+00:00");
+    expect(normalizeTodoDue("2026-08-07T15:30:00-05:00")).toBe("2026-08-07T15:30:00-05:00");
+  });
+
+  it("keeps date-only values as YYYY-MM-DD", () => {
+    expect(normalizeTodoDue("2026-08-10")).toBe("2026-08-10");
   });
 
   it("rejects non-date strings and non-strings", () => {
@@ -77,7 +91,7 @@ describe("normalizeTodoDue", () => {
 describe("buildTriagePrompt todo_due instructions", () => {
   it("asks for YYYY-MM-DDTHH:mm when a time-of-day is present, date-only otherwise", () => {
     const p = buildTriagePrompt(new Date("2026-08-06T04:00:00Z"));
-    expect(p).toContain('YYYY-MM-DDTHH:mm');
+    expect(p).toContain('YYYY-MM-DDTHH:mm:00+08:00');
     expect(p).toContain("具体时刻");
     expect(p).toContain('只有日期没有时刻时仅输出 "YYYY-MM-DD"');
   });

@@ -54,6 +54,15 @@ class NotesRepository(
         return client.setTodoDone(id, done)
     }
 
+    suspend fun delete(id: String) {
+        val (client, mock) = api()
+        if (mock) {
+            MockStore.delete(id)
+            return
+        }
+        client.deleteNote(id)
+    }
+
     suspend fun listThreads(): List<Thread> {
         val (client, mock) = api()
         if (mock) return emptyList()

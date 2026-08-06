@@ -123,6 +123,16 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
     }
 
+    /** DELETE /api/notes/:id */
+    suspend fun deleteNote(id: String): Unit = withContext(Dispatchers.IO) {
+        val resp = try {
+            client.newCall(request("/api/notes/$id").delete().build()).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use { if (!it.isSuccessful) throw httpError(it.code) }
+    }
+
     /** GET /api/threads */
     suspend fun listThreads(): ThreadsPage = withContext(Dispatchers.IO) {
         execute(request("/api/threads").get().build(), ThreadsPage.serializer())

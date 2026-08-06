@@ -13,14 +13,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,6 +45,7 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -98,10 +103,31 @@ fun formatRelativeTime(iso: String, now: Instant = Instant.now()): String = try 
     iso.take(16).replace("T", " ")
 }
 
-/** 截止时间：含 HH:mm 显示到分钟，否则只显日期 */
+/** 北京时间偏移：无偏移的旧格式 todo_due 按 +08:00 解释 */
+private val CN_OFFSET: ZoneOffset = ZoneOffset.of("+08:00")
+
+/** todo_due 容错解析：兼容带偏移 ISO、无偏移（按 +08:00）与纯日期（本地零点） */
+fun parseDueInstant(raw: String): Instant? {
+    val v = raw.trim().replace(' ', 'T')
+    try {
+        return OffsetDateTime.parse(v).toInstant()
+    } catch (_: Exception) {
+    }
+    try {
+        return LocalDateTime.parse(v).toInstant(CN_OFFSET)
+    } catch (_: Exception) {
+    }
+    return try {
+        LocalDate.parse(v.take(10)).atStartOfDay(ZoneId.systemDefault()).toInstant()
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/** 截止时间：含 HH:mm 按本地时区显示到分钟，否则只显日期 */
 fun formatDue(iso: String): String = try {
     val hasTime = Regex("[T ]\\d{2}:\\d{2}").containsMatchIn(iso)
-    val zoned = (parseInstantLenient(iso) ?: throw IllegalArgumentException(iso)).atZone(ZoneId.systemDefault())
+    val zoned = (parseDueInstant(iso) ?: throw IllegalArgumentException(iso)).atZone(ZoneId.systemDefault())
     if (hasTime) zoned.format(dateFormatter)
     else zoned.format(DateTimeFormatter.ofPattern("MM-dd"))
 } catch (_: Exception) {
@@ -122,7 +148,25 @@ fun NoteCard(
     note: Note,
     modifier: Modifier = Modifier,
     onToggleTodo: ((Note) -> Unit)? = null,
+    onDelete: ((Note) -> Unit)? = null,
 ) {
+    var confirmDelete by rememberSaveable(note.id) { mutableStateOf(false) }
+    if (confirmDelete && onDelete != null) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除这条笔记？") },
+            text = { Text("删除后不可恢复") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    onDelete(note)
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("取消") }
+            },
+        )
+    }
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -130,14 +174,24 @@ fun NoteCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(Modifier.padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 CategoryBadge(note.category)
                 Spacer(Modifier.width(8.dp))
                 Text(
                     formatRelativeTime(note.createdAt),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
                 )
+                if (onDelete != null) {
+                    IconButton(onClick = { confirmDelete = true }, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            Icons.Outlined.Delete,
+                            contentDescription = "删除笔记",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
 
             // AI 标题（title 为空显正文首行）

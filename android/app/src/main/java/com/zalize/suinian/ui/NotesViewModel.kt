@@ -145,6 +145,19 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun deleteNote(note: Note) {
+        val prev = _ui.value.notes
+        _ui.value = _ui.value.copy(notes = prev.filter { it.id != note.id })
+        viewModelScope.launch {
+            try {
+                repo.delete(note.id)
+                _ui.value = _ui.value.copy(toast = "已删除")
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(notes = prev, toast = e.message ?: "删除失败")
+            }
+        }
+    }
+
     fun quickSend(text: String) {
         val content = text.trim()
         if (content.isEmpty()) return

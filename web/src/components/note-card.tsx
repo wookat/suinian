@@ -24,7 +24,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
-import { cn, formatTime } from "@/lib/utils"
+import { cn, formatTime, parseDue, dueHasTime } from "@/lib/utils"
 import type { Note, NoteCategory } from "@/lib/types"
 
 const CATEGORY_META: Record<
@@ -85,7 +85,12 @@ export function CategoryBadge({
 
 export function DueChip({ due }: { due: string | null }) {
   if (!due) return null
-  const overdue = new Date(due).getTime() < Date.now()
+  const d = parseDue(due)
+  const now = new Date()
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate())
+  const overdue = dueHasTime(due)
+    ? d.getTime() < now.getTime()
+    : startOfDay(d).getTime() < startOfDay(now).getTime()
   return (
     <span
       className={cn(
@@ -103,15 +108,14 @@ export function DueChip({ due }: { due: string | null }) {
 }
 
 function formatDue(due: string): string {
-  const d = new Date(due)
+  const d = parseDue(due)
   const pad = (n: number) => String(n).padStart(2, "0")
   const date = `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
   const withYear =
     d.getFullYear() === new Date().getFullYear()
       ? date
       : `${d.getFullYear()}-${date}`
-  const hasTime = /[T ]\d{2}:\d{2}/.test(due)
-  return hasTime ? `${withYear} ${pad(d.getHours())}:${pad(d.getMinutes())}` : withYear
+  return dueHasTime(due) ? `${withYear} ${pad(d.getHours())}:${pad(d.getMinutes())}` : withYear
 }
 
 const MAX_TAGS = 3
