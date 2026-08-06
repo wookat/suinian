@@ -12,6 +12,7 @@ import {
   mockPatchNote,
 } from "./mock"
 import type {
+  AskHistoryMessage,
   AskResponse,
   CreateNotePayload,
   Note,
@@ -139,11 +140,14 @@ export async function deleteNote(id: string): Promise<void> {
   await realFetch<{ ok: boolean }>(`/api/notes/${id}`, { method: "DELETE" })
 }
 
-export async function ask(question: string): Promise<AskResponse> {
+export async function ask(
+  question: string,
+  history: AskHistoryMessage[] = [],
+): Promise<AskResponse> {
   if (loadSettings().useMock) return mockAsk(question)
   const res = await realFetch<AskResponse>("/api/ask", {
     method: "POST",
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(history.length > 0 ? { question, history } : { question }),
   })
   return {
     ...res,

@@ -24,10 +24,17 @@ export interface IngestPayload {
   attachments?: IngestAttachment[]
 }
 
+export interface AskHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export interface AskPayload {
   source: 'wechat'
   question: string
   wechat_user_id: string
+  /** 最近几轮对话（多轮追问上下文），可选 */
+  history?: AskHistoryMessage[]
 }
 
 const URL_RE = /https?:\/\/[^\s<>"'）)】\]，。；！？]+/i

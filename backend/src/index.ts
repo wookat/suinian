@@ -343,25 +343,63 @@ export function buildAskReferences(
   return order.map((n) => ({ index: n, note_id: noteIds[n - 1] }));
 }
 
+export type AskHistoryMessage = { role: "user" | "assistant"; content: string };
+
+const ASK_HISTORY_MAX_MESSAGES = 6; // 最近 3 轮
+const ASK_HISTORY_MAX_CHARS = 2000;
+
+/** Validate the optional multi-turn `history` param: keep only well-formed recent messages. */
+export function sanitizeAskHistory(raw: unknown): AskHistoryMessage[] {
+  if (!Array.isArray(raw)) return [];
+  const msgs: AskHistoryMessage[] = [];
+  for (const m of raw) {
+    if (!m || typeof m !== "object") continue;
+    const { role, content } = m as { role?: unknown; content?: unknown };
+    if ((role === "user" || role === "assistant") && typeof content === "string" && content.trim()) {
+      msgs.push({ role, content: content.trim().slice(0, ASK_HISTORY_MAX_CHARS) });
+    }
+  }
+  return msgs.slice(-ASK_HISTORY_MAX_MESSAGES);
+}
+
+// D1 rejects LIKE patterns over ~50 bytes ("pattern too complex"), so cap each term's UTF-8 length.
+function capBytes(s: string, max: number): string {
+  const enc = new TextEncoder();
+  while (s.length > 0 && enc.encode(s).length > max) s = s.slice(0, -1);
+  return s;
+}
+
+/**
+ * Recall keywords for /api/ask: terms from the current question come first,
+ * then terms from the last two user turns of history (so follow-up questions
+ * using pronouns still recall notes about the earlier topic).
+ */
+export function extractAskTerms(question: string, history: AskHistoryMessage[]): string[] {
+  const split = (s: string) =>
+    s
+      .split(/[\s,，。？?！!、;；:：]+/)
+      .map((t) => capBytes(t.trim(), 45))
+      .filter((t) => t.length >= 2);
+  const terms: string[] = [];
+  const push = (t: string) => {
+    if (!terms.includes(t) && terms.length < 6) terms.push(t);
+  };
+  for (const t of split(question)) push(t);
+  const recentUser = history.filter((m) => m.role === "user").slice(-2);
+  for (const m of recentUser) for (const t of split(m.content)) push(t);
+  return terms;
+}
+
 // ---- POST /api/ask ----
 app.post("/api/ask", async (c) => {
   const userId = c.get("userId");
-  const body = await c.req.json<{ question?: string }>().catch(() => null);
+  const body = await c.req.json<{ question?: string; history?: unknown }>().catch(() => null);
   const question = (body?.question ?? "").trim();
   if (!question) return c.json({ error: "question required" }, 400);
+  const history = sanitizeAskHistory(body?.history);
 
-  // keyword recall: split question into terms, LIKE-match, top 20 recent.
-  // D1 rejects LIKE patterns over ~50 bytes ("pattern too complex"), so cap each term's UTF-8 length.
-  const capBytes = (s: string, max: number): string => {
-    const enc = new TextEncoder();
-    while (s.length > 0 && enc.encode(s).length > max) s = s.slice(0, -1);
-    return s;
-  };
-  const terms = question
-    .split(/[\s,，。？?！!、;；:：]+/)
-    .map((t) => capBytes(t.trim(), 45))
-    .filter((t) => t.length >= 2)
-    .slice(0, 6);
+  // keyword recall: current question + recent context terms, LIKE-match, top 20 recent.
+  const terms = extractAskTerms(question, history);
   const conds: string[] = ["user_id = ?"];
   const binds: unknown[] = [userId];
   if (terms.length > 0) {
@@ -400,15 +438,21 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。若笔记中没有相关信息，直接说没找到。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。可结合之前的对话上下文理解代词与省略。若笔记中没有相关信息，直接说没找到。回答用中文，简洁。",
       },
+      ...history,
       { role: "user", content: `笔记片段：\n${context || "（无相关笔记）"}\n\n问题：${question}` },
     ],
   });
+  const references = buildAskReferences(answer ?? "", noteIds);
+  const byId = new Map(notes.map((n) => [n.id, n]));
+  const refNotes = await Promise.all(
+    references.map((r) => noteToJsonDecrypted(c.env, byId.get(r.note_id)!))
+  );
   if (!answer) {
-    return c.json({ answer: "（AI 暂不可用）已找到相关记录，见 references。", references: buildAskReferences("", noteIds) });
+    return c.json({ answer: "（AI 暂不可用）已找到相关记录，见 references。", references, notes: refNotes });
   }
-  return c.json({ answer, references: buildAskReferences(answer, noteIds) });
+  return c.json({ answer, references, notes: refNotes });
 });
 
 // ---- GET /api/threads ----

@@ -8,9 +8,10 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
-import { getNotes, getNote, patchNote, deleteNote, ask, ApiError, NetworkError } from "@/lib/api"
+import { AskChat } from "@/components/ask-chat"
+import { getNotes, getNote, patchNote, deleteNote, ApiError, NetworkError } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import type { AskResponse, Note } from "@/lib/types"
+import type { Note } from "@/lib/types"
 
 const CATEGORY_TABS = [
   { value: "", label: "全部" },
@@ -54,10 +55,6 @@ export function TimelinePage() {
   const [searchInput, setSearchInput] = useState("")
   const [search, setSearch] = useState("")
   const [askMode, setAskMode] = useState(false)
-  const [askInput, setAskInput] = useState("")
-  const [asking, setAsking] = useState(false)
-  const [askError, setAskError] = useState<string | null>(null)
-  const [askResult, setAskResult] = useState<AskResponse | null>(null)
   const [tagsExpanded, setTagsExpanded] = useState(false)
   const [mobileTagsExpanded, setMobileTagsExpanded] = useState(false)
   const [debouncing, setDebouncing] = useState(false)
@@ -176,21 +173,6 @@ export function TimelinePage() {
     return groups
   }, [notes])
 
-  async function handleAsk() {
-    const q = askInput.trim()
-    if (!q || asking) return
-    setAsking(true)
-    setAskResult(null)
-    setAskError(null)
-    try {
-      setAskResult(await ask(q))
-    } catch (e) {
-      setAskError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setAsking(false)
-    }
-  }
-
   async function toggleTodo(note: Note) {
     const next = note.todo_done === 1 ? 0 : 1
     setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, todo_done: next } : n)))
@@ -236,40 +218,32 @@ export function TimelinePage() {
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
           <Input
-            value={askMode ? askInput : searchInput}
+            value={searchInput}
             onChange={(e) => {
-              if (askMode) {
-                setAskInput(e.target.value)
-              } else {
-                const value = e.target.value
-                setSearchInput(value)
-                if (debounceRef.current !== null) window.clearTimeout(debounceRef.current)
-                if (value.trim() === search) {
-                  setDebouncing(false)
-                  return
-                }
-                setDebouncing(true)
-                debounceRef.current = window.setTimeout(() => {
-                  setDebouncing(false)
-                  setSearch(value.trim())
-                }, SEARCH_DEBOUNCE_MS)
+              const value = e.target.value
+              setSearchInput(value)
+              if (debounceRef.current !== null) window.clearTimeout(debounceRef.current)
+              if (value.trim() === search) {
+                setDebouncing(false)
+                return
               }
+              setDebouncing(true)
+              debounceRef.current = window.setTimeout(() => {
+                setDebouncing(false)
+                setSearch(value.trim())
+              }, SEARCH_DEBOUNCE_MS)
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-                if (askMode) {
-                  void handleAsk()
-                } else {
-                  if (debounceRef.current !== null) window.clearTimeout(debounceRef.current)
-                  setDebouncing(false)
-                  setSearch(searchInput.trim())
-                }
+                if (debounceRef.current !== null) window.clearTimeout(debounceRef.current)
+                setDebouncing(false)
+                setSearch(searchInput.trim())
               }
             }}
-            placeholder={askMode ? "问问你的笔记，例如：我之前想过的那个点子…" : "搜索笔记…"}
+            placeholder="搜索笔记…"
             className="pl-8"
           />
-          {!askMode && (debouncing || (loading && search !== "")) && (
+          {(debouncing || (loading && search !== "")) && (
             <Loader2 className="absolute right-2.5 top-2.5 size-4 animate-spin text-muted-foreground" />
           )}
         </div>
@@ -277,57 +251,14 @@ export function TimelinePage() {
           variant={askMode ? "default" : "outline"}
           size="sm"
           className="h-9"
-          onClick={() => {
-            setAskMode((m) => !m)
-            setAskResult(null)
-            setAskError(null)
-          }}
+          onClick={() => setAskMode((m) => !m)}
         >
           <Sparkles />
           问答
         </Button>
       </div>
 
-      {askMode && (askResult || asking || askError) && (
-        <Card className="border-primary/30 bg-accent/40 p-4">
-          {asking ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" /> 正在思考…
-            </div>
-          ) : askError ? (
-            <p className="text-sm text-destructive">{askError}</p>
-          ) : (
-            askResult && (
-              <div className="space-y-3">
-                <div className="flex items-start justify-between gap-2">
-                  <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                    {askResult.answer}
-                  </p>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-6 shrink-0"
-                    onClick={() => setAskResult(null)}
-                    aria-label="关闭回答"
-                  >
-                    <X />
-                  </Button>
-                </div>
-                {askResult.notes.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-xs font-medium text-muted-foreground">
-                      引用笔记（{askResult.notes.length}）
-                    </p>
-                    {askResult.notes.map((n) => (
-                      <NoteCard key={n.id} note={n} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          )}
-        </Card>
-      )}
+      {askMode && <AskChat onTagClick={setTag} />}
 
       <div className="flex gap-1 overflow-x-auto pb-1">
         {CATEGORY_TABS.map((t) => (

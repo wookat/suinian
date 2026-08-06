@@ -299,7 +299,11 @@ export async function mockAsk(question: string): Promise<AskResponse> {
     hits.length > 0
       ? `（Mock 回答）根据你的笔记，与「${question}」相关的记录有 ${hits.length} 条。其中最相关的一条提到：「${hits[0].content.slice(0, 60)}…」。连接真实后端后，这里会由 DeepSeek 结合检索结果生成完整回答。`
       : `（Mock 回答）没有在你的笔记里找到与「${question}」直接相关的内容。连接真实后端后会使用向量召回获得更好的效果。`
-  return { answer, note_ids: hits.map((n) => n.id), notes: hits }
+  return {
+    answer,
+    references: hits.map((n, i) => ({ index: i + 1, note_id: n.id })),
+    notes: hits,
+  }
 }
 
 const seedThreads: Thread[] = [
