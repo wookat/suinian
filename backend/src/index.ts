@@ -1,14 +1,21 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import type { Env, NoteRow, TriageResult } from "./types";
-import { triageNote, FALLBACK_TRIAGE } from "./triage";
+import type { Env, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
+import { triageNote, loadTopTags, FALLBACK_TRIAGE } from "./triage";
 import { extractUrl, fetchLinkMeta } from "./linkmeta";
 import { encodeCursor, decodeCursor } from "./cursor";
+import { clusterNote, refreshThreads } from "./threads";
+import { generateWeeklyReport, generateAllWeeklyReports } from "./reports";
 
 type Vars = { userId: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 app.use("*", cors());
+
+app.onError((err, c) => {
+  console.error("unhandled error:", err);
+  return c.json({ error: "internal error" }, 500);
+});
 
 app.get("/", (c) => c.json({ name: "suinian-api", status: "ok" }));
 app.get("/health", (c) => c.json({ ok: true }));
@@ -37,55 +44,81 @@ const CATEGORY_LABEL: Record<string, string> = {
   data: "资料",
 };
 
+async function applyTriage(env: Env, noteId: string, triage: TriageResult): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE notes SET category = ?, tags = ?, title = ?, is_sensitive = ?, todo_due = ?, updated_at = datetime('now') WHERE id = ?`
+  )
+    .bind(
+      triage.category,
+      JSON.stringify(triage.tags),
+      triage.title || null,
+      triage.is_sensitive ? 1 : 0,
+      triage.todo_due ?? null,
+      noteId
+    )
+    .run();
+}
+
+async function fetchLinkMetaInto(env: Env, noteId: string, url: string): Promise<void> {
+  const meta = await fetchLinkMeta(url);
+  if (meta.title || meta.description) {
+    await env.DB.prepare(
+      "UPDATE notes SET url_title = ?, url_summary = ?, updated_at = datetime('now') WHERE id = ?"
+    )
+      .bind(meta.title, meta.description, noteId)
+      .run();
+  }
+}
+
 async function createNote(
   c: { env: Env },
   userId: string,
   body: { source?: string; raw_type?: string; content?: string; url?: string },
-  waitUntil: (p: Promise<unknown>) => void
-): Promise<{ note: NoteRow; triage: TriageResult }> {
+  waitUntil: (p: Promise<unknown>) => void,
+  opts: { syncTriage: boolean }
+): Promise<{ note: NoteRow; triage: TriageResult | null }> {
   const id = crypto.randomUUID();
   const content = (body.content ?? "").trim();
   const url = body.url || extractUrl(content);
   const source = body.source || "api";
   const rawType = body.raw_type || (url && content === url ? "link" : "text");
 
-  // AI triage (synchronous so the caller can reply with category/tags; falls back fast)
-  let triage = FALLBACK_TRIAGE;
-  if (c.env.DEEPSEEK_API_KEY) {
-    triage = await triageNote(content, c.env);
-  }
-
+  // insert immediately (category resolved by triage, sync or async)
   await c.env.DB.prepare(
-    `INSERT INTO notes (id, user_id, source, raw_type, content, url, category, tags, title, is_sensitive, todo_due)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO notes (id, user_id, source, raw_type, content, url, category, tags)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, '[]')`
   )
-    .bind(
-      id,
-      userId,
-      source,
-      rawType,
-      content,
-      url ?? null,
-      triage.category,
-      JSON.stringify(triage.tags),
-      triage.title || null,
-      triage.is_sensitive ? 1 : 0,
-      triage.todo_due ?? null
-    )
+    .bind(id, userId, source, rawType, content, url ?? null)
     .run();
 
-  // link metadata in background
-  if (url) {
+  const runTriage = async (): Promise<TriageResult> => {
+    let triage = FALLBACK_TRIAGE;
+    if (c.env.DEEPSEEK_API_KEY) {
+      const topTags = await loadTopTags(c.env.DB, userId).catch(() => [] as string[]);
+      triage = await triageNote(content, c.env, topTags);
+    }
+    await applyTriage(c.env, id, triage);
+    return triage;
+  };
+
+  // link metadata always in background
+  if (url) waitUntil(fetchLinkMetaInto(c.env, id, url));
+
+  let triage: TriageResult | null = null;
+  if (opts.syncTriage) {
+    triage = await runTriage();
     waitUntil(
       (async () => {
-        const meta = await fetchLinkMeta(url);
-        if (meta.title || meta.description) {
-          await c.env.DB.prepare(
-            "UPDATE notes SET url_title = ?, url_summary = ?, updated_at = datetime('now') WHERE id = ?"
-          )
-            .bind(meta.title, meta.description, id)
-            .run();
-        }
+        const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
+        if (n) await clusterNote(c.env, n);
+      })()
+    );
+  } else {
+    waitUntil(
+      (async () => {
+        await runTriage();
+        const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
+        if (n) await clusterNote(c.env, n);
       })()
     );
   }
@@ -98,7 +131,8 @@ async function createNote(
 app.post("/api/notes", async (c) => {
   const body = await c.req.json<{ source?: string; raw_type?: string; content?: string; url?: string }>().catch(() => null);
   if (!body || !(body.content ?? "").trim()) return c.json({ error: "content required" }, 400);
-  const { note } = await createNote(c, c.get("userId"), body, (p) => c.executionCtx.waitUntil(p));
+  // returns immediately; triage + link fetch + clustering backfill asynchronously
+  const { note } = await createNote(c, c.get("userId"), body, (p) => c.executionCtx.waitUntil(p), { syncTriage: false });
   return c.json({ note: noteToJson(note) }, 201);
 });
 
@@ -186,10 +220,21 @@ app.patch("/api/notes/:id", async (c) => {
 
 // ---- DELETE /api/notes/:id ----
 app.delete("/api/notes/:id", async (c) => {
-  const res = await c.env.DB.prepare("DELETE FROM notes WHERE id = ? AND user_id = ?")
-    .bind(c.req.param("id"), c.get("userId"))
-    .run();
-  if (!res.meta.changes) return c.json({ error: "not found" }, 404);
+  const id = c.req.param("id");
+  const note = await c.env.DB.prepare("SELECT thread_id FROM notes WHERE id = ? AND user_id = ?")
+    .bind(id, c.get("userId"))
+    .first<{ thread_id: string | null }>();
+  if (!note) return c.json({ error: "not found" }, 404);
+  await c.env.DB.prepare("DELETE FROM note_embeddings WHERE note_id = ?").bind(id).run();
+  await c.env.DB.prepare("DELETE FROM notes WHERE id = ?").bind(id).run();
+  if (note.thread_id) {
+    await c.env.DB.prepare(
+      "UPDATE threads SET note_count = (SELECT COUNT(*) FROM notes WHERE thread_id = ?), updated_at = datetime('now') WHERE id = ?"
+    )
+      .bind(note.thread_id, note.thread_id)
+      .run();
+    await c.env.DB.prepare("DELETE FROM threads WHERE id = ? AND note_count = 0").bind(note.thread_id).run();
+  }
   return c.json({ ok: true });
 });
 
@@ -197,12 +242,15 @@ app.delete("/api/notes/:id", async (c) => {
 app.post("/api/ingest/wechat", async (c) => {
   const body = await c.req.json<{ content?: string; url?: string; raw_type?: string }>().catch(() => null);
   if (!body || !(body.content ?? "").trim()) return c.json({ error: "content required" }, 400);
-  const { note, triage } = await createNote(
+  // wechat needs the category/tags in its confirmation text -> triage stays synchronous
+  const { note, triage: triageResult } = await createNote(
     c,
     c.get("userId"),
     { ...body, source: "wechat" },
-    (p) => c.executionCtx.waitUntil(p)
+    (p) => c.executionCtx.waitUntil(p),
+    { syncTriage: true }
   );
+  const triage = triageResult ?? FALLBACK_TRIAGE;
   const label = CATEGORY_LABEL[triage.category] ?? triage.category;
   const tagStr = triage.tags.map((t) => `#${t}`).join(" ");
   const reply = `已存 · ${label}${tagStr ? " " + tagStr : ""}`;
@@ -216,10 +264,16 @@ app.post("/api/ask", async (c) => {
   const question = (body?.question ?? "").trim();
   if (!question) return c.json({ error: "question required" }, 400);
 
-  // keyword recall: split question into terms, LIKE-match, top 20 recent
+  // keyword recall: split question into terms, LIKE-match, top 20 recent.
+  // D1 rejects LIKE patterns over ~50 bytes ("pattern too complex"), so cap each term's UTF-8 length.
+  const capBytes = (s: string, max: number): string => {
+    const enc = new TextEncoder();
+    while (s.length > 0 && enc.encode(s).length > max) s = s.slice(0, -1);
+    return s;
+  };
   const terms = question
     .split(/[\s,，。？?！!、;；:：]+/)
-    .map((t) => t.trim())
+    .map((t) => capBytes(t.trim(), 45))
     .filter((t) => t.length >= 2)
     .slice(0, 6);
   const conds: string[] = ["user_id = ?"];
@@ -285,4 +339,104 @@ app.post("/api/ask", async (c) => {
   }
 });
 
-export default app;
+// ---- GET /api/threads ----
+app.get("/api/threads", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT * FROM threads WHERE user_id = ? AND note_count > 0 ORDER BY updated_at DESC LIMIT 100"
+  )
+    .bind(c.get("userId"))
+    .all<ThreadRow>();
+  return c.json({ threads: results ?? [] });
+});
+
+// ---- GET /api/threads/:id ----
+app.get("/api/threads/:id", async (c) => {
+  const userId = c.get("userId");
+  const thread = await c.env.DB.prepare("SELECT * FROM threads WHERE id = ? AND user_id = ?")
+    .bind(c.req.param("id"), userId)
+    .first<ThreadRow>();
+  if (!thread) return c.json({ error: "not found" }, 404);
+  const { results } = await c.env.DB.prepare(
+    "SELECT * FROM notes WHERE thread_id = ? AND user_id = ? ORDER BY created_at ASC LIMIT 200"
+  )
+    .bind(thread.id, userId)
+    .all<NoteRow>();
+  return c.json({ thread, notes: (results ?? []).map(noteToJson) });
+});
+
+// ---- GET /api/reports ----
+app.get("/api/reports", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT id, week_start, created_at FROM weekly_reports WHERE user_id = ? ORDER BY week_start DESC LIMIT 100"
+  )
+    .bind(c.get("userId"))
+    .all<{ id: string; week_start: string; created_at: string }>();
+  return c.json({ reports: results ?? [] });
+});
+
+// ---- GET /api/reports/:id ----
+app.get("/api/reports/:id", async (c) => {
+  const report = await c.env.DB.prepare("SELECT * FROM weekly_reports WHERE id = ? AND user_id = ?")
+    .bind(c.req.param("id"), c.get("userId"))
+    .first<WeeklyReportRow>();
+  if (!report) return c.json({ error: "not found" }, 404);
+  return c.json({ report });
+});
+
+// ---- POST /api/reports/generate (manual trigger) ----
+app.post("/api/reports/generate", async (c) => {
+  const body = await c.req.json<{ week?: string }>().catch(() => null);
+  const week = body?.week === "this" ? "this" : "last";
+  const { id, week_start } = await generateWeeklyReport(c.env, c.get("userId"), new Date(), week);
+  const report = await c.env.DB.prepare("SELECT * FROM weekly_reports WHERE id = ?").bind(id).first<WeeklyReportRow>();
+  return c.json({ report, week_start }, 201);
+});
+
+// ---- GET /api/export ----
+app.get("/api/export", async (c) => {
+  const userId = c.get("userId");
+  const [notesR, threadsR, reportsR] = await Promise.all([
+    c.env.DB.prepare("SELECT * FROM notes WHERE user_id = ? ORDER BY created_at ASC").bind(userId).all<NoteRow>(),
+    c.env.DB.prepare("SELECT * FROM threads WHERE user_id = ? ORDER BY updated_at DESC").bind(userId).all<ThreadRow>(),
+    c.env.DB.prepare("SELECT * FROM weekly_reports WHERE user_id = ? ORDER BY week_start DESC").bind(userId).all<WeeklyReportRow>(),
+  ]);
+  const notes = (notesR.results ?? []).map(noteToJson);
+  const threads = threadsR.results ?? [];
+  const reports = reportsR.results ?? [];
+
+  if (c.req.query("format") === "markdown") {
+    let md = `# 碎念全量导出（${new Date().toISOString().slice(0, 10)}）\n\n共 ${notes.length} 条笔记、${threads.length} 条线索、${reports.length} 份周报。\n\n## 笔记\n`;
+    for (const n of notes) {
+      md += `\n### ${n.title || n.content.slice(0, 30)}\n- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${n.url ? ` | 链接：${n.url}` : ""}\n\n${n.content}\n`;
+    }
+    md += `\n## 思考线索\n`;
+    for (const t of threads) md += `\n### ${t.title}（${t.note_count} 条）\n${t.summary ?? ""}\n`;
+    md += `\n## 周报\n`;
+    for (const r of reports) md += `\n---\n\n${r.content_md}\n`;
+    return c.body(md, 200, {
+      "content-type": "text/markdown; charset=utf-8",
+      "content-disposition": `attachment; filename="suinian-export.md"`,
+    });
+  }
+  return c.json({
+    exported_at: new Date().toISOString(),
+    notes,
+    threads,
+    reports,
+  });
+});
+
+export { app };
+
+export default {
+  fetch: app.fetch,
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    if (event.cron === "0 0 * * 1") {
+      // Monday 08:00 Asia/Shanghai = Monday 00:00 UTC -> weekly reports
+      ctx.waitUntil(generateAllWeeklyReports(env));
+    } else {
+      // daily thread title/summary refresh
+      ctx.waitUntil(refreshThreads(env));
+    }
+  },
+};

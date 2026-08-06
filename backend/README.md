@@ -41,7 +41,7 @@ npx wrangler d1 execute suinian --remote --command \
 ```json
 { "source": "web", "raw_type": "text", "content": "碎片内容", "url": "可选" }
 ```
-入库时同步调用 DeepSeek 分拣（`deepseek-chat`），输出 `{category, tags, title, is_sensitive, todo_due}`；AI 失败降级为 `category=idea` 无标签，不阻塞入库。`content` 中含 URL 或传了 `url` 时后台抓取 `<title>`/meta description 存入 `url_title`/`url_summary`。返回 `201 {note}`。
+立即落库返回 `201 {note}`（此时 `category=null, tags=[]`），DeepSeek 分拣（`deepseek-chat`，输出 `{category, tags(≤3个，优先复用用户 top50 已有标签), title, is_sensitive, todo_due}`）、链接抓取（`url_title`/`url_summary`）、线索聚类均在 `ctx.waitUntil` 异步回填。敏感信息除 prompt 判定外另有正则兜底（密码/密钥/卡号等模式），疑似敏感值的标签会被过滤。
 
 ### GET /api/notes — 时间流
 Query：`category=idea|todo|collect|data`、`tag=标签`、`q=关键词`（LIKE 全文）、`cursor`（上一页返回的 `next_cursor`）、`limit`（默认 20，最大 100）。
@@ -57,7 +57,7 @@ Query：`category=idea|todo|collect|data`、`tag=标签`、`q=关键词`（LIKE 
 ```json
 { "content": "消息文本", "url": "可选", "raw_type": "可选" }
 ```
-同 Bearer 鉴权；等价于 `source=wechat` 的收件，另外返回适合微信回复的确认文案：
+同 Bearer 鉴权；等价于 `source=wechat` 的收件，但分拣保持同步（微信需要带分类/标签的确认文案），链接抓取与聚类仍异步；返回：
 ```json
 { "note": {...}, "reply": "已存 · 想法 #创业 #AI" }
 ```
@@ -66,10 +66,29 @@ Query：`category=idea|todo|collect|data`、`tag=标签`、`q=关键词`（LIKE 
 ```json
 { "question": "我最近在想什么关于创业的？" }
 ```
-关键词召回 top-20 → DeepSeek 汇总回答。返回 `{answer, references: [note_id...]}`。
+关键词召回 top-20（每个关键词按 UTF-8 截断至 45 字节，避开 D1 LIKE 模式长度限制）→ 召回笔记每条截断 500 字符入 prompt → DeepSeek 汇总回答。返回 `{answer, references: [note_id...]}`；AI 失败降级返回 references。
+
+### GET /api/threads — 思考线索列表
+返回 `{threads: [{id, title, summary, note_count, updated_at}...]}`（仅含有笔记的线索）。
+
+### GET /api/threads/:id — 线索详情
+返回 `{thread, notes: [...]}`（按时间升序）。
+
+聚类机制：新 idea 入库后用 Workers AI `@cf/baai/bge-m3` embedding 与近 90 天 idea 做余弦相似度（阈值 0.78），命中则归入已有 thread 或与命中笔记建新 thread；Workers AI 不可用时降级为 DeepSeek 按线索标题判断。每日 cron（04:00 北京时间）重整 thread 标题/摘要。
+
+### 周报
+- `GET /api/reports` 列表 `{reports: [{id, week_start, created_at}...]}`
+- `GET /api/reports/:id` 详情 `{report: {..., content_md}}`
+- `POST /api/reports/generate` 手动触发（默认上周；传 `{"week":"this"}` 生成本周，验收用），同周重复生成会覆盖
+- cron：每周一 08:00 Asia/Shanghai（UTC 周一 00:00）自动为全部用户生成上周周报；敏感笔记不进周报 prompt
+
+### GET /api/export — 全量导出
+默认 JSON `{exported_at, notes, threads, reports}`；`?format=markdown` 返回 markdown 附件（`content-disposition: attachment`）。
 
 ### 其他
 - `GET /health` 公开健康检查。
 
 ## 数据模型
-见 `migrations/0001_init.sql`（users / notes / threads / weekly_reports / attachments，按 docs/SPEC.md）。R1 只写 users/notes，threads/weekly_reports/attachments 为 R2+ 预留。
+见 `migrations/`：0001（users / notes / threads / weekly_reports / attachments）+ 0002（note_embeddings 聚类向量表 + 索引）。R2 已启用 threads/weekly_reports；attachments 为 R3+ 预留。
+
+注：wrangler v3 对 D1 migrations/zone-routes 有兼容问题，线上迁移用 Cloudflare REST API `/d1/database/:id/query` 执行；`wrangler deploy` 上传正常（需 `CLOUDFLARE_ACCOUNT_ID` 环境变量）。

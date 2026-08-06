@@ -36,9 +36,9 @@ describe("parseTriageJson", () => {
     expect(parseTriageJson("not json at all")).toBeNull();
   });
 
-  it("caps tags at 5 and filters non-strings", () => {
+  it("caps tags at 3 and filters non-strings", () => {
     const r = parseTriageJson('{"category":"idea","tags":["a","b","c","d","e","f",1,null]}');
-    expect(r?.tags).toEqual(["a", "b", "c", "d", "e"]);
+    expect(r?.tags).toEqual(["a", "b", "c"]);
   });
 
   it("fallback shape is category=idea no tags", () => {
