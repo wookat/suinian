@@ -1,6 +1,9 @@
 import type { Env, NoteRow } from "./types";
 
-const SIM_THRESHOLD = 0.78;
+/** bge-m3 cosine similarity above which two ideas join the same thread directly. */
+const SIM_JOIN = 0.76;
+/** Similarity above which DeepSeek is asked to confirm a borderline match. */
+const SIM_CANDIDATE = 0.5;
 const EMBED_MODEL = "@cf/baai/bge-m3";
 
 export function cosineSim(a: number[], b: number[]): number {
@@ -24,8 +27,13 @@ async function embed(env: Env, text: string): Promise<number[] | null> {
       data?: number[][];
     };
     const v = res?.data?.[0];
-    return Array.isArray(v) && v.length > 0 ? v : null;
-  } catch {
+    if (!Array.isArray(v) || v.length === 0) {
+      console.error("threads: embed returned no vector", JSON.stringify(res).slice(0, 200));
+      return null;
+    }
+    return v;
+  } catch (err) {
+    console.error("threads: embed failed", err);
     return null;
   }
 }
@@ -59,15 +67,9 @@ async function attachNoteToThread(env: Env, noteId: string, threadId: string): P
     .run();
 }
 
-/** DeepSeek fallback: pick an existing thread (by title) or none for a new idea. */
-async function deepseekPickThread(
-  env: Env,
-  content: string,
-  threads: { id: string; title: string }[]
-): Promise<string | null> {
-  if (!env.DEEPSEEK_API_KEY || threads.length === 0) return null;
+async function deepseekPickNumber(env: Env, system: string, user: string, max: number): Promise<number | null> {
+  if (!env.DEEPSEEK_API_KEY) return null;
   try {
-    const list = threads.map((t, i) => `${i + 1}. ${t.title}`).join("\n");
     const res = await fetch(`${env.DEEPSEEK_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${env.DEEPSEEK_API_KEY}` },
@@ -76,22 +78,67 @@ async function deepseekPickThread(
         temperature: 0,
         max_tokens: 10,
         messages: [
-          {
-            role: "system",
-            content:
-              "下面是若干思考线索的标题，以及一条新想法。若新想法明显属于其中某条线索（同一主题的延续），只输出对应序号数字；否则输出 0。只输出数字。",
-          },
-          { role: "user", content: `线索：\n${list}\n\n新想法：${content.slice(0, 500)}` },
+          { role: "system", content: system },
+          { role: "user", content: user },
         ],
       }),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error("threads: deepseek pick failed", res.status, (await res.text()).slice(0, 200));
+      return null;
+    }
     const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const n = parseInt((data.choices?.[0]?.message?.content ?? "0").trim(), 10);
-    return n >= 1 && n <= threads.length ? threads[n - 1].id : null;
-  } catch {
+    const n = parseInt((data.choices?.[0]?.message?.content ?? "").trim(), 10);
+    return Number.isFinite(n) && n >= 0 && n <= max ? n : null;
+  } catch (err) {
+    console.error("threads: deepseek pick error", err);
     return null;
   }
+}
+
+/** DeepSeek fallback: pick an existing thread (by title) or none for a new idea. */
+async function deepseekPickThread(
+  env: Env,
+  content: string,
+  threads: { id: string; title: string }[]
+): Promise<string | null> {
+  if (threads.length === 0) return null;
+  const list = threads.map((t, i) => `${i + 1}. ${t.title}`).join("\n");
+  const n = await deepseekPickNumber(
+    env,
+    "下面是若干思考线索的标题，以及一条新想法。若新想法明显属于其中某条线索（同一主题的延续），只输出对应序号数字；否则输出 0。只输出数字。",
+    `线索：\n${list}\n\n新想法：${content.slice(0, 500)}`,
+    threads.length
+  );
+  return n !== null && n >= 1 ? threads[n - 1].id : null;
+}
+
+/** DeepSeek: pick a same-topic note among recent unthreaded ideas (cold start: no threads yet). */
+async function deepseekPickNote(
+  env: Env,
+  content: string,
+  notes: { id: string; title: string | null; content: string }[]
+): Promise<string | null> {
+  if (notes.length === 0) return null;
+  const list = notes.map((n, i) => `${i + 1}. ${(n.title || n.content).slice(0, 100)}`).join("\n");
+  const n = await deepseekPickNumber(
+    env,
+    "下面是若干历史想法，以及一条新想法。若新想法与其中某条明显是同一主题的延续（可以串成同一条思考线索），只输出对应序号数字；否则输出 0。只输出数字。",
+    `历史想法：\n${list}\n\n新想法：${content.slice(0, 500)}`,
+    notes.length
+  );
+  return n !== null && n >= 1 ? notes[n - 1].id : null;
+}
+
+/** DeepSeek: confirm whether two idea snippets are the same topic (borderline embedding match). */
+async function deepseekConfirmPair(env: Env, a: string, b: string): Promise<boolean> {
+  const n = await deepseekPickNumber(
+    env,
+    "判断下面两条想法是否属于同一主题（可以串成同一条思考线索）。是则输出 1，否则输出 0。只输出数字。",
+    `想法A：${a.slice(0, 400)}\n\n想法B：${b.slice(0, 400)}`,
+    1
+  );
+  return n === 1;
 }
 
 /**
@@ -115,7 +162,8 @@ export async function clusterNote(env: Env, note: NoteRow): Promise<void> {
       )
         .bind(note.user_id, note.id)
         .all<{ id: string; thread_id: string | null; title: string | null; content: string; vector: string | null }>();
-      let best: { id: string; thread_id: string | null; title: string | null; sim: number } | null = null;
+      let best: { id: string; thread_id: string | null; title: string | null; content: string; sim: number } | null =
+        null;
       let backfilled = 0;
       for (const r of results ?? []) {
         let v: number[] | null = null;
@@ -133,29 +181,108 @@ export async function clusterNote(env: Env, note: NoteRow): Promise<void> {
         }
         if (!v) continue;
         const sim = cosineSim(vector, v);
-        if (!best || sim > best.sim) best = { id: r.id, thread_id: r.thread_id, title: r.title, sim };
+        if (!best || sim > best.sim)
+          best = { id: r.id, thread_id: r.thread_id, title: r.title, content: r.content, sim };
       }
-      if (best && best.sim >= SIM_THRESHOLD) {
-        let threadId = best.thread_id;
-        if (!threadId) {
-          threadId = await newThread(env, note.user_id, best.title || note.title || note.content.slice(0, 20));
-          await attachNoteToThread(env, best.id, threadId);
+      if (best) {
+        const direct = best.sim >= SIM_JOIN;
+        const confirmed =
+          !direct &&
+          best.sim >= SIM_CANDIDATE &&
+          (await deepseekConfirmPair(env, note.title || note.content, best.title || best.content));
+        console.log(
+          `threads: cluster note=${note.id} best=${best.id} sim=${best.sim.toFixed(3)} direct=${direct} confirmed=${confirmed}`
+        );
+        if (direct || confirmed) {
+          let threadId = best.thread_id;
+          if (!threadId) {
+            threadId = await newThread(env, note.user_id, best.title || note.title || note.content.slice(0, 20));
+            await attachNoteToThread(env, best.id, threadId);
+            console.log(`threads: created thread ${threadId} for notes ${best.id}, ${note.id}`);
+          }
+          await attachNoteToThread(env, note.id, threadId);
+          return;
         }
-        await attachNoteToThread(env, note.id, threadId);
+      } else {
+        console.log(`threads: cluster note=${note.id} no comparable idea notes`);
       }
+      // borderline/no embedding match: still try DeepSeek against existing thread titles
+      const picked = await pickThreadByDeepseek(env, note);
+      if (picked) await attachNoteToThread(env, note.id, picked);
       return;
     }
-    // fallback: DeepSeek picks among recent thread titles
-    const { results: threads } = await env.DB.prepare(
-      "SELECT id, title FROM threads WHERE user_id = ? ORDER BY updated_at DESC LIMIT 30"
+    // no embedding available: DeepSeek-only fallback (existing threads, then cold-start pairing)
+    console.log(`threads: no embedding for note=${note.id}, using deepseek fallback`);
+    const picked = await pickThreadByDeepseek(env, note);
+    if (picked) {
+      await attachNoteToThread(env, note.id, picked);
+      return;
+    }
+    // cold start: no thread matched (or none exist) — pair with a recent unthreaded idea
+    const { results: loose } = await env.DB.prepare(
+      `SELECT id, title, content FROM notes
+       WHERE user_id = ? AND category = 'idea' AND thread_id IS NULL AND id != ?
+         AND created_at >= datetime('now', '-90 days')
+       ORDER BY created_at DESC LIMIT 30`
     )
-      .bind(note.user_id)
-      .all<{ id: string; title: string }>();
-    const picked = await deepseekPickThread(env, note.content, threads ?? []);
-    if (picked) await attachNoteToThread(env, note.id, picked);
-  } catch {
-    /* clustering must never break note ingestion */
+      .bind(note.user_id, note.id)
+      .all<{ id: string; title: string | null; content: string }>();
+    const mate = await deepseekPickNote(env, note.content, loose ?? []);
+    if (mate) {
+      const m = (loose ?? []).find((n) => n.id === mate)!;
+      const threadId = await newThread(env, note.user_id, m.title || note.title || note.content.slice(0, 20));
+      await attachNoteToThread(env, mate, threadId);
+      await attachNoteToThread(env, note.id, threadId);
+      console.log(`threads: cold-start created thread ${threadId} for notes ${mate}, ${note.id}`);
+    }
+  } catch (err) {
+    // clustering must never break note ingestion, but always leave a trace
+    console.error(`threads: clusterNote failed for note=${note.id}`, err);
   }
+}
+
+async function pickThreadByDeepseek(env: Env, note: NoteRow): Promise<string | null> {
+  const { results: threads } = await env.DB.prepare(
+    "SELECT id, title FROM threads WHERE user_id = ? ORDER BY updated_at DESC LIMIT 30"
+  )
+    .bind(note.user_id)
+    .all<{ id: string; title: string }>();
+  return deepseekPickThread(env, note.content, threads ?? []);
+}
+
+/**
+ * Full re-cluster of a user's idea notes from the last 90 days: detach them
+ * from threads, drop the resulting empty threads, then run clusterNote over
+ * each idea in chronological order.
+ */
+export async function rebuildThreads(env: Env, userId: string): Promise<{ ideas: number; threads: number }> {
+  const { results: ideas } = await env.DB.prepare(
+    `SELECT * FROM notes WHERE user_id = ? AND category = 'idea'
+       AND created_at >= datetime('now', '-90 days')
+     ORDER BY created_at ASC LIMIT 500`
+  )
+    .bind(userId)
+    .all<NoteRow>();
+  const rows = ideas ?? [];
+  await env.DB.prepare(
+    `UPDATE notes SET thread_id = NULL WHERE user_id = ? AND category = 'idea'
+       AND created_at >= datetime('now', '-90 days')`
+  )
+    .bind(userId)
+    .run();
+  await env.DB.prepare(
+    "DELETE FROM threads WHERE user_id = ? AND id NOT IN (SELECT DISTINCT thread_id FROM notes WHERE thread_id IS NOT NULL)"
+  )
+    .bind(userId)
+    .run();
+  for (const n of rows) {
+    await clusterNote(env, { ...n, thread_id: null });
+  }
+  const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM threads WHERE user_id = ? AND note_count > 0")
+    .bind(userId)
+    .first<{ c: number }>();
+  console.log(`threads: rebuild for user=${userId} ideas=${rows.length} threads=${cnt?.c ?? 0}`);
+  return { ideas: rows.length, threads: cnt?.c ?? 0 };
 }
 
 /** Daily cron: refresh title/summary/note_count of every thread from its notes. */

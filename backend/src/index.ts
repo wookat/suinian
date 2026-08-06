@@ -5,7 +5,7 @@ import { triageNote, loadTopTags, FALLBACK_TRIAGE } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
-import { clusterNote, refreshThreads } from "./threads";
+import { clusterNote, refreshThreads, rebuildThreads } from "./threads";
 import { generateWeeklyReport, generateAllWeeklyReports } from "./reports";
 
 type Vars = { userId: string };
@@ -406,6 +406,17 @@ app.get("/api/threads", async (c) => {
     .bind(c.get("userId"))
     .all<ThreadRow>();
   return c.json({ threads: results ?? [] });
+});
+
+// ---- POST /api/threads/rebuild ----
+app.post("/api/threads/rebuild", async (c) => {
+  const result = await rebuildThreads(c.env, c.get("userId"));
+  const { results } = await c.env.DB.prepare(
+    "SELECT * FROM threads WHERE user_id = ? AND note_count > 0 ORDER BY updated_at DESC LIMIT 100"
+  )
+    .bind(c.get("userId"))
+    .all<ThreadRow>();
+  return c.json({ ...result, threads: results ?? [] });
 });
 
 // ---- GET /api/threads/:id ----
