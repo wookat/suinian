@@ -26,6 +26,8 @@ npx wrangler d1 create suinian
 npx wrangler d1 migrations apply suinian --remote
 # 设置密钥
 npx wrangler secret put DEEPSEEK_API_KEY
+# 敏感内容加密密钥（32 随机字节 base64，生成后妥善备份，丢失将无法解密存量敏感笔记；不要写进仓库/日志）
+openssl rand -base64 32 | npx wrangler secret put SUINIAN_ENC_KEY
 # 部署（自定义域 suinian-api.zalize.com 已在 wrangler.toml routes 中声明）
 npx wrangler deploy
 # 创建用户 token
@@ -41,7 +43,13 @@ npx wrangler d1 execute suinian --remote --command \
 ```json
 { "source": "web", "raw_type": "text", "content": "碎片内容", "url": "可选" }
 ```
-立即落库返回 `201 {note}`（此时 `category=null, tags=[]`），DeepSeek 分拣（`deepseek-chat`，输出 `{category, tags(≤3个，优先复用用户 top50 已有标签), title, is_sensitive, todo_due}`）、链接抓取（`url_title`/`url_summary`）、线索聚类均在 `ctx.waitUntil` 异步回填。敏感信息除 prompt 判定外另有正则兜底（密码/密钥/卡号等模式），疑似敏感值的标签会被过滤。
+立即落库返回 `201 {note}`（此时 `category=null, tags=[]`），DeepSeek 分拣（`deepseek-chat`，输出 `{category, tags(≤3个，优先复用用户 top50 已有标签), title, is_sensitive, todo_due}`）、链接抓取、线索聚类均在 `ctx.waitUntil` 异步回填。敏感信息除 prompt 判定外另有正则兜底（密码/密钥/卡号等模式），疑似敏感值的标签会被过滤。
+
+- **内容长度上限 20000 字符**（`POST /api/notes`、`/api/ingest/wechat`、`PATCH content` 同），超出返回 `413 {"error":"内容过长：最多 20000 字符，当前 N 字符。…"}`。
+- **多链接抓取**：正文中前 3 个（去重）URL 都会抓标题，存 `url_titles`（JSON `[{url,title}]`）；`url`/`url_title`/`url_summary` 保持为首个 URL 的信息。
+
+#### 敏感内容加密（R3）
+分拣判定 `is_sensitive=true` 的笔记，原文用 **AES-256-GCM** 加密后存 `content_enc`（格式 `v1:<b64 iv>:<b64 ct>`），D1 中 `content` 字段只存占位符 `[加密内容]`。GET/PATCH/export 等接口对已授权 token **透明解密**返回原文（响应中不含 `content_enc`）。密钥为 worker secret `SUINIAN_ENC_KEY`（32 随机字节的 base64，生成方式见上；不落仓库，丢失即无法解密）。周报与问答召回只见占位符，敏感原文不会进入 AI prompt。存量敏感笔记迁移：`node scripts/encrypt-existing.mjs`（需 `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`/`D1_DATABASE_ID`/`SUINIAN_ENC_KEY` 环境变量，支持 `--dry-run`）。
 
 ### GET /api/notes — 时间流
 Query：`category=idea|todo|collect|data`、`tag=标签`、`q=关键词`（LIKE 全文）、`cursor`（上一页返回的 `next_cursor`）、`limit`（默认 20，最大 100）。
@@ -87,8 +95,9 @@ Query：`category=idea|todo|collect|data`、`tag=标签`、`q=关键词`（LIKE 
 
 ### 其他
 - `GET /health` 公开健康检查。
+- 所有 404（含不存在的 thread/report id 与未知路由）统一返回 JSON `{"error":"not found"}`。
 
 ## 数据模型
-见 `migrations/`：0001（users / notes / threads / weekly_reports / attachments）+ 0002（note_embeddings 聚类向量表 + 索引）。R2 已启用 threads/weekly_reports；attachments 为 R3+ 预留。
+见 `migrations/`：0001（users / notes / threads / weekly_reports / attachments）+ 0002（note_embeddings 聚类向量表 + 索引）+ 0003（notes.url_titles 多链接标题）。R2 已启用 threads/weekly_reports；attachments 为 R3+ 预留。
 
 注：wrangler v3 对 D1 migrations/zone-routes 有兼容问题，线上迁移用 Cloudflare REST API `/d1/database/:id/query` 执行；`wrangler deploy` 上传正常（需 `CLOUDFLARE_ACCOUNT_ID` 环境变量）。

@@ -6,6 +6,17 @@ export function extractUrl(text: string): string | null {
   return m ? m[0] : null;
 }
 
+/** Extract up to `max` distinct URLs from text, in order of appearance. */
+export function extractUrls(text: string, max = 3): string[] {
+  const re = new RegExp(URL_RE.source, "g");
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while (out.length < max && (m = re.exec(text)) !== null) {
+    if (!out.includes(m[0])) out.push(m[0]);
+  }
+  return out;
+}
+
 function decodeEntities(s: string): string {
   return s
     .replace(/&amp;/g, "&")
