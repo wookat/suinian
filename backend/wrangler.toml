@@ -15,7 +15,7 @@ database_id = "8a0a1fc0-c714-4822-a915-b1791f1599a1"
 binding = "AI"
 
 [triggers]
-crons = ["0 0 * * 1", "0 20 * * *"]
+crons = ["0 0 * * 1", "0 20 * * *", "*/10 * * * *"]
 
 [vars]
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"

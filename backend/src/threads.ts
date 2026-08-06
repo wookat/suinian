@@ -1,4 +1,5 @@
 import type { Env, NoteRow } from "./types";
+import { chatComplete } from "./ai";
 
 /** bge-m3 cosine similarity above which two ideas join the same thread directly. */
 const SIM_JOIN = 0.76;
@@ -64,7 +65,7 @@ async function newThread(env: Env, userId: string, title: string): Promise<strin
  */
 export async function summarizeThread(env: Env, threadId: string, fallbackTitle?: string): Promise<void> {
   try {
-    if (!env.DEEPSEEK_API_KEY) return;
+
     const { results: notes } = await env.DB.prepare(
       "SELECT title, content, created_at FROM notes WHERE thread_id = ? ORDER BY created_at ASC LIMIT 50"
     )
@@ -75,26 +76,19 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
     const digest = rows
       .map((n, i) => `${i + 1}. (${n.created_at.slice(0, 10)}) ${(n.title || n.content).slice(0, 200)}`)
       .join("\n");
-    const res = await fetch(`${env.DEEPSEEK_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${env.DEEPSEEK_API_KEY}` },
-      body: JSON.stringify({
-        model: "deepseek-chat",
-        temperature: 0.3,
-        max_tokens: 300,
-        messages: [
-          {
-            role: "system",
-            content:
-              '以下是同一条思考线索里按时间排列的碎片。输出严格 JSON {"title":"<=20字的线索标题","summary":"<=120字的线索脉络总结"}，只输出 JSON。',
-          },
-          { role: "user", content: digest },
-        ],
-      }),
+    const text = await chatComplete(env, {
+      temperature: 0.3,
+      max_tokens: 300,
+      messages: [
+        {
+          role: "system",
+          content:
+            '以下是同一条思考线索里按时间排列的碎片。输出严格 JSON {"title":"<=20字的线索标题","summary":"<=120字的线索脉络总结"}，只输出 JSON。',
+        },
+        { role: "user", content: digest },
+      ],
     });
-    if (!res.ok) return;
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const text = data.choices?.[0]?.message?.content ?? "";
+    if (!text) return;
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) return;
     const obj = JSON.parse(m[0]) as { title?: string; summary?: string };
@@ -122,32 +116,17 @@ async function attachNoteToThread(env: Env, noteId: string, threadId: string): P
 }
 
 async function deepseekPickNumber(env: Env, system: string, user: string, max: number): Promise<number | null> {
-  if (!env.DEEPSEEK_API_KEY) return null;
-  try {
-    const res = await fetch(`${env.DEEPSEEK_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${env.DEEPSEEK_API_KEY}` },
-      body: JSON.stringify({
-        model: "deepseek-chat",
-        temperature: 0,
-        max_tokens: 10,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }),
-    });
-    if (!res.ok) {
-      console.error("threads: deepseek pick failed", res.status, (await res.text()).slice(0, 200));
-      return null;
-    }
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const n = parseInt((data.choices?.[0]?.message?.content ?? "").trim(), 10);
-    return Number.isFinite(n) && n >= 0 && n <= max ? n : null;
-  } catch (err) {
-    console.error("threads: deepseek pick error", err);
-    return null;
-  }
+  const text = await chatComplete(env, {
+    temperature: 0,
+    max_tokens: 10,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  });
+  if (text === null) return null;
+  const n = parseInt(text.trim(), 10);
+  return Number.isFinite(n) && n >= 0 && n <= max ? n : null;
 }
 
 /** DeepSeek fallback: pick an existing thread (by title) or none for a new idea. */
