@@ -56,6 +56,60 @@ async function newThread(env: Env, userId: string, title: string): Promise<strin
   return id;
 }
 
+/**
+ * Generate the thread's title/summary from its notes via DeepSeek and persist
+ * them. Called synchronously when clustering attaches a note (so a thread has
+ * a one-line summary right away, not only after the daily cron) and reused by
+ * the daily refresh. Never throws.
+ */
+export async function summarizeThread(env: Env, threadId: string, fallbackTitle?: string): Promise<void> {
+  try {
+    if (!env.DEEPSEEK_API_KEY) return;
+    const { results: notes } = await env.DB.prepare(
+      "SELECT title, content, created_at FROM notes WHERE thread_id = ? ORDER BY created_at ASC LIMIT 50"
+    )
+      .bind(threadId)
+      .all<{ title: string | null; content: string; created_at: string }>();
+    const rows = notes ?? [];
+    if (rows.length === 0) return;
+    const digest = rows
+      .map((n, i) => `${i + 1}. (${n.created_at.slice(0, 10)}) ${(n.title || n.content).slice(0, 200)}`)
+      .join("\n");
+    const res = await fetch(`${env.DEEPSEEK_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${env.DEEPSEEK_API_KEY}` },
+      body: JSON.stringify({
+        model: "deepseek-chat",
+        temperature: 0.3,
+        max_tokens: 300,
+        messages: [
+          {
+            role: "system",
+            content:
+              '以下是同一条思考线索里按时间排列的碎片。输出严格 JSON {"title":"<=20字的线索标题","summary":"<=120字的线索脉络总结"}，只输出 JSON。',
+          },
+          { role: "user", content: digest },
+        ],
+      }),
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const text = data.choices?.[0]?.message?.content ?? "";
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) return;
+    const obj = JSON.parse(m[0]) as { title?: string; summary?: string };
+    if (obj.title || obj.summary) {
+      await env.DB.prepare(
+        "UPDATE threads SET title = ?, summary = ?, updated_at = datetime('now') WHERE id = ?"
+      )
+        .bind((obj.title || fallbackTitle || "未命名线索").slice(0, 50), obj.summary ?? null, threadId)
+        .run();
+    }
+  } catch (err) {
+    console.error(`threads: summarizeThread failed for thread=${threadId}`, err);
+  }
+}
+
 async function attachNoteToThread(env: Env, noteId: string, threadId: string): Promise<void> {
   await env.DB.prepare("UPDATE notes SET thread_id = ?, updated_at = datetime('now') WHERE id = ?")
     .bind(threadId, noteId)
@@ -201,6 +255,7 @@ export async function clusterNote(env: Env, note: NoteRow): Promise<void> {
             console.log(`threads: created thread ${threadId} for notes ${best.id}, ${note.id}`);
           }
           await attachNoteToThread(env, note.id, threadId);
+          await summarizeThread(env, threadId, note.title || undefined);
           return;
         }
       } else {
@@ -208,7 +263,10 @@ export async function clusterNote(env: Env, note: NoteRow): Promise<void> {
       }
       // borderline/no embedding match: still try DeepSeek against existing thread titles
       const picked = await pickThreadByDeepseek(env, note);
-      if (picked) await attachNoteToThread(env, note.id, picked);
+      if (picked) {
+        await attachNoteToThread(env, note.id, picked);
+        await summarizeThread(env, picked, note.title || undefined);
+      }
       return;
     }
     // no embedding available: DeepSeek-only fallback (existing threads, then cold-start pairing)
@@ -216,6 +274,7 @@ export async function clusterNote(env: Env, note: NoteRow): Promise<void> {
     const picked = await pickThreadByDeepseek(env, note);
     if (picked) {
       await attachNoteToThread(env, note.id, picked);
+      await summarizeThread(env, picked, note.title || undefined);
       return;
     }
     // cold start: no thread matched (or none exist) — pair with a recent unthreaded idea
@@ -233,6 +292,7 @@ export async function clusterNote(env: Env, note: NoteRow): Promise<void> {
       const threadId = await newThread(env, note.user_id, m.title || note.title || note.content.slice(0, 20));
       await attachNoteToThread(env, mate, threadId);
       await attachNoteToThread(env, note.id, threadId);
+      await summarizeThread(env, threadId, m.title || undefined);
       console.log(`threads: cold-start created thread ${threadId} for notes ${mate}, ${note.id}`);
     }
   } catch (err) {
@@ -292,51 +352,15 @@ export async function refreshThreads(env: Env): Promise<void> {
   ).all<{ id: string; user_id: string; title: string }>();
   for (const t of threads ?? []) {
     try {
-      const { results: notes } = await env.DB.prepare(
-        "SELECT title, content, created_at FROM notes WHERE thread_id = ? ORDER BY created_at ASC LIMIT 50"
-      )
+      const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM notes WHERE thread_id = ?")
         .bind(t.id)
-        .all<{ title: string | null; content: string; created_at: string }>();
-      const rows = notes ?? [];
+        .first<{ c: number }>();
       await env.DB.prepare(
         "UPDATE threads SET note_count = ?, updated_at = datetime('now') WHERE id = ?"
       )
-        .bind(rows.length, t.id)
+        .bind(cnt?.c ?? 0, t.id)
         .run();
-      if (rows.length === 0 || !env.DEEPSEEK_API_KEY) continue;
-      const digest = rows
-        .map((n, i) => `${i + 1}. (${n.created_at.slice(0, 10)}) ${(n.title || n.content).slice(0, 200)}`)
-        .join("\n");
-      const res = await fetch(`${env.DEEPSEEK_BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${env.DEEPSEEK_API_KEY}` },
-        body: JSON.stringify({
-          model: "deepseek-chat",
-          temperature: 0.3,
-          max_tokens: 300,
-          messages: [
-            {
-              role: "system",
-              content:
-                '以下是同一条思考线索里按时间排列的碎片。输出严格 JSON {"title":"<=20字的线索标题","summary":"<=120字的线索脉络总结"}，只输出 JSON。',
-            },
-            { role: "user", content: digest },
-          ],
-        }),
-      });
-      if (!res.ok) continue;
-      const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-      const text = data.choices?.[0]?.message?.content ?? "";
-      const m = text.match(/\{[\s\S]*\}/);
-      if (!m) continue;
-      const obj = JSON.parse(m[0]) as { title?: string; summary?: string };
-      if (obj.title || obj.summary) {
-        await env.DB.prepare(
-          "UPDATE threads SET title = ?, summary = ?, updated_at = datetime('now') WHERE id = ?"
-        )
-          .bind((obj.title || t.title).slice(0, 50), obj.summary ?? null, t.id)
-          .run();
-      }
+      if ((cnt?.c ?? 0) > 0) await summarizeThread(env, t.id, t.title);
     } catch {
       /* per-thread failures shouldn't stop the sweep */
     }

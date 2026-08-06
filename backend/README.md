@@ -74,7 +74,7 @@ Query：`category=idea|todo|collect|data`、`tag=标签`、`q=关键词`（LIKE 
 ```json
 { "question": "我最近在想什么关于创业的？" }
 ```
-关键词召回 top-20（每个关键词按 UTF-8 截断至 45 字节，避开 D1 LIKE 模式长度限制）→ 召回笔记每条截断 500 字符入 prompt → DeepSeek 汇总回答。返回 `{answer, references: [note_id...]}`；AI 失败降级返回 references。
+关键词召回 top-20（每个关键词按 UTF-8 截断至 45 字节，避开 D1 LIKE 模式长度限制）→ 召回笔记每条截断 500 字符入 prompt → DeepSeek 汇总回答。返回 `{answer, references: [{index, note_id}...]}`：`index` 与回答正文中的 `[n]` 引用编号一一对应，被引用的笔记按引用顺序排列；回答中没有 `[n]` 引用时返回全部召回笔记（index 为召回序号）。AI 失败降级返回全部召回 references。
 
 ### GET /api/threads — 思考线索列表
 返回 `{threads: [{id, title, summary, note_count, updated_at}...]}`（仅含有笔记的线索）。
@@ -82,7 +82,10 @@ Query：`category=idea|todo|collect|data`、`tag=标签`、`q=关键词`（LIKE 
 ### GET /api/threads/:id — 线索详情
 返回 `{thread, notes: [...]}`（按时间升序）。
 
-聚类机制：新 idea 入库后用 Workers AI `@cf/baai/bge-m3` embedding 与近 90 天 idea 做余弦相似度（阈值 0.78），命中则归入已有 thread 或与命中笔记建新 thread；Workers AI 不可用时降级为 DeepSeek 按线索标题判断。每日 cron（04:00 北京时间）重整 thread 标题/摘要。
+聚类机制：新 idea 入库后用 Workers AI `@cf/baai/bge-m3` embedding 与近 90 天 idea 做余弦相似度（阈值 0.78），命中则归入已有 thread 或与命中笔记建新 thread；Workers AI 不可用时降级为 DeepSeek 按线索标题判断。命中/新建 thread 时会**立即同步生成**一句话标题/摘要（不等每日 cron）；每日 cron（04:00 北京时间）仍会重整全部 thread 标题/摘要。
+
+### POST /api/threads/rebuild — 重建线索
+对当前用户近 90 天的 idea 笔记做全量重聚类：先把它们从 thread 中摘出、删掉空 thread，再按时间顺序逐条重新聚类（同步执行，笔记多时耗时较长）。返回 `{ideas, threads: [...]}`（`ideas`=参与重聚类的笔记数，`threads`=重建后的线索列表）。无请求体。
 
 ### 周报
 - `GET /api/reports` 列表 `{reports: [{id, week_start, created_at}...]}`
@@ -100,4 +103,15 @@ Query：`category=idea|todo|collect|data`、`tag=标签`、`q=关键词`（LIKE 
 ## 数据模型
 见 `migrations/`：0001（users / notes / threads / weekly_reports / attachments）+ 0002（note_embeddings 聚类向量表 + 索引）+ 0003（notes.url_titles 多链接标题）。R2 已启用 threads/weekly_reports；attachments 为 R3+ 预留。
 
-注：wrangler v3 对 D1 migrations/zone-routes 有兼容问题，线上迁移用 Cloudflare REST API `/d1/database/:id/query` 执行；`wrangler deploy` 上传正常（需 `CLOUDFLARE_ACCOUNT_ID` 环境变量）。
+### 线上迁移
+
+wrangler v3 对 D1 migrations/zone-routes 有兼容问题，线上迁移用仓库内脚本走 Cloudflare REST API `/d1/database/:id/query`：
+
+```bash
+export CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=...
+# 可选：D1_DATABASE_ID（默认读 wrangler.toml 的 database_id）
+node scripts/migrate-remote.mjs --dry-run   # 先看待应用列表
+node scripts/migrate-remote.mjs             # 应用 migrations/*.sql
+```
+
+脚本用与 wrangler 相同的 `d1_migrations` 表记录已应用迁移，重复执行会自动跳过（幂等）。`wrangler deploy` 上传正常（需 `CLOUDFLARE_ACCOUNT_ID` 环境变量）。

@@ -316,6 +316,26 @@ app.post("/api/ingest/wechat", async (c) => {
   return c.json({ note: await noteToJsonDecrypted(c.env, note), reply }, 201);
 });
 
+/**
+ * Build the /api/ask references array so that [n] citations in the answer map
+ * to entries: each reference carries the exact `index` used in the answer
+ * ([index] ↔ note id). Cited notes come first in citation order; when the
+ * answer has no [n] citations, all recalled notes are returned with their
+ * prompt indexes.
+ */
+export function buildAskReferences(
+  answer: string,
+  noteIds: string[]
+): { index: number; note_id: string }[] {
+  const cited: number[] = [];
+  for (const m of answer.matchAll(/[\[［](\d{1,2})[\]］]/g)) {
+    const n = parseInt(m[1], 10);
+    if (n >= 1 && n <= noteIds.length && !cited.includes(n)) cited.push(n);
+  }
+  const order = cited.length > 0 ? cited : noteIds.map((_, i) => i + 1);
+  return order.map((n) => ({ index: n, note_id: noteIds[n - 1] }));
+}
+
 // ---- POST /api/ask ----
 app.post("/api/ask", async (c) => {
   const userId = c.get("userId");
@@ -361,8 +381,9 @@ app.post("/api/ask", async (c) => {
     notes = recent.results ?? [];
   }
 
+  const noteIds = notes.map((n) => n.id);
   if (!c.env.DEEPSEEK_API_KEY) {
-    return c.json({ answer: "（AI 暂不可用）已找到相关记录，见 references。", references: notes.map((n) => n.id) });
+    return c.json({ answer: "（AI 暂不可用）已找到相关记录，见 references。", references: buildAskReferences("", noteIds) });
   }
 
   const context = notes
@@ -392,9 +413,9 @@ app.post("/api/ask", async (c) => {
     if (!res.ok) throw new Error(`deepseek ${res.status}`);
     const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     const answer = data.choices?.[0]?.message?.content ?? "";
-    return c.json({ answer, references: notes.map((n) => n.id) });
+    return c.json({ answer, references: buildAskReferences(answer, noteIds) });
   } catch {
-    return c.json({ answer: "（AI 暂不可用）已找到相关记录，见 references。", references: notes.map((n) => n.id) });
+    return c.json({ answer: "（AI 暂不可用）已找到相关记录，见 references。", references: buildAskReferences("", noteIds) });
   }
 });
 

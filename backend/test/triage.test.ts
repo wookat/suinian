@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseTriageJson, FALLBACK_TRIAGE } from "../src/triage";
+import { parseTriageJson, FALLBACK_TRIAGE, buildTriagePrompt, normalizeTodoDue } from "../src/triage";
 
 describe("parseTriageJson", () => {
   it("parses valid JSON", () => {
@@ -44,5 +44,41 @@ describe("parseTriageJson", () => {
   it("fallback shape is category=idea no tags", () => {
     expect(FALLBACK_TRIAGE.category).toBe("idea");
     expect(FALLBACK_TRIAGE.tags).toEqual([]);
+  });
+
+  it("keeps a time-of-day in todo_due (YYYY-MM-DDTHH:mm)", () => {
+    const r = parseTriageJson(
+      '{"category":"todo","tags":["会议"],"title":"开会","is_sensitive":false,"todo_due":"2026-08-07T15:30"}'
+    );
+    expect(r?.todo_due).toBe("2026-08-07T15:30");
+  });
+
+  it("keeps date-only todo_due as YYYY-MM-DD", () => {
+    const r = parseTriageJson('{"category":"todo","tags":[],"title":"t","is_sensitive":false,"todo_due":"2026-08-10"}');
+    expect(r?.todo_due).toBe("2026-08-10");
+  });
+});
+
+describe("normalizeTodoDue", () => {
+  it("normalizes space separator and trailing seconds/timezone", () => {
+    expect(normalizeTodoDue("2026-08-07 15:30")).toBe("2026-08-07T15:30");
+    expect(normalizeTodoDue("2026-08-07T15:30:00")).toBe("2026-08-07T15:30");
+    expect(normalizeTodoDue("2026-08-07T15:30+08:00")).toBe("2026-08-07T15:30");
+  });
+
+  it("rejects non-date strings and non-strings", () => {
+    expect(normalizeTodoDue("明天下午")).toBeNull();
+    expect(normalizeTodoDue("")).toBeNull();
+    expect(normalizeTodoDue(null)).toBeNull();
+    expect(normalizeTodoDue(42)).toBeNull();
+  });
+});
+
+describe("buildTriagePrompt todo_due instructions", () => {
+  it("asks for YYYY-MM-DDTHH:mm when a time-of-day is present, date-only otherwise", () => {
+    const p = buildTriagePrompt(new Date("2026-08-06T04:00:00Z"));
+    expect(p).toContain('YYYY-MM-DDTHH:mm');
+    expect(p).toContain("具体时刻");
+    expect(p).toContain('只有日期没有时刻时仅输出 "YYYY-MM-DD"');
   });
 });
