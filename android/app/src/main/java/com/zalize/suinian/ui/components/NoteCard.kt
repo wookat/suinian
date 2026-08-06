@@ -39,7 +39,10 @@ import com.zalize.suinian.data.Note
 import com.zalize.suinian.data.UrlTitle
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 private val categories = listOf(
@@ -58,9 +61,27 @@ fun categoryLabel(category: String?): String {
 private val dateFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm")
 private val dateFormatterWithYear = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
+/** 后端时间容错解析：兼容 ISO-8601 与 D1 的 "yyyy-MM-dd HH:mm[:ss]"（UTC） */
+fun parseInstantLenient(raw: String): Instant? {
+    try {
+        return Instant.parse(raw)
+    } catch (_: Exception) {
+    }
+    val normalized = raw.trim().replace(' ', 'T')
+    try {
+        return LocalDateTime.parse(normalized).toInstant(ZoneOffset.UTC)
+    } catch (_: Exception) {
+    }
+    return try {
+        LocalDate.parse(normalized.take(10)).atStartOfDay().toInstant(ZoneOffset.UTC)
+    } catch (_: Exception) {
+        null
+    }
+}
+
 /** 相对时间：刚刚 / x 分钟前 / x 小时前，超 7 天显日期（对齐 Web formatTime） */
 fun formatRelativeTime(iso: String, now: Instant = Instant.now()): String = try {
-    val t = Instant.parse(iso)
+    val t = parseInstantLenient(iso) ?: throw IllegalArgumentException(iso)
     val minutes = Duration.between(t, now).toMinutes()
     when {
         minutes < 1 -> "刚刚"
@@ -80,7 +101,7 @@ fun formatRelativeTime(iso: String, now: Instant = Instant.now()): String = try 
 /** 截止时间：含 HH:mm 显示到分钟，否则只显日期 */
 fun formatDue(iso: String): String = try {
     val hasTime = Regex("[T ]\\d{2}:\\d{2}").containsMatchIn(iso)
-    val zoned = Instant.parse(iso).atZone(ZoneId.systemDefault())
+    val zoned = (parseInstantLenient(iso) ?: throw IllegalArgumentException(iso)).atZone(ZoneId.systemDefault())
     if (hasTime) zoned.format(dateFormatter)
     else zoned.format(DateTimeFormatter.ofPattern("MM-dd"))
 } catch (_: Exception) {

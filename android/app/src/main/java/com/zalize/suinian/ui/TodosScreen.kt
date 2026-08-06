@@ -25,7 +25,10 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zalize.suinian.SuinianApp
 import com.zalize.suinian.data.Note
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.zalize.suinian.ui.components.NoteCard
+import com.zalize.suinian.ui.components.parseInstantLenient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -42,15 +45,8 @@ enum class DueGroup(val label: String) {
 
 internal fun dueGroup(due: String?, today: LocalDate = LocalDate.now()): DueGroup {
     if (due.isNullOrBlank()) return DueGroup.NONE
-    val date = try {
-        java.time.Instant.parse(due).atZone(ZoneId.systemDefault()).toLocalDate()
-    } catch (_: Exception) {
-        try {
-            LocalDate.parse(due.take(10))
-        } catch (_: Exception) {
-            return DueGroup.NONE
-        }
-    }
+    val date = parseInstantLenient(due)?.atZone(ZoneId.systemDefault())?.toLocalDate()
+        ?: return DueGroup.NONE
     val dayDiff = java.time.temporal.ChronoUnit.DAYS.between(today, date)
     return when {
         dayDiff < 0 -> DueGroup.OVERDUE
@@ -116,6 +112,11 @@ class TodosViewModel(app: Application) : AndroidViewModel(app) {
 @Composable
 fun TodosScreen(modifier: Modifier = Modifier, vm: TodosViewModel = viewModel()) {
     val ui by vm.ui.collectAsState()
+
+    // 切回该页时刷新，避免新建待办看不到
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        vm.refresh()
+    }
 
     when {
         ui.loading && ui.notes.isEmpty() -> Column(
