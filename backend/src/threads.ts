@@ -75,11 +75,11 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
     const digest = rows
       .map((n, i) => `${i + 1}. (${n.created_at.slice(0, 10)}) ${(n.title || n.content).slice(0, 200)}`)
       .join("\n");
-    const res = await fetch(`${env.DEEPSEEK_BASE_URL}/chat/completions`, {
+    const res = await fetch(`${env.AI_BASE_URL || env.DEEPSEEK_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${env.DEEPSEEK_API_KEY}` },
       body: JSON.stringify({
-        model: "deepseek-chat",
+        model: env.AI_MODEL || "deepseek-chat",
         temperature: 0.3,
         max_tokens: 300,
         messages: [
@@ -124,11 +124,11 @@ async function attachNoteToThread(env: Env, noteId: string, threadId: string): P
 async function deepseekPickNumber(env: Env, system: string, user: string, max: number): Promise<number | null> {
   if (!env.DEEPSEEK_API_KEY) return null;
   try {
-    const res = await fetch(`${env.DEEPSEEK_BASE_URL}/chat/completions`, {
+    const res = await fetch(`${env.AI_BASE_URL || env.DEEPSEEK_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${env.DEEPSEEK_API_KEY}` },
       body: JSON.stringify({
-        model: "deepseek-chat",
+        model: env.AI_MODEL || "deepseek-chat",
         temperature: 0,
         max_tokens: 10,
         messages: [

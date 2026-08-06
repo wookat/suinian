@@ -390,14 +390,14 @@ app.post("/api/ask", async (c) => {
     .map((n, i) => `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}) ${n.title ?? ""}\n${n.content.slice(0, 500)}`)
     .join("\n\n");
   try {
-    const res = await fetch(`${c.env.DEEPSEEK_BASE_URL}/chat/completions`, {
+    const res = await fetch(`${c.env.AI_BASE_URL || c.env.DEEPSEEK_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${c.env.DEEPSEEK_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "deepseek-chat",
+        model: c.env.AI_MODEL || "deepseek-chat",
         temperature: 0.3,
         max_tokens: 800,
         messages: [

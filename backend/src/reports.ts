@@ -68,11 +68,11 @@ export async function generateWeeklyReport(
         .filter((n) => !n.is_sensitive)
         .map((n, i) => `${i + 1}. [${CATEGORY_LABEL[n.category ?? "idea"]}] (${n.created_at.slice(0, 10)}) ${(n.title || n.content).slice(0, 200)}`)
         .join("\n");
-      const res = await fetch(`${env.DEEPSEEK_BASE_URL}/chat/completions`, {
+      const res = await fetch(`${env.AI_BASE_URL || env.DEEPSEEK_BASE_URL}/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${env.DEEPSEEK_API_KEY}` },
         body: JSON.stringify({
-          model: "deepseek-chat",
+          model: env.AI_MODEL || "deepseek-chat",
           temperature: 0.4,
           max_tokens: 1200,
           messages: [

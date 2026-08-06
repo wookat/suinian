@@ -110,19 +110,19 @@ export async function loadTopTags(db: D1Database, userId: string): Promise<strin
 
 export async function triageNote(
   content: string,
-  env: { DEEPSEEK_API_KEY: string; DEEPSEEK_BASE_URL: string },
+  env: { DEEPSEEK_API_KEY: string; DEEPSEEK_BASE_URL: string; AI_MODEL?: string; AI_BASE_URL?: string },
   existingTags: string[] = []
 ): Promise<TriageResult> {
   let result = FALLBACK_TRIAGE;
   try {
-    const res = await fetch(`${env.DEEPSEEK_BASE_URL}/chat/completions`, {
+    const res = await fetch(`${env.AI_BASE_URL || env.DEEPSEEK_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${env.DEEPSEEK_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "deepseek-chat",
+        model: env.AI_MODEL || "deepseek-chat",
         temperature: 0.2,
         max_tokens: 300,
         messages: [

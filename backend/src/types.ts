@@ -3,6 +3,8 @@ export type Env = {
   AI?: Ai;
   DEEPSEEK_API_KEY: string;
   DEEPSEEK_BASE_URL: string;
+  AI_MODEL?: string;
+  AI_BASE_URL?: string;
   SUINIAN_ENC_KEY?: string;
 };
 
