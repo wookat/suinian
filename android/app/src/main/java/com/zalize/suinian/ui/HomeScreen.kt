@@ -1,7 +1,5 @@
 package com.zalize.suinian.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,12 +17,10 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudOff
-import androidx.compose.material.icons.outlined.Event
-import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Visibility
-import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.material3.AssistChip
@@ -47,16 +43,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
-import com.zalize.suinian.data.Note
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import com.zalize.suinian.data.NotesViewLimits
+import com.zalize.suinian.ui.components.NoteCard
 
 private val categories = listOf(
     null to "全部",
@@ -66,24 +58,24 @@ private val categories = listOf(
     "data" to "资料",
 )
 
-internal fun categoryLabel(category: String?): String {
-    if (category == null) return "分拣中"
-    return categories.firstOrNull { it.first == category }?.second ?: category
-}
-
 @Composable
 fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNoteSignal: Int = 0) {
     val ui by vm.ui.collectAsState()
     val pending by vm.pendingCount.collectAsState()
     var draft by rememberSaveable { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(focusQuickNoteSignal) {
-        if (focusQuickNoteSignal > 0) focusRequester.requestFocus()
+        if (focusQuickNoteSignal > 0) {
+            focusRequester.requestFocus()
+            keyboard?.show()
+        }
     }
 
     Column(modifier = modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         // 速记框
+        val overLimit = draft.length > NotesViewLimits.MAX_CONTENT_CHARS
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
@@ -93,13 +85,17 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
             placeholder = { Text("现在的想法是……") },
             shape = RoundedCornerShape(16.dp),
             maxLines = 4,
+            isError = overLimit,
+            supportingText = if (overLimit) {
+                { Text("内容过长：最多 ${NotesViewLimits.MAX_CONTENT_CHARS} 字符，当前 ${draft.length} 字符") }
+            } else null,
             trailingIcon = {
                 IconButton(
                     onClick = {
                         vm.quickSend(draft)
                         draft = ""
                     },
-                    enabled = draft.isNotBlank() && !ui.sending,
+                    enabled = draft.isNotBlank() && !overLimit && !ui.sending,
                 ) {
                     Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "记下")
                 }
@@ -108,21 +104,89 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
 
         Spacer(Modifier.height(8.dp))
 
-        // 搜索框
-        OutlinedTextField(
-            value = ui.query,
-            onValueChange = { vm.setQuery(it) },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("搜索碎念…") },
-            shape = RoundedCornerShape(16.dp),
-            singleLine = true,
-            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-            trailingIcon = {
-                IconButton(onClick = { vm.search() }) {
-                    Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "搜索")
+        // 搜索框 / 问答框
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = if (ui.askMode) ui.askInput else ui.query,
+                onValueChange = { if (ui.askMode) vm.setAskInput(it) else vm.setQuery(it) },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text(if (ui.askMode) "问问你的笔记，例如：我之前想过的那个点子…" else "搜索碎念…") },
+                shape = RoundedCornerShape(16.dp),
+                singleLine = true,
+                leadingIcon = {
+                    Icon(
+                        if (ui.askMode) Icons.Outlined.AutoAwesome else Icons.Outlined.Search,
+                        contentDescription = null,
+                    )
+                },
+                trailingIcon = {
+                    IconButton(onClick = { if (ui.askMode) vm.ask() else vm.search() }) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.Send,
+                            contentDescription = if (ui.askMode) "提问" else "搜索",
+                        )
+                    }
+                },
+            )
+            Spacer(Modifier.width(8.dp))
+            FilterChip(
+                selected = ui.askMode,
+                onClick = { vm.toggleAskMode() },
+                label = { Text("问答") },
+                leadingIcon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
+            )
+        }
+
+        // 问答结果卡
+        if (ui.askMode && (ui.asking || ui.askAnswer != null || ui.askError != null)) {
+            Spacer(Modifier.height(8.dp))
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            ) {
+                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                    when {
+                        ui.asking -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(Modifier.width(18.dp).height(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("正在思考…", style = MaterialTheme.typography.bodyMedium)
+                        }
+                        ui.askError != null -> Text(
+                            ui.askError!!,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        else -> {
+                            Row {
+                                Text(
+                                    ui.askAnswer.orEmpty(),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                IconButton(onClick = { vm.clearAskResult() }) {
+                                    Icon(Icons.Outlined.Close, contentDescription = "关闭回答")
+                                }
+                            }
+                            if (ui.askReferences.isNotEmpty()) {
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "引用笔记（${ui.askReferences.size}）",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                ui.askReferences.forEach { note ->
+                                    Spacer(Modifier.height(6.dp))
+                                    NoteCard(note)
+                                }
+                            }
+                        }
+                    }
                 }
-            },
-        )
+            }
+        }
 
         Spacer(Modifier.height(8.dp))
 
@@ -175,7 +239,11 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    Text("加载失败：${ui.error}", color = MaterialTheme.colorScheme.error)
+                    Text(
+                        ui.error ?: "加载失败",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
                     Spacer(Modifier.height(8.dp))
                     AssistChip(onClick = { vm.refresh() }, label = { Text("重试") })
                 }
@@ -210,7 +278,7 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(ui.notes, key = { it.id }) { note ->
-                        NoteCard(note)
+                        NoteCard(note, onToggleTodo = { vm.toggleTodo(it) })
                     }
                     if (ui.loadingMore) {
                         item {
@@ -225,146 +293,4 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
             }
         }
     }
-}
-
-@Composable
-private fun NoteCard(note: Note) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-    ) {
-        Column(Modifier.padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CategoryBadge(note.category)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    formatTime(note.createdAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            if (note.isSensitive) {
-                var revealed by rememberSaveable(note.id) { mutableStateOf(false) }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { revealed = !revealed },
-                ) {
-                    Icon(
-                        if (revealed) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
-                        contentDescription = if (revealed) "隐藏敏感内容" else "显示敏感内容",
-                        tint = MaterialTheme.colorScheme.secondary,
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        if (revealed) note.content else "••••••••",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            } else {
-                Text(note.content, style = MaterialTheme.typography.bodyMedium)
-            }
-
-            // 待办截止时间
-            if (note.category == "todo" && !note.todoDue.isNullOrBlank()) {
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Outlined.Event,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary,
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "截止 ${formatDue(note.todoDue)}" + if (note.todoDone == true) " · 已完成" else "",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.tertiary,
-                    )
-                }
-            }
-
-            // 链接卡片
-            if (note.url != null) {
-                Spacer(Modifier.height(8.dp))
-                Card(
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(10.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Outlined.Link,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                note.urlTitle ?: note.url,
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        if (note.urlSummary != null) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                note.urlSummary,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (note.tags.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    note.tags.take(5).forEach { tag ->
-                        Text(
-                            "#$tag",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CategoryBadge(category: String?) {
-    Text(
-        categoryLabel(category),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onPrimaryContainer,
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(MaterialTheme.colorScheme.primaryContainer)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    )
-}
-
-private val timeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm")
-
-private fun formatTime(iso: String): String = try {
-    Instant.parse(iso).atZone(ZoneId.systemDefault()).format(timeFormatter)
-} catch (_: Exception) {
-    iso.take(16).replace("T", " ")
-}
-
-private fun formatDue(iso: String): String = try {
-    Instant.parse(iso).atZone(ZoneId.systemDefault()).format(timeFormatter)
-} catch (_: Exception) {
-    iso.take(16).replace("T", " ")
 }

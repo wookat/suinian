@@ -7,6 +7,7 @@ import com.zalize.suinian.SuinianApp
 import com.zalize.suinian.data.AppSettings
 import com.zalize.suinian.data.CreateNoteRequest
 import com.zalize.suinian.data.Note
+import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.SendResult
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -24,6 +25,13 @@ data class NotesUiState(
     val toast: String? = null,
     val cursor: String? = null,
     val loadingMore: Boolean = false,
+    // 问答模式
+    val askMode: Boolean = false,
+    val askInput: String = "",
+    val asking: Boolean = false,
+    val askAnswer: String? = null,
+    val askError: String? = null,
+    val askReferences: List<Note> = emptyList(),
 )
 
 class NotesViewModel(app: Application) : AndroidViewModel(app) {
@@ -92,9 +100,60 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun search() = refresh()
 
+    fun toggleAskMode() {
+        val s = _ui.value
+        _ui.value = s.copy(askMode = !s.askMode, askAnswer = null, askError = null, askReferences = emptyList())
+    }
+
+    fun setAskInput(v: String) {
+        _ui.value = _ui.value.copy(askInput = v)
+    }
+
+    fun clearAskResult() {
+        _ui.value = _ui.value.copy(askAnswer = null, askError = null, askReferences = emptyList())
+    }
+
+    fun ask() {
+        val question = _ui.value.askInput.trim()
+        if (question.isEmpty() || _ui.value.asking) return
+        _ui.value = _ui.value.copy(asking = true, askAnswer = null, askError = null, askReferences = emptyList())
+        viewModelScope.launch {
+            try {
+                val res = repo.ask(question)
+                // 引用只有 id：从当前列表 + 最近一页里尽量匹配出笔记内容
+            val pool = (_ui.value.notes + runCatching { repo.list(null, null, null).notes }.getOrDefault(emptyList()))
+                    .distinctBy { it.id }
+                val refNotes = res.references.mapNotNull { id -> pool.firstOrNull { it.id == id } }.take(5)
+                _ui.value = _ui.value.copy(asking = false, askAnswer = res.answer, askReferences = refNotes)
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(asking = false, askError = e.message ?: "提问失败，请稍后重试")
+            }
+        }
+    }
+
+    fun toggleTodo(note: Note) {
+        val target = !(note.todoDone ?: false)
+        val optimistic = _ui.value.notes.map { if (it.id == note.id) it.copy(todoDone = target) else it }
+        _ui.value = _ui.value.copy(notes = optimistic)
+        viewModelScope.launch {
+            try {
+                repo.setTodoDone(note.id, target)
+            } catch (e: Exception) {
+                val rolledBack = _ui.value.notes.map { if (it.id == note.id) it.copy(todoDone = note.todoDone) else it }
+                _ui.value = _ui.value.copy(notes = rolledBack, toast = e.message ?: "操作失败")
+            }
+        }
+    }
+
     fun quickSend(text: String) {
         val content = text.trim()
         if (content.isEmpty()) return
+        if (content.length > NotesViewLimits.MAX_CONTENT_CHARS) {
+            _ui.value = _ui.value.copy(
+                toast = "内容过长：最多 ${NotesViewLimits.MAX_CONTENT_CHARS} 字符，当前 ${content.length} 字符"
+            )
+            return
+        }
         _ui.value = _ui.value.copy(sending = true)
         viewModelScope.launch {
             val isLink = content.startsWith("http://") || content.startsWith("https://")
