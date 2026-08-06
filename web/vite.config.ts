@@ -9,8 +9,13 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       includeAssets: ['favicon.svg'],
+      workbox: {
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        navigateFallbackDenylist: [/^\/api\//],
+      },
       manifest: {
         lang: 'zh-CN',
         name: '碎念 Suinian',

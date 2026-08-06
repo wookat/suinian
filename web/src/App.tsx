@@ -11,6 +11,7 @@ import { TodosPage } from "@/pages/todos"
 import { ThreadsPage } from "@/pages/threads"
 import { ReportsPage } from "@/pages/reports"
 import { SettingsPage } from "@/pages/settings"
+import { ReloadPrompt } from "@/components/reload-prompt"
 import { cn } from "@/lib/utils"
 
 const ROUTES = [
@@ -102,6 +103,8 @@ export default function App() {
           )
         })}
       </nav>
+
+      <ReloadPrompt />
     </div>
   )
 }

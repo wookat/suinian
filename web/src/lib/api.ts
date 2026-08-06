@@ -45,7 +45,14 @@ async function realFetch<T>(
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
-    throw new ApiError(res.status, text || res.statusText)
+    let message = text || res.statusText
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown }
+      if (typeof parsed.error === "string" && parsed.error) message = parsed.error
+    } catch {
+      // not JSON, keep raw text
+    }
+    throw new ApiError(res.status, message)
   }
   return res.json() as Promise<T>
 }
@@ -53,7 +60,7 @@ async function realFetch<T>(
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
-    super(`API ${status}: ${message}`)
+    super(message)
     this.status = status
   }
 }
@@ -68,6 +75,7 @@ function normalizeNote(raw: Record<string, unknown>): Note {
   return {
     ...n,
     tags: Array.isArray(n.tags) ? n.tags : [],
+    url_titles: Array.isArray(n.url_titles) ? n.url_titles : null,
     is_sensitive: sensitive === true || sensitive === 1 ? 1 : 0,
     todo_done: done == null ? null : done === true || done === 1 ? 1 : 0,
   }
