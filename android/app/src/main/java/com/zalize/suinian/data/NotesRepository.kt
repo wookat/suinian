@@ -42,10 +42,10 @@ class NotesRepository(
         }
     }
 
-    suspend fun list(category: String?, tag: String?, q: String?): NotesPage {
+    suspend fun list(category: String?, tag: String?, q: String?, cursor: String? = null): NotesPage {
         val (client, mock) = api()
         if (mock) return MockStore.list(category, tag, q)
-        return client.listNotes(category = category, tag = tag, q = q)
+        return client.listNotes(category = category, tag = tag, q = q, cursor = cursor)
     }
 
     /** 重试队列：全部成功返回 true */

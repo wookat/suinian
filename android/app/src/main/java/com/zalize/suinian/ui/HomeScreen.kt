@@ -1,6 +1,7 @@
 package com.zalize.suinian.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,8 +20,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -61,7 +67,7 @@ private val categories = listOf(
 )
 
 internal fun categoryLabel(category: String?): String =
-    categories.firstOrNull { it.first == category }?.second ?: (category ?: "未分类")
+    categories.firstOrNull { it.first == category }?.second ?: (category ?: "分拣中")
 
 @Composable
 fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNoteSignal: Int = 0) {
@@ -186,6 +192,16 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
                 LaunchedEffect(ui.notes.firstOrNull()?.id) {
                     listState.scrollToItem(0)
                 }
+                // 接近列表尾部时自动加载下一页
+                val shouldLoadMore by remember {
+                    derivedStateOf {
+                        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+                        lastVisible >= listState.layoutInfo.totalItemsCount - 3
+                    }
+                }
+                LaunchedEffect(listState) {
+                    snapshotFlow { shouldLoadMore }.collect { if (it) vm.loadMore() }
+                }
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
@@ -193,6 +209,14 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
                 ) {
                     items(ui.notes, key = { it.id }) { note ->
                         NoteCard(note)
+                    }
+                    if (ui.loadingMore) {
+                        item {
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.Center,
+                            ) { CircularProgressIndicator(Modifier.width(24.dp).height(24.dp)) }
+                        }
                     }
                     item { Spacer(Modifier.height(24.dp)) }
                 }
@@ -220,7 +244,47 @@ private fun NoteCard(note: Note) {
                 )
             }
             Spacer(Modifier.height(6.dp))
-            Text(note.content, style = MaterialTheme.typography.bodyMedium)
+            if (note.isSensitive) {
+                var revealed by rememberSaveable(note.id) { mutableStateOf(false) }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { revealed = !revealed },
+                ) {
+                    Icon(
+                        if (revealed) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
+                        contentDescription = if (revealed) "隐藏敏感内容" else "显示敏感内容",
+                        tint = MaterialTheme.colorScheme.secondary,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (revealed) note.content else "••••••••",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            } else {
+                Text(note.content, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            // 待办截止时间
+            if (note.category == "todo" && !note.todoDue.isNullOrBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Outlined.Event,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.tertiary,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "截止 ${formatDue(note.todoDue)}" + if (note.todoDone == true) " · 已完成" else "",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+            }
 
             // 链接卡片
             if (note.url != null) {
@@ -292,6 +356,12 @@ private fun CategoryBadge(category: String?) {
 private val timeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm")
 
 private fun formatTime(iso: String): String = try {
+    Instant.parse(iso).atZone(ZoneId.systemDefault()).format(timeFormatter)
+} catch (_: Exception) {
+    iso.take(16).replace("T", " ")
+}
+
+private fun formatDue(iso: String): String = try {
     Instant.parse(iso).atZone(ZoneId.systemDefault()).format(timeFormatter)
 } catch (_: Exception) {
     iso.take(16).replace("T", " ")
