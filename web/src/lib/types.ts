@@ -69,7 +69,7 @@ export interface WeeklyReport {
   id: string
   user_id: string
   week_start: string
-  content_md: string
+  content_md?: string
   created_at: string
 }
 

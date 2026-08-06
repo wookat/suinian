@@ -3,7 +3,7 @@ import { FileText, Loader2, ChevronLeft, RefreshCw } from "lucide-react"
 import { marked } from "marked"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { getReports } from "@/lib/api"
+import { getReports, getReport } from "@/lib/api"
 import type { WeeklyReport } from "@/lib/types"
 
 function weekLabel(weekStart: string): string {
@@ -29,7 +29,10 @@ export function ReportsPage() {
   const [reports, setReports] = useState<WeeklyReport[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selected, setSelected] = useState<WeeklyReport | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -48,18 +51,57 @@ export function ReportsPage() {
     void load()
   }, [load])
 
-  if (selected)
+  useEffect(() => {
+    if (!selectedId) {
+      setSelected(null)
+      return
+    }
+    let cancelled = false
+    setDetailLoading(true)
+    setDetailError(null)
+    getReport(selectedId)
+      .then((r) => {
+        if (!cancelled) setSelected(r)
+      })
+      .catch((e) => {
+        if (!cancelled) setDetailError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedId])
+
+  if (selectedId)
     return (
       <div className="space-y-4">
-        <Button variant="ghost" size="sm" className="-ml-2" onClick={() => setSelected(null)}>
+        <Button variant="ghost" size="sm" className="-ml-2" onClick={() => setSelectedId(null)}>
           <ChevronLeft className="size-4" /> 返回周报列表
         </Button>
-        <Card className="p-5">
-          <p className="mb-3 text-xs font-medium text-muted-foreground">
-            {weekLabel(selected.week_start)}
-          </p>
-          <ReportBody md={selected.content_md} />
-        </Card>
+        {detailLoading ? (
+          <div className="flex justify-center py-10 text-muted-foreground">
+            <Loader2 className="size-5 animate-spin" />
+          </div>
+        ) : detailError ? (
+          <Card className="flex flex-col items-center gap-3 p-8 text-center">
+            <p className="text-sm text-destructive">{detailError}</p>
+          </Card>
+        ) : (
+          selected && (
+            <Card className="p-5">
+              <p className="mb-3 text-xs font-medium text-muted-foreground">
+                {weekLabel(selected.week_start)}
+              </p>
+              {selected.content_md ? (
+                <ReportBody md={selected.content_md} />
+              ) : (
+                <p className="text-sm text-muted-foreground">该周报暂无内容</p>
+              )}
+            </Card>
+          )
+        )}
       </div>
     )
 
@@ -97,16 +139,18 @@ export function ReportsPage() {
         <Card
           key={r.id}
           className="cursor-pointer p-4 transition-shadow hover:shadow-md"
-          onClick={() => setSelected(r)}
+          onClick={() => setSelectedId(r.id)}
         >
           <div className="flex items-center gap-2">
             <FileText className="size-4 shrink-0 text-muted-foreground" />
             <h3 className="text-[15px] font-medium">本周思考报告</h3>
           </div>
           <p className="mt-1.5 text-xs text-muted-foreground">{weekLabel(r.week_start)}</p>
-          <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
-            {r.content_md.replace(/[#*`>\-\n]+/g, " ").trim().slice(0, 120)}
-          </p>
+          {r.content_md && (
+            <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
+              {r.content_md.replace(/[#*`>\-\n]+/g, " ").trim().slice(0, 120)}
+            </p>
+          )}
         </Card>
       ))}
     </div>

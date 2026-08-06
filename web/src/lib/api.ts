@@ -5,6 +5,7 @@ import {
   mockDeleteNote,
   mockGetNote,
   mockGetNotes,
+  mockGetReport,
   mockGetReports,
   mockGetThread,
   mockGetThreads,
@@ -19,6 +20,7 @@ import type {
   ReportsResponse,
   ThreadDetail,
   ThreadsResponse,
+  WeeklyReport,
 } from "./types"
 
 async function realFetch<T>(
@@ -161,6 +163,15 @@ export async function getThread(id: string): Promise<ThreadDetail> {
 export async function getReports(): Promise<ReportsResponse> {
   if (loadSettings().useMock) return mockGetReports()
   return realFetch<ReportsResponse>("/api/reports")
+}
+
+// The reports list omits content_md; the detail endpoint returns the full report
+export async function getReport(id: string): Promise<WeeklyReport> {
+  if (loadSettings().useMock) return mockGetReport(id)
+  const res = await realFetch<{ report?: WeeklyReport } & WeeklyReport>(
+    `/api/reports/${id}`,
+  )
+  return res.report ?? res
 }
 
 export interface TestConnectionResult {

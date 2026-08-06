@@ -368,3 +368,10 @@ export async function mockGetReports(): Promise<ReportsResponse> {
   await delay()
   return { reports: seedReports }
 }
+
+export async function mockGetReport(id: string): Promise<WeeklyReport> {
+  await delay(120)
+  const report = seedReports.find((r) => r.id === id)
+  if (!report) throw new Error("report not found")
+  return report
+}
