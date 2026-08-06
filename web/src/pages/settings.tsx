@@ -1,19 +1,34 @@
 import { useState } from "react"
-import { Check } from "lucide-react"
+import { Check, Loader2, CircleCheck, CircleAlert } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
+import { testConnection, type TestConnectionResult } from "@/lib/api"
 import { loadSettings, saveSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 
 export function SettingsPage() {
   const [settings, setSettings] = useState(loadSettings())
   const [saved, setSaved] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<TestConnectionResult | null>(null)
 
   function save() {
     saveSettings(settings)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
+  }
+
+  async function handleTest() {
+    if (testing) return
+    saveSettings(settings)
+    setTesting(true)
+    setTestResult(null)
+    try {
+      setTestResult(await testConnection())
+    } finally {
+      setTesting(false)
+    }
   }
 
   return (
@@ -22,12 +37,12 @@ export function SettingsPage() {
         <div>
           <h2 className="text-sm font-medium">数据源</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            后端未就绪时可使用 Mock 数据体验完整功能
+            演示模式使用本地示例数据，无需后端即可体验完整功能
           </p>
           <div className="mt-2 flex gap-1 rounded-lg bg-secondary p-1">
             {(
               [
-                { value: true, label: "Mock 数据" },
+                { value: true, label: "演示模式" },
                 { value: false, label: "真实 API" },
               ] as const
             ).map((opt) => (
@@ -74,15 +89,48 @@ export function SettingsPage() {
           <p className="text-xs text-muted-foreground">仅保存在本机浏览器 localStorage</p>
         </div>
 
-        <Button onClick={save} className="w-full sm:w-auto">
-          {saved ? (
-            <>
-              <Check /> 已保存
-            </>
-          ) : (
-            "保存设置"
-          )}
-        </Button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Button onClick={save} className="w-full sm:w-auto">
+            {saved ? (
+              <>
+                <Check /> 已保存
+              </>
+            ) : (
+              "保存设置"
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => void handleTest()}
+            disabled={testing}
+            className="w-full sm:w-auto"
+          >
+            {testing ? (
+              <>
+                <Loader2 className="animate-spin" /> 测试中…
+              </>
+            ) : (
+              "测试连接"
+            )}
+          </Button>
+        </div>
+        {testResult && (
+          <p
+            className={cn(
+              "flex items-center gap-1.5 text-sm",
+              testResult.ok
+                ? "text-emerald-600 dark:text-emerald-400"
+                : "text-destructive",
+            )}
+          >
+            {testResult.ok ? (
+              <CircleCheck className="size-4 shrink-0" />
+            ) : (
+              <CircleAlert className="size-4 shrink-0" />
+            )}
+            {testResult.message}
+          </p>
+        )}
       </Card>
 
       <Card className="p-4">

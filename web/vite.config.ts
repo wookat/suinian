@@ -12,6 +12,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
       manifest: {
+        lang: 'zh-CN',
         name: '碎念 Suinian',
         short_name: '碎念',
         description: '什么都能丢的 AI 收件箱',

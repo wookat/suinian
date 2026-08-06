@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { Search, Sparkles, X, Loader2 } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Search, Sparkles, X, Loader2, Info, RefreshCw, Plus } from "lucide-react"
 import { QuickInput } from "@/components/quick-input"
 import { NoteCard } from "@/components/note-card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
-import { getNotes, patchNote, ask } from "@/lib/api"
+import { getNotes, getNote, patchNote, deleteNote, ask, ApiError, NetworkError } from "@/lib/api"
+import { loadSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import type { AskResponse, Note } from "@/lib/types"
 
@@ -18,32 +19,74 @@ const CATEGORY_TABS = [
   { value: "data", label: "资料" },
 ] as const
 
+const TOP_TAGS = 12
+const POLL_INTERVAL = 2000
+const POLL_MAX = 15
+
+type LoadError =
+  | { kind: "auth" }
+  | { kind: "network" }
+  | { kind: "other"; message: string }
+
+function dayLabel(iso: string): string {
+  const d = new Date(iso)
+  const now = new Date()
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate())
+  const diffDays = Math.round(
+    (startOfDay(now).getTime() - startOfDay(d).getTime()) / 86400_000,
+  )
+  if (diffDays === 0) return "今天"
+  if (diffDays === 1) return "昨天"
+  const pad = (n: number) => String(n).padStart(2, "0")
+  const date = `${pad(d.getMonth() + 1)}月${pad(d.getDate())}日`
+  return d.getFullYear() === now.getFullYear() ? date : `${d.getFullYear()}年${date}`
+}
+
 export function TimelinePage() {
   const [notes, setNotes] = useState<Note[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<LoadError | null>(null)
   const [category, setCategory] = useState("")
   const [tag, setTag] = useState("")
-  const [query, setQuery] = useState("")
+  const [searchInput, setSearchInput] = useState("")
   const [search, setSearch] = useState("")
   const [askMode, setAskMode] = useState(false)
+  const [askInput, setAskInput] = useState("")
   const [asking, setAsking] = useState(false)
+  const [askError, setAskError] = useState<string | null>(null)
   const [askResult, setAskResult] = useState<AskResponse | null>(null)
+  const [tagsExpanded, setTagsExpanded] = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
+  const pollersRef = useRef<Map<string, number>>(new Map())
+  const quickInputRef = useRef<HTMLDivElement>(null)
+  const isMock = loadSettings().useMock
 
   const load = useCallback(async () => {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     setLoading(true)
     setError(null)
     try {
-      const res = await getNotes({
-        category: category || undefined,
-        tag: tag || undefined,
-        q: search || undefined,
-      })
+      const res = await getNotes(
+        {
+          category: category || undefined,
+          tag: tag || undefined,
+          q: search || undefined,
+        },
+        controller.signal,
+      )
+      if (controller.signal.aborted) return
       setNotes(res.notes)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (e instanceof DOMException && e.name === "AbortError") return
+      if (controller.signal.aborted) return
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403))
+        setError({ kind: "auth" })
+      else if (e instanceof NetworkError) setError({ kind: "network" })
+      else setError({ kind: "other", message: e instanceof Error ? e.message : String(e) })
     } finally {
-      setLoading(false)
+      if (!controller.signal.aborted) setLoading(false)
     }
   }, [category, tag, search])
 
@@ -51,27 +94,72 @@ export function TimelinePage() {
     void load()
   }, [load])
 
+  useEffect(() => {
+    const pollers = pollersRef.current
+    return () => {
+      for (const t of pollers.values()) window.clearTimeout(t)
+      pollers.clear()
+    }
+  }, [])
+
+  const pollTriage = useCallback((id: string, attempt = 0) => {
+    if (attempt >= POLL_MAX) {
+      pollersRef.current.delete(id)
+      return
+    }
+    const t = window.setTimeout(() => {
+      void getNote(id)
+        .then((fresh) => {
+          if (fresh && fresh.category !== null) {
+            pollersRef.current.delete(id)
+            setNotes((ns) => ns.map((n) => (n.id === id ? fresh : n)))
+          } else {
+            pollTriage(id, attempt + 1)
+          }
+        })
+        .catch(() => pollTriage(id, attempt + 1))
+    }, POLL_INTERVAL)
+    pollersRef.current.set(id, t)
+  }, [])
+
+  const handleCreated = useCallback(
+    (note: Note) => {
+      setNotes((ns) => [note, ...ns])
+      if (note.category === null) pollTriage(note.id)
+    },
+    [pollTriage],
+  )
+
   const allTags = useMemo(() => {
-    const set = new Set<string>()
-    for (const n of notes) for (const t of n.tags) set.add(t)
-    return [...set].sort()
+    const count = new Map<string, number>()
+    for (const n of notes)
+      for (const t of n.tags) count.set(t, (count.get(t) ?? 0) + 1)
+    return [...count.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t)
   }, [notes])
 
-  async function handleSubmitSearch() {
-    if (askMode) {
-      const q = query.trim()
-      if (!q || asking) return
-      setAsking(true)
-      setAskResult(null)
-      try {
-        setAskResult(await ask(q))
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
-      } finally {
-        setAsking(false)
-      }
-    } else {
-      setSearch(query.trim())
+  const grouped = useMemo(() => {
+    const groups: { label: string; notes: Note[] }[] = []
+    for (const n of notes) {
+      const label = dayLabel(n.created_at)
+      const last = groups[groups.length - 1]
+      if (last && last.label === label) last.notes.push(n)
+      else groups.push({ label, notes: [n] })
+    }
+    return groups
+  }, [notes])
+
+  async function handleAsk() {
+    const q = askInput.trim()
+    if (!q || asking) return
+    setAsking(true)
+    setAskResult(null)
+    setAskError(null)
+    try {
+      setAskResult(await ask(q))
+    } catch (e) {
+      setAskError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAsking(false)
     }
   }
 
@@ -87,21 +175,65 @@ export function TimelinePage() {
     }
   }
 
+  async function handleEdit(note: Note, content: string) {
+    setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, content } : n)))
+    try {
+      const fresh = await patchNote(note.id, { content })
+      setNotes((ns) => ns.map((n) => (n.id === note.id ? fresh : n)))
+    } catch {
+      setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
+    }
+  }
+
+  async function handleDelete(note: Note) {
+    const prev = notes
+    setNotes((ns) => ns.filter((n) => n.id !== note.id))
+    try {
+      await deleteNote(note.id)
+    } catch {
+      setNotes(prev)
+    }
+  }
+
+  const visibleTags = tagsExpanded ? allTags : allTags.slice(0, TOP_TAGS)
+  const hiddenCount = allTags.length - TOP_TAGS
+
   return (
     <div className="space-y-4">
-      <QuickInput onCreated={() => void load()} />
+      {isMock && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+          <Info className="size-4 shrink-0" />
+          <span>
+            正在浏览演示数据，
+            <a href="#/settings" className="font-medium underline underline-offset-2">
+              去设置连接你的碎念 →
+            </a>
+          </span>
+        </div>
+      )}
+
+      <div ref={quickInputRef}>
+        <QuickInput onCreated={handleCreated} />
+      </div>
 
       <div className="flex gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
           <Input
-            value={query}
+            value={askMode ? askInput : searchInput}
             onChange={(e) => {
-              setQuery(e.target.value)
-              if (!askMode && e.target.value === "") setSearch("")
+              if (askMode) {
+                setAskInput(e.target.value)
+              } else {
+                setSearchInput(e.target.value)
+                if (e.target.value === "") setSearch("")
+              }
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.nativeEvent.isComposing) void handleSubmitSearch()
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                if (askMode) void handleAsk()
+                else setSearch(searchInput.trim())
+              }
             }}
             placeholder={askMode ? "问问你的笔记，例如：我之前想过的那个点子…" : "搜索笔记…"}
             className="pl-8"
@@ -114,6 +246,7 @@ export function TimelinePage() {
           onClick={() => {
             setAskMode((m) => !m)
             setAskResult(null)
+            setAskError(null)
           }}
         >
           <Sparkles />
@@ -121,12 +254,14 @@ export function TimelinePage() {
         </Button>
       </div>
 
-      {askMode && (askResult || asking) && (
+      {askMode && (askResult || asking || askError) && (
         <Card className="border-primary/30 bg-accent/40 p-4">
           {asking ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" /> 正在思考…
             </div>
+          ) : askError ? (
+            <p className="text-sm text-destructive">{askError}</p>
           ) : (
             askResult && (
               <div className="space-y-3">
@@ -178,16 +313,13 @@ export function TimelinePage() {
       </div>
 
       {allTags.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           {tag && (
-            <Badge
-              className="cursor-pointer"
-              onClick={() => setTag("")}
-            >
+            <Badge className="cursor-pointer" onClick={() => setTag("")}>
               #{tag} <X className="ml-0.5 size-3" />
             </Badge>
           )}
-          {allTags
+          {visibleTags
             .filter((t) => t !== tag)
             .map((t) => (
               <Badge
@@ -199,31 +331,100 @@ export function TimelinePage() {
                 #{t}
               </Badge>
             ))}
+          {hiddenCount > 0 && (
+            <button
+              onClick={() => setTagsExpanded((x) => !x)}
+              className="text-xs font-medium text-muted-foreground hover:text-foreground"
+            >
+              {tagsExpanded ? "收起" : `更多（${hiddenCount}）`}
+            </button>
+          )}
         </div>
       )}
-
-      {error && <p className="text-sm text-destructive">{error}</p>}
 
       {loading ? (
         <div className="flex justify-center py-10 text-muted-foreground">
           <Loader2 className="size-5 animate-spin" />
         </div>
+      ) : error ? (
+        <Card className="flex flex-col items-center gap-3 p-8 text-center">
+          {error.kind === "auth" ? (
+            <>
+              <p className="text-sm text-muted-foreground">
+                登录已失效或 Token 不正确，无法读取你的碎念。
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  window.location.hash = "#/settings"
+                }}
+              >
+                去设置检查 Token
+              </Button>
+            </>
+          ) : error.kind === "network" ? (
+            <>
+              <p className="text-sm text-muted-foreground">
+                网络连接失败，请检查网络后重试。
+              </p>
+              <Button size="sm" variant="outline" onClick={() => void load()}>
+                <RefreshCw className="size-3.5" /> 重试
+              </Button>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-destructive">{error.message}</p>
+              <Button size="sm" variant="outline" onClick={() => void load()}>
+                <RefreshCw className="size-3.5" /> 重试
+              </Button>
+            </>
+          )}
+        </Card>
       ) : notes.length === 0 ? (
         <p className="py-10 text-center text-sm text-muted-foreground">
-          还没有笔记，在上面记一条吧
+          {search || tag || category
+            ? "没有找到匹配的笔记，换个条件试试"
+            : "还没有笔记，在上面记一条吧"}
         </p>
       ) : (
-        <div className="space-y-3">
-          {notes.map((n) => (
-            <NoteCard
-              key={n.id}
-              note={n}
-              onToggleTodo={(note) => void toggleTodo(note)}
-              onTagClick={setTag}
-            />
+        <div className="space-y-4">
+          {grouped.map((g) => (
+            <section key={g.label}>
+              <div className="sticky top-[52px] z-10 -mx-1 bg-background/95 px-1 py-1.5 backdrop-blur md:top-0">
+                <span className="text-xs font-medium text-muted-foreground">
+                  {g.label}
+                </span>
+              </div>
+              <div className="mt-1 space-y-3">
+                {g.notes.map((n) => (
+                  <NoteCard
+                    key={n.id}
+                    note={n}
+                    onToggleTodo={(note) => void toggleTodo(note)}
+                    onTagClick={setTag}
+                    onEdit={(note, content) => void handleEdit(note, content)}
+                    onDelete={(note) => void handleDelete(note)}
+                    categoryFilterActive={category === n.category}
+                  />
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       )}
+
+      {/* Mobile FAB: scroll to quick input and focus it */}
+      <button
+        onClick={() => {
+          quickInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+          quickInputRef.current?.querySelector("textarea")?.focus()
+        }}
+        aria-label="快速记录"
+        className="fixed bottom-20 right-4 z-20 flex size-13 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform active:scale-95 md:hidden"
+      >
+        <Plus className="size-6" />
+      </button>
     </div>
   )
 }

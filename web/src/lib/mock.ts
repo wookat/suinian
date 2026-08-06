@@ -4,9 +4,14 @@ import type {
   Note,
   NotesQuery,
   NotesResponse,
+  ReportsResponse,
+  Thread,
+  ThreadDetail,
+  ThreadsResponse,
+  WeeklyReport,
 } from "./types"
 
-const MOCK_KEY = "suinian.mock.notes"
+const MOCK_KEY = "suinian.mock.notes.v2"
 
 function hoursAgo(h: number): string {
   return new Date(Date.now() - h * 3600_000).toISOString()
@@ -23,6 +28,7 @@ const seedNotes: Note[] = [
     url: null,
     url_title: null,
     url_summary: null,
+    title: "碎片笔记的差异化：分拣与线索",
     category: "idea",
     tags: ["产品思考", "碎念", "AI"],
     thread_id: "t-1",
@@ -60,6 +66,7 @@ const seedNotes: Note[] = [
     url: null,
     url_title: null,
     url_summary: null,
+    title: "提交碎念 Web R1 PR",
     category: "todo",
     tags: ["碎念", "开发"],
     thread_id: null,
@@ -78,10 +85,11 @@ const seedNotes: Note[] = [
     url: null,
     url_title: null,
     url_summary: null,
+    title: "家里路由器管理入口",
     category: "data",
     tags: ["家庭", "网络"],
     thread_id: null,
-    is_sensitive: 0,
+    is_sensitive: 1,
     todo_due: null,
     todo_done: null,
     created_at: hoursAgo(26),
@@ -207,8 +215,9 @@ export async function mockCreateNote(payload: CreateNotePayload): Promise<Note> 
   await delay()
   const now = new Date().toISOString()
   const isLink = payload.url != null || URL_RE.test(payload.content.trim())
+  const id = `n-${Date.now()}`
   const note: Note = {
-    id: `n-${Date.now()}`,
+    id,
     user_id: "u-1",
     source: payload.source,
     raw_type: isLink ? "link" : payload.raw_type,
@@ -216,7 +225,8 @@ export async function mockCreateNote(payload: CreateNotePayload): Promise<Note> 
     url: payload.url ?? (isLink ? payload.content.trim() : null),
     url_title: null,
     url_summary: null,
-    category: isLink ? "collect" : "idea",
+    title: null,
+    category: null,
     tags: [],
     thread_id: null,
     is_sensitive: 0,
@@ -228,7 +238,31 @@ export async function mockCreateNote(payload: CreateNotePayload): Promise<Note> 
   const notes = loadMockNotes()
   notes.unshift(note)
   saveMockNotes(notes)
+  // Simulate the async AI triage pipeline backfilling category/tags
+  setTimeout(() => {
+    const all = loadMockNotes()
+    const idx = all.findIndex((n) => n.id === id)
+    if (idx === -1) return
+    all[idx] = {
+      ...all[idx],
+      category: isLink ? "collect" : "idea",
+      tags: isLink ? ["收藏"] : ["随手记"],
+      title: all[idx].content.slice(0, 18) || null,
+      updated_at: new Date().toISOString(),
+    }
+    saveMockNotes(all)
+  }, 2500)
   return note
+}
+
+export async function mockGetNote(id: string): Promise<Note | null> {
+  await delay(120)
+  return loadMockNotes().find((n) => n.id === id) ?? null
+}
+
+export async function mockDeleteNote(id: string): Promise<void> {
+  await delay(120)
+  saveMockNotes(loadMockNotes().filter((n) => n.id !== id))
 }
 
 export async function mockPatchNote(
@@ -266,4 +300,71 @@ export async function mockAsk(question: string): Promise<AskResponse> {
       ? `（Mock 回答）根据你的笔记，与「${question}」相关的记录有 ${hits.length} 条。其中最相关的一条提到：「${hits[0].content.slice(0, 60)}…」。连接真实后端后，这里会由 DeepSeek 结合检索结果生成完整回答。`
       : `（Mock 回答）没有在你的笔记里找到与「${question}」直接相关的内容。连接真实后端后会使用向量召回获得更好的效果。`
   return { answer, note_ids: hits.map((n) => n.id), notes: hits }
+}
+
+const seedThreads: Thread[] = [
+  {
+    id: "t-1",
+    user_id: "u-1",
+    title: "碎片笔记产品的差异化路径",
+    summary:
+      "围绕「AI 分拣 + 线索聚类 + 微信入口」的一组思考：找得到比记得多重要，入口最近是最大护城河。",
+    note_count: 2,
+    updated_at: hoursAgo(2),
+  },
+  {
+    id: "t-2",
+    user_id: "u-1",
+    title: "周报应该讲故事而不是流水账",
+    summary: "周报的价值在于回答「这周你在想什么」，把碎片聚类后讲成一个故事。",
+    note_count: 1,
+    updated_at: hoursAgo(96),
+  },
+]
+
+export async function mockGetThreads(): Promise<ThreadsResponse> {
+  await delay()
+  return { threads: seedThreads }
+}
+
+export async function mockGetThread(id: string): Promise<ThreadDetail> {
+  await delay()
+  const thread = seedThreads.find((t) => t.id === id)
+  if (!thread) throw new Error("thread not found")
+  const notes = loadMockNotes()
+    .filter((n) => n.thread_id === id)
+    .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
+  return { ...thread, notes }
+}
+
+const seedReports: WeeklyReport[] = [
+  {
+    id: "r-1",
+    user_id: "u-1",
+    week_start: new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10),
+    content_md: `# 本周思考报告
+
+## 你在想什么
+
+这周你的想法主要集中在**碎片笔记产品的差异化**上：
+
+- 核心不是记录，而是「找得到 + 有人替你整理」
+- 微信入口的「距离优势」可能是最大护城河
+- 周报应该讲故事，而不是流水账
+
+## 待办进展
+
+- 完成 1 项：买猫粮
+- 逾期 1 项：提交碎念 Web R1 PR
+
+## 收藏了什么
+
+flomo 的产品理念、MyMind 的 AI 标签方案，都值得回看。`,
+    created_at: hoursAgo(96),
+  },
+]
+
+export async function mockGetReports(): Promise<ReportsResponse> {
+  await delay()
+  return { reports: seedReports }
 }

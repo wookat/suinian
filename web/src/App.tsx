@@ -8,7 +8,8 @@ import {
 } from "lucide-react"
 import { TimelinePage } from "@/pages/timeline"
 import { TodosPage } from "@/pages/todos"
-import { ThreadsPage, ReportsPage } from "@/pages/placeholders"
+import { ThreadsPage } from "@/pages/threads"
+import { ReportsPage } from "@/pages/reports"
 import { SettingsPage } from "@/pages/settings"
 import { cn } from "@/lib/utils"
 
