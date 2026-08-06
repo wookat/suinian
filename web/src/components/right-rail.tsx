@@ -3,6 +3,7 @@ import { Hash, BarChart3, GitBranch } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { getNotes, getThreads } from "@/lib/api"
+import { useSettingsVersion } from "@/lib/settings"
 import type { Note, Thread } from "@/lib/types"
 
 const MAX_RAIL_THREADS = 3
@@ -12,6 +13,7 @@ const MAX_RAIL_TAGS = 20
 export function RightRail() {
   const [notes, setNotes] = useState<Note[] | null>(null)
   const [threads, setThreads] = useState<Thread[]>([])
+  const settingsVersion = useSettingsVersion()
 
   useEffect(() => {
     let cancelled = false
@@ -32,7 +34,7 @@ export function RightRail() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [settingsVersion])
 
   const tags = useMemo(() => {
     const count = new Map<string, number>()

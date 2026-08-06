@@ -6,6 +6,7 @@ import { NoteCard } from "@/components/note-card"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { getThreads, getThread } from "@/lib/api"
+import { useSettingsVersion } from "@/lib/settings"
 import { formatTime } from "@/lib/utils"
 import type { Thread, ThreadDetail } from "@/lib/types"
 
@@ -26,6 +27,7 @@ export function ThreadsPage() {
   const [detail, setDetail] = useState<ThreadDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const settingsVersion = useSettingsVersion()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -42,7 +44,7 @@ export function ThreadsPage() {
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, settingsVersion])
 
   useEffect(() => {
     const applyHashId = () => {

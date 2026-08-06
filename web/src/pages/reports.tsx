@@ -6,6 +6,7 @@ import { marked } from "marked"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { getReports, getReport } from "@/lib/api"
+import { useSettingsVersion } from "@/lib/settings"
 import type { WeeklyReport } from "@/lib/types"
 
 function weekLabel(weekStart: string): string {
@@ -49,6 +50,7 @@ export function ReportsPage() {
   const [selected, setSelected] = useState<WeeklyReport | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const settingsVersion = useSettingsVersion()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -65,7 +67,7 @@ export function ReportsPage() {
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, settingsVersion])
 
   useEffect(() => {
     if (!selectedId) {
