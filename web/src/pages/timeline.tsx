@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import { AskChat } from "@/components/ask-chat"
 import { getNotes, getNote, patchNote, deleteNote, ApiError, NetworkError } from "@/lib/api"
+import { useSettingsVersion } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import type { Note } from "@/lib/types"
 
@@ -63,6 +64,7 @@ export function TimelinePage() {
   const abortRef = useRef<AbortController | null>(null)
   const pollersRef = useRef<Map<string, number>>(new Map())
   const quickInputRef = useRef<HTMLDivElement>(null)
+  const settingsVersion = useSettingsVersion()
 
   const load = useCallback(async () => {
     abortRef.current?.abort()
@@ -95,7 +97,7 @@ export function TimelinePage() {
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, settingsVersion])
 
   useEffect(() => {
     const applyHashTag = () => {

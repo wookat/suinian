@@ -5,6 +5,7 @@ import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { cn, parseDue, dueHasTime } from "@/lib/utils"
 import { getNotes, patchNote, deleteNote } from "@/lib/api"
+import { useSettingsVersion } from "@/lib/settings"
 import type { Note } from "@/lib/types"
 
 type DueGroup = "overdue" | "today" | "week" | "later" | "none"
@@ -38,6 +39,7 @@ export function TodosPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [doneExpanded, setDoneExpanded] = useState(false)
+  const settingsVersion = useSettingsVersion()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -54,7 +56,7 @@ export function TodosPage() {
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, settingsVersion])
 
   async function toggleTodo(note: Note) {
     const next = note.todo_done === 1 ? 0 : 1

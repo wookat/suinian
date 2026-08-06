@@ -1,5 +1,17 @@
-import { describe, it, expect } from "vitest";
-import { parseTriageJson, FALLBACK_TRIAGE, buildTriagePrompt, normalizeTodoDue } from "../src/triage";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import {
+  parseTriageJson,
+  FALLBACK_TRIAGE,
+  buildTriagePrompt,
+  normalizeTodoDue,
+  nextMondayInShanghai,
+  shanghaiDate,
+  triageNote,
+} from "../src/triage";
+import { chatComplete } from "../src/ai";
+
+vi.mock("../src/ai", () => ({ chatComplete: vi.fn() }));
+const chatCompleteMock = vi.mocked(chatComplete);
 
 describe("parseTriageJson", () => {
   it("parses valid JSON", () => {
@@ -85,6 +97,62 @@ describe("normalizeTodoDue", () => {
     expect(normalizeTodoDue("")).toBeNull();
     expect(normalizeTodoDue(null)).toBeNull();
     expect(normalizeTodoDue(42)).toBeNull();
+  });
+});
+
+describe("relative date grounding (R9)", () => {
+  // 2026-08-07 10:00 Shanghai = Friday
+  const friday = new Date("2026-08-07T02:00:00Z");
+
+  it("computes 明天 and 下周一 from a Friday", () => {
+    expect(shanghaiDate(friday, 1)).toEqual({ iso: "2026-08-08", weekday: "周六" });
+    expect(nextMondayInShanghai(friday)).toEqual({ iso: "2026-08-10", weekday: "周一" });
+  });
+
+  it("下周一 on a Monday is next week's Monday, not today", () => {
+    const monday = new Date("2026-08-10T02:00:00Z");
+    expect(nextMondayInShanghai(monday).iso).toBe("2026-08-17");
+  });
+
+  it("下周一 on a Sunday is tomorrow", () => {
+    const sunday = new Date("2026-08-09T02:00:00Z");
+    expect(nextMondayInShanghai(sunday).iso).toBe("2026-08-10");
+  });
+
+  it("prompt includes 北京时间, today's weekday and worked 明天/下周一 examples", () => {
+    const p = buildTriagePrompt(friday);
+    expect(p).toContain("今天是 2026-08-07（周五）");
+    expect(p).toContain("北京时间");
+    expect(p).toContain("「明天」= 2026-08-08（周六）");
+    expect(p).toContain("「下周一」= 2026-08-10");
+    expect(p).toContain("2026-08-10T20:00:00+08:00");
+  });
+
+  it("prompt includes category examples and tag prefix rule", () => {
+    const p = buildTriagePrompt(friday);
+    expect(p).toContain("公司报销流程");
+    expect(p).toContain("不得照抄内容开头的括号前缀");
+  });
+});
+
+describe("triageNote prompt injection (mocked chatComplete)", () => {
+  afterEach(() => {
+    chatCompleteMock.mockReset();
+    vi.useRealTimers();
+  });
+
+  it("sends a system prompt with the correct 今天/周X for the mocked clock", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-07T02:00:00Z")); // Friday in Shanghai
+    chatCompleteMock.mockResolvedValue(
+      '{"category":"todo","tags":["邮件"],"title":"给客户回邮件","is_sensitive":false,"todo_due":"2026-08-10T20:00:00+08:00"}'
+    );
+    const result = await triageNote("下周一晚上8点提醒我给客户回邮件", {} as never);
+    const system = chatCompleteMock.mock.calls[0][1].messages[0];
+    expect(system.role).toBe("system");
+    expect(system.content).toContain("今天是 2026-08-07（周五）");
+    expect(system.content).toContain("「下周一」= 2026-08-10");
+    expect(result?.todo_due).toBe("2026-08-10T20:00:00+08:00");
   });
 });
 
