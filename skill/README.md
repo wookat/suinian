@@ -49,6 +49,37 @@ docker compose up -d                            # 之后：凭证已持久化，
 
 凭证存在 named volume `wechatbot-creds`，重启不需要重新扫码；iLink 会话 24h 过期后 SDK 自动重连（详见 [docs/clawbot-limits.md](docs/clawbot-limits.md)）。
 
+### 生产部署（国内服务器 · systemd 常驻）
+
+生产环境跑在国内 VPS（CN_VPS_HOST，见密钥库）上的 systemd 服务 `suinian-bridge`：开机自启、崩溃 5s 自动拉起、日志落盘 `/var/log/suinian-bridge/bridge.log`（logrotate 周转 8 份）、token 通过 `/etc/suinian-bridge.env`（600 权限）注入，不落仓库。
+
+```bash
+cd skill/bridge
+# 密码登录：export SSHPASS=<密码>（需本机装 sshpass）
+BRIDGE_HOST=<ip[:port]> BRIDGE_USER=root \
+SUINIAN_API_URL=https://suinian-api.zalize.com SUINIAN_TOKEN=<token> \
+./deploy/deploy.sh
+```
+
+脚本本地构建 → 上传 dist → 远端 `npm ci --omit=dev` → 装 systemd unit + `suinian-qr` 命令 + logrotate → 启动。绑定：ssh 登录服务器后运行 **`suinian-qr`** 显示二维码，微信扫码即绑（老板验收步骤见 [docs/boss-verify.md](docs/boss-verify.md)）。服务器运维：
+
+```bash
+systemctl status|restart suinian-bridge   # 状态 / 重启
+tail -f /var/log/suinian-bridge/bridge.log # 日志
+suinian-qr                                 # 显示绑定二维码
+```
+
+### 依赖版本锁定与升级须知（重要）
+
+`bridge/package.json` 的所有依赖**锁死精确版本**（无 `^`/`~`），当前 `@wechatbot/wechatbot@2.2.0`（2026-07-01 发布，零运行时依赖、不依赖 openclaw/plugin-sdk）。
+
+背景：2026-03-22 起 OpenClaw 插件 SDK 大重构（`openclaw/plugin-sdk` 移除且无 shim），曾导致 ClawBot 生态瘫痪 72h。本 bridge 走独立的 `@wechatbot/wechatbot` SDK，不受 OpenClaw 插件链影响，但升级仍须谨慎：
+
+1. **不要**恢复 `^` 范围版本，升级必须显式改 package.json 并重新生成 lockfile；
+2. 升级前查 `npm view @wechatbot/wechatbot@<新版本> dependencies deprecated`，确认未引入 openclaw/plugin-sdk 依赖、未被弃用，且发布 ≥7 天；
+3. 升级后必跑 `npm test`（18 单测）+ `npm run smoke`（mock 全链路）+ 真机扫码回归，再部署生产；
+4. 生产回滚：重新跑旧 commit 的 `deploy/deploy.sh` 即可（凭证目录 `/var/lib/suinian-bridge/wechatbot` 不受影响，免重新扫码）。
+
 ### 环境变量
 
 | 变量 | 必填 | 说明 |

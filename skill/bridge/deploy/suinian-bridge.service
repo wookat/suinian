@@ -1,0 +1,19 @@
+# 碎念微信桥 systemd 服务（安装到 /etc/systemd/system/suinian-bridge.service）
+# 说明：目标机 systemd 239 不支持 StandardOutput=append:，日志用 shell 重定向落盘。
+[Unit]
+Description=Suinian WeChat bridge (ClawBot iLink -> suinian-api)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/suinian-bridge
+EnvironmentFile=/etc/suinian-bridge.env
+Environment=WECHATBOT_STORAGE_DIR=/var/lib/suinian-bridge/wechatbot
+ExecStart=/bin/bash -c 'exec node dist/index.js >> /var/log/suinian-bridge/bridge.log 2>&1'
+Restart=always
+RestartSec=5
+# 二维码 ASCII 输出较宽，避免被 journald 截断影响日志文件
+
+[Install]
+WantedBy=multi-user.target

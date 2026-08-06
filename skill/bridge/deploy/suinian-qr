@@ -1,0 +1,38 @@
+#!/bin/bash
+# 显示最新的微信绑定二维码（安装到 /usr/local/bin/suinian-qr）
+# 用法：ssh 登录服务器后运行 `suinian-qr`，微信扫码即绑定。
+set -euo pipefail
+LOG=/var/log/suinian-bridge/bridge.log
+APP=/opt/suinian-bridge
+
+if systemctl is-active --quiet suinian-bridge; then
+  echo "[suinian] 服务运行中"
+else
+  echo "[suinian] ⚠ 服务未运行：systemctl status suinian-bridge"
+fi
+
+if [ -d /var/lib/suinian-bridge/wechatbot ] && [ -n "$(ls -A /var/lib/suinian-bridge/wechatbot 2>/dev/null)" ] \
+   && grep -q '已上线，等待微信消息' <(tail -n 200 "$LOG" 2>/dev/null) ; then
+  echo "[suinian] 已绑定并在线，无需扫码。最近日志："
+  tail -n 5 "$LOG"
+  exit 0
+fi
+
+URL=$(grep -oE 'https://liteapp\.weixin\.qq\.com/[^[:space:]]+' "$LOG" 2>/dev/null | tail -1 || true)
+if [ -z "$URL" ]; then
+  echo "[suinian] 日志里暂无二维码，重启服务生成新码…"
+  systemctl restart suinian-bridge
+  for i in $(seq 1 30); do
+    sleep 2
+    URL=$(grep -oE 'https://liteapp\.weixin\.qq\.com/[^[:space:]]+' "$LOG" 2>/dev/null | tail -1 || true)
+    [ -n "$URL" ] && break
+  done
+fi
+if [ -z "$URL" ]; then
+  echo "[suinian] 仍未生成二维码，请查看日志：tail -f $LOG"
+  exit 1
+fi
+echo "[suinian] 请用微信扫码绑定（二维码约 60 秒有效，过期服务会自动刷新，重跑本命令即可）："
+node -e "require('$APP/node_modules/qrcode-terminal').generate(process.argv[1],{small:true})" "$URL"
+echo "$URL"
+echo "[suinian] 扫码后在手机确认；观察日志确认上线：tail -f $LOG"
