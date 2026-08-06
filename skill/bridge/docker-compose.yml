@@ -1,0 +1,18 @@
+services:
+  suinian-wechat-bridge:
+    build: .
+    container_name: suinian-wechat-bridge
+    restart: unless-stopped
+    environment:
+      SUINIAN_API_URL: ${SUINIAN_API_URL:?后端地址必填}
+      SUINIAN_TOKEN: ${SUINIAN_TOKEN:?后端token必填}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      REPLY_INTERVAL_MS: ${REPLY_INTERVAL_MS:-3000}
+    volumes:
+      - wechatbot-creds:/data/wechatbot
+    # 首次运行需要在终端扫码：docker compose run --rm suinian-wechat-bridge
+    tty: true
+    stdin_open: true
+
+volumes:
+  wechatbot-creds:

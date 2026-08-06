@@ -1,0 +1,73 @@
+import type { BridgeConfig } from './config.js'
+import type { AskPayload, IngestPayload } from './payload.js'
+
+export interface IngestResponse {
+  ok: boolean
+  note_id?: string
+  /** 后端生成的确认文案，如「已存：想法 #创业 #AI」 */
+  reply?: string
+  error?: string
+}
+
+export interface AskResponse {
+  ok: boolean
+  answer?: string
+  note_ids?: string[]
+  error?: string
+}
+
+/** 后端 HTTP 客户端：Bearer 鉴权 + 超时 + 指数退避重试 */
+export class SuinianClient {
+  constructor(private readonly cfg: Pick<BridgeConfig, 'apiUrl' | 'token' | 'requestTimeoutMs' | 'maxRetries'>) {}
+
+  ingest(payload: IngestPayload): Promise<IngestResponse> {
+    return this.post<IngestResponse>('/api/ingest/wechat', payload)
+  }
+
+  ask(payload: AskPayload): Promise<AskResponse> {
+    return this.post<AskResponse>('/api/ask', payload)
+  }
+
+  private async post<T>(path: string, body: unknown): Promise<T> {
+    let lastErr: unknown
+    for (let attempt = 0; attempt <= this.cfg.maxRetries; attempt++) {
+      try {
+        const res = await fetch(`${this.cfg.apiUrl}${path}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.cfg.token}`,
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(this.cfg.requestTimeoutMs),
+        })
+        if (res.status === 401 || res.status === 403) {
+          throw new FatalApiError(`后端鉴权失败（${res.status}），请检查 SUINIAN_TOKEN`)
+        }
+        if (!res.ok) throw new Error(`后端返回 ${res.status}: ${await safeText(res)}`)
+        return (await res.json()) as T
+      } catch (err) {
+        if (err instanceof FatalApiError) throw err
+        lastErr = err
+        if (attempt < this.cfg.maxRetries) {
+          await sleep(500 * 2 ** attempt)
+        }
+      }
+    }
+    throw lastErr
+  }
+}
+
+export class FatalApiError extends Error {}
+
+async function safeText(res: Response): Promise<string> {
+  try {
+    return (await res.text()).slice(0, 500)
+  } catch {
+    return ''
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
+}
