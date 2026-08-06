@@ -3,7 +3,7 @@ import { CheckCircle2, ChevronDown, ListTodo } from "lucide-react"
 import { NoteCard } from "@/components/note-card"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
-import { cn } from "@/lib/utils"
+import { cn, parseDue, dueHasTime } from "@/lib/utils"
 import { getNotes, patchNote, deleteNote } from "@/lib/api"
 import type { Note } from "@/lib/types"
 
@@ -21,13 +21,13 @@ const GROUP_ORDER: DueGroup[] = ["overdue", "today", "week", "later", "none"]
 
 function dueGroup(due: string | null): DueGroup {
   if (!due) return "none"
-  const d = new Date(due)
+  const d = parseDue(due)
   const now = new Date()
   const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate())
   const dayDiff = Math.round(
     (startOfDay(d).getTime() - startOfDay(now).getTime()) / 86400_000,
   )
-  if (d.getTime() < now.getTime() && dayDiff < 0) return "overdue"
+  if (dayDiff < 0 && (!dueHasTime(due) || d.getTime() < now.getTime())) return "overdue"
   if (dayDiff <= 0) return "today"
   if (dayDiff <= 7) return "week"
   return "later"

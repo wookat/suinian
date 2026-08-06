@@ -13,8 +13,11 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import android.widget.Toast
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,7 +31,7 @@ import com.zalize.suinian.data.Note
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.zalize.suinian.ui.components.NoteCard
-import com.zalize.suinian.ui.components.parseInstantLenient
+import com.zalize.suinian.ui.components.parseDueInstant
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -45,7 +48,7 @@ enum class DueGroup(val label: String) {
 
 internal fun dueGroup(due: String?, today: LocalDate = LocalDate.now()): DueGroup {
     if (due.isNullOrBlank()) return DueGroup.NONE
-    val date = parseInstantLenient(due)?.atZone(ZoneId.systemDefault())?.toLocalDate()
+    val date = parseDueInstant(due)?.atZone(ZoneId.systemDefault())?.toLocalDate()
         ?: return DueGroup.NONE
     val dayDiff = java.time.temporal.ChronoUnit.DAYS.between(today, date)
     return when {
@@ -60,6 +63,7 @@ data class TodosUiState(
     val loading: Boolean = false,
     val error: String? = null,
     val notes: List<Note> = emptyList(),
+    val toast: String? = null,
 )
 
 class TodosViewModel(app: Application) : AndroidViewModel(app) {
@@ -92,6 +96,22 @@ class TodosViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun delete(note: Note) {
+        val prev = _ui.value.notes
+        _ui.value = _ui.value.copy(notes = prev.filter { it.id != note.id })
+        viewModelScope.launch {
+            try {
+                repo.delete(note.id)
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(notes = prev, toast = e.message ?: "删除失败")
+            }
+        }
+    }
+
+    fun consumeToast() {
+        _ui.value = _ui.value.copy(toast = null)
+    }
+
     fun toggle(note: Note) {
         val target = !(note.todoDone ?: false)
         _ui.value = _ui.value.copy(
@@ -112,10 +132,18 @@ class TodosViewModel(app: Application) : AndroidViewModel(app) {
 @Composable
 fun TodosScreen(modifier: Modifier = Modifier, vm: TodosViewModel = viewModel()) {
     val ui by vm.ui.collectAsState()
+    val context = LocalContext.current
 
     // 切回该页时刷新，避免新建待办看不到
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         vm.refresh()
+    }
+
+    LaunchedEffect(ui.toast) {
+        ui.toast?.let {
+            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+            vm.consumeToast()
+        }
     }
 
     when {
@@ -162,7 +190,7 @@ fun TodosScreen(modifier: Modifier = Modifier, vm: TodosViewModel = viewModel())
                         )
                     }
                     items(list, key = { it.id }) { note ->
-                        NoteCard(note, onToggleTodo = { vm.toggle(it) })
+                        NoteCard(note, onToggleTodo = { vm.toggle(it) }, onDelete = { vm.delete(it) })
                     }
                 }
                 if (done.isNotEmpty()) {
@@ -176,7 +204,7 @@ fun TodosScreen(modifier: Modifier = Modifier, vm: TodosViewModel = viewModel())
                         )
                     }
                     items(done, key = { it.id }) { note ->
-                        NoteCard(note, onToggleTodo = { vm.toggle(it) })
+                        NoteCard(note, onToggleTodo = { vm.toggle(it) }, onDelete = { vm.delete(it) })
                     }
                 }
                 item { Spacer(Modifier.height(24.dp)) }

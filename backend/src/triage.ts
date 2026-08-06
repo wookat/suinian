@@ -30,7 +30,7 @@ export function buildTriagePrompt(now: Date = new Date(), existingTags: string[]
 - tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）${tagHint}
 - title: 一句话短标题（<=20字）
 - is_sensitive: 是否含敏感信息 (boolean)。只要内容中出现密码、口令、密钥、API key、token、验证码、身份证号、银行卡号、账号+密码组合等任何一项，必须为 true，宁可误判为 true
-- todo_due: 若是待办且能推断截止时间，基于上面给出的今天日期换算（如"周五之前"= 从今天起最近的周五；"明天"= 今天+1 天）。内容中有具体时刻（如"下午三点半""晚上8点"）时输出带时刻的 "YYYY-MM-DDTHH:mm"（24 小时制，Asia/Shanghai，如 "2026-08-07T15:30"）；只有日期没有时刻时仅输出 "YYYY-MM-DD"；无法推断则 null。绝不要输出早于今天的日期
+- todo_due: 若是待办且能推断截止时间，基于上面给出的今天日期换算（如"周五之前"= 从今天起最近的周五；"明天"= 今天+1 天）。内容中有具体时刻（如"下午三点半""晚上8点"）时输出带时刻和时区偏移的 ISO 8601 "YYYY-MM-DDTHH:mm:00+08:00"（24 小时制，Asia/Shanghai 固定 +08:00，如 "2026-08-07T15:30:00+08:00"）；只有日期没有时刻时仅输出 "YYYY-MM-DD"；无法推断则 null。绝不要输出早于今天的日期
 只输出 JSON。标签禁止包含密码、密钥、卡号等敏感值本身。`;
 }
 
@@ -53,14 +53,23 @@ export function sanitizeTags(tags: string[]): string[] {
   return tags.filter((t) => !TAG_SECRET_RE.test(t.trim())).slice(0, 3);
 }
 
-const TODO_DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}))?/;
+const TODO_DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::\d{2})?\s*(Z|[+-]\d{2}:?\d{2})?)?/;
 
-/** Normalize an LLM todo_due into "YYYY-MM-DD" or "YYYY-MM-DDTHH:mm"; null when absent/invalid. */
+function normalizeOffset(raw: string | undefined): string {
+  if (!raw || raw === "Z") return raw === "Z" ? "+00:00" : "+08:00";
+  return raw.includes(":") ? raw : `${raw.slice(0, 3)}:${raw.slice(3)}`;
+}
+
+/**
+ * Normalize a todo_due into "YYYY-MM-DD" (date-only) or offset ISO 8601
+ * "YYYY-MM-DDTHH:mm:00+08:00" (timed; bare local times are Asia/Shanghai).
+ */
 export function normalizeTodoDue(v: unknown): string | null {
   if (typeof v !== "string") return null;
   const m = v.trim().match(TODO_DUE_RE);
   if (!m) return null;
-  return m[2] ? `${m[1]}T${m[2]}` : m[1];
+  if (!m[2]) return m[1];
+  return `${m[1]}T${m[2]}:00${normalizeOffset(m[3])}`;
 }
 
 /** Parse the LLM output into a TriageResult; returns null when invalid. */

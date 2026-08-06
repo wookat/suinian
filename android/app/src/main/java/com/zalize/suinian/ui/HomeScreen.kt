@@ -31,8 +31,10 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -58,6 +60,7 @@ private val categories = listOf(
     "data" to "资料",
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNoteSignal: Int = 0) {
     val ui by vm.ui.collectAsState()
@@ -272,23 +275,29 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
                 LaunchedEffect(listState) {
                     snapshotFlow { shouldLoadMore }.collect { if (it) vm.loadMore() }
                 }
-                LazyColumn(
-                    state = listState,
+                PullToRefreshBox(
+                    isRefreshing = ui.loading,
+                    onRefresh = { vm.refresh() },
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(ui.notes, key = { it.id }) { note ->
-                        NoteCard(note, onToggleTodo = { vm.toggleTodo(it) })
-                    }
-                    if (ui.loadingMore) {
-                        item {
-                            Row(
-                                Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                                horizontalArrangement = Arrangement.Center,
-                            ) { CircularProgressIndicator(Modifier.width(24.dp).height(24.dp)) }
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(ui.notes, key = { it.id }) { note ->
+                            NoteCard(note, onToggleTodo = { vm.toggleTodo(it) }, onDelete = { vm.deleteNote(it) })
                         }
+                        if (ui.loadingMore) {
+                            item {
+                                Row(
+                                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                ) { CircularProgressIndicator(Modifier.width(24.dp).height(24.dp)) }
+                            }
+                        }
+                        item { Spacer(Modifier.height(24.dp)) }
                     }
-                    item { Spacer(Modifier.height(24.dp)) }
                 }
             }
         }
