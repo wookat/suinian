@@ -29,7 +29,7 @@ export function buildTriagePrompt(now: Date = new Date(), existingTags: string[]
 - tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）${tagHint}
 - title: 一句话短标题（<=20字）
 - is_sensitive: 是否含敏感信息 (boolean)。只要内容中出现密码、口令、密钥、API key、token、验证码、身份证号、银行卡号、账号+密码组合等任何一项，必须为 true，宁可误判为 true
-- todo_due: 若是待办且能推断截止时间，基于上面给出的今天日期换算成 ISO 日期字符串（如"周五之前"= 从今天起最近的周五；"明天"= 今天+1 天），否则 null。绝不要输出早于今天的日期
+- todo_due: 若是待办且能推断截止时间，基于上面给出的今天日期换算（如"周五之前"= 从今天起最近的周五；"明天"= 今天+1 天）。内容中有具体时刻（如"下午三点半""晚上8点"）时输出带时刻的 "YYYY-MM-DDTHH:mm"（24 小时制，Asia/Shanghai，如 "2026-08-07T15:30"）；只有日期没有时刻时仅输出 "YYYY-MM-DD"；无法推断则 null。绝不要输出早于今天的日期
 只输出 JSON。标签禁止包含密码、密钥、卡号等敏感值本身。`;
 }
 
@@ -50,6 +50,16 @@ const TAG_SECRET_RE = /^(?=.*\d)[A-Za-z0-9_\-@#$%.]{6,}$|^\d{6,}$|^sk-/i;
 /** Drop tags that look like sensitive values (long alnum strings, digit runs, key prefixes). */
 export function sanitizeTags(tags: string[]): string[] {
   return tags.filter((t) => !TAG_SECRET_RE.test(t.trim())).slice(0, 3);
+}
+
+const TODO_DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}))?/;
+
+/** Normalize an LLM todo_due into "YYYY-MM-DD" or "YYYY-MM-DDTHH:mm"; null when absent/invalid. */
+export function normalizeTodoDue(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const m = v.trim().match(TODO_DUE_RE);
+  if (!m) return null;
+  return m[2] ? `${m[1]}T${m[2]}` : m[1];
 }
 
 /** Parse the LLM output into a TriageResult; returns null when invalid. */
@@ -75,7 +85,7 @@ export function parseTriageJson(text: string): TriageResult | null {
     : [];
   const title = typeof o.title === "string" ? o.title : "";
   const is_sensitive = o.is_sensitive === true;
-  const todo_due = typeof o.todo_due === "string" && o.todo_due.length > 0 ? o.todo_due : null;
+  const todo_due = normalizeTodoDue(o.todo_due);
   return { category: category as Category, tags, title, is_sensitive, todo_due };
 }
 
