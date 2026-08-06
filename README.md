@@ -4,6 +4,12 @@
 
 **开源可自部署的 AI 收件箱：微信里丢，AI 分拣、串线索、每周报告。**
 
+*An open-source, self-hostable AI inbox: dump anything into WeChat (or Web/API), AI sorts it, threads recurring thoughts, and reports weekly.* — [English README](README.en.md)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers%20%2B%20D1-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 想法、链接、待办、密码、文件——只管往微信（或 Web / Android）里丢，AI 帮你分拣归类、把散落数周的同题碎片串成思考线索，每周一告诉你「你最近在想什么」。
 
 [在线体验（演示模式）](https://suinian.zalize.com) · [3 分钟自部署](docs/self-host.md) · [技术 SPEC](docs/SPEC.md)
@@ -16,8 +22,19 @@
 ## 为什么用碎念？
 
 - **vs flomo**：flomo 靠你自己回顾；碎念用 AI 自动分拣（想法/待办/收藏/资料）、自动打标签，还把碎片串成「思考线索」。
+- **vs flomo Agent（MAX）**：flomo Agent 也住在微信里，但锁在 MAX 付费订阅后，记录仍靠你自己打标签（Agent 是"聊出来再写回"），没有产品化的线索视图；碎念免费开源，每条自动分拣，线索自动聚成视图，数据在你自己账号里。
 - **vs Cubox**：Cubox 是稍后读收藏夹；碎念什么都能收（文字/链接/语音/图片/密码），敏感内容 AES-256-GCM 加密，且**开源可自部署**，数据在你自己的 Cloudflare 账号里。
 - **微信即入口**：不用装新 App，给 bot 发消息就是记录，`?` 开头就是问答检索（微信入口可选，纯 Web/API 也完整可用）。
+
+| 能力 | 碎念 | flomo Agent（MAX） | OmniBox | just-note | mymind / Mem |
+|---|---|---|---|---|---|
+| 微信零摩擦输入 | ✅ bridge/skill | ✅ 付费墙 | ✅ ClawBot | ✅ | ❌ |
+| AI 自动四类分拣 | ✅ | ❌（聊天写回） | ❌ | ✅（9 类 md） | 部分（magic 分类） |
+| **自动思考线索聚类** | ✅ | ⚠️ 仅被动提醒 | ❌ | ❌ | ❌ |
+| 周报 | ✅ | ❌（可让 Agent 定时） | ❌ | ✅（md） | ⚠️ API 可自建 |
+| 敏感内容加密（AES-256-GCM） | ✅ | 密码锁（非 e2e） | ❌ | ❌ | ❌ |
+| 开源自部署 | ✅ | ❌ | ❌ | ⚠️ 仅 skill | ❌ |
+| 免费 | ✅ | Agent 要 MAX | 转向收费 | ✅ | 订阅 |
 
 ## 架构
 
@@ -96,6 +113,8 @@ npx wrangler pages deploy dist --project-name suinian
 <img src="docs/assets/screenshot-todos.png" alt="待办" width="80%" />
 
 **Android**：任意 App「分享 → 碎念」、桌面小组件速记、离线队列自动重试（见 [android/README.md](android/README.md)）。
+
+**API / Agent 接入**：REST API 全量文档化（[backend/README.md](backend/README.md)），可作为个人记忆源接入 Claude / OpenClaw / 任意 agent，见 [docs/integrations.md](docs/integrations.md)。
 
 ## 贡献与许可
 

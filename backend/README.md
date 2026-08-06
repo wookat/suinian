@@ -94,11 +94,15 @@ Query：`category=idea|todo|collect|data`、`tag=标签`、`q=关键词`（LIKE 
 - cron：每周一 08:00 Asia/Shanghai（UTC 周一 00:00）自动为全部用户生成上周周报；敏感笔记不进周报 prompt
 
 ### GET /api/export — 全量导出
-默认 JSON `{exported_at, notes, threads, reports}`；`?format=markdown` 返回 markdown 附件（`content-disposition: attachment`）。
+默认 JSON `{exported_at, notes, threads, reports}`；`?format=markdown`（或 `?format=md`）返回 markdown 附件（`content-disposition: attachment`）。
 
 ### 其他
 - `GET /health` 公开健康检查。
 - 所有 404（含不存在的 thread/report id 与未知路由）统一返回 JSON `{"error":"not found"}`。
+
+## 作为个人记忆源接入 agent
+
+REST API 可直接作为 Claude / OpenClaw / 任意 agent 的个人记忆源，接入方式与 curl 示例见 [docs/integrations.md](../docs/integrations.md)。
 
 ## 数据模型
 见 `migrations/`：0001（users / notes / threads / weekly_reports / attachments）+ 0002（note_embeddings 聚类向量表 + 索引）+ 0003（notes.url_titles 多链接标题）。R2 已启用 threads/weekly_reports；attachments 为 R3+ 预留。
