@@ -24,6 +24,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -63,6 +65,10 @@ fun SuinianNavHost(focusQuickNoteSignal: Int) {
     val vm: NotesViewModel = viewModel()
     val snackbarHostState = remember { SnackbarHostState() }
     val ui by vm.ui.collectAsState()
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        vm.refresh()
+    }
 
     LaunchedEffect(ui.toast) {
         ui.toast?.let {
