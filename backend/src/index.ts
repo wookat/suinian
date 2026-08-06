@@ -221,11 +221,20 @@ app.patch("/api/notes/:id", async (c) => {
 // ---- DELETE /api/notes/:id ----
 app.delete("/api/notes/:id", async (c) => {
   const id = c.req.param("id");
-  await c.env.DB.prepare("DELETE FROM note_embeddings WHERE note_id = ?").bind(id).run();
-  const res = await c.env.DB.prepare("DELETE FROM notes WHERE id = ? AND user_id = ?")
+  const note = await c.env.DB.prepare("SELECT thread_id FROM notes WHERE id = ? AND user_id = ?")
     .bind(id, c.get("userId"))
-    .run();
-  if (!res.meta.changes) return c.json({ error: "not found" }, 404);
+    .first<{ thread_id: string | null }>();
+  if (!note) return c.json({ error: "not found" }, 404);
+  await c.env.DB.prepare("DELETE FROM note_embeddings WHERE note_id = ?").bind(id).run();
+  await c.env.DB.prepare("DELETE FROM notes WHERE id = ?").bind(id).run();
+  if (note.thread_id) {
+    await c.env.DB.prepare(
+      "UPDATE threads SET note_count = (SELECT COUNT(*) FROM notes WHERE thread_id = ?), updated_at = datetime('now') WHERE id = ?"
+    )
+      .bind(note.thread_id, note.thread_id)
+      .run();
+    await c.env.DB.prepare("DELETE FROM threads WHERE id = ? AND note_count = 0").bind(note.thread_id).run();
+  }
   return c.json({ ok: true });
 });
 
