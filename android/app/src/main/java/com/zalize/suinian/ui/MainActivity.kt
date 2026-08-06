@@ -64,7 +64,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Deprecated("Deprecated in ComponentActivity")
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val app = application as SuinianApp
         lifecycleScope.launch {
