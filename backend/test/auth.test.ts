@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import app from "../src/index";
+import { app } from "../src/index";
 
 // Minimal fake D1: one user with token "good-token", empty notes table.
 function fakeDb() {

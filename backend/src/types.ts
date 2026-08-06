@@ -1,8 +1,26 @@
 export type Env = {
   DB: D1Database;
+  AI?: Ai;
   DEEPSEEK_API_KEY: string;
   DEEPSEEK_BASE_URL: string;
 };
+
+export interface ThreadRow {
+  id: string;
+  user_id: string;
+  title: string;
+  summary: string | null;
+  note_count: number;
+  updated_at: string;
+}
+
+export interface WeeklyReportRow {
+  id: string;
+  user_id: string;
+  week_start: string;
+  content_md: string;
+  created_at: string;
+}
 
 export type Category = "idea" | "todo" | "collect" | "data";
 

@@ -32,6 +32,7 @@ notes(
 threads(id, user_id, title, summary, note_count, updated_at)  -- 思考线索
 weekly_reports(id, user_id, week_start, content_md, created_at)
 attachments(id, note_id, r2_key, mime, size)
+note_embeddings(note_id, vector)  -- 聚类 embedding（JSON 数组）
 ```
 
 ## API（backend, Hono on Workers）
@@ -40,14 +41,15 @@ attachments(id, note_id, r2_key, mime, size)
 - `GET /api/notes?category=&tag=&q=&cursor=` 时间流+筛选+全文搜
 - `GET /api/threads` / `GET /api/threads/:id`（含碎片列表）
 - `POST /api/ask` 自然语言问答（检索+LLM 汇总，返回引用 note ids）
-- `GET /api/reports` 周报列表
-- `POST /api/ingest/wechat` ClawBot 桥接入口（bot 实例回调）
-- cron：每周一 08:00 生成周报；每日线索聚类增量维护
+- `GET /api/reports` / `GET /api/reports/:id` 周报；`POST /api/reports/generate` 手动触发（可传 `{"week":"this"}`）
+- `GET /api/export` 全量导出（JSON，`?format=markdown` 转 markdown 附件）
+- `POST /api/ingest/wechat` ClawBot 桥接入口（bot 实例回调，分拣同步以便回确认文案；其余入口分拣/抓取/聚类全异步）
+- cron：每周一 08:00 Asia/Shanghai（UTC 00:00）生成周报；每日 04:00 重整 thread 标题/摘要
 
 ## AI 管线（DeepSeek，OpenAI-compatible）
-1. **分拣**：单条 prompt 输出 {category, tags[3-5], title, is_sensitive, todo_due?}
+1. **分拣**：单条 prompt（注入今日日期+星期、用户 top50 已有标签）输出 {category, tags[≤3], title, is_sensitive, todo_due?}；敏感判定另有正则兜底，敏感值禁入 tags
 2. **链接抓取**：Workers fetch → readability 抽正文 → 摘要（公众号/小红书后续专项）
-3. **线索聚类**：新想法入库时与近 90 天 idea 类做 embedding 相似度（DeepSeek/bge via Workers AI），超阈值归入已有 thread 或建新 thread；每日 cron 重整 thread 标题/摘要
+3. **线索聚类**：新想法入库时与近 90 天 idea 类做 embedding 相似度（Workers AI `@cf/baai/bge-m3`，余弦阈值 0.78，向量存 note_embeddings 表；不可用时降级 DeepSeek 按标题判断），超阈值归入已有 thread 或建新 thread；每日 cron 重整 thread 标题/摘要
 4. **周报**：本周 notes 汇总 → 结构化周报 markdown
 5. **问答**：关键词+向量召回 top-K → LLM 生成回答附引用
 
