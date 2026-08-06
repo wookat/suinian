@@ -8,6 +8,7 @@ import {
   MessageCircle,
   Smartphone,
   Globe,
+  Webhook,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -21,6 +22,7 @@ import {
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
 import { cn, formatTime } from "@/lib/utils"
 import type { Note, NoteCategory } from "@/lib/types"
@@ -51,11 +53,11 @@ const CATEGORY_META: Record<
   },
 }
 
-const SOURCE_ICON = {
-  wechat: MessageCircle,
-  android: Smartphone,
-  web: Globe,
-  api: Globe,
+const SOURCE_META = {
+  wechat: { icon: MessageCircle, label: "来自微信" },
+  android: { icon: Smartphone, label: "来自 Android" },
+  web: { icon: Globe, label: "来自 Web 速记" },
+  api: { icon: Webhook, label: "来自 API" },
 } as const
 
 export function CategoryBadge({
@@ -129,6 +131,7 @@ interface NoteCardProps {
   onEdit?: (note: Note, content: string) => void
   onDelete?: (note: Note) => void
   categoryFilterActive?: boolean
+  className?: string
 }
 
 export function NoteCard({
@@ -138,8 +141,10 @@ export function NoteCard({
   onEdit,
   onDelete,
   categoryFilterActive = false,
+  className,
 }: NoteCardProps) {
-  const SourceIcon = SOURCE_ICON[note.source] ?? Globe
+  const sourceMeta = SOURCE_META[note.source] ?? SOURCE_META.web
+  const SourceIcon = sourceMeta.icon
   const isLink = note.url != null
   const done = note.todo_done === 1
   const pending = note.category === null
@@ -183,7 +188,7 @@ export function NoteCard({
   const longContent = note.content.length > CLAMP_THRESHOLD
 
   return (
-    <Card className="group p-4 transition-shadow hover:shadow-md">
+    <Card className={cn("group p-4 transition-shadow hover:shadow-md", className)}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {pending ? (
@@ -212,7 +217,9 @@ export function NoteCard({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-          <SourceIcon className="size-3" />
+          <span title={sourceMeta.label} aria-label={sourceMeta.label}>
+            <SourceIcon className="size-3" />
+          </span>
           <time>{formatTime(note.created_at)}</time>
           {(onEdit || onDelete) && (
             <div className="relative" ref={menuRef}>
@@ -273,12 +280,11 @@ export function NoteCard({
 
       <div className={cn("flex items-start gap-2", note.title ? "mt-1" : "mt-2")}>
         {note.category === "todo" && !editing && (
-          <input
-            type="checkbox"
+          <Checkbox
             checked={done}
-            onChange={() => onToggleTodo?.(note)}
+            onCheckedChange={() => onToggleTodo?.(note)}
             aria-label={done ? "标记为未完成" : "标记为完成"}
-            className="mt-0.5 size-4 shrink-0 cursor-pointer accent-primary"
+            className="mt-0.5"
           />
         )}
         {editing ? (
@@ -306,18 +312,16 @@ export function NoteCard({
             </div>
           </div>
         ) : sensitive && !revealed ? (
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <p className="select-none text-sm tracking-widest text-muted-foreground">
+          <div className="flex h-7 min-w-0 flex-1 items-center gap-2">
+            <p className="select-none text-sm leading-7 tracking-widest text-muted-foreground">
               ••••••••••••
             </p>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 gap-1 px-2 text-xs text-muted-foreground"
+            <button
               onClick={() => setRevealed(true)}
+              className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border bg-secondary px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
-              <Eye className="size-3.5" /> 显示
-            </Button>
+              <Eye className="size-3" /> 显示
+            </button>
           </div>
         ) : isLink ? (
           <div className="min-w-0 flex-1 space-y-2">
@@ -327,7 +331,7 @@ export function NoteCard({
                 href={card.url}
                 target="_blank"
                 rel="noreferrer"
-                className="group/link block rounded-lg border bg-muted/40 p-3 transition-colors hover:bg-muted"
+                className="group/link flex min-h-[52px] flex-col justify-center rounded-lg border bg-muted/40 p-3 transition-colors hover:bg-muted"
               >
                 <div className="flex items-center gap-1.5 text-sm font-medium group-hover/link:text-primary">
                   <LinkIcon className="size-3.5 shrink-0" />

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { FileText, Loader2, ChevronLeft, RefreshCw } from "lucide-react"
+import { FileText, ChevronLeft, RefreshCw } from "lucide-react"
+import { NoteListSkeleton } from "@/components/ui/skeleton"
+import { EmptyState } from "@/components/empty-state"
 import { marked } from "marked"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -15,11 +17,25 @@ function weekLabel(weekStart: string): string {
   return `${year}${fmt(d)} – ${fmt(end)}`
 }
 
+function isoWeekNumber(weekStart: string): number {
+  const d = new Date(weekStart)
+  const target = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
+  const dayNum = target.getUTCDay() || 7
+  target.setUTCDate(target.getUTCDate() + 4 - dayNum)
+  const yearStart = Date.UTC(target.getUTCFullYear(), 0, 1)
+  return Math.ceil(((target.getTime() - yearStart) / 86400_000 + 1) / 7)
+}
+
+// Strip a leading H1 from report markdown; the page header already shows the title
+function stripLeadingH1(md: string): string {
+  return md.replace(/^\s*#\s+[^\n]*\n+/, "")
+}
+
 function ReportBody({ md }: { md: string }) {
   const html = useMemo(() => marked.parse(md, { async: false }), [md])
   return (
     <div
-      className="prose-report text-sm leading-relaxed [&_h1]:mb-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1.5 [&_h3]:mt-4 [&_h3]:font-medium [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
+      className="prose-report text-sm leading-relaxed [&_h1]:mb-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2.5 [&_h2]:mt-7 [&_h2]:border-b [&_h2]:pb-1.5 [&_h2]:text-base [&_h2]:font-semibold [&_h2:first-child]:mt-0 [&_h3]:mb-1.5 [&_h3]:mt-4 [&_h3]:font-medium [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )
@@ -81,9 +97,7 @@ export function ReportsPage() {
           <ChevronLeft className="size-4" /> 返回周报列表
         </Button>
         {detailLoading ? (
-          <div className="flex justify-center py-10 text-muted-foreground">
-            <Loader2 className="size-5 animate-spin" />
-          </div>
+          <NoteListSkeleton />
         ) : detailError ? (
           <Card className="flex flex-col items-center gap-3 p-8 text-center">
             <p className="text-sm text-destructive">{detailError}</p>
@@ -91,11 +105,14 @@ export function ReportsPage() {
         ) : (
           selected && (
             <Card className="p-5">
-              <p className="mb-3 text-xs font-medium text-muted-foreground">
+              <h2 className="text-lg font-semibold">
+                第 {isoWeekNumber(selected.week_start)} 周思考报告
+              </h2>
+              <p className="mb-4 mt-1 text-xs font-medium text-muted-foreground">
                 {weekLabel(selected.week_start)}
               </p>
               {selected.content_md ? (
-                <ReportBody md={selected.content_md} />
+                <ReportBody md={stripLeadingH1(selected.content_md)} />
               ) : (
                 <p className="text-sm text-muted-foreground">该周报暂无内容</p>
               )}
@@ -105,12 +122,7 @@ export function ReportsPage() {
       </div>
     )
 
-  if (loading)
-    return (
-      <div className="flex justify-center py-10 text-muted-foreground">
-        <Loader2 className="size-5 animate-spin" />
-      </div>
-    )
+  if (loading) return <NoteListSkeleton />
 
   if (error)
     return (
@@ -124,13 +136,15 @@ export function ReportsPage() {
 
   if (reports.length === 0)
     return (
-      <Card className="flex flex-col items-center gap-3 p-10 text-center">
-        <FileText className="size-8 text-muted-foreground" />
-        <h2 className="text-base font-medium">每周思考报告</h2>
-        <p className="max-w-sm text-sm text-muted-foreground">
-          每周一自动生成「本周你在想什么」的结构化周报。第一份周报生成后会出现在这里。
-        </p>
-      </Card>
+      <EmptyState
+        icon={FileText}
+        title="周报还未生成"
+        description="每周一自动生成「本周你在想什么」的结构化周报。持续记录，第一份周报生成后会出现在这里。"
+        actionLabel="去首页记点想法"
+        onAction={() => {
+          window.location.hash = "#/"
+        }}
+      />
     )
 
   return (
@@ -143,7 +157,9 @@ export function ReportsPage() {
         >
           <div className="flex items-center gap-2">
             <FileText className="size-4 shrink-0 text-muted-foreground" />
-            <h3 className="text-[15px] font-medium">本周思考报告</h3>
+            <h3 className="text-[15px] font-medium">
+              第 {isoWeekNumber(r.week_start)} 周思考报告
+            </h3>
           </div>
           <p className="mt-1.5 text-xs text-muted-foreground">{weekLabel(r.week_start)}</p>
           {r.content_md && (
