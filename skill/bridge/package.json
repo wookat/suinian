@@ -1,0 +1,30 @@
+{
+  "name": "@suinian/wechat-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "碎念 Suinian — 微信 ClawBot(iLink) 收件桥：扫码绑定、长轮询收消息、转发后端 /api/ingest/wechat、? 问答",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "mock": "tsx mock/server.ts",
+    "smoke": "tsx test/smoke.ts",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@wechatbot/wechatbot": "^2.2.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/qrcode-terminal": "^0.12.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
