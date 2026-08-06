@@ -1,4 +1,5 @@
 import type { Env, NoteRow } from "./types";
+import { chatComplete } from "./ai";
 
 /**
  * Week boundaries in Asia/Shanghai for "last week" relative to `now`:
@@ -62,19 +63,17 @@ export async function generateWeeklyReport(
   const notes = results ?? [];
 
   let md = fallbackMarkdown(weekStart, weekEnd, notes);
-  if (notes.length > 0 && env.DEEPSEEK_API_KEY) {
+  if (notes.length > 0) {
     try {
       const digest = notes
         .filter((n) => !n.is_sensitive)
         .map((n, i) => `${i + 1}. [${CATEGORY_LABEL[n.category ?? "idea"]}] (${n.created_at.slice(0, 10)}) ${(n.title || n.content).slice(0, 200)}`)
         .join("\n");
-      const res = await fetch(`${env.AI_BASE_URL || env.DEEPSEEK_BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${env.DEEPSEEK_API_KEY}` },
-        body: JSON.stringify({
-          model: env.AI_MODEL || "deepseek-chat",
+      const text = (
+        await chatComplete(env, {
           temperature: 0.4,
           max_tokens: 1200,
+          timeout_ms: 40_000,
           messages: [
             {
               role: "system",
@@ -82,13 +81,9 @@ export async function generateWeeklyReport(
             },
             { role: "user", content: digest || "（本周没有记录）" },
           ],
-        }),
-      });
-      if (res.ok) {
-        const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-        const text = data.choices?.[0]?.message?.content?.trim();
-        if (text) md = text;
-      }
+        })
+      )?.trim();
+      if (text) md = text;
     } catch {
       /* fall back to the plain summary */
     }

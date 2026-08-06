@@ -1,4 +1,5 @@
 import type { Category, TriageResult } from "./types";
+import { chatComplete } from "./ai";
 
 const CATEGORIES: Category[] = ["idea", "todo", "collect", "data"];
 
@@ -110,38 +111,24 @@ export async function loadTopTags(db: D1Database, userId: string): Promise<strin
 
 export async function triageNote(
   content: string,
-  env: { DEEPSEEK_API_KEY: string; DEEPSEEK_BASE_URL: string; AI_MODEL?: string; AI_BASE_URL?: string },
+  env: Parameters<typeof chatComplete>[0],
   existingTags: string[] = []
-): Promise<TriageResult> {
-  let result = FALLBACK_TRIAGE;
-  try {
-    const res = await fetch(`${env.AI_BASE_URL || env.DEEPSEEK_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${env.DEEPSEEK_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: env.AI_MODEL || "deepseek-chat",
-        temperature: 0.2,
-        max_tokens: 300,
-        messages: [
-          { role: "system", content: buildTriagePrompt(new Date(), existingTags) },
-          { role: "user", content: content.slice(0, 4000) },
-        ],
-      }),
-    });
-    if (res.ok) {
-      const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-      const text = data.choices?.[0]?.message?.content ?? "";
-      result = parseTriageJson(text) ?? FALLBACK_TRIAGE;
-    }
-  } catch {
-    result = FALLBACK_TRIAGE;
-  }
+): Promise<TriageResult | null> {
+  const text = await chatComplete(env, {
+    temperature: 0.2,
+    max_tokens: 300,
+    messages: [
+      { role: "system", content: buildTriagePrompt(new Date(), existingTags) },
+      { role: "user", content: content.slice(0, 4000) },
+    ],
+  });
+  let result = (text && parseTriageJson(text)) || null;
   // regex fallback: never let an obvious credential slip through as non-sensitive
-  if (!result.is_sensitive && detectSensitive(content)) {
-    result = { ...result, is_sensitive: true, category: result === FALLBACK_TRIAGE ? "data" : result.category };
+  if (!result?.is_sensitive && detectSensitive(content)) {
+    result = result
+      ? { ...result, is_sensitive: true }
+      : { ...FALLBACK_TRIAGE, category: "data", is_sensitive: true };
   }
+  // null = AI unavailable: leave the note unsorted so the retry sweep picks it up
   return result;
 }

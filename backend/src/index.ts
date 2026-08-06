@@ -6,6 +6,7 @@ import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { clusterNote, refreshThreads, rebuildThreads } from "./threads";
+import { chatComplete } from "./ai";
 import { generateWeeklyReport, generateAllWeeklyReports } from "./reports";
 
 type Vars = { userId: string };
@@ -133,13 +134,11 @@ async function createNote(
     .bind(id, userId, source, rawType, content, url ?? null)
     .run();
 
-  const runTriage = async (): Promise<TriageResult> => {
-    let triage = FALLBACK_TRIAGE;
-    if (c.env.DEEPSEEK_API_KEY) {
-      const topTags = await loadTopTags(c.env.DB, userId).catch(() => [] as string[]);
-      triage = await triageNote(content, c.env, topTags);
-    }
-    await applyTriage(c.env, id, triage, content);
+  const runTriage = async (): Promise<TriageResult | null> => {
+    const topTags = await loadTopTags(c.env.DB, userId).catch(() => [] as string[]);
+    const triage = await triageNote(content, c.env, topTags);
+    // null = AI unavailable: keep category NULL so the cron sweep retries later
+    if (triage) await applyTriage(c.env, id, triage, content);
     return triage;
   };
 
@@ -382,41 +381,26 @@ app.post("/api/ask", async (c) => {
   }
 
   const noteIds = notes.map((n) => n.id);
-  if (!c.env.DEEPSEEK_API_KEY) {
-    return c.json({ answer: "（AI 暂不可用）已找到相关记录，见 references。", references: buildAskReferences("", noteIds) });
-  }
-
   const context = notes
     .map((n, i) => `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}) ${n.title ?? ""}\n${n.content.slice(0, 500)}`)
     .join("\n\n");
-  try {
-    const res = await fetch(`${c.env.AI_BASE_URL || c.env.DEEPSEEK_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${c.env.DEEPSEEK_API_KEY}`,
+  const answer = await chatComplete(c.env, {
+    temperature: 0.3,
+    max_tokens: 800,
+    timeout_ms: 40_000,
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。若笔记中没有相关信息，直接说没找到。回答用中文，简洁。",
       },
-      body: JSON.stringify({
-        model: c.env.AI_MODEL || "deepseek-chat",
-        temperature: 0.3,
-        max_tokens: 800,
-        messages: [
-          {
-            role: "system",
-            content:
-              "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。若笔记中没有相关信息，直接说没找到。回答用中文，简洁。",
-          },
-          { role: "user", content: `笔记片段：\n${context || "（无相关笔记）"}\n\n问题：${question}` },
-        ],
-      }),
-    });
-    if (!res.ok) throw new Error(`deepseek ${res.status}`);
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const answer = data.choices?.[0]?.message?.content ?? "";
-    return c.json({ answer, references: buildAskReferences(answer, noteIds) });
-  } catch {
+      { role: "user", content: `笔记片段：\n${context || "（无相关笔记）"}\n\n问题：${question}` },
+    ],
+  });
+  if (!answer) {
     return c.json({ answer: "（AI 暂不可用）已找到相关记录，见 references。", references: buildAskReferences("", noteIds) });
   }
+  return c.json({ answer, references: buildAskReferences(answer, noteIds) });
 });
 
 // ---- GET /api/threads ----
@@ -520,12 +504,32 @@ app.get("/api/export", async (c) => {
 
 export { app };
 
+/** Re-triage notes the AI failed to sort (category still NULL), oldest first. */
+export async function retriageUnsorted(env: Env, limit = 10): Promise<void> {
+  const { results } = await env.DB.prepare(
+    "SELECT id, user_id, content FROM notes WHERE category IS NULL AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT ?"
+  )
+    .bind(limit)
+    .all<{ id: string; user_id: string; content: string }>();
+  for (const row of results ?? []) {
+    const topTags = await loadTopTags(env.DB, row.user_id).catch(() => [] as string[]);
+    const triage = await triageNote(row.content, env, topTags);
+    if (!triage) continue;
+    await applyTriage(env, row.id, triage, row.content);
+    const n = await env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(row.id).first<NoteRow>();
+    if (n) await clusterNote(env, n).catch((err) => console.error("retriage: cluster failed", err));
+  }
+}
+
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
     if (event.cron === "0 0 * * 1") {
       // Monday 08:00 Asia/Shanghai = Monday 00:00 UTC -> weekly reports
       ctx.waitUntil(generateAllWeeklyReports(env));
+    } else if (event.cron === "*/10 * * * *") {
+      // sweep notes whose async triage failed or was cancelled
+      ctx.waitUntil(retriageUnsorted(env));
     } else {
       // daily thread title/summary refresh
       ctx.waitUntil(refreshThreads(env));
