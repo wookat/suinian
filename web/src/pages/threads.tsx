@@ -45,6 +45,21 @@ export function ThreadsPage() {
   }, [load])
 
   useEffect(() => {
+    const applyHashId = () => {
+      const query = window.location.hash.split("?")[1]
+      if (!query) return
+      const id = new URLSearchParams(query).get("id")
+      if (id) {
+        setSelected(id)
+        history.replaceState(null, "", `${window.location.pathname}#/threads`)
+      }
+    }
+    applyHashId()
+    window.addEventListener("hashchange", applyHashId)
+    return () => window.removeEventListener("hashchange", applyHashId)
+  }, [])
+
+  useEffect(() => {
     if (!selected) {
       setDetail(null)
       return

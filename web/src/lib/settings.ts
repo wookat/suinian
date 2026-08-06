@@ -23,6 +23,9 @@ export function loadSettings(): Settings {
   return { apiBaseUrl: "", apiToken: "", useMock: true }
 }
 
+export const SETTINGS_CHANGED_EVENT = "suinian:settings-changed"
+
 export function saveSettings(s: Settings) {
   localStorage.setItem(KEY, JSON.stringify(s))
+  window.dispatchEvent(new Event(SETTINGS_CHANGED_EVENT))
 }
