@@ -129,9 +129,15 @@ data class Report(
 @Serializable
 data class ReportDetail(val report: Report)
 
-/** POST /api/ask 响应 */
+/** POST /api/ask 响应：references 元素为 {index, note_id} */
+@Serializable
+data class AskReference(
+    val index: Int = 0,
+    @SerialName("note_id") val noteId: String = "",
+)
+
 @Serializable
 data class AskResponse(
     val answer: String = "",
-    val references: List<String> = emptyList(),
+    val references: List<AskReference> = emptyList(),
 )

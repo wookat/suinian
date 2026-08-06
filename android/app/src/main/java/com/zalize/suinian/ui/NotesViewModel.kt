@@ -121,9 +121,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val res = repo.ask(question)
                 // 引用只有 id：从当前列表 + 最近一页里尽量匹配出笔记内容
-            val pool = (_ui.value.notes + runCatching { repo.list(null, null, null).notes }.getOrDefault(emptyList()))
+                val pool = (_ui.value.notes + runCatching { repo.list(null, null, null).notes }.getOrDefault(emptyList()))
                     .distinctBy { it.id }
-                val refNotes = res.references.mapNotNull { id -> pool.firstOrNull { it.id == id } }.take(5)
+                val refNotes = res.references.mapNotNull { ref -> pool.firstOrNull { it.id == ref.noteId } }.take(5)
                 _ui.value = _ui.value.copy(asking = false, askAnswer = res.answer, askReferences = refNotes)
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(asking = false, askError = e.message ?: "提问失败，请稍后重试")
