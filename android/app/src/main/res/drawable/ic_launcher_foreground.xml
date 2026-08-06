@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 简洁的"念"意象：气泡 + 笔迹点 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,30c-13.3,0 -24,9 -24,20c0,6.4 3.7,12 9.4,15.7L36,78l12.6,-7.2c1.7,0.3 3.5,0.5 5.4,0.5c13.3,0 24,-9 24,-20S67.3,30 54,30z" />
+    <path
+        android:fillColor="#3A5A40"
+        android:pathData="M44,50a3.4,3.4 0 1,0 6.8,0a3.4,3.4 0 1,0 -6.8,0z" />
+    <path
+        android:fillColor="#3A5A40"
+        android:pathData="M57.2,50a3.4,3.4 0 1,0 6.8,0a3.4,3.4 0 1,0 -6.8,0z" />
+</vector>
