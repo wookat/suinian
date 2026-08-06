@@ -48,6 +48,40 @@ class NotesRepository(
         return client.listNotes(category = category, tag = tag, q = q, cursor = cursor)
     }
 
+    suspend fun setTodoDone(id: String, done: Boolean): Note? {
+        val (client, mock) = api()
+        if (mock) return MockStore.setTodoDone(id, done)
+        return client.setTodoDone(id, done)
+    }
+
+    suspend fun listThreads(): List<Thread> {
+        val (client, mock) = api()
+        if (mock) return emptyList()
+        return client.listThreads().threads
+    }
+
+    suspend fun getThread(id: String): ThreadDetail {
+        val (client, _) = api()
+        return client.getThread(id)
+    }
+
+    suspend fun listReports(): List<ReportSummary> {
+        val (client, mock) = api()
+        if (mock) return emptyList()
+        return client.listReports()
+    }
+
+    suspend fun getReport(id: String): Report {
+        val (client, _) = api()
+        return client.getReport(id)
+    }
+
+    suspend fun ask(question: String): AskResponse {
+        val (client, mock) = api()
+        if (mock) return AskResponse(answer = "Mock 模式下问答不可用，请在设置中关闭 Mock 并连接真实后端。")
+        return client.ask(question)
+    }
+
     /** 重试队列：全部成功返回 true */
     suspend fun flushPending(): Boolean {
         val (client, mock) = api()

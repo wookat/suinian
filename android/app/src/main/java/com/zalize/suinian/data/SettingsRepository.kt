@@ -10,11 +10,14 @@ import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
+/** 老版本误把 Web 域名当默认 API 地址存了下来，读取时纠正 */
+private const val LEGACY_WEB_URL = "https://suinian.zalize.com"
+
 data class AppSettings(
-    val baseUrl: String = "https://suinian.zalize.com",
+    val baseUrl: String = "https://suinian-api.zalize.com",
     val token: String = "",
     val mockMode: Boolean = true,
-    val notificationShortcut: Boolean = true,
+    val notificationShortcut: Boolean = false,
 )
 
 class SettingsRepository(private val context: Context) {
@@ -28,10 +31,11 @@ class SettingsRepository(private val context: Context) {
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
         AppSettings(
-            baseUrl = p[Keys.BASE_URL] ?: AppSettings().baseUrl,
+            baseUrl = (p[Keys.BASE_URL] ?: AppSettings().baseUrl)
+                .let { if (it == LEGACY_WEB_URL) AppSettings().baseUrl else it },
             token = p[Keys.TOKEN] ?: "",
             mockMode = p[Keys.MOCK_MODE] ?: true,
-            notificationShortcut = p[Keys.NOTIF_SHORTCUT] ?: true,
+            notificationShortcut = p[Keys.NOTIF_SHORTCUT] ?: false,
         )
     }
 

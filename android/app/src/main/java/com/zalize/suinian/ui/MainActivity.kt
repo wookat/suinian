@@ -7,10 +7,16 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Notes
+import androidx.compose.material.icons.outlined.AccountTree
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -23,19 +29,29 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import androidx.lifecycle.lifecycleScope
-import com.zalize.suinian.SuinianApp
-import com.zalize.suinian.notif.QuickNoteNotification
-import com.zalize.suinian.ui.theme.SuinianTheme
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
+
+private data class Tab(
+    val route: String,
+    val label: String,
+    val icon: ImageVector,
+)
+
+private val tabs = listOf(
+    Tab("home", "碎念", Icons.AutoMirrored.Outlined.Notes),
+    Tab("todos", "待办", Icons.Outlined.CheckCircle),
+    Tab("threads", "线索", Icons.Outlined.AccountTree),
+    Tab("reports", "周报", Icons.Outlined.Description),
+)
 
 class MainActivity : ComponentActivity() {
 
@@ -50,26 +66,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         if (intent?.getBooleanExtra(EXTRA_FOCUS_QUICK_NOTE, false) == true) focusQuickNoteSignal++
-        if (android.os.Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
-            android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 0)
-        }
+        // 通知权限不在首启请求，改为设置里打开「通知栏速记入口」时再请求
         setContent {
-            SuinianTheme {
+            com.zalize.suinian.ui.theme.SuinianTheme {
                 SuinianNavHost(focusQuickNoteSignal)
-            }
-        }
-    }
-
-    @Deprecated("Deprecated in ComponentActivity")
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        val app = application as SuinianApp
-        lifecycleScope.launch {
-            if (app.settings.settings.first().notificationShortcut) {
-                QuickNoteNotification.show(this@MainActivity)
             }
         }
     }
@@ -99,30 +99,97 @@ fun SuinianNavHost(focusQuickNoteSignal: Int) {
         }
     }
 
-    NavHost(navController = navController, startDestination = "home") {
-        composable("home") {
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = { Text("碎念", fontWeight = FontWeight.SemiBold) },
-                        actions = {
-                            IconButton(onClick = { navController.navigate("settings") }) {
-                                Icon(Icons.Outlined.Settings, contentDescription = "设置")
-                            }
-                        },
-                    )
-                },
-                snackbarHost = { SnackbarHost(snackbarHostState) },
-            ) { padding ->
+    // 小组件/通知点开：回到首页并聚焦速记框
+    LaunchedEffect(focusQuickNoteSignal) {
+        if (focusQuickNoteSignal > 0) {
+            navController.navigate("home") {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+    }
+
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route
+    val showBottomBar = currentRoute in tabs.map { it.route }
+
+    Scaffold(
+        topBar = {
+            if (showBottomBar) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            when (currentRoute) {
+                                "todos" -> "待办"
+                                "threads" -> "思考线索"
+                                "reports" -> "每周报告"
+                                else -> "碎念"
+                            },
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    },
+                    actions = {
+                        IconButton(onClick = { navController.navigate("settings") }) {
+                            Icon(Icons.Outlined.Settings, contentDescription = "设置")
+                        }
+                    },
+                )
+            }
+        },
+        bottomBar = {
+            if (showBottomBar) {
+                NavigationBar {
+                    tabs.forEach { tab ->
+                        NavigationBarItem(
+                            selected = currentRoute == tab.route,
+                            onClick = {
+                                navController.navigate(tab.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            icon = { Icon(tab.icon, contentDescription = tab.label) },
+                            label = { Text(tab.label) },
+                        )
+                    }
+                }
+            }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+    ) { padding ->
+        NavHost(
+            navController = navController,
+            startDestination = "home",
+            modifier = Modifier.padding(padding),
+        ) {
+            composable("home") {
                 HomeScreen(
                     vm = vm,
-                    modifier = Modifier.padding(padding),
                     focusQuickNoteSignal = focusQuickNoteSignal,
                 )
             }
-        }
-        composable("settings") {
-            SettingsScreen(vm = vm, onBack = { navController.popBackStack() })
+            composable("todos") {
+                TodosScreen()
+            }
+            composable("threads") {
+                ThreadsScreen(onOpenThread = { id -> navController.navigate("threads/$id") })
+            }
+            composable("threads/{id}") { entry ->
+                val id = entry.arguments?.getString("id") ?: return@composable
+                ThreadDetailScreen(threadId = id, onBack = { navController.popBackStack() })
+            }
+            composable("reports") {
+                ReportsScreen(onOpenReport = { id -> navController.navigate("reports/$id") })
+            }
+            composable("reports/{id}") { entry ->
+                val id = entry.arguments?.getString("id") ?: return@composable
+                ReportDetailScreen(reportId = id, onBack = { navController.popBackStack() })
+            }
+            composable("settings") {
+                SettingsScreen(vm = vm, onBack = { navController.popBackStack() })
+            }
         }
     }
 }

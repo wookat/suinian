@@ -64,6 +64,15 @@ object MockStore {
     }
 
     @Synchronized
+    fun setTodoDone(id: String, done: Boolean): Note? {
+        val idx = notes.indexOfFirst { it.id == id }
+        if (idx < 0) return null
+        val updated = notes[idx].copy(todoDone = done)
+        notes[idx] = updated
+        return updated
+    }
+
+    @Synchronized
     fun list(category: String?, tag: String?, q: String?): NotesPage {
         var result = notes.toList()
         if (!category.isNullOrBlank()) result = result.filter { it.category == category }
