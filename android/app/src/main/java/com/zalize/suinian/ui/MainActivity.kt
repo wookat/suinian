@@ -30,7 +30,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.lifecycle.lifecycleScope
+import com.zalize.suinian.SuinianApp
+import com.zalize.suinian.notif.QuickNoteNotification
 import com.zalize.suinian.ui.theme.SuinianTheme
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -45,9 +50,26 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         if (intent?.getBooleanExtra(EXTRA_FOCUS_QUICK_NOTE, false) == true) focusQuickNoteSignal++
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 0)
+        }
         setContent {
             SuinianTheme {
                 SuinianNavHost(focusQuickNoteSignal)
+            }
+        }
+    }
+
+    @Deprecated("Deprecated in ComponentActivity")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        val app = application as SuinianApp
+        lifecycleScope.launch {
+            if (app.settings.settings.first().notificationShortcut) {
+                QuickNoteNotification.show(this@MainActivity)
             }
         }
     }

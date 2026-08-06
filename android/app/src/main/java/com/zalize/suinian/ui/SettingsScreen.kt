@@ -1,5 +1,10 @@
 package com.zalize.suinian.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -140,12 +145,27 @@ fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                val notifPermissionLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { granted ->
+                    if (granted) QuickNoteNotification.show(context)
+                }
                 Switch(
                     checked = settings.notificationShortcut,
                     onCheckedChange = { v ->
                         scope.launch {
                             vm.settingsRepo.setNotificationShortcut(v)
-                            if (v) QuickNoteNotification.show(context) else QuickNoteNotification.hide(context)
+                            if (v) {
+                                val needsPermission = Build.VERSION.SDK_INT >= 33 &&
+                                    context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                                if (needsPermission) {
+                                    notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else {
+                                    QuickNoteNotification.show(context)
+                                }
+                            } else {
+                                QuickNoteNotification.hide(context)
+                            }
                         }
                     },
                 )
