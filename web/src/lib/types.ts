@@ -11,6 +11,7 @@ export interface Note {
   url: string | null
   url_title: string | null
   url_summary: string | null
+  title?: string | null
   category: NoteCategory | null
   tags: string[]
   thread_id: string | null
@@ -44,4 +45,34 @@ export interface NotesQuery {
   tag?: string
   q?: string
   cursor?: string
+  limit?: number
+}
+
+export interface Thread {
+  id: string
+  user_id: string
+  title: string
+  summary: string | null
+  note_count: number
+  updated_at: string
+}
+
+export interface ThreadDetail extends Thread {
+  notes: Note[]
+}
+
+export interface ThreadsResponse {
+  threads: Thread[]
+}
+
+export interface WeeklyReport {
+  id: string
+  user_id: string
+  week_start: string
+  content_md?: string
+  created_at: string
+}
+
+export interface ReportsResponse {
+  reports: WeeklyReport[]
 }
