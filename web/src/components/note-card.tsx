@@ -18,6 +18,8 @@ import {
   EyeOff,
   CalendarClock,
   Loader2,
+  Mic,
+  Image as ImageIcon,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -51,6 +53,23 @@ const CATEGORY_META: Record<
     icon: Database,
     activeClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
   },
+}
+
+const RAW_TYPE_META = {
+  voice: { icon: Mic, label: "语音转写" },
+  image: { icon: ImageIcon, label: "图片识别" },
+} as const
+
+export function RawTypeBadge({ rawType }: { rawType: string }) {
+  const meta = RAW_TYPE_META[rawType as keyof typeof RAW_TYPE_META]
+  if (!meta) return null
+  const Icon = meta.icon
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+      <Icon className="size-3" />
+      {meta.label}
+    </span>
+  )
 }
 
 const SOURCE_META = {
@@ -204,6 +223,7 @@ export function NoteCard({
             <CategoryBadge category={note.category} active={categoryFilterActive} />
           )}
           {note.category === "todo" && <DueChip due={note.todo_due} />}
+          <RawTypeBadge rawType={note.raw_type} />
           {note.tags.slice(0, MAX_TAGS).map((tag) => (
             <Badge
               key={tag}

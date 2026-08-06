@@ -3,12 +3,18 @@ import {
   isQuestion,
   stripQuestionPrefix,
   toIngestPayload,
+  toMediaIngestPayload,
   type AskHistoryMessage,
   type NormalizedMessage,
 } from './payload.js'
 
 const FALLBACK_SAVED = '已收到，正在整理…（后端确认文案缺失）'
 const ERR_SAVE = '保存失败了，稍后我会自动重试；也可以过一会儿重发一次。'
+const FALLBACK_MEDIA_SAVED = '已记录，正在识别…'
+const MEDIA_DOWNLOAD_FAILED: Record<'voice' | 'image', string> = {
+  voice: '【语音】下载失败，未能转写，请重发一次',
+  image: '【图片】下载失败，未能识别，请重发一次',
+}
 const ERR_ASK = '检索出错了，请稍后再问一次。'
 const EMPTY_QUESTION = '想问什么？在 ? 后面写上问题，例如「?上周我在想什么」。'
 
@@ -87,6 +93,23 @@ export async function handleMessage(
       if (err instanceof FatalApiError) throw err
       return ERR_ASK
     }
+  }
+
+  // 语音/图片：走 /api/ingest/media 转写/识别入库
+  if (msg.type === 'voice' || msg.type === 'image') {
+    const mediaPayload = toMediaIngestPayload(msg)
+    if (mediaPayload) {
+      try {
+        const res = await client.ingestMedia(mediaPayload)
+        if (res.note && !res.error) return res.reply ?? FALLBACK_MEDIA_SAVED
+        return res.error ? `保存失败：${res.error}` : ERR_SAVE
+      } catch (err) {
+        if (err instanceof FatalApiError) throw err
+        return ERR_SAVE
+      }
+    }
+    // 媒体下载失败/超限：占位文字入库，提醒用户重发
+    msg = { ...msg, text: msg.text?.trim() || MEDIA_DOWNLOAD_FAILED[msg.type] }
   }
 
   const payload = toIngestPayload(msg)

@@ -1,6 +1,7 @@
 export type Env = {
   DB: D1Database;
   AI?: Ai;
+  MEDIA?: R2Bucket;
   DEEPSEEK_API_KEY: string;
   DEEPSEEK_BASE_URL: string;
   AI_MODEL?: string;

@@ -24,6 +24,31 @@ export interface IngestPayload {
   attachments?: IngestAttachment[]
 }
 
+export interface MediaIngestPayload {
+  type: 'audio' | 'image'
+  data_base64: string
+  mime: string
+  file_name?: string
+  source: 'wechat'
+}
+
+/** 需要走 /api/ingest/media 的媒体（语音/图片且已下载到字节）→ payload；否则 null */
+export function toMediaIngestPayload(msg: NormalizedMessage): MediaIngestPayload | null {
+  if (msg.type !== 'voice' && msg.type !== 'image') return null
+  const media = msg.media?.[0]
+  if (!media?.data || media.data.length === 0) return null
+  if (media.data.length > MAX_MEDIA_BYTES) return null
+  return {
+    type: msg.type === 'voice' ? 'audio' : 'image',
+    data_base64: media.data.toString('base64'),
+    mime: media.mime,
+    file_name: media.fileName,
+    source: 'wechat',
+  }
+}
+
+export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
+
 export interface AskHistoryMessage {
   role: 'user' | 'assistant'
   content: string

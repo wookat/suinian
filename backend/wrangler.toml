@@ -14,6 +14,10 @@ database_id = "8a0a1fc0-c714-4822-a915-b1791f1599a1"
 [ai]
 binding = "AI"
 
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "suinian-media"
+
 [triggers]
 crons = ["0 0 * * 1", "0 20 * * *", "*/10 * * * *"]
 

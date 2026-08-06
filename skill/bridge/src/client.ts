@@ -1,10 +1,20 @@
 import type { BridgeConfig } from './config.js'
-import type { AskPayload, IngestPayload } from './payload.js'
+import type { AskPayload, IngestPayload, MediaIngestPayload } from './payload.js'
 
 export interface IngestResponse {
   ok: boolean
   note_id?: string
   /** 后端生成的确认文案，如「已存：想法 #创业 #AI」 */
+  reply?: string
+  error?: string
+}
+
+export interface MediaIngestResponse {
+  note?: { id: string }
+  /** 提取/转写出的文字 */
+  text?: string
+  transcribed?: boolean
+  /** 后端生成的确认文案，如「已记录（语音转写）：…」 */
   reply?: string
   error?: string
 }
@@ -27,6 +37,10 @@ export class SuinianClient {
 
   ask(payload: AskPayload): Promise<AskResponse> {
     return this.post<AskResponse>('/api/ask', payload)
+  }
+
+  ingestMedia(payload: MediaIngestPayload): Promise<MediaIngestResponse> {
+    return this.post<MediaIngestResponse>('/api/ingest/media', payload)
   }
 
   private async post<T>(path: string, body: unknown): Promise<T> {
