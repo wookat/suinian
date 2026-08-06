@@ -90,7 +90,8 @@ async function main() {
     let notes: NoteJson[] = [];
     for (let i = 0; i < 30; i++) {
       await sleep(3000);
-      const res = await api<{ notes: NoteJson[] }>(`/api/notes?q=${encodeURIComponent(PREFIX)}&limit=50`);
+      // no q= filter: sensitive notes are stored encrypted, so content LIKE would miss them
+      const res = await api<{ notes: NoteJson[] }>(`/api/notes?limit=50`);
       notes = res.notes.filter((n) => created.includes(n.id));
       if (notes.length === created.length && notes.every((n) => n.category)) break;
     }
