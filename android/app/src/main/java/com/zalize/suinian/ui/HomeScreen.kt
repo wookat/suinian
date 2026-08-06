@@ -66,8 +66,10 @@ private val categories = listOf(
     "data" to "资料",
 )
 
-internal fun categoryLabel(category: String?): String =
-    categories.firstOrNull { it.first == category }?.second ?: (category ?: "分拣中")
+internal fun categoryLabel(category: String?): String {
+    if (category == null) return "分拣中"
+    return categories.firstOrNull { it.first == category }?.second ?: category
+}
 
 @Composable
 fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNoteSignal: Int = 0) {
