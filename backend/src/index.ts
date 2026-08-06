@@ -480,7 +480,8 @@ app.get("/api/export", async (c) => {
   const threads = threadsR.results ?? [];
   const reports = reportsR.results ?? [];
 
-  if (c.req.query("format") === "markdown") {
+  const format = c.req.query("format");
+  if (format === "markdown" || format === "md") {
     let md = `# 碎念全量导出（${new Date().toISOString().slice(0, 10)}）\n\n共 ${notes.length} 条笔记、${threads.length} 条线索、${reports.length} 份周报。\n\n## 笔记\n`;
     for (const n of notes) {
       md += `\n### ${n.title || n.content.slice(0, 30)}\n- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${n.url ? ` | 链接：${n.url}` : ""}\n\n${n.content}\n`;

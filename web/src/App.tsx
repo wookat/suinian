@@ -5,6 +5,8 @@ import {
   GitBranch,
   FileText,
   Settings as SettingsIcon,
+  Info,
+  X,
 } from "lucide-react"
 import { TimelinePage } from "@/pages/timeline"
 import { TodosPage } from "@/pages/todos"
@@ -14,6 +16,7 @@ import { SettingsPage } from "@/pages/settings"
 import { ReloadPrompt } from "@/components/reload-prompt"
 import { PageHeader } from "@/components/page-header"
 import { RightRail } from "@/components/right-rail"
+import { loadSettings, saveSettings, SETTINGS_CHANGED_EVENT } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 
 const ROUTES = [
@@ -73,13 +76,49 @@ function useHashRoute(): string {
   return hash
 }
 
+function useMockMode(): boolean {
+  const [mock, setMock] = useState(() => loadSettings().useMock)
+  useEffect(() => {
+    const onChange = () => setMock(loadSettings().useMock)
+    window.addEventListener(SETTINGS_CHANGED_EVENT, onChange)
+    window.addEventListener("storage", onChange)
+    return () => {
+      window.removeEventListener(SETTINGS_CHANGED_EVENT, onChange)
+      window.removeEventListener("storage", onChange)
+    }
+  }, [])
+  return mock
+}
+
 export default function App() {
   const route = useHashRoute()
   const active = ROUTES.find((r) => r.path === route) ?? ROUTES[0]
   const Page = active.page
+  const isMock = useMockMode()
 
   return (
     <div className="min-h-dvh">
+      {isMock && (
+        <div className="flex items-center justify-center gap-2 border-b border-amber-500/30 bg-amber-500/15 px-4 py-2 text-sm text-amber-800 backdrop-blur dark:text-amber-300 md:pl-52">
+          <Info className="size-4 shrink-0" />
+          <span>
+            当前为演示数据，
+            <a href="#/settings" className="font-medium underline underline-offset-2">
+              去设置连接你的碎念 →
+            </a>
+          </span>
+          <button
+            onClick={() => {
+              saveSettings({ ...loadSettings(), useMock: false })
+              window.location.reload()
+            }}
+            aria-label="关闭演示模式"
+            className="ml-1 flex items-center gap-1 rounded-md border border-amber-500/40 px-2 py-0.5 text-xs font-medium transition-colors hover:bg-amber-500/20"
+          >
+            <X className="size-3" /> 关闭演示
+          </button>
+        </div>
+      )}
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-20 hidden w-52 flex-col border-r bg-card p-4 md:flex">
         <div className="mb-6 flex items-center gap-2 px-2">

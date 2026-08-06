@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from "react"
-import { Hash, BarChart3 } from "lucide-react"
+import { Hash, BarChart3, GitBranch } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { getNotes } from "@/lib/api"
-import type { Note } from "@/lib/types"
+import { getNotes, getThreads } from "@/lib/api"
+import type { Note, Thread } from "@/lib/types"
+
+const MAX_RAIL_THREADS = 3
 
 const MAX_RAIL_TAGS = 20
 
 export function RightRail() {
   const [notes, setNotes] = useState<Note[] | null>(null)
+  const [threads, setThreads] = useState<Thread[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -18,6 +21,13 @@ export function RightRail() {
       })
       .catch(() => {
         if (!cancelled) setNotes([])
+      })
+    getThreads()
+      .then((res) => {
+        if (!cancelled) setThreads(res.threads.slice(0, MAX_RAIL_THREADS))
+      })
+      .catch(() => {
+        if (!cancelled) setThreads([])
       })
     return () => {
       cancelled = true
@@ -55,6 +65,25 @@ export function RightRail() {
               <p className="text-lg font-semibold tabular-nums">{stats.total}</p>
               <p className="text-xs text-muted-foreground">总条数</p>
             </div>
+          </div>
+        </Card>
+      )}
+      {threads.length > 0 && (
+        <Card className="p-4">
+          <h2 className="flex items-center gap-1.5 text-sm font-medium">
+            <GitBranch className="size-4 text-muted-foreground" /> 最近线索
+          </h2>
+          <div className="mt-3 space-y-1">
+            {threads.map((t) => (
+              <a
+                key={t.id}
+                href={`#/threads?id=${encodeURIComponent(t.id)}`}
+                className="block rounded-lg px-2 py-1.5 transition-colors hover:bg-accent"
+              >
+                <p className="truncate text-sm font-medium">{t.title}</p>
+                <p className="text-xs text-muted-foreground">{t.note_count} 条碎念</p>
+              </a>
+            ))}
           </div>
         </Card>
       )}

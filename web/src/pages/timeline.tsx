@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Search, Sparkles, X, Loader2, Info, RefreshCw, Plus, PenLine, SearchX } from "lucide-react"
+import { Search, Sparkles, X, Loader2, RefreshCw, Plus, PenLine, SearchX } from "lucide-react"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { QuickInput } from "@/components/quick-input"
@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import { getNotes, getNote, patchNote, deleteNote, ask, ApiError, NetworkError } from "@/lib/api"
-import { loadSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import type { AskResponse, Note } from "@/lib/types"
 
@@ -22,6 +21,8 @@ const CATEGORY_TABS = [
 ] as const
 
 const TOP_TAGS = 12
+const MOBILE_TOP_TAGS = 6
+const SEARCH_DEBOUNCE_MS = 300
 const POLL_INTERVAL = 2000
 const POLL_MAX = 15
 
@@ -58,11 +59,13 @@ export function TimelinePage() {
   const [askError, setAskError] = useState<string | null>(null)
   const [askResult, setAskResult] = useState<AskResponse | null>(null)
   const [tagsExpanded, setTagsExpanded] = useState(false)
+  const [mobileTagsExpanded, setMobileTagsExpanded] = useState(false)
+  const [debouncing, setDebouncing] = useState(false)
+  const debounceRef = useRef<number | null>(null)
   const [newIds, setNewIds] = useState<Set<string>>(() => new Set())
   const abortRef = useRef<AbortController | null>(null)
   const pollersRef = useRef<Map<string, number>>(new Map())
   const quickInputRef = useRef<HTMLDivElement>(null)
-  const isMock = loadSettings().useMock
 
   const load = useCallback(async () => {
     abortRef.current?.abort()
@@ -110,6 +113,12 @@ export function TimelinePage() {
     applyHashTag()
     window.addEventListener("hashchange", applyHashTag)
     return () => window.removeEventListener("hashchange", applyHashTag)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current !== null) window.clearTimeout(debounceRef.current)
+    }
   }, [])
 
   useEffect(() => {
@@ -219,18 +228,6 @@ export function TimelinePage() {
 
   return (
     <div className="space-y-4">
-      {isMock && (
-        <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
-          <Info className="size-4 shrink-0" />
-          <span>
-            正在浏览演示数据，
-            <a href="#/settings" className="font-medium underline underline-offset-2">
-              去设置连接你的碎念 →
-            </a>
-          </span>
-        </div>
-      )}
-
       <div ref={quickInputRef}>
         <QuickInput onCreated={handleCreated} />
       </div>
@@ -244,19 +241,37 @@ export function TimelinePage() {
               if (askMode) {
                 setAskInput(e.target.value)
               } else {
-                setSearchInput(e.target.value)
-                if (e.target.value === "") setSearch("")
+                const value = e.target.value
+                setSearchInput(value)
+                if (debounceRef.current !== null) window.clearTimeout(debounceRef.current)
+                if (value.trim() === search) {
+                  setDebouncing(false)
+                  return
+                }
+                setDebouncing(true)
+                debounceRef.current = window.setTimeout(() => {
+                  setDebouncing(false)
+                  setSearch(value.trim())
+                }, SEARCH_DEBOUNCE_MS)
               }
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-                if (askMode) void handleAsk()
-                else setSearch(searchInput.trim())
+                if (askMode) {
+                  void handleAsk()
+                } else {
+                  if (debounceRef.current !== null) window.clearTimeout(debounceRef.current)
+                  setDebouncing(false)
+                  setSearch(searchInput.trim())
+                }
               }
             }}
             placeholder={askMode ? "问问你的笔记，例如：我之前想过的那个点子…" : "搜索笔记…"}
             className="pl-8"
           />
+          {!askMode && (debouncing || (loading && search !== "")) && (
+            <Loader2 className="absolute right-2.5 top-2.5 size-4 animate-spin text-muted-foreground" />
+          )}
         </div>
         <Button
           variant={askMode ? "default" : "outline"}
@@ -340,20 +355,33 @@ export function TimelinePage() {
           )}
           {visibleTags
             .filter((t) => t !== tag)
-            .map((t) => (
+            .map((t, i) => (
               <Badge
                 key={t}
                 variant="outline"
-                className="cursor-pointer hover:bg-accent"
+                className={cn(
+                  "cursor-pointer hover:bg-accent",
+                  !mobileTagsExpanded && i >= MOBILE_TOP_TAGS && "hidden md:inline-flex",
+                )}
                 onClick={() => setTag(t)}
               >
                 #{t}
               </Badge>
             ))}
+          {visibleTags.filter((t) => t !== tag).length > MOBILE_TOP_TAGS && (
+            <button
+              onClick={() => setMobileTagsExpanded((x) => !x)}
+              className="text-xs font-medium text-muted-foreground hover:text-foreground md:hidden"
+            >
+              {mobileTagsExpanded
+                ? "收起"
+                : `展开（${visibleTags.filter((t) => t !== tag).length - MOBILE_TOP_TAGS}）`}
+            </button>
+          )}
           {hiddenCount > 0 && (
             <button
               onClick={() => setTagsExpanded((x) => !x)}
-              className="text-xs font-medium text-muted-foreground hover:text-foreground"
+              className="hidden text-xs font-medium text-muted-foreground hover:text-foreground md:inline"
             >
               {tagsExpanded ? "收起" : `更多（${hiddenCount}）`}
             </button>

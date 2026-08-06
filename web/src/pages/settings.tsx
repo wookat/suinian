@@ -22,7 +22,12 @@ export function SettingsPage() {
   const [theme, setThemeState] = useState<ThemeMode>(loadTheme)
 
   function save() {
-    saveSettings(settings)
+    const next =
+      settings.useMock && settings.apiBaseUrl.trim() && settings.apiToken.trim()
+        ? { ...settings, useMock: false }
+        : settings
+    setSettings(next)
+    saveSettings(next)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
