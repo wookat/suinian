@@ -22,6 +22,8 @@ data class NotesUiState(
     val query: String = "",
     val sending: Boolean = false,
     val toast: String? = null,
+    val cursor: String? = null,
+    val loadingMore: Boolean = false,
 )
 
 class NotesViewModel(app: Application) : AndroidViewModel(app) {
@@ -49,9 +51,32 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val page = repo.list(category = s.category, tag = null, q = s.query.ifBlank { null })
-                _ui.value = _ui.value.copy(notes = page.notes, loading = false)
+                _ui.value = _ui.value.copy(notes = page.notes, loading = false, cursor = page.cursor)
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(loading = false, error = e.message ?: "加载失败")
+            }
+        }
+    }
+
+    fun loadMore() {
+        val s = _ui.value
+        val cursor = s.cursor ?: return
+        if (s.loading || s.loadingMore) return
+        _ui.value = s.copy(loadingMore = true)
+        viewModelScope.launch {
+            try {
+                val page = repo.list(
+                    category = s.category,
+                    tag = null,
+                    q = s.query.ifBlank { null },
+                    cursor = cursor,
+                )
+                val existing = _ui.value.notes
+                val existingIds = existing.map { it.id }.toSet()
+                val merged = existing + page.notes.filter { it.id !in existingIds }
+                _ui.value = _ui.value.copy(notes = merged, loadingMore = false, cursor = page.cursor)
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(loadingMore = false, toast = "加载更多失败：${e.message ?: "网络错误"}")
             }
         }
     }
