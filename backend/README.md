@@ -30,14 +30,26 @@ npx wrangler secret put DEEPSEEK_API_KEY
 openssl rand -base64 32 | npx wrangler secret put SUINIAN_ENC_KEY
 # 部署（自定义域 suinian-api.zalize.com 已在 wrangler.toml routes 中声明）
 npx wrangler deploy
-# 创建用户 token
+# 创建用户 token（也可直接用自助注册接口 POST /api/auth/register，见下）
 npx wrangler d1 execute suinian --remote --command \
   "INSERT INTO users (id,name,api_token) VALUES ('u_xxx','boss','<random-token>')"
 ```
 
+环境变量：`REGISTRATION_ENABLED`（`wrangler.toml [vars]`，默认 `"true"`；设为 `"false"`/`"0"`/`"off"` 关闭自助注册）。
+
 ## API
 
-所有 `/api/*` 需要 `Authorization: Bearer <token>`（token 存 D1 `users.api_token`）。
+所有 `/api/*` 需要 `Authorization: Bearer <token>`（token 存 D1 `users.api_token`），仅 `POST /api/auth/register`、`POST /api/auth/login` 公开。
+
+### 账号（R13）
+
+- `POST /api/auth/register` `{name, password}` → `201 {user:{id,name}, api_token}`。用户名 2-32 字符（中英文/数字/._-）且唯一；密码 8-128 字符。受 `REGISTRATION_ENABLED` 开关控制（关闭时 403）。
+- `POST /api/auth/login` `{name, password}` → `{user, api_token}`。老用户（无 `password_hash`）不能密码登录，仍用 token。
+- `POST /api/auth/rotate-token`（Bearer 鉴权）→ `{api_token}`，旧 token 立即失效。
+- `GET /api/auth/me` → `{user:{id,name,created_at,has_password}}`。
+- `DELETE /api/auth/me` → 自助注销，级联删除该用户全部笔记/embeddings/附件（含 R2 对象）/线索/周报。
+- 密码哈希：PBKDF2-HMAC-SHA256（WebCrypto），100,000 次迭代、16 字节随机盐、32 字节输出，存 `pbkdf2$<iter>$<salt b64>$<hash b64>`（Workers 无原生 argon2/bcrypt 且 WebCrypto PBKDF2 上限 10 万次迭代，故选 OWASP 认可的 PBKDF2-SHA256）。任何日志不记录密码明文。
+- 速率限制：注册/登录每 IP 每分钟 5 次（D1 `auth_rate_limits` 固定窗口计数；取舍：D1 表是 Workers 上最简单的持久方案——内存计数按 isolate 隔离且随时被回收；固定分钟窗口在边界处最多允许 2 倍突发，对登录/注册防滥用足够。D1 出错时放行，保证限流故障不影响登录）。
 
 ### POST /api/notes — 收件
 ```json

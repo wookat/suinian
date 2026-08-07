@@ -72,8 +72,24 @@ openssl rand -base64 32 | npx wrangler secret put SUINIAN_ENC_KEY
 
 ```bash
 npx wrangler deploy
+```
 
-# 创建你的用户与 API token（token 自己生成一个随机串，妥善保存）
+### 1.5 创建账号（二选一）
+
+**方式 A：自助注册（推荐）**——直接在 Web 端首页引导里选「注册新账号」，或调接口：
+
+```bash
+curl -sX POST https://<你的 worker 地址>/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"me","password":"你的密码（至少8位）"}'
+# 返回的 api_token 就是你的 Bearer token（也可随时用 name+密码 POST /api/auth/login 取回）
+```
+
+不想开放注册（个人实例部署完就关）：在 `backend/wrangler.toml` 的 `[vars]` 里把 `REGISTRATION_ENABLED` 改为 `"false"` 后重新 `npx wrangler deploy`。
+
+**方式 B：手工 INSERT（无密码，纯 token）**：
+
+```bash
 npx wrangler d1 execute suinian --remote --command \
   "INSERT INTO users (id,name,api_token) VALUES ('u_me','me','$(openssl rand -hex 24)')"
 ```
@@ -95,8 +111,8 @@ npx wrangler pages deploy dist --project-name suinian
 
 部署完成后打开 Pages 给的地址（或绑定自己的域名）：
 
-1. 首次打开默认是**演示模式**（本地 Mock 数据，可先体验界面）
-2. 进入「设置」→ 填 API Base URL（你的 worker 地址）与 API Token → 关闭演示模式 → 保存
+1. 首次打开会弹出引导三选一：**先看演示** / **注册新账号**（填你的 worker 地址 + 用户名密码，注册成功自动配置进入真实模式）/ **已有 token**（去设置页填）
+2. 已有 token 的：进入「设置」→ 填 API Base URL（你的 worker 地址）与 API Token → 关闭演示模式 → 保存；设置页另有「复制我的 API token」「轮换 token」「注销账号」
 3. 回到首页，速记框里丢一条试试——几秒后 AI 分拣的分类角标和标签会自动出现
 
 ## 3. 可选：微信入口（bot 桥）
