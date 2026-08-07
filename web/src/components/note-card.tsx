@@ -25,13 +25,15 @@ import {
   Sparkles,
   FileText,
   Download,
+  CircleAlert,
+  RefreshCw,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
-import { downloadNoteFile } from "@/lib/api"
+import { downloadNoteFile, refetchLink } from "@/lib/api"
 import { cn, formatTime, parseDue, dueHasTime } from "@/lib/utils"
 import type { Note, NoteCategory } from "@/lib/types"
 
@@ -154,6 +156,23 @@ function linkCards(note: Note): { url: string; title: string | null }[] {
   return note.url ? [{ url: note.url, title: note.url_title }] : []
 }
 
+/** Compact display form of a URL for title-less link cards: host + short path. */
+function shortLink(url: string): string {
+  try {
+    const u = new URL(url)
+    const path = u.pathname === "/" ? "" : u.pathname
+    const s = `${u.hostname}${path}`
+    return s.length > 40 ? `${s.slice(0, 40)}…` : s
+  } catch {
+    return url.length > 40 ? `${url.slice(0, 40)}…` : url
+  }
+}
+
+const LINK_STATUS_TEXT: Record<string, string> = {
+  fetch_failed: "未能抓取正文，已保存链接",
+  no_content: "未能提取正文，已保存链接",
+}
+
 interface NoteCardProps {
   note: Note
   onToggleTodo?: (note: Note) => void
@@ -166,7 +185,7 @@ interface NoteCardProps {
 }
 
 export function NoteCard({
-  note,
+  note: noteProp,
   onToggleTodo,
   onTagClick,
   onEdit,
@@ -175,6 +194,8 @@ export function NoteCard({
   categoryFilterActive = false,
   className,
 }: NoteCardProps) {
+  const [localNote, setLocalNote] = useState<Note | null>(null)
+  const note = localNote && localNote.id === noteProp.id ? localNote : noteProp
   const sourceMeta = SOURCE_META[note.source] ?? SOURCE_META.web
   const SourceIcon = sourceMeta.icon
   const isLink = note.url != null
@@ -194,6 +215,7 @@ export function NoteCard({
   const [fileExcerptOpen, setFileExcerptOpen] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState<string | null>(null)
+  const [refetching, setRefetching] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const fileMeta = note.raw_type === "file" && note.meta?.file_name ? note.meta : null
@@ -208,6 +230,18 @@ export function NoteCard({
       setDownloadError(e instanceof Error ? e.message : String(e))
     } finally {
       setDownloading(false)
+    }
+  }
+
+  async function retryLinkFetch() {
+    if (refetching) return
+    setRefetching(true)
+    try {
+      setLocalNote(await refetchLink(note.id))
+    } catch {
+      // keep the current failed state; the user can retry again
+    } finally {
+      setRefetching(false)
     }
   }
 
@@ -415,8 +449,8 @@ export function NoteCard({
                 >
                   <div className="flex items-center gap-1.5 text-sm font-medium group-hover/link:text-primary">
                     <LinkIcon className="size-3.5 shrink-0" />
-                    <span className="truncate">{card.title ?? card.url}</span>
-                    {i === 0 && note.meta?.link_site && (
+                    <span className="truncate">{card.title ?? shortLink(card.url)}</span>
+                    {i === 0 && card.title && note.meta?.link_site && (
                       <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                         {note.meta.link_site}
                       </span>
@@ -433,6 +467,23 @@ export function NoteCard({
                     </p>
                   )}
                 </a>
+                {i === 0 && note.meta?.link_status && note.meta.link_status !== "ok" && (
+                  <div className="flex items-center gap-2 px-3 pb-2 text-xs text-muted-foreground">
+                    <CircleAlert className="size-3.5 shrink-0" />
+                    <span>{LINK_STATUS_TEXT[note.meta.link_status] ?? "抓取异常，已保存链接"}</span>
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault()
+                        void retryLinkFetch()
+                      }}
+                      disabled={refetching}
+                      className="inline-flex items-center gap-1 font-medium text-primary hover:underline disabled:opacity-60"
+                    >
+                      <RefreshCw className={cn("size-3", refetching && "animate-spin")} />
+                      {refetching ? "重试中…" : "重试抓取"}
+                    </button>
+                  </div>
+                )}
                 {i === 0 && (note.url_summary || note.meta?.link_excerpt) && (
                   <div className="flex items-center gap-3 px-3 pb-2">
                     {note.url_summary && note.url_summary.length > 60 && (
@@ -506,7 +557,7 @@ export function NoteCard({
                     disabled={downloading}
                     aria-label="下载原件"
                     title="下载原件"
-                    className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    className="-my-2 shrink-0 rounded-md p-3.5 text-muted-foreground hover:bg-accent hover:text-foreground md:-my-0.5 md:p-1.5"
                   >
                     {downloading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
                   </button>

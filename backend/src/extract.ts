@@ -1,7 +1,7 @@
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import { chatComplete } from "./ai";
-import { parseHtmlMeta } from "./linkmeta";
+import { parseHtmlMeta, isBlockedTitle } from "./linkmeta";
 import { sanitizeTags } from "./triage";
 import type { Env, NoteMeta, NoteRow } from "./types";
 
@@ -82,7 +82,7 @@ export function extractArticle(html: string, url: string): ArticleExtract {
     }
     const article = new Readability(document, { charThreshold: 100 }).parse();
     if (article) {
-      if (article.title) title = article.title.slice(0, 300);
+      if (article.title && !isBlockedTitle(article.title)) title = article.title.slice(0, 300);
       if (article.siteName && !site) site = article.siteName.slice(0, 100);
       const text = normalizeText(article.textContent ?? "");
       if (!excerpt && text.length >= 80) excerpt = text.slice(0, EXCERPT_CHARS);
@@ -197,9 +197,9 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
   meta.link_fetched_at = new Date().toISOString();
 
   if (!extract || !extract.excerpt) {
-    // title-only fallback: keep existing behaviour, just record the attempt
+    // title-only fallback: keep the link + its domain and record a readable status
     meta.link_status = extract ? "no_content" : "fetch_failed";
-    if (extract?.site) meta.link_site = extract.site;
+    meta.link_site = extract?.site ?? meta.link_site ?? hostnameOf(note.url) ?? undefined;
     await env.DB.prepare("UPDATE notes SET meta = ?, updated_at = datetime('now') WHERE id = ?")
       .bind(JSON.stringify(meta), noteId)
       .run();

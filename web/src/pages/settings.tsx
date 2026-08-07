@@ -12,6 +12,7 @@ import {
   UserPlus,
   Trash2,
   Download,
+  LogOut,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -95,10 +96,26 @@ export function SettingsPage() {
     }
   }
 
+  function handleLogout() {
+    if (
+      !window.confirm(
+        "退出登录只会清除本机保存的 token 与设置，云端笔记/线索/周报全部保留，重新登录即可找回。确定退出？",
+      )
+    )
+      return
+    saveSettings({ apiBaseUrl: "", apiToken: "", useMock: true, onboarded: false })
+    window.location.hash = "#/"
+    window.location.reload()
+  }
+
   async function handleDeleteAccount() {
     if (deleting) return
     if (!window.confirm("注销将永久删除账号及全部笔记/线索/周报，无法恢复。确定继续？")) return
-    if (!window.confirm("再次确认：真的要删除账号和所有数据吗？")) return
+    const typed = window.prompt('最后确认：请输入「注销」两个字以永久删除账号和全部数据')
+    if (typed !== "注销") {
+      if (typed !== null) setAccountMsg({ ok: false, text: "输入不匹配，已取消注销" })
+      return
+    }
     setDeleting(true)
     setAccountMsg(null)
     try {
@@ -280,23 +297,13 @@ export function SettingsPage() {
               </>
             )}
           </Button>
-          <Button
-            variant="outline"
-            onClick={() => void handleDeleteAccount()}
-            disabled={deleting}
-            className="w-full text-destructive hover:text-destructive sm:w-auto"
-          >
-            {deleting ? (
-              <>
-                <Loader2 className="animate-spin" /> 注销中…
-              </>
-            ) : (
-              <>
-                <Trash2 /> 注销账号
-              </>
-            )}
+          <Button variant="outline" onClick={handleLogout} className="w-full sm:w-auto">
+            <LogOut /> 退出登录
           </Button>
         </div>
+        <p className="text-xs text-muted-foreground">
+          退出登录仅清除本机登录状态，云端数据不受影响，重新登录即可找回全部笔记
+        </p>
         {accountMsg && (
           <p
             className={cn(
@@ -377,6 +384,31 @@ export function SettingsPage() {
             {exportMsg.text}
           </p>
         )}
+      </Card>
+
+      <Card className="space-y-3 border-destructive/40 p-4">
+        <div>
+          <h2 className="text-sm font-medium text-destructive">危险操作</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            注销会永久删除账号及全部笔记/线索/周报，不可恢复。若只想在本机退出，请使用上方「退出登录」
+          </p>
+        </div>
+        <Button
+          variant="destructive"
+          onClick={() => void handleDeleteAccount()}
+          disabled={deleting}
+          className="w-full sm:w-auto"
+        >
+          {deleting ? (
+            <>
+              <Loader2 className="animate-spin" /> 注销中…
+            </>
+          ) : (
+            <>
+              <Trash2 /> 注销账号（删除全部数据）
+            </>
+          )}
+        </Button>
       </Card>
 
       <Card className="p-4">

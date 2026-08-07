@@ -6,7 +6,7 @@ import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
-import { clusterNote, refreshThreads, rebuildThreads } from "./threads";
+import { clusterNote, refreshThreads, rebuildThreads, reconcileThreads } from "./threads";
 import { chatComplete } from "./ai";
 import {
   hashPassword,
@@ -499,15 +499,24 @@ app.delete("/api/notes/:id", async (c) => {
   await deleteNoteEmbedding(c.env, id);
   await deleteNoteGraph(c.env, id);
   await c.env.DB.prepare("DELETE FROM notes WHERE id = ?").bind(id).run();
-  if (note.thread_id) {
-    await c.env.DB.prepare(
-      "UPDATE threads SET note_count = (SELECT COUNT(*) FROM notes WHERE thread_id = ?), updated_at = datetime('now') WHERE id = ?"
-    )
-      .bind(note.thread_id, note.thread_id)
-      .run();
-    await c.env.DB.prepare("DELETE FROM threads WHERE id = ? AND note_count = 0").bind(note.thread_id).run();
-  }
+  // recount/dissolve every thread of this user (also self-heals older orphans)
+  await reconcileThreads(c.env, c.get("userId"));
   return c.json({ ok: true });
+});
+
+// ---- POST /api/notes/:id/refetch-link ----
+// Manual retry of link title + article extraction for a link note.
+app.post("/api/notes/:id/refetch-link", async (c) => {
+  const id = c.req.param("id");
+  const note = await c.env.DB.prepare("SELECT id, url FROM notes WHERE id = ? AND user_id = ?")
+    .bind(id, c.get("userId"))
+    .first<{ id: string; url: string | null }>();
+  if (!note) return c.json({ error: "not found" }, 404);
+  if (!note.url) return c.json({ error: "not a link note" }, 400);
+  await fetchLinkMetaInto(c.env, id, [note.url]);
+  await enrichLinkInto(c.env, id);
+  const updated = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
+  return c.json({ note: await noteToJsonDecrypted(c.env, updated!) });
 });
 
 // ---- GET /api/notes/:id/file ----

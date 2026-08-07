@@ -352,8 +352,57 @@ export async function rebuildThreads(
   return { ideas: rows.length, threads: cnt?.c ?? 0 };
 }
 
+/**
+ * Recount every thread from its notes and clean up degenerate ones: a thread
+ * with 0 notes is deleted, a thread left with a single note is dissolved (the
+ * note is detached — a thread only makes sense with ≥2 fragments). Scoped to
+ * one user when userId is given; otherwise sweeps all threads.
+ */
+export async function reconcileThreads(
+  env: Env,
+  userId?: string
+): Promise<{ deleted: number; dissolved: number }> {
+  const stmt = userId
+    ? env.DB.prepare("SELECT id, note_count FROM threads WHERE user_id = ?").bind(userId)
+    : env.DB.prepare("SELECT id, note_count FROM threads");
+  const { results } = await stmt.all<{ id: string; note_count: number }>();
+  let deleted = 0;
+  let dissolved = 0;
+  for (const t of results ?? []) {
+    const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM notes WHERE thread_id = ?")
+      .bind(t.id)
+      .first<{ c: number }>();
+    const c = cnt?.c ?? 0;
+    if (c === 0) {
+      await env.DB.prepare("DELETE FROM threads WHERE id = ?").bind(t.id).run();
+      deleted++;
+    } else if (c === 1) {
+      await env.DB.prepare(
+        "UPDATE notes SET thread_id = NULL, updated_at = datetime('now') WHERE thread_id = ?"
+      )
+        .bind(t.id)
+        .run();
+      await env.DB.prepare("DELETE FROM threads WHERE id = ?").bind(t.id).run();
+      dissolved++;
+    } else if (c !== t.note_count) {
+      await env.DB.prepare(
+        "UPDATE threads SET note_count = ?, updated_at = datetime('now') WHERE id = ?"
+      )
+        .bind(c, t.id)
+        .run();
+    }
+  }
+  if (deleted || dissolved)
+    console.log(
+      `threads: reconcile${userId ? ` user=${userId}` : ""} deleted=${deleted} dissolved=${dissolved}`
+    );
+  return { deleted, dissolved };
+}
+
 /** Daily cron: refresh title/summary/note_count of every thread from its notes. */
 export async function refreshThreads(env: Env): Promise<void> {
+  // drop orphaned (0-note) threads and dissolve 1-note leftovers first
+  await reconcileThreads(env).catch((err) => console.error("threads: reconcile failed", err));
   const { results: threads } = await env.DB.prepare(
     "SELECT id, user_id, title FROM threads"
   ).all<{ id: string; user_id: string; title: string }>();
