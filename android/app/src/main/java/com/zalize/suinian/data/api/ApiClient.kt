@@ -3,7 +3,9 @@ package com.zalize.suinian.data.api
 import com.zalize.suinian.data.AskHistoryMessage
 import com.zalize.suinian.data.AskResponse
 import com.zalize.suinian.data.AuthResponse
+import com.zalize.suinian.data.BatchResponse
 import com.zalize.suinian.data.CreateNoteRequest
+import com.zalize.suinian.data.DailyReviewResponse
 import com.zalize.suinian.data.MediaIngestResponse
 import com.zalize.suinian.data.Note
 import com.zalize.suinian.data.NotesPage
@@ -13,6 +15,8 @@ import com.zalize.suinian.data.ReportsPage
 import com.zalize.suinian.data.ReportSummary
 import com.zalize.suinian.data.ThreadDetail
 import com.zalize.suinian.data.RotateTokenResponse
+import com.zalize.suinian.data.TagCount
+import com.zalize.suinian.data.TagsPage
 import com.zalize.suinian.data.ThreadsPage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -22,6 +26,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.addJsonObject
@@ -132,6 +139,109 @@ class ApiClient(private val baseUrl: String, private val token: String) {
     /** PATCH /api/notes/:id  {todo_done} */
     suspend fun setTodoDone(id: String, done: Boolean): Note? =
         patchNote(id, buildJsonObject { put("todo_done", done) })
+
+    /** PATCH /api/notes/:id：编辑 content/title/category/tags/todo_due（null 清除截止时间） */
+    suspend fun updateNote(
+        id: String,
+        content: String? = null,
+        title: String? = null,
+        category: String? = null,
+        tags: List<String>? = null,
+        todoDue: String? = null,
+        clearTodoDue: Boolean = false,
+    ): Note? = patchNote(
+        id,
+        buildJsonObject {
+            if (content != null) put("content", content)
+            if (title != null) put("title", title)
+            if (category != null) put("category", category)
+            if (tags != null) putJsonArray("tags") { tags.forEach { add(JsonPrimitive(it)) } }
+            if (todoDue != null) put("todo_due", todoDue)
+            else if (clearTodoDue) put("todo_due", JsonNull)
+        },
+    )
+
+    /** POST /api/notes/batch：批量 delete / add_tags / remove_tags / set_category */
+    suspend fun batchNotes(
+        action: String,
+        ids: List<String>,
+        tags: List<String>? = null,
+        category: String? = null,
+    ): BatchResponse = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("action", action)
+            putJsonArray("ids") { ids.forEach { add(JsonPrimitive(it)) } }
+            if (tags != null) putJsonArray("tags") { tags.forEach { add(JsonPrimitive(it)) } }
+            if (category != null) put("category", category)
+        }.toString().toRequestBody(jsonMedia)
+        execute(request("/api/notes/batch").post(body).build(), BatchResponse.serializer())
+    }
+
+    /** GET /api/tags：全部标签及使用次数 */
+    suspend fun listTags(): List<TagCount> = withContext(Dispatchers.IO) {
+        execute(request("/api/tags").get().build(), TagsPage.serializer()).tags
+    }
+
+    /** POST /api/tags/rename：全局重命名；改到已有标签即合并 */
+    suspend fun renameTag(from: String, to: String): Unit = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("from", from)
+            put("to", to)
+        }.toString().toRequestBody(jsonMedia)
+        val resp = try {
+            client.newCall(request("/api/tags/rename").post(body).build()).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use { if (!it.isSuccessful) throw httpError(it.code, it.body?.string()) }
+    }
+
+    /** POST /api/tags/delete：从所有笔记移除该标签（不删笔记） */
+    suspend fun deleteTag(tag: String): Unit = withContext(Dispatchers.IO) {
+        val body = buildJsonObject { put("tag", tag) }.toString().toRequestBody(jsonMedia)
+        val resp = try {
+            client.newCall(request("/api/tags/delete").post(body).build()).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use { if (!it.isSuccessful) throw httpError(it.code, it.body?.string()) }
+    }
+
+    /** GET /api/review/today：今日回顾（那年今日/上月今日/久未回看） */
+    suspend fun getTodayReview(): DailyReviewResponse = withContext(Dispatchers.IO) {
+        execute(request("/api/review/today").get().build(), DailyReviewResponse.serializer())
+    }
+
+    /** POST /api/reports/generate：手动生成周报（week=this|last） */
+    suspend fun generateReport(week: String = "this"): Report = withContext(Dispatchers.IO) {
+        val body = buildJsonObject { put("week", week) }.toString().toRequestBody(jsonMedia)
+        val client90 = client.newBuilder().readTimeout(90, TimeUnit.SECONDS).build()
+        val resp = try {
+            client90.newCall(request("/api/reports/generate").post(body).build()).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use {
+            val text = it.body?.string().orEmpty()
+            if (!it.isSuccessful) throw httpError(it.code, text)
+            try {
+                json.decodeFromString(ReportDetail.serializer(), text).report
+            } catch (e: Exception) {
+                throw ApiException("服务器返回了无法识别的数据", e)
+            }
+        }
+    }
+
+    /** DELETE /api/auth/me：永久注销账号并删除全部数据 */
+    suspend fun deleteAccount(): Unit = withContext(Dispatchers.IO) {
+        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val resp = try {
+            client60.newCall(request("/api/auth/me").delete().build()).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use { if (!it.isSuccessful) throw httpError(it.code, it.body?.string()) }
+    }
 
     /** PATCH /api/notes/:id  {is_sensitive}（手动标记/取消敏感，后端同步加密/解密） */
     suspend fun setSensitive(id: String, sensitive: Boolean): Note? =

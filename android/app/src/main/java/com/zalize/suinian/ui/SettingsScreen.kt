@@ -47,7 +47,12 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit, onLogout: () -> Unit = {}) {
+fun SettingsScreen(
+    vm: NotesViewModel,
+    onBack: () -> Unit,
+    onLogout: () -> Unit = {},
+    onOpenTags: () -> Unit = {},
+) {
     val settings by vm.settings.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -59,6 +64,10 @@ fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit, onLogout: () -> Unit 
     var confirmLogout by remember { mutableStateOf(false) }
     var rotating by remember { mutableStateOf(false) }
     var rotateMessage by remember { mutableStateOf<String?>(null) }
+    var confirmDeleteAccount by remember { mutableStateOf(false) }
+    var deleteAccountInput by remember { mutableStateOf("") }
+    var deletingAccount by remember { mutableStateOf(false) }
+    var deleteAccountMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(settings) {
         if (!initialized) {
@@ -110,6 +119,59 @@ fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit, onLogout: () -> Unit 
                 }) { Text("退出登录") }
             },
             dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("取消") } },
+        )
+    }
+
+    if (confirmDeleteAccount) {
+        AlertDialog(
+            onDismissRequest = { if (!deletingAccount) confirmDeleteAccount = false },
+            title = { Text("永久注销账号？") },
+            text = {
+                Column {
+                    Text("注销将永久删除账号及全部笔记/线索/周报，无法恢复。请输入「注销」两个字确认：")
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = deleteAccountInput,
+                        onValueChange = { deleteAccountInput = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("注销") },
+                        singleLine = true,
+                        enabled = !deletingAccount,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        deletingAccount = true
+                        deleteAccountMessage = null
+                        scope.launch {
+                            try {
+                                vm.deleteAccount()
+                                deletingAccount = false
+                                confirmDeleteAccount = false
+                                onLogout()
+                            } catch (e: Exception) {
+                                deletingAccount = false
+                                deleteAccountMessage = e.message ?: "注销失败，请稍后重试"
+                                confirmDeleteAccount = false
+                            }
+                        }
+                    },
+                    enabled = !deletingAccount && deleteAccountInput.trim() == "注销",
+                ) {
+                    Text(
+                        if (deletingAccount) "注销中…" else "永久注销",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { confirmDeleteAccount = false },
+                    enabled = !deletingAccount,
+                ) { Text("取消") }
+            },
         )
     }
 
@@ -235,18 +297,55 @@ fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit, onLogout: () -> Unit 
             }
 
             Spacer(Modifier.height(24.dp))
+            Text("数据", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = onOpenTags,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !settings.mockMode,
+            ) { Text("标签管理") }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "重命名/合并/删除标签，全局生效",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(24.dp))
             Text("账号", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(8.dp))
             OutlinedButton(
                 onClick = { confirmLogout = true },
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("退出登录", color = MaterialTheme.colorScheme.error) }
+            ) { Text("退出登录") }
             Spacer(Modifier.height(4.dp))
             Text(
                 "退出登录只清本机登录状态，不删除云端账号与数据",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            Spacer(Modifier.height(24.dp))
+            Text("危险操作", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    deleteAccountInput = ""
+                    confirmDeleteAccount = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !settings.mockMode && !deletingAccount,
+            ) { Text(if (deletingAccount) "注销中…" else "永久注销账号", color = MaterialTheme.colorScheme.error) }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "注销会永久删除账号及全部笔记/线索/周报，不可恢复；若只想在本机退出，请用上方「退出登录」",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            deleteAccountMessage?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
             Spacer(Modifier.height(32.dp))
         }
     }

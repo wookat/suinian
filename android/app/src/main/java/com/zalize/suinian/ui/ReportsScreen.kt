@@ -18,8 +18,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,6 +60,8 @@ data class ReportsUiState(
     val detailLoading: Boolean = false,
     val detailError: String? = null,
     val detail: Report? = null,
+    val generating: Boolean = false,
+    val generateError: String? = null,
 )
 
 class ReportsViewModel(app: Application) : AndroidViewModel(app) {
@@ -77,6 +82,25 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(loading = false, reports = reports)
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(loading = false, error = e.message ?: "加载失败")
+            }
+        }
+    }
+
+    /** 手动生成本周报告（POST /api/reports/generate week=this），成功后直接打开详情 */
+    fun generate(onGenerated: (String) -> Unit) {
+        if (_ui.value.generating) return
+        _ui.value = _ui.value.copy(generating = true, generateError = null)
+        viewModelScope.launch {
+            try {
+                val report = repo.generateReport("this")
+                _ui.value = _ui.value.copy(generating = false)
+                refresh()
+                onGenerated(report.id)
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(
+                    generating = false,
+                    generateError = e.message ?: "生成失败，请稍后重试",
+                )
             }
         }
     }
@@ -110,6 +134,20 @@ fun ReportsScreen(
 ) {
     val ui by vm.ui.collectAsState()
 
+    val generateButton: @Composable () -> Unit = {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Button(onClick = { vm.generate(onOpenReport) }, enabled = !ui.generating) {
+                Icon(Icons.Outlined.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(if (ui.generating) "生成中，约需半分钟…" else "生成本周报告")
+            }
+            ui.generateError?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+
     when {
         ui.loading && ui.reports.isEmpty() -> Column(
             modifier.fillMaxSize(),
@@ -131,14 +169,21 @@ fun ReportsScreen(
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                "还没有周报\n每周一自动生成本周思考报告",
+                "还没有周报\n每周一自动生成本周思考报告\n也可以随时手动生成",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(Modifier.height(12.dp))
+            generateButton()
         }
         else -> LazyColumn(
             modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            item(key = "generate") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    generateButton()
+                }
+            }
             items(ui.reports, key = { it.id }) { report ->
                 Card(
                     modifier = Modifier.fillMaxWidth().clickable { onOpenReport(report.id) },

@@ -61,6 +61,76 @@ class NotesRepository(
         return client.setSensitive(id, sensitive)
     }
 
+    /** 编辑笔记：content/title/category/tags/todo_due（PATCH /api/notes/:id） */
+    suspend fun updateNote(
+        id: String,
+        content: String? = null,
+        title: String? = null,
+        category: String? = null,
+        tags: List<String>? = null,
+        todoDue: String? = null,
+        clearTodoDue: Boolean = false,
+    ): Note? {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.updateNote(id, content, title, category, tags, todoDue, clearTodoDue)
+    }
+
+    /** 批量操作：delete / add_tags / remove_tags / set_category */
+    suspend fun batchNotes(
+        action: String,
+        ids: List<String>,
+        tags: List<String>? = null,
+        category: String? = null,
+    ): BatchResponse {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.batchNotes(action, ids, tags, category)
+    }
+
+    /** 标签列表（含使用次数） */
+    suspend fun listTags(): List<TagCount> {
+        val (client, mock) = api()
+        if (mock) return emptyList()
+        return client.listTags()
+    }
+
+    /** 标签重命名/合并 */
+    suspend fun renameTag(from: String, to: String) {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        client.renameTag(from, to)
+    }
+
+    /** 标签删除（不删笔记） */
+    suspend fun deleteTag(tag: String) {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        client.deleteTag(tag)
+    }
+
+    /** 今日回顾（失败时静默隐藏，由调用方处理） */
+    suspend fun getTodayReview(): DailyReviewResponse {
+        val (client, mock) = api()
+        if (mock) return DailyReviewResponse()
+        return client.getTodayReview()
+    }
+
+    /** 手动生成周报 */
+    suspend fun generateReport(week: String = "this"): Report {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.generateReport(week)
+    }
+
+    /** 永久注销账号并删除全部云端数据，成功后清本机登录状态 */
+    suspend fun deleteAccount() {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        client.deleteAccount()
+        settingsRepo.logout()
+    }
+
     /** 链接笔记重试抓取 */
     suspend fun refetchLink(id: String): Note? {
         val (client, mock) = api()
