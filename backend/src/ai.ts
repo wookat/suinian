@@ -11,9 +11,36 @@ export type ChatOptions = {
 };
 
 const WORKERS_AI_PREFIX = "workers-ai:";
+const MOCK_MODEL = "mock";
+
+/**
+ * Deterministic offline responses for local development (`AI_MODEL=mock`):
+ * prompts that demand strict JSON (triage/graph) get a minimal valid JSON
+ * object, everything else gets a canned text answer. Lets `wrangler dev` run
+ * the full note pipeline with no API key.
+ */
+function mockChatResponse(opts: ChatOptions): string {
+  const system = opts.messages.find((m) => m.role === "system")?.content ?? "";
+  if (system.includes("严格 JSON") || system.includes("strict JSON")) {
+    return JSON.stringify({
+      category: "idea",
+      tags: ["本地开发"],
+      title: "",
+      is_sensitive: false,
+      todo_due: null,
+      amount: null,
+      currency: null,
+      merchant: null,
+      entities: [],
+      relations: [],
+    });
+  }
+  return "（本地 mock AI 回复：未配置真实模型，设置 DEEPSEEK_API_KEY 或 AI_MODEL 后可获得真实回答。）";
+}
 
 /**
  * Model-agnostic chat completion. `AI_MODEL` selects the backend:
+ * - `mock` returns deterministic offline responses (local dev, no key needed)
  * - `workers-ai:<model>` runs on the Workers AI binding (`env.AI`)
  * - anything else goes to the OpenAI-compatible endpoint at
  *   `AI_BASE_URL || DEEPSEEK_BASE_URL` with `DEEPSEEK_API_KEY`.
@@ -24,6 +51,7 @@ export async function chatComplete(
   opts: ChatOptions
 ): Promise<string | null> {
   const model = env.AI_MODEL || "deepseek-chat";
+  if (model === MOCK_MODEL) return mockChatResponse(opts);
   try {
     if (model.startsWith(WORKERS_AI_PREFIX)) {
       if (!env.AI) return null;

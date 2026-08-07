@@ -7,16 +7,15 @@ Cloudflare Workers + Hono + D1。线上：`https://suinian-api.zalize.com`
 ```bash
 cd backend
 npm install
-# 本地 D1 建表
-npx wrangler d1 migrations apply suinian --local
-# 本地起服务（http://localhost:8787）
-npx wrangler dev
+cp .dev.vars.example .dev.vars   # 默认 AI_MODEL=mock：无 API key 也能跑通分拣/问答
+npm run dev:init                 # 本地 D1 建表（= wrangler d1 migrations apply suinian --local）
+npm run dev                      # 本地起服务（http://127.0.0.1:8787）
 # 单测 / 类型检查
 npm test
 npm run typecheck
 ```
 
-本地调用 DeepSeek 需在 `backend/.dev.vars` 写入 `DEEPSEEK_API_KEY=sk-...`（不要提交）。
+要用真实 AI：在 `backend/.dev.vars` 删掉 `AI_MODEL=mock` 并写入 `DEEPSEEK_API_KEY=sk-...`（不要提交）。
 
 ## 部署
 

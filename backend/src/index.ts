@@ -35,6 +35,7 @@ import {
 import { detectFileKind, buildFileNote, buildFileReply } from "./files";
 import { parseImportFile, runImport, IMPORT_SOURCES, type ImportSource } from "./import";
 import { registerMcpRoute } from "./mcp";
+import { PIPELINE_TIMEOUT_MS, SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 
 type Vars = { userId: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -46,10 +47,24 @@ const ALLOWED_ORIGINS = [
   "http://localhost:4173",
 ];
 
+/**
+ * Origins allowed for CORS: the built-in list plus CORS_ALLOWED_ORIGINS
+ * (comma-separated; "*" allows any origin). The API is bearer-token only (no
+ * cookies), so self-hosters can safely add their own Pages/custom domain here.
+ */
+function corsOrigin(origin: string, extra: string | undefined): string | null {
+  if (ALLOWED_ORIGINS.includes(origin)) return origin;
+  for (const o of (extra ?? "").split(",")) {
+    const t = o.trim();
+    if (t === "*" || t === origin) return origin;
+  }
+  return null;
+}
+
 app.use(
   "*",
   cors({
-    origin: (origin) => (ALLOWED_ORIGINS.includes(origin) ? origin : null),
+    origin: (origin, c) => corsOrigin(origin, (c.env as Env).CORS_ALLOWED_ORIGINS),
     allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type"],
     maxAge: 86400,
@@ -366,13 +381,6 @@ async function fetchLinkMetaInto(env: Env, noteId: string, urls: string[]): Prom
   }
 }
 
-/**
- * Upper bound for a note's background pipeline (triage + graph + cluster +
- * embedding + link enrichment). Every network call inside already has its own
- * 8-40s timeout; this cap is a second line of defense so a waitUntil task can
- * never run unbounded (anything unfinished is picked up by the cron sweep).
- */
-export const PIPELINE_TIMEOUT_MS = 60_000;
 
 /** Resolve when `p` settles or after `ms`, whichever comes first; never rejects. */
 export function capped(p: Promise<unknown>, ms: number, label: string): Promise<void> {
@@ -1404,8 +1412,6 @@ app.post("/api/import", async (c) => {
   const stats = await runImport(c.env.DB, userId, source as ImportSource, items);
   return c.json(stats, 201);
 });
-
-export const SENSITIVE_EXPORT_PLACEHOLDER = "[已加密内容]";
 
 // ---- GET /api/export ----
 app.get("/api/export", async (c) => {

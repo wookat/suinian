@@ -77,31 +77,29 @@ flowchart LR
     API --> VIEW[Web 端 React PWA<br/>时间流/线索/周报]
 ```
 
-## Quick Start（TL;DR，约 3 分钟）
+## Quick Start（3 步部署）
 
-需要：Cloudflare 账号 + [DeepSeek API Key](https://platform.deepseek.com/)。完整步骤见 [docs/self-host.md](docs/self-host.md)。
+需要：[Cloudflare 账号](https://dash.cloudflare.com/)（免费版即可，AI 用 Workers AI 无需外部 key）+ Node.js ≥ 20。
 
 ```bash
+# 1) clone 并登录 Cloudflare
 git clone https://github.com/wookat/suinian.git && cd suinian
+npx wrangler login
 
-# 1) 后端：D1 + Workers
-cd backend && npm install
-npx wrangler d1 create suinian          # 把返回的 database_id 填入 wrangler.toml
-npx wrangler d1 migrations apply suinian --remote
-npx wrangler secret put DEEPSEEK_API_KEY
-openssl rand -base64 32 | npx wrangler secret put SUINIAN_ENC_KEY
-npx wrangler deploy                     # 先删掉/改掉 wrangler.toml 里的 routes 自定义域
-# 创建账号：Web 端首页引导「注册新账号」即可（用户名+密码，自动配置 token）；
-# 或 curl POST /api/auth/register；不想开放注册可设 REGISTRATION_ENABLED="false"
+# 2) 一键部署（交互式建 D1/R2、migrations、secrets、部署 Worker + Pages、配 CORS）
+bash scripts/setup.sh
 
-# 2) Web 端：Cloudflare Pages
-cd ../web && npm install && npm run build
-npx wrangler pages deploy dist --project-name suinian
-
-# 3) 打开 Web 端 → 设置页填 API 地址与 token，开始丢碎片
+# 3) 打开输出的 Web 地址 → 引导里「注册新账号」，开始丢碎片
 ```
 
-微信入口（可选）：见 [skill/README.md](skill/README.md)，海外用户可跳过，Web/API 即完整体验。
+手动步骤、常见报错排查见 [docs/self-host.md](docs/self-host.md)。微信入口（可选）：见 [skill/README.md](skill/README.md)，海外用户可跳过，Web/API 即完整体验。
+
+本地开发（不部署、无 key 也能跑）：
+
+```bash
+cd backend && npm install && cp .dev.vars.example .dev.vars && npm run dev:init && npm run dev
+cd web && npm install && cp .env.example .env.local && npm run dev   # 另开终端
+```
 
 ## 子目录导览
 
