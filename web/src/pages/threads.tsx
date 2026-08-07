@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { GitBranch, ChevronLeft, RefreshCw } from "lucide-react"
+import { GitBranch, ChevronLeft, RefreshCw, Network, ArrowRight } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { NoteCard } from "@/components/note-card"
@@ -116,6 +116,41 @@ export function ThreadsPage() {
                   {detail.note_count} 条碎片 · 更新于 {formatTime(detail.updated_at)}
                 </p>
               </Card>
+              {detail.graph && detail.graph.entities.length > 0 && (
+                <Card className="p-4">
+                  <div className="flex items-center gap-2">
+                    <Network className="size-4 text-muted-foreground" />
+                    <h3 className="text-sm font-semibold">实体与关系脉络</h3>
+                  </div>
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    {detail.graph.entities.map((e) => (
+                      <span
+                        key={e.id}
+                        className="inline-flex items-center gap-1 rounded-full bg-secondary px-2.5 py-0.5 text-xs text-secondary-foreground"
+                      >
+                        {e.name}
+                        {e.note_count > 1 && (
+                          <span className="text-[10px] text-muted-foreground">×{e.note_count}</span>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                  {detail.graph.relations.length > 0 && (
+                    <ul className="mt-3 space-y-1.5 border-t pt-3">
+                      {detail.graph.relations.map((r, i) => (
+                        <li key={i} className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground">{r.src}</span>
+                          <span className="inline-flex items-center gap-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">
+                            {r.relation_label}
+                            <ArrowRight className="size-3" />
+                          </span>
+                          <span className="font-medium text-foreground">{r.dst}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Card>
+              )}
               <div className="relative space-y-3 pl-4 before:absolute before:inset-y-2 before:left-1 before:w-px before:bg-border">
                 {detail.notes.map((n, i) => {
                   const date = timelineDate(n.created_at)

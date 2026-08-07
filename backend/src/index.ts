@@ -20,6 +20,7 @@ import {
 } from "./auth";
 import { generateWeeklyReport, generateAllWeeklyReports } from "./reports";
 import { upsertNoteEmbedding, deleteNoteEmbedding, semanticRecall, backfillEmbeddings } from "./semantic";
+import { extractGraph, deleteNoteGraph, deleteUserGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
 import {
   parseMediaRequest,
   transcribeAudio,
@@ -151,6 +152,7 @@ app.delete("/api/auth/me", async (c) => {
     );
   }
   await c.env.DB.prepare("DELETE FROM note_embeddings WHERE note_id IN (SELECT id FROM notes WHERE user_id = ?)").bind(userId).run();
+  await deleteUserGraph(c.env, userId);
   await c.env.DB.prepare("DELETE FROM notes WHERE user_id = ?").bind(userId).run();
   await c.env.DB.prepare("DELETE FROM threads WHERE user_id = ?").bind(userId).run();
   await c.env.DB.prepare("DELETE FROM weekly_reports WHERE user_id = ?").bind(userId).run();
@@ -283,6 +285,7 @@ async function createNote(
       (async () => {
         const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
         if (n) {
+          await extractGraph(c.env, n);
           await clusterNote(c.env, n);
           await upsertNoteEmbedding(c.env, n);
         }
@@ -295,6 +298,7 @@ async function createNote(
         await runTriage();
         const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
         if (n) {
+          await extractGraph(c.env, n);
           await clusterNote(c.env, n);
           await upsertNoteEmbedding(c.env, n);
         }
@@ -440,6 +444,7 @@ app.patch("/api/notes/:id", async (c) => {
   if (!res.meta.changes) return c.json({ error: "not found" }, 404);
   const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
   c.executionCtx.waitUntil(upsertNoteEmbedding(c.env, note!));
+  if (typeof body.content === "string") c.executionCtx.waitUntil(extractGraph(c.env, note!));
   return c.json({ note: await noteToJsonDecrypted(c.env, note!) });
 });
 
@@ -462,6 +467,7 @@ app.delete("/api/notes/:id", async (c) => {
     );
   }
   await deleteNoteEmbedding(c.env, id);
+  await deleteNoteGraph(c.env, id);
   await c.env.DB.prepare("DELETE FROM notes WHERE id = ?").bind(id).run();
   if (note.thread_id) {
     await c.env.DB.prepare(
@@ -637,10 +643,11 @@ export async function rewriteAskQuestion(
 // ---- POST /api/ask ----
 app.post("/api/ask", async (c) => {
   const userId = c.get("userId");
-  const body = await c.req.json<{ question?: string; history?: unknown }>().catch(() => null);
+  const body = await c.req.json<{ question?: string; history?: unknown; graph?: unknown }>().catch(() => null);
   const question = (body?.question ?? "").trim();
   if (!question) return c.json({ error: "question required" }, 400);
   const history = sanitizeAskHistory(body?.history);
+  const useGraph = body?.graph !== false; // graph:false disables GraphRAG expansion (A/B comparison)
 
   // query rewrite: resolve pronouns/ordinals against history, then keyword recall
   const recallQuestion = await rewriteAskQuestion(c.env, question, history);
@@ -676,6 +683,26 @@ app.post("/api/ask", async (c) => {
     // semantic hits go first in score order so they survive the 20-note cap
     notes = [...extraIds.map((id) => byId.get(id)).filter((n): n is NoteRow => !!n), ...notes].slice(0, 20);
   }
+  // GraphRAG: expand recalled notes 1 hop along the knowledge graph so strongly
+  // related fragments (shared entities/relations) join the context
+  const graphNoteIds = new Set<string>();
+  let graphTriples: string[] = [];
+  if (useGraph && notes.length > 0) {
+    const expansion = await graphExpand(c.env, userId, notes.map((n) => n.id), 5);
+    graphTriples = expansion.triples;
+    const missing = expansion.note_ids.filter((nid) => !notes.some((n) => n.id === nid));
+    if (missing.length > 0) {
+      const ph = missing.map(() => "?").join(",");
+      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${ph})`)
+        .bind(userId, ...missing)
+        .all<NoteRow>();
+      for (const n of r.results ?? []) {
+        graphNoteIds.add(n.id);
+        notes.push(n);
+      }
+      notes = notes.slice(0, 20);
+    }
+  }
   if (notes.length === 0) {
     // keyword recall missed (common for CJK questions): fall back to recent notes
     const recent = await c.env.DB.prepare(
@@ -697,7 +724,8 @@ app.post("/api/ask", async (c) => {
       ]
         .filter(Boolean)
         .join(", ");
-      return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}) ${n.title ?? ""}\n${n.content.slice(0, 500)}`;
+      const graphTag = graphNoteIds.has(n.id) ? ", 图谱关联" : "";
+      return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}) ${n.title ?? ""}\n${n.content.slice(0, 500)}`;
     })
     .join("\n\n");
   const answer = await chatComplete(c.env, {
@@ -708,12 +736,14 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。可结合之前的对话上下文理解代词与省略。若笔记中没有相关信息，直接说没找到。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。可结合之前的对话上下文理解代词与省略。若笔记中没有相关信息，直接说没找到。回答用中文，简洁。",
       },
       ...history,
       {
         role: "user",
-        content: `笔记片段：\n${context || "（无相关笔记）"}\n\n问题：${question}${
+        content: `笔记片段：\n${context || "（无相关笔记）"}${
+          graphTriples.length > 0 ? `\n\n实体关系：\n${graphTriples.join("\n")}` : ""
+        }\n\n问题：${question}${
           recallQuestion !== question ? `\n（即：${recallQuestion}）` : ""
         }`,
       },
@@ -742,7 +772,9 @@ app.get("/api/threads", async (c) => {
 
 // ---- POST /api/threads/rebuild ----
 app.post("/api/threads/rebuild", async (c) => {
-  const result = await rebuildThreads(c.env, c.get("userId"));
+  // mode=similarity re-clusters with the pre-graph embedding-only algorithm (A/B comparison & debugging)
+  const body = await c.req.json<{ mode?: string }>().catch(() => null);
+  const result = await rebuildThreads(c.env, c.get("userId"), { useGraph: body?.mode !== "similarity" });
   const { results } = await c.env.DB.prepare(
     "SELECT * FROM threads WHERE user_id = ? AND note_count > 0 ORDER BY updated_at DESC LIMIT 100"
   )
@@ -764,7 +796,8 @@ app.get("/api/threads/:id", async (c) => {
     .bind(thread.id, userId)
     .all<NoteRow>();
   const notes = await Promise.all((results ?? []).map((n) => noteToJsonDecrypted(c.env, n)));
-  return c.json({ thread, notes });
+  const graph = await getThreadGraph(c.env, userId, (results ?? []).map((n) => n.id));
+  return c.json({ thread, notes, graph });
 });
 
 // ---- GET /api/reports ----
@@ -856,6 +889,7 @@ export async function retriageUnsorted(env: Env, limit = 10): Promise<void> {
     await applyTriage(env, row.id, triage, row.content);
     const n = await env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(row.id).first<NoteRow>();
     if (n) {
+      await extractGraph(env, n);
       await clusterNote(env, n).catch((err) => console.error("retriage: cluster failed", err));
       await upsertNoteEmbedding(env, n);
     }
@@ -875,6 +909,8 @@ export default {
       ctx.waitUntil(backfillLinkExtracts(env));
       // backfill embeddings for notes that predate semantic search (rate-limited)
       ctx.waitUntil(backfillEmbeddings(env));
+      // backfill graph extraction for notes that predate the knowledge graph (rate-limited)
+      ctx.waitUntil(backfillGraphExtracts(env));
     } else {
       // daily thread title/summary refresh
       ctx.waitUntil(refreshThreads(env));
