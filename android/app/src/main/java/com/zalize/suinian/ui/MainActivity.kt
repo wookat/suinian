@@ -95,6 +95,10 @@ fun SuinianNavHost(focusQuickNoteSignal: Int) {
     val loadedSettings by vm.settingsRepo.settings.collectAsState(initial = null)
     val settingsSnapshot = loadedSettings ?: return
     var onboardingJustDone by remember { mutableStateOf(false) }
+    // 引导完成后复位临时标记，退出登录（onboardingDone 变 false）时能回到引导页
+    LaunchedEffect(settingsSnapshot.onboardingDone) {
+        if (settingsSnapshot.onboardingDone) onboardingJustDone = false
+    }
     if (!settingsSnapshot.onboardingDone && !onboardingJustDone) {
         OnboardingScreen(
             settingsRepo = vm.settingsRepo,
@@ -210,7 +214,15 @@ fun SuinianNavHost(focusQuickNoteSignal: Int) {
                 ReportDetailScreen(reportId = id, onBack = { navController.popBackStack() })
             }
             composable("settings") {
-                SettingsScreen(vm = vm, onBack = { navController.popBackStack() })
+                SettingsScreen(
+                    vm = vm,
+                    onBack = { navController.popBackStack() },
+                    onLogout = {
+                        navController.navigate("home") {
+                            popUpTo(navController.graph.findStartDestination().id) { inclusive = true }
+                        }
+                    },
+                )
             }
         }
     }

@@ -47,7 +47,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit) {
+fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit, onLogout: () -> Unit = {}) {
     val settings by vm.settings.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -56,6 +56,7 @@ fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit) {
     var token by remember { mutableStateOf(settings.token) }
     var initialized by remember { mutableStateOf(false) }
     var confirmRotate by remember { mutableStateOf(false) }
+    var confirmLogout by remember { mutableStateOf(false) }
     var rotating by remember { mutableStateOf(false) }
     var rotateMessage by remember { mutableStateOf<String?>(null) }
 
@@ -91,6 +92,24 @@ fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit) {
                 }) { Text("轮换") }
             },
             dismissButton = { TextButton(onClick = { confirmRotate = false }) { Text("取消") } },
+        )
+    }
+
+    if (confirmLogout) {
+        AlertDialog(
+            onDismissRequest = { confirmLogout = false },
+            title = { Text("退出登录？") },
+            text = { Text("只清除本机登录状态，云端账号与笔记不受影响，重新登录即可恢复") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmLogout = false
+                    scope.launch {
+                        vm.settingsRepo.logout()
+                        onLogout()
+                    }
+                }) { Text("退出登录") }
+            },
+            dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("取消") } },
         )
     }
 
@@ -214,6 +233,20 @@ fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit) {
                     },
                 )
             }
+
+            Spacer(Modifier.height(24.dp))
+            Text("账号", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { confirmLogout = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("退出登录", color = MaterialTheme.colorScheme.error) }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "退出登录只清本机登录状态，不删除云端账号与数据",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.height(32.dp))
         }
     }

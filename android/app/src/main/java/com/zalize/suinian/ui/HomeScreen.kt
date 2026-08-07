@@ -1,5 +1,8 @@
 package com.zalize.suinian.ui
 
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,6 +20,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudOff
@@ -47,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import com.zalize.suinian.data.NotesViewLimits
@@ -68,6 +73,29 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
     var draft by rememberSaveable { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    val context = LocalContext.current
+
+    // 文件选择器：PDF/txt/md/docx → 上传入库
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val resolver = context.contentResolver
+            val bytes = try {
+                resolver.openInputStream(uri)?.use { it.readBytes() }
+            } catch (_: Exception) {
+                null
+            }
+            if (bytes == null || bytes.isEmpty()) return@rememberLauncherForActivityResult
+            val mime = resolver.getType(uri) ?: "application/octet-stream"
+            val name = try {
+                resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) c.getString(0) else null
+                }
+            } catch (_: Exception) {
+                null
+            } ?: uri.lastPathSegment ?: "file"
+            vm.uploadFile(bytes, mime, name)
+        }
+    }
 
     LaunchedEffect(focusQuickNoteSignal) {
         if (focusQuickNoteSignal > 0) {
@@ -93,14 +121,31 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
                 { Text("内容过长：最多 ${NotesViewLimits.MAX_CONTENT_CHARS} 字符，当前 ${draft.length} 字符") }
             } else null,
             trailingIcon = {
-                IconButton(
-                    onClick = {
-                        vm.quickSend(draft)
-                        draft = ""
-                    },
-                    enabled = draft.isNotBlank() && !overLimit && !ui.sending,
-                ) {
-                    Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "记下")
+                Row {
+                    IconButton(
+                        onClick = {
+                            filePicker.launch(
+                                arrayOf(
+                                    "application/pdf",
+                                    "text/plain",
+                                    "text/markdown",
+                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                )
+                            )
+                        },
+                        enabled = !ui.sending,
+                    ) {
+                        Icon(Icons.Outlined.AttachFile, contentDescription = "选择文件入库")
+                    }
+                    IconButton(
+                        onClick = {
+                            vm.quickSend(draft)
+                            draft = ""
+                        },
+                        enabled = draft.isNotBlank() && !overLimit && !ui.sending,
+                    ) {
+                        Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "记下")
+                    }
                 }
             },
         )
@@ -218,7 +263,15 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(ui.notes, key = { it.id }) { note ->
-                            NoteCard(note, onToggleTodo = { vm.toggleTodo(it) }, onDelete = { vm.deleteNote(it) })
+                            NoteCard(
+                                note,
+                                onToggleTodo = { vm.toggleTodo(it) },
+                                onDelete = { vm.deleteNote(it) },
+                                onToggleSensitive = { vm.toggleSensitive(it) },
+                                onRetryLink = { vm.retryLink(it) },
+                                retryingLink = note.id in ui.retryingLinkIds,
+                                onDownloadFile = { vm.downloadFile(it) },
+                            )
                         }
                         if (ui.loadingMore) {
                             item {

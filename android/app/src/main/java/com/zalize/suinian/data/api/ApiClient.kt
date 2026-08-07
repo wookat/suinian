@@ -130,8 +130,15 @@ class ApiClient(private val baseUrl: String, private val token: String) {
     }
 
     /** PATCH /api/notes/:id  {todo_done} */
-    suspend fun setTodoDone(id: String, done: Boolean): Note? = withContext(Dispatchers.IO) {
-        val body = buildJsonObject { put("todo_done", done) }.toString().toRequestBody(jsonMedia)
+    suspend fun setTodoDone(id: String, done: Boolean): Note? =
+        patchNote(id, buildJsonObject { put("todo_done", done) })
+
+    /** PATCH /api/notes/:id  {is_sensitive}（手动标记/取消敏感，后端同步加密/解密） */
+    suspend fun setSensitive(id: String, sensitive: Boolean): Note? =
+        patchNote(id, buildJsonObject { put("is_sensitive", sensitive) })
+
+    private suspend fun patchNote(id: String, bodyObj: JsonObject): Note? = withContext(Dispatchers.IO) {
+        val body = bodyObj.toString().toRequestBody(jsonMedia)
         val resp = try {
             client.newCall(request("/api/notes/$id").patch(body).build()).execute()
         } catch (e: IOException) {
@@ -140,6 +147,37 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         resp.use {
             if (!it.isSuccessful) throw httpError(it.code)
             parseNoteLenient(it.body?.string().orEmpty())
+        }
+    }
+
+    /** POST /api/notes/:id/refetch-link：链接笔记手动重试抓取标题/正文 */
+    suspend fun refetchLink(id: String): Note? = withContext(Dispatchers.IO) {
+        val body = "{}".toRequestBody(jsonMedia)
+        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val resp = try {
+            client60.newCall(request("/api/notes/$id/refetch-link").post(body).build()).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use {
+            if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
+            parseNoteLenient(it.body?.string().orEmpty())
+        }
+    }
+
+    /** GET /api/notes/:id/file：下载原件字节（附件不超 10MB，直接读入内存） */
+    suspend fun downloadNoteFile(id: String): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
+        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val resp = try {
+            client60.newCall(request("/api/notes/$id/file").get().build()).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use {
+            if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
+            val bytes = it.body?.bytes() ?: throw ApiException("下载失败：文件内容为空")
+            val mime = it.header("Content-Type") ?: "application/octet-stream"
+            bytes to mime
         }
     }
 

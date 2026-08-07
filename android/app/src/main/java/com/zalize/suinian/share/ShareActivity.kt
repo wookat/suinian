@@ -3,6 +3,7 @@ package com.zalize.suinian.share
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -43,10 +45,30 @@ import com.zalize.suinian.data.SendResult
 import com.zalize.suinian.ui.theme.SuinianTheme
 import kotlinx.coroutines.launch
 
-/** 分享入的一条内容（图片带 uri，确认后读字节上传） */
-private data class SharedItem(val rawType: String, val content: String, val url: String?, val imageUri: Uri? = null)
+/** 分享入的一条内容（图片/文件带 uri，确认后读字节上传） */
+private data class SharedItem(
+    val rawType: String,
+    val content: String,
+    val url: String?,
+    val imageUri: Uri? = null,
+    val fileUri: Uri? = null,
+)
 
 private const val MAX_IMAGE_BYTES = 10 * 1024 * 1024
+private const val MAX_FILE_BYTES = 10 * 1024 * 1024
+
+/** 后端支持的文档类型：PDF / txt / md / docx（按 mime 或扩展名判断） */
+private fun isSupportedDocument(mime: String?, name: String?): Boolean {
+    when (mime?.substringBefore(';')?.trim()) {
+        "application/pdf",
+        "text/plain",
+        "text/markdown",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        -> return true
+    }
+    val ext = name?.substringAfterLast('.', "")?.lowercase()
+    return ext in setOf("pdf", "txt", "md", "markdown", "docx")
+}
 
 /** 任何 app「分享 → 碎念」的轻量确认页 */
 class ShareActivity : ComponentActivity() {
@@ -89,19 +111,39 @@ class ShareActivity : ComponentActivity() {
             items.add(SharedItem("image", "[图片] ${uri.lastPathSegment ?: uri}", null, imageUri = uri))
         }
 
+        fun addFile(uri: Uri?) {
+            if (uri == null) return
+            val name = displayName(uri) ?: uri.lastPathSegment ?: "文件"
+            items.add(SharedItem("file", "[文件] $name", null, fileUri = uri))
+        }
+
+        fun addStream(uri: Uri?) {
+            if (uri == null) return
+            val mime = contentResolver.getType(uri) ?: type
+            when {
+                mime.startsWith("image/") -> addImage(uri)
+                isSupportedDocument(mime, displayName(uri) ?: uri.lastPathSegment) -> addFile(uri)
+                else -> Toast.makeText(this, "不支持的文件类型：目前支持 PDF / txt / md / docx", Toast.LENGTH_SHORT).show()
+            }
+        }
+
         when (action) {
             Intent.ACTION_SEND -> {
-                if (type.startsWith("image/")) {
+                if (type == "text/plain" && intent.getStringExtra(Intent.EXTRA_TEXT) != null) {
+                    addText(intent.getStringExtra(Intent.EXTRA_TEXT))
+                } else if (type.startsWith("text/") || type.startsWith("image/") || type.startsWith("application/")) {
                     @Suppress("DEPRECATION")
-                    addImage(intent.getParcelableExtra(Intent.EXTRA_STREAM))
+                    val stream = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                    if (stream != null) addStream(stream) else addText(intent.getStringExtra(Intent.EXTRA_TEXT))
                 } else {
                     addText(intent.getStringExtra(Intent.EXTRA_TEXT))
                 }
             }
             Intent.ACTION_SEND_MULTIPLE -> {
-                if (type.startsWith("image/")) {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.forEach { addImage(it) }
+                @Suppress("DEPRECATION")
+                val streams = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                if (!streams.isNullOrEmpty()) {
+                    streams.forEach { addStream(it) }
                 } else {
                     intent.getStringArrayListExtra(Intent.EXTRA_TEXT)?.forEach { addText(it) }
                 }
@@ -110,12 +152,22 @@ class ShareActivity : ComponentActivity() {
         return items
     }
 
+    /** 从 ContentResolver 取文件显示名 */
+    private fun displayName(uri: Uri): String? = try {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    } catch (_: Exception) {
+        null
+    }
+
     private fun sendAll(items: List<SharedItem>, remark: String) {
         val app = application as SuinianApp
         lifecycleScope.launch {
             var queued = false
             var failed = 0
             var uploadedImages = 0
+            var uploadedFiles = 0
             for (item in items) {
                 if (item.imageUri != null) {
                     // 图片：读字节 -> POST /api/ingest/media type=image（后端视觉识别成文字笔记）
@@ -144,6 +196,33 @@ class ShareActivity : ComponentActivity() {
                     }
                     continue
                 }
+                if (item.fileUri != null) {
+                    // 文件：读字节 -> POST /api/ingest/media type=file（后端提取正文+存档原件）
+                    try {
+                        val bytes = contentResolver.openInputStream(item.fileUri)?.use { it.readBytes() }
+                        if (bytes == null || bytes.isEmpty()) {
+                            failed++
+                            continue
+                        }
+                        if (bytes.size > MAX_FILE_BYTES) {
+                            Toast.makeText(this@ShareActivity, "文件过大：最多 10MB", Toast.LENGTH_SHORT).show()
+                            failed++
+                            continue
+                        }
+                        val mime = contentResolver.getType(item.fileUri) ?: "application/octet-stream"
+                        val fileName = displayName(item.fileUri) ?: item.fileUri.lastPathSegment ?: "file"
+                        app.repository.sendFile(bytes, mime, fileName)
+                        uploadedFiles++
+                        if (remark.isNotBlank()) {
+                            app.repository.send(
+                                CreateNoteRequest(source = "android", rawType = "text", content = "备注：${remark.trim()}", url = null)
+                            )
+                        }
+                    } catch (e: Exception) {
+                        failed++
+                    }
+                    continue
+                }
                 val content = if (remark.isBlank()) item.content else "${item.content}\n\n备注：${remark.trim()}"
                 val result = app.repository.send(
                     CreateNoteRequest(source = "android", rawType = item.rawType, content = content, url = item.url)
@@ -151,9 +230,10 @@ class ShareActivity : ComponentActivity() {
                 if (result is SendResult.Queued) queued = true
             }
             val msg = when {
-                failed > 0 && uploadedImages == 0 && items.all { it.imageUri != null } -> "图片上传失败，请检查网络后重试"
+                failed > 0 && uploadedImages == 0 && uploadedFiles == 0 && items.all { it.imageUri != null || it.fileUri != null } -> "上传失败，请检查网络后重试"
                 failed > 0 -> "部分内容上传失败（$failed 条）"
                 queued -> "网络不佳，已暂存稍后自动重试"
+                uploadedFiles > 0 -> "已上传，AI 正在提取文件内容"
                 uploadedImages > 0 -> "已上传，AI 正在识别图片文字"
                 items.size > 1 -> "已存 ${items.size} 条到碎念"
                 else -> "已存到碎念"
@@ -187,9 +267,9 @@ private fun ShareSheet(
 
                 items.take(3).forEach { item ->
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-                        if (item.rawType == "image") {
+                        if (item.rawType == "image" || item.rawType == "file") {
                             Icon(
-                                Icons.Outlined.Image,
+                                if (item.rawType == "file") Icons.Outlined.Description else Icons.Outlined.Image,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
                             )

@@ -56,6 +56,13 @@ class SettingsRepository(private val context: Context) {
     suspend fun setNotificationShortcut(v: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHORTCUT] = v }
     suspend fun setOnboardingDone(v: Boolean) = context.dataStore.edit { it[Keys.ONBOARDING_DONE] = v }
     suspend fun setUserName(v: String) = context.dataStore.edit { it[Keys.USER_NAME] = v.trim() }
+
+    /** 退出登录：只清本机 token/用户名并回引导页，不动服务端账号与数据（区别于注销） */
+    suspend fun logout() = context.dataStore.edit {
+        it[Keys.TOKEN] = ""
+        it[Keys.USER_NAME] = ""
+        it[Keys.ONBOARDING_DONE] = false
+    }
     suspend fun setAskChatJson(v: String) = context.dataStore.edit { it[Keys.ASK_CHAT] = v }
 
     /** 首启引导完成：单事务写入，避免分步写时 token 先落库触发重组、后续写入被取消 */

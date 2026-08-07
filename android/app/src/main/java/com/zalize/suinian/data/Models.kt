@@ -36,13 +36,20 @@ object FlexibleBooleanSerializer : KSerializer<Boolean> {
     override fun serialize(encoder: Encoder, value: Boolean) = encoder.encodeBoolean(value)
 }
 
-/** notes.meta JSON：语音原稿 / 图片描述 / 链接站点与正文摘录 */
+/** notes.meta JSON：语音原稿 / 图片描述 / 链接站点与正文摘录 / 文件原件信息 */
 @Serializable
 data class NoteMeta(
     @SerialName("raw_transcript") val rawTranscript: String? = null,
     @SerialName("image_description") val imageDescription: String? = null,
     @SerialName("link_site") val linkSite: String? = null,
     @SerialName("link_excerpt") val linkExcerpt: String? = null,
+    @SerialName("link_status") val linkStatus: String? = null, // ok|no_content|fetch_failed
+    @SerialName("file_name") val fileName: String? = null,
+    @SerialName("file_mime") val fileMime: String? = null,
+    @SerialName("file_size") val fileSize: Long? = null,
+    @SerialName("file_kind") val fileKind: String? = null, // pdf|txt|md|docx
+    @SerialName("file_excerpt") val fileExcerpt: String? = null,
+    @SerialName("file_status") val fileStatus: String? = null, // ok|extract_failed
 )
 
 /** Note，字段形状与 docs/SPEC.md D1 notes 表一致 */
@@ -114,6 +121,29 @@ data class ThreadsPage(val threads: List<Thread> = emptyList())
 data class ThreadDetail(
     val thread: Thread,
     val notes: List<Note> = emptyList(),
+    val graph: ThreadGraph? = null,
+)
+
+/** 线索实体脉络：GET /api/threads/:id 返回的 graph 字段 */
+@Serializable
+data class ThreadGraph(
+    val entities: List<GraphEntity> = emptyList(),
+    val relations: List<GraphRelation> = emptyList(),
+)
+
+@Serializable
+data class GraphEntity(
+    val id: String,
+    val name: String = "",
+    val type: String = "other", // person|project|concept|product|org|place|other
+    @SerialName("note_count") val noteCount: Int = 0,
+)
+
+@Serializable
+data class GraphRelation(
+    val src: String = "",
+    val dst: String = "",
+    @SerialName("relation_label") val relationLabel: String = "",
 )
 
 /** GET /api/reports 元素（列表只有摘要字段） */

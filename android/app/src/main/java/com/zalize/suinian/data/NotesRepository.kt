@@ -54,6 +54,27 @@ class NotesRepository(
         return client.setTodoDone(id, done)
     }
 
+    /** 手动标记/取消敏感（PATCH is_sensitive） */
+    suspend fun setSensitive(id: String, sensitive: Boolean): Note? {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.setSensitive(id, sensitive)
+    }
+
+    /** 链接笔记重试抓取 */
+    suspend fun refetchLink(id: String): Note? {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.refetchLink(id)
+    }
+
+    /** 下载文件笔记原件：返回字节 + mime */
+    suspend fun downloadNoteFile(id: String): Pair<ByteArray, String> {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.downloadNoteFile(id)
+    }
+
     suspend fun delete(id: String) {
         val (client, mock) = api()
         if (mock) {
@@ -96,6 +117,13 @@ class NotesRepository(
         val (client, mock) = api()
         if (mock) throw IllegalStateException("Mock 模式下图片上传不可用，请在设置中关闭 Mock")
         return client.ingestMedia("image", bytes, mime, fileName)
+    }
+
+    /** 文件上传：POST /api/ingest/media type=file（PDF/txt/md/docx，后端提取正文+存档原件） */
+    suspend fun sendFile(bytes: ByteArray, mime: String, fileName: String): MediaIngestResponse {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下文件上传不可用，请在设置中关闭 Mock")
+        return client.ingestMedia("file", bytes, mime, fileName)
     }
 
     /** 轮换 API token，成功后自动保存新 token */
