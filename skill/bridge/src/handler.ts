@@ -15,6 +15,12 @@ const MEDIA_DOWNLOAD_FAILED: Record<'voice' | 'image', string> = {
   voice: '【语音】下载失败，未能转写，请重发一次',
   image: '【图片】下载失败，未能识别，请重发一次',
 }
+
+/** 文件上传/提取失败时的兜底入库文案（仅存档文件名） */
+export function fileFallbackText(msg: NormalizedMessage): string {
+  const name = msg.media?.[0]?.fileName || msg.text?.trim()
+  return name ? `【文件】${name}` : '【文件】未能获取文件名，请重发一次'
+}
 const ERR_ASK = '检索出错了，请稍后再问一次。'
 const EMPTY_QUESTION = '想问什么？在 ? 后面写上问题，例如「?上周我在想什么」。'
 
@@ -110,6 +116,21 @@ export async function handleMessage(
     }
     // 媒体下载失败/超限：占位文字入库，提醒用户重发
     msg = { ...msg, text: msg.text?.trim() || MEDIA_DOWNLOAD_FAILED[msg.type] }
+  }
+
+  // 文件：上传 /api/ingest/media 提取+存档；失败兜底仅存档文件名
+  if (msg.type === 'file') {
+    const mediaPayload = toMediaIngestPayload(msg)
+    if (mediaPayload) {
+      try {
+        const res = await client.ingestMedia(mediaPayload)
+        if (res.note && !res.error) return res.reply ?? FALLBACK_MEDIA_SAVED
+      } catch (err) {
+        if (err instanceof FatalApiError) throw err
+        // 非致命失败：落到文件名存档兜底
+      }
+    }
+    msg = { ...msg, text: fileFallbackText(msg) }
   }
 
   const payload = toIngestPayload(msg)

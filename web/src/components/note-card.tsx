@@ -21,12 +21,15 @@ import {
   Mic,
   Image as ImageIcon,
   Sparkles,
+  FileText,
+  Download,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
+import { downloadNoteFile } from "@/lib/api"
 import { cn, formatTime, parseDue, dueHasTime } from "@/lib/utils"
 import type { Note, NoteCategory } from "@/lib/types"
 
@@ -59,6 +62,7 @@ const CATEGORY_META: Record<
 const RAW_TYPE_META = {
   voice: { icon: Mic, label: "语音转写" },
   image: { icon: ImageIcon, label: "图片识别" },
+  file: { icon: FileText, label: "文件" },
 } as const
 
 export function RawTypeBadge({ rawType }: { rawType: string }) {
@@ -183,7 +187,25 @@ export function NoteCard({
   const [metaOpen, setMetaOpen] = useState(false)
   const [summaryOpen, setSummaryOpen] = useState(false)
   const [excerptOpen, setExcerptOpen] = useState(false)
+  const [fileExcerptOpen, setFileExcerptOpen] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+
+  const fileMeta = note.raw_type === "file" && note.meta?.file_name ? note.meta : null
+
+  async function downloadFile() {
+    if (downloading || !fileMeta?.file_name) return
+    setDownloading(true)
+    setDownloadError(null)
+    try {
+      await downloadNoteFile(note.id, fileMeta.file_name)
+    } catch (e) {
+      setDownloadError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   const imageDescription =
     note.raw_type === "image" && note.meta?.image_description && note.meta.image_description !== note.content
@@ -452,6 +474,44 @@ export function NoteCard({
               >
                 {expanded ? "收起" : "展开全文"}
               </button>
+            )}
+            {fileMeta && (
+              <div className="mt-2 rounded-lg border bg-muted/40 p-2.5">
+                <div className="flex items-center gap-2">
+                  <FileText className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{fileMeta.file_name}</span>
+                  {fileMeta.file_kind && (
+                    <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs uppercase text-muted-foreground">
+                      {fileMeta.file_kind}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => void downloadFile()}
+                    disabled={downloading}
+                    aria-label="下载原件"
+                    title="下载原件"
+                    className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    {downloading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+                  </button>
+                </div>
+                {downloadError && <p className="mt-1 text-xs text-destructive">{downloadError}</p>}
+                {fileMeta.file_excerpt && (
+                  <div className="mt-1.5">
+                    <button
+                      onClick={() => setFileExcerptOpen((x) => !x)}
+                      className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+                    >
+                      {fileExcerptOpen ? "收起全文摘录" : "查看全文摘录"}
+                    </button>
+                    {fileExcerptOpen && (
+                      <p className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-2.5 text-xs leading-relaxed text-muted-foreground">
+                        {fileMeta.file_excerpt}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
             {imageDescription && (
               <div className="mt-2">

@@ -82,6 +82,7 @@ function guessMime(type: NormalizedMessage['type'], fileName?: string): string {
     const map: Record<string, string> = {
       png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
       pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       mp3: 'audio/mpeg', mp4: 'video/mp4', silk: 'audio/silk',
     }
     if (ext && map[ext]) return map[ext]

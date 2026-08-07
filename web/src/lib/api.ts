@@ -123,15 +123,21 @@ export async function createNote(payload: CreateNotePayload): Promise<Note> {
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 
-/** 图片上传：走 /api/ingest/media，后端提取文字/描述后入库 */
-export async function ingestImage(file: File): Promise<Note> {
+export const SUPPORTED_FILE_EXTS = ["pdf", "txt", "md", "markdown", "docx"]
+
+/** 图片/文件上传：走 /api/ingest/media，后端提取文字/描述/摘要后入库 */
+export async function ingestMedia(file: File, type: "image" | "file"): Promise<Note> {
   if (loadSettings().useMock) {
-    return mockCreateNote({ source: "web", raw_type: "image", content: `【图片】${file.name}（演示模式不做识别）` })
+    return mockCreateNote({
+      source: "web",
+      raw_type: type,
+      content: type === "image" ? `【图片】${file.name}（演示模式不做识别）` : `【文件】${file.name}（演示模式不做提取）`,
+    })
   }
   const { apiBaseUrl, apiToken } = loadSettings()
   if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
   const form = new FormData()
-  form.set("type", "image")
+  form.set("type", type)
   form.set("source", "web")
   form.set("file", file)
   let res: Response
@@ -157,6 +163,33 @@ export async function ingestImage(file: File): Promise<Note> {
   }
   const data = (await res.json()) as { note: Record<string, unknown> }
   return normalizeNote(data.note)
+}
+
+/** 下载文件笔记的原件（鉴权本人，经 API 代理） */
+export async function downloadNoteFile(noteId: string, fileName: string): Promise<void> {
+  const { apiBaseUrl, apiToken, useMock } = loadSettings()
+  if (useMock || !apiBaseUrl) throw new Error("演示模式不支持下载，请先配置真实 API")
+  let res: Response
+  try {
+    res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/notes/${noteId}/file`, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+    })
+  } catch {
+    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    throw new ApiError(res.status, text || res.statusText)
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 export async function patchNote(
