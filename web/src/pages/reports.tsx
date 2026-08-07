@@ -6,9 +6,10 @@ import { marked } from "marked"
 import DOMPurify from "dompurify"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import { getReports, getReport, generateReport } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
-import type { WeeklyReport } from "@/lib/types"
+import type { ReportPeriod, WeeklyReport } from "@/lib/types"
 
 function weekLabel(weekStart: string): string {
   const d = new Date(weekStart)
@@ -26,6 +27,29 @@ function isoWeekNumber(weekStart: string): number {
   target.setUTCDate(target.getUTCDate() + 4 - dayNum)
   const yearStart = Date.UTC(target.getUTCFullYear(), 0, 1)
   return Math.ceil(((target.getTime() - yearStart) / 86400_000 + 1) / 7)
+}
+
+function monthTitle(monthStart: string): string {
+  const d = new Date(monthStart)
+  const year = d.getFullYear() === new Date().getFullYear() ? "" : `${d.getFullYear()} 年 `
+  return `${year}${d.getMonth() + 1} 月思考报告`
+}
+
+function monthLabel(monthStart: string): string {
+  const d = new Date(monthStart)
+  return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}`
+}
+
+function reportPeriod(r: WeeklyReport): ReportPeriod {
+  return r.period === "month" ? "month" : "week"
+}
+
+function reportTitle(r: WeeklyReport): string {
+  return reportPeriod(r) === "month" ? monthTitle(r.week_start) : `第 ${isoWeekNumber(r.week_start)} 周思考报告`
+}
+
+function reportRangeLabel(r: WeeklyReport): string {
+  return reportPeriod(r) === "month" ? monthLabel(r.week_start) : weekLabel(r.week_start)
 }
 
 // Strip a leading H1 from report markdown; the page header already shows the title
@@ -53,6 +77,7 @@ export function ReportsPage() {
   const [detailError, setDetailError] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
+  const [periodTab, setPeriodTab] = useState<ReportPeriod>("week")
   const settingsVersion = useSettingsVersion()
 
   const load = useCallback(async () => {
@@ -77,7 +102,7 @@ export function ReportsPage() {
     setGenerating(true)
     setGenerateError(null)
     try {
-      const report = await generateReport("this")
+      const report = await generateReport("this", periodTab)
       await load()
       setSelectedId(report.id)
     } catch (e) {
@@ -102,7 +127,7 @@ export function ReportsPage() {
           </>
         ) : (
           <>
-            <Sparkles /> 生成本周报告
+            <Sparkles /> {periodTab === "month" ? "生成本月报告" : "生成本周报告"}
           </>
         )}
       </Button>
@@ -137,7 +162,7 @@ export function ReportsPage() {
     return (
       <div className="space-y-4">
         <Button variant="ghost" size="sm" className="-ml-2" onClick={() => setSelectedId(null)}>
-          <ChevronLeft className="size-4" /> 返回周报列表
+          <ChevronLeft className="size-4" /> 返回报告列表
         </Button>
         {detailLoading ? (
           <NoteListSkeleton />
@@ -148,11 +173,9 @@ export function ReportsPage() {
         ) : (
           selected && (
             <Card className="p-5">
-              <h2 className="text-lg font-semibold">
-                第 {isoWeekNumber(selected.week_start)} 周思考报告
-              </h2>
+              <h2 className="text-lg font-semibold">{reportTitle(selected)}</h2>
               <p className="mb-4 mt-1 text-xs font-medium text-muted-foreground">
-                {weekLabel(selected.week_start)}
+                {reportRangeLabel(selected)}
               </p>
               {selected.content_md ? (
                 <ReportBody md={stripLeadingH1(selected.content_md)} />
@@ -164,6 +187,32 @@ export function ReportsPage() {
         )}
       </div>
     )
+
+  const visible = reports.filter((r) => reportPeriod(r) === periodTab)
+
+  const periodTabs = (
+    <div className="flex w-fit gap-1 rounded-lg bg-muted p-1" role="tablist" aria-label="报告类型">
+      {(
+        [
+          { value: "week", label: "周报" },
+          { value: "month", label: "月报" },
+        ] as const
+      ).map((t) => (
+        <button
+          key={t.value}
+          role="tab"
+          aria-selected={periodTab === t.value}
+          onClick={() => setPeriodTab(t.value)}
+          className={cn(
+            "rounded-md px-3 py-1 text-sm font-medium transition-colors",
+            periodTab === t.value ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  )
 
   if (loading) return <NoteListSkeleton />
 
@@ -177,13 +226,18 @@ export function ReportsPage() {
       </Card>
     )
 
-  if (reports.length === 0)
+  if (visible.length === 0)
     return (
       <div className="space-y-4">
+        {periodTabs}
         <EmptyState
           icon={FileText}
-          title="周报还未生成"
-          description="每周一自动生成「本周你在想什么」的结构化周报；也可以随时手动生成本周的报告。"
+          title={periodTab === "month" ? "月报还未生成" : "周报还未生成"}
+          description={
+            periodTab === "month"
+              ? "每月 1 日自动生成上个月的思考月报；也可以随时手动生成本月的报告。"
+              : "每周一自动生成「本周你在想什么」的结构化周报；也可以随时手动生成本周的报告。"
+          }
           actionLabel="去首页记点想法"
           onAction={() => {
             window.location.hash = "#/"
@@ -195,8 +249,9 @@ export function ReportsPage() {
 
   return (
     <div className="space-y-3">
+      {periodTabs}
       {generateButton}
-      {reports.map((r) => (
+      {visible.map((r) => (
         <Card
           key={r.id}
           className="cursor-pointer p-4 transition-shadow hover:shadow-md"
@@ -204,11 +259,9 @@ export function ReportsPage() {
         >
           <div className="flex items-center gap-2">
             <FileText className="size-4 shrink-0 text-muted-foreground" />
-            <h3 className="text-[15px] font-medium">
-              第 {isoWeekNumber(r.week_start)} 周思考报告
-            </h3>
+            <h3 className="text-[15px] font-medium">{reportTitle(r)}</h3>
           </div>
-          <p className="mt-1.5 text-xs text-muted-foreground">{weekLabel(r.week_start)}</p>
+          <p className="mt-1.5 text-xs text-muted-foreground">{reportRangeLabel(r)}</p>
           {r.content_md && (
             <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
               {r.content_md.replace(/[#*`>\-\n]+/g, " ").trim().slice(0, 120)}

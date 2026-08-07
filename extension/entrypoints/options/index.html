@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>碎念剪藏 · 设置</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main id="app">
+      <h1>碎念剪藏 · 设置</h1>
+      <p class="hint">
+        填写与碎念 Web 端一致的 API 地址与 Token（Web 端「设置页」可查看 / 复制 Token）。
+      </p>
+      <label class="field">
+        <span>API Base URL</span>
+        <input id="api-base" type="url" placeholder="https://suinian-api.zalize.com" />
+      </label>
+      <label class="field">
+        <span>API Token</span>
+        <input id="api-token" type="password" placeholder="sn_xxx..." autocomplete="off" />
+      </label>
+      <div class="row">
+        <button id="save" type="button">保存</button>
+        <button id="test" type="button" class="secondary">测试连接</button>
+      </div>
+      <p id="status" class="status" hidden></p>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -98,6 +98,7 @@ npx wrangler pages deploy dist --project-name suinian
 |---|---|---|
 | [`backend/`](backend/) | notes API、DeepSeek 分拣管线、线索聚类、周报、加密 | Cloudflare Workers + Hono + D1 |
 | [`web/`](web/) | 时间流 / 待办 / 线索 / 周报视图，PWA | React 19 + Vite + Tailwind v4 + shadcn/ui |
+| [`extension/`](extension/) | 浏览器剪藏扩展：一键存页 / 划词保存 / 备注标签 | WXT + Manifest V3 + Readability |
 | [`skill/`](skill/) | 微信 bot 桥（独立进程）+ OpenClaw skill | Node.js / Docker |
 | [`android/`](android/) | 分享接收、小组件、原生查看端 | Kotlin + Jetpack Compose |
 | [`docs/`](docs/) | [自部署指南](docs/self-host.md)、[SPEC](docs/SPEC.md)、[产品方案](docs/product-plan.md)、[竞品调研](docs/research-competitors.md) | — |

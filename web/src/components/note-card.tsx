@@ -28,6 +28,9 @@ import {
   CircleAlert,
   RefreshCw,
   X,
+  Wallet,
+  Coins,
+  Puzzle,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -63,6 +66,16 @@ const CATEGORY_META: Record<
     icon: Database,
     activeClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
   },
+  expense: {
+    label: "支出",
+    icon: Wallet,
+    activeClassName: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+  },
+  income: {
+    label: "收入",
+    icon: Coins,
+    activeClassName: "bg-green-500/10 text-green-600 dark:text-green-400",
+  },
 }
 
 const RAW_TYPE_META = {
@@ -88,6 +101,7 @@ const SOURCE_META = {
   android: { icon: Smartphone, label: "来自 Android" },
   web: { icon: Globe, label: "来自 Web 速记" },
   api: { icon: Webhook, label: "来自 API" },
+  extension: { icon: Puzzle, label: "来自浏览器剪藏" },
 } as const
 
 export function CategoryBadge({
@@ -133,6 +147,38 @@ export function DueChip({ due }: { due: string | null }) {
       <CalendarClock className="size-3" />
       {overdue ? "已过期 " : ""}
       {formatDue(due)}
+    </span>
+  )
+}
+
+const CURRENCY_SYMBOL: Record<string, string> = { CNY: "¥", USD: "$", EUR: "€", GBP: "£", JPY: "JP¥", HKD: "HK$" }
+
+export function formatAmount(amount: number, currency: string): string {
+  const sym = CURRENCY_SYMBOL[currency]
+  const num = Number.isInteger(amount) ? String(amount) : amount.toFixed(2)
+  return sym ? `${sym}${num}` : `${num} ${currency}`
+}
+
+export function AmountChip({ note }: { note: Note }) {
+  const merchant = note.meta?.finance_merchant
+  const label =
+    note.amount != null
+      ? `${note.category === "income" ? "+" : "-"}${formatAmount(note.amount, note.currency || "CNY")}`
+      : "金额待定"
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
+        note.amount == null
+          ? "bg-muted text-muted-foreground"
+          : note.category === "income"
+            ? "bg-green-500/10 text-green-600 dark:text-green-400"
+            : "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+      )}
+      title={merchant ? `商家/用途：${merchant}` : undefined}
+    >
+      {label}
+      {merchant && <span className="max-w-24 truncate font-normal opacity-80">· {merchant}</span>}
     </span>
   )
 }
@@ -342,6 +388,7 @@ export function NoteCard({
             <CategoryBadge category={note.category} active={categoryFilterActive} />
           )}
           {note.category === "todo" && <DueChip due={note.todo_due} />}
+          {(note.category === "expense" || note.category === "income") && <AmountChip note={note} />}
           <RawTypeBadge rawType={note.raw_type} />
           {note.match === "semantic" && (
             <Badge variant="secondary" className="gap-1 text-xs text-muted-foreground" title="按语义相关召回，原文可能不含搜索词">

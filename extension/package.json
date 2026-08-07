@@ -1,0 +1,24 @@
+{
+  "name": "suinian-extension",
+  "description": "碎念浏览器剪藏扩展：一键保存当前页 / 划词保存到碎念",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:edge": "wxt -b edge",
+    "build": "wxt build",
+    "build:edge": "wxt build -b edge",
+    "zip": "wxt zip",
+    "zip:edge": "wxt zip -b edge",
+    "typecheck": "wxt prepare && tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "wxt": "^0.21.3"
+  }
+}

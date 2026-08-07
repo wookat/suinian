@@ -24,15 +24,18 @@ export interface ThreadRow {
   updated_at: string;
 }
 
+export type ReportPeriod = "week" | "month";
+
 export interface WeeklyReportRow {
   id: string;
   user_id: string;
   week_start: string;
+  period: ReportPeriod;
   content_md: string;
   created_at: string;
 }
 
-export type Category = "idea" | "todo" | "collect" | "data";
+export type Category = "idea" | "todo" | "collect" | "data" | "expense" | "income";
 
 export interface TriageResult {
   category: Category;
@@ -40,6 +43,12 @@ export interface TriageResult {
   title: string;
   is_sensitive: boolean;
   todo_due?: string | null;
+  /** Amount for expense/income notes; null when the amount is uncertain. */
+  amount?: number | null;
+  /** ISO 4217 currency code (e.g. CNY, USD) for expense/income notes. */
+  currency?: string | null;
+  /** Optional merchant / purpose for expense/income notes. */
+  merchant?: string | null;
 }
 
 /** Optional per-note metadata stored as JSON in notes.meta. */
@@ -72,6 +81,8 @@ export interface NoteMeta {
   import_source?: string;
   /** Original tags from the export file, merged back after AI triage (imported notes). */
   import_tags?: string[];
+  /** Merchant / purpose of an expense/income note. */
+  finance_merchant?: string;
   /** Fields the user set by hand; AI triage / cron sweeps must not overwrite them. */
   manual_override?: { category?: boolean; tags?: boolean };
 }
@@ -95,6 +106,8 @@ export interface NoteRow {
   todo_due: string | null;
   todo_done: number;
   done_at: string | null;
+  amount: number | null;
+  currency: string | null;
   meta: string | null;
   created_at: string;
   updated_at: string;

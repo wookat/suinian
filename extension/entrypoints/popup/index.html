@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>碎念剪藏</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main id="app">
+      <header>
+        <h1>碎念剪藏</h1>
+        <button id="open-options" class="link" type="button">设置</button>
+      </header>
+
+      <section id="page-info">
+        <p id="page-title" class="title">加载中…</p>
+        <p id="page-url" class="url"></p>
+        <p id="extract-status" class="hint"></p>
+      </section>
+
+      <section id="selection-block" hidden>
+        <label class="checkbox"><input type="checkbox" id="use-selection" checked /> 只保存选中文字（划词）</label>
+        <blockquote id="selection-preview"></blockquote>
+      </section>
+
+      <label class="field">
+        <span>备注（可选）</span>
+        <textarea id="note" rows="2" placeholder="为什么存这一条？"></textarea>
+      </label>
+
+      <label class="field">
+        <span>标签（可选，逗号分隔）</span>
+        <input id="tags" type="text" placeholder="稍后读, 技术" />
+      </label>
+
+      <label class="checkbox"><input type="checkbox" id="include-excerpt" checked /> 附带正文抽取</label>
+
+      <button id="save" type="button">保存到碎念</button>
+      <p id="status" class="status" hidden></p>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -1,6 +1,6 @@
-export type NoteSource = "wechat" | "android" | "web" | "api"
+export type NoteSource = "wechat" | "android" | "web" | "api" | "extension"
 export type NoteRawType = "text" | "link" | "image" | "voice" | "file"
-export type NoteCategory = "idea" | "todo" | "collect" | "data"
+export type NoteCategory = "idea" | "todo" | "collect" | "data" | "expense" | "income"
 
 export interface NoteMeta {
   raw_transcript?: string
@@ -15,6 +15,7 @@ export interface NoteMeta {
   file_kind?: string
   file_excerpt?: string
   file_status?: "ok" | "extract_failed"
+  finance_merchant?: string
   manual_override?: { category?: boolean; tags?: boolean }
 }
 
@@ -36,6 +37,8 @@ export interface Note {
   todo_due: string | null
   todo_done: number | null
   done_at?: string | null
+  amount?: number | null
+  currency?: string | null
   meta?: NoteMeta | null
   /** Search recall type when returned from a text search (semantic = no keyword hit). */
   match?: "keyword" | "semantic" | "both"
@@ -143,10 +146,13 @@ export interface ThreadsResponse {
   threads: Thread[]
 }
 
+export type ReportPeriod = "week" | "month"
+
 export interface WeeklyReport {
   id: string
   user_id: string
   week_start: string
+  period?: ReportPeriod
   content_md?: string
   created_at: string
 }

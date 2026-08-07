@@ -24,6 +24,9 @@ describe("parseTriageJson", () => {
       title: "约会议",
       is_sensitive: false,
       todo_due: "2026-08-10",
+      amount: null,
+      currency: null,
+      merchant: null,
     });
   });
 

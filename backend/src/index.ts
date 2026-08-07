@@ -18,7 +18,7 @@ import {
   checkRateLimit,
   clientIp,
 } from "./auth";
-import { generateWeeklyReport, generateAllWeeklyReports } from "./reports";
+import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports } from "./reports";
 import { getTodayReview, generateAllDailyReviews } from "./review";
 import { upsertNoteEmbedding, deleteNoteEmbedding, semanticRecall, backfillEmbeddings } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteUserGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
@@ -307,6 +307,8 @@ const CATEGORY_LABEL: Record<string, string> = {
   todo: "待办",
   collect: "收藏",
   data: "资料",
+  expense: "支出",
+  income: "收入",
 };
 
 export async function applyTriage(env: Env, noteId: string, triage: TriageResult, content: string): Promise<void> {
@@ -327,8 +329,12 @@ export async function applyTriage(env: Env, noteId: string, triage: TriageResult
   ];
   // fields the user set by hand stay untouched
   if (!override?.category) {
-    sets.push("category = ?");
-    binds.push(triage.category);
+    sets.push("category = ?", "amount = ?", "currency = ?");
+    binds.push(triage.category, triage.amount ?? null, triage.currency ?? null);
+    if (triage.merchant) {
+      sets.push("meta = ?");
+      binds.push(JSON.stringify({ ...(meta ?? {}), finance_merchant: triage.merchant }));
+    }
   }
   if (!override?.tags) {
     sets.push("tags = ?");
@@ -603,7 +609,7 @@ app.patch("/api/notes/:id", async (c) => {
     binds.push(body.todo_done ? 1 : 0, body.todo_done ? new Date().toISOString() : null);
   }
   const override: { category?: boolean; tags?: boolean } = {};
-  if (typeof body.category === "string" && ["idea", "todo", "collect", "data"].includes(body.category)) {
+  if (typeof body.category === "string" && ["idea", "todo", "collect", "data", "expense", "income"].includes(body.category)) {
     sets.push("category = ?");
     binds.push(body.category);
     override.category = true;
@@ -804,7 +810,7 @@ app.post("/api/notes/batch", async (c) => {
 
   if (action === "set_category") {
     const category = body.category;
-    if (typeof category !== "string" || !["idea", "todo", "collect", "data"].includes(category))
+    if (typeof category !== "string" || !["idea", "todo", "collect", "data", "expense", "income"].includes(category))
       return c.json({ error: "invalid category" }, 400);
     const results: { id: string; meta: string | null }[] = [];
     for (const chunk of chunks(ids)) {
@@ -1328,10 +1334,10 @@ app.get("/api/review/today", async (c) => {
 // ---- GET /api/reports ----
 app.get("/api/reports", async (c) => {
   const { results } = await c.env.DB.prepare(
-    "SELECT id, week_start, created_at FROM weekly_reports WHERE user_id = ? ORDER BY week_start DESC LIMIT 100"
+    "SELECT id, week_start, period, created_at FROM weekly_reports WHERE user_id = ? ORDER BY week_start DESC LIMIT 100"
   )
     .bind(c.get("userId"))
-    .all<{ id: string; week_start: string; created_at: string }>();
+    .all<{ id: string; week_start: string; period: string; created_at: string }>();
   return c.json({ reports: results ?? [] });
 });
 
@@ -1346,11 +1352,13 @@ app.get("/api/reports/:id", async (c) => {
 
 // ---- POST /api/reports/generate (manual trigger) ----
 app.post("/api/reports/generate", async (c) => {
-  const body = await c.req.json<{ week?: string }>().catch(() => null);
-  const week = body?.week === "this" ? "this" : "last";
-  const generated = await generateWeeklyReport(c.env, c.get("userId"), new Date(), week);
+  const body = await c.req.json<{ week?: string; period?: string; which?: string }>().catch(() => null);
+  const period = body?.period === "month" ? "month" : "week";
+  const which = (body?.which ?? body?.week) === "this" ? "this" : "last";
+  const generated = await generatePeriodReport(c.env, c.get("userId"), new Date(), which, period);
   if (!generated) {
-    return c.json({ error: week === "this" ? "本周还没有记录，先去记几条碎念吧" : "上周没有记录，暂无内容可总结" }, 422);
+    const unit = period === "month" ? (which === "this" ? "本月" : "上个月") : which === "this" ? "本周" : "上周";
+    return c.json({ error: which === "this" ? `${unit}还没有记录，先去记几条碎念吧` : `${unit}没有记录，暂无内容可总结` }, 422);
   }
   const { id, week_start } = generated;
   const report = await c.env.DB.prepare("SELECT * FROM weekly_reports WHERE id = ?").bind(id).first<WeeklyReportRow>();
@@ -1468,6 +1476,9 @@ export default {
     if (event.cron === "0 0 * * 1") {
       // Monday 08:00 Asia/Shanghai = Monday 00:00 UTC -> weekly reports
       ctx.waitUntil(generateAllWeeklyReports(env));
+    } else if (event.cron === "0 0 1 * *") {
+      // 1st of the month 08:00 Asia/Shanghai = 00:00 UTC -> last month's reports
+      ctx.waitUntil(generateAllMonthlyReports(env));
     } else if (event.cron === "*/10 * * * *") {
       // sweep notes whose async triage failed or was cancelled
       ctx.waitUntil(retriageUnsorted(env));
