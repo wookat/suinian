@@ -18,7 +18,7 @@
     "@mozilla/readability": "^0.6.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.2",
+    "typescript": "^7.0.2",
     "wxt": "^0.21.3"
   }
 }
