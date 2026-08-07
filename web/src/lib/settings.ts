@@ -10,8 +10,15 @@ export interface Settings {
 
 const OFFICIAL_API_BASE = "https://suinian-api.zalize.com"
 
-/** Build-time API base (e.g. VITE_API_BASE=http://127.0.0.1:8787 for local dev). */
-const ENV_API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.trim() ?? ""
+/** Build-time API base (e.g. VITE_API_BASE=http://127.0.0.1:8787 for local dev).
+ * A localhost value is honored only when the page itself is served from
+ * localhost, so a stray .env.local can never leak into a deployed build. */
+const ENV_API_BASE = (() => {
+  const v = (import.meta.env.VITE_API_BASE as string | undefined)?.trim() ?? ""
+  const isLocalUrl = /^https?:\/\/(localhost|127\.0\.0\.1)([:/]|$)/.test(v)
+  const onLocalhost = /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname)
+  return isLocalUrl && !onLocalhost ? "" : v
+})()
 
 /** Suggested API base for register/login forms: saved value, build-time env,
  * or the official instance when the page is served from the hosted domain. */
