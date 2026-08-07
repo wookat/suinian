@@ -369,27 +369,32 @@ export async function reconcileThreads(
   let deleted = 0;
   let dissolved = 0;
   for (const t of results ?? []) {
-    const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM notes WHERE thread_id = ?")
-      .bind(t.id)
-      .first<{ c: number }>();
-    const c = cnt?.c ?? 0;
-    if (c === 0) {
-      await env.DB.prepare("DELETE FROM threads WHERE id = ?").bind(t.id).run();
-      deleted++;
-    } else if (c === 1) {
-      await env.DB.prepare(
-        "UPDATE notes SET thread_id = NULL, updated_at = datetime('now') WHERE thread_id = ?"
-      )
+    // isolate per-thread failures so one bad row never aborts the whole sweep
+    try {
+      const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM notes WHERE thread_id = ?")
         .bind(t.id)
-        .run();
-      await env.DB.prepare("DELETE FROM threads WHERE id = ?").bind(t.id).run();
-      dissolved++;
-    } else if (c !== t.note_count) {
-      await env.DB.prepare(
-        "UPDATE threads SET note_count = ?, updated_at = datetime('now') WHERE id = ?"
-      )
-        .bind(c, t.id)
-        .run();
+        .first<{ c: number }>();
+      const c = cnt?.c ?? 0;
+      if (c === 0) {
+        await env.DB.prepare("DELETE FROM threads WHERE id = ?").bind(t.id).run();
+        deleted++;
+      } else if (c === 1) {
+        await env.DB.prepare(
+          "UPDATE notes SET thread_id = NULL, updated_at = datetime('now') WHERE thread_id = ?"
+        )
+          .bind(t.id)
+          .run();
+        await env.DB.prepare("DELETE FROM threads WHERE id = ?").bind(t.id).run();
+        dissolved++;
+      } else if (c !== t.note_count) {
+        await env.DB.prepare(
+          "UPDATE threads SET note_count = ?, updated_at = datetime('now') WHERE id = ?"
+        )
+          .bind(c, t.id)
+          .run();
+      }
+    } catch (err) {
+      console.error(`threads: reconcile failed for thread=${t.id}`, err);
     }
   }
   if (deleted || dissolved)

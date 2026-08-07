@@ -104,6 +104,19 @@ app.post("/api/auth/login", async (c) => {
   return c.json({ user: { id: user.id, name: user.name }, api_token: user.api_token });
 });
 
+// ---- admin maintenance (guarded by ADMIN_TOKEN worker secret, not user tokens) ----
+// One-shot full reconcile across all users: drops 0-note orphan threads,
+// dissolves 1-note leftovers, fixes stale note_count. Read-only for healthy data.
+app.post("/api/admin/reconcile-threads", async (c) => {
+  const adminToken = c.env.ADMIN_TOKEN;
+  if (!adminToken) return c.json({ error: "not found" }, 404);
+  const auth = c.req.header("authorization") || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m || m[1] !== adminToken) return c.json({ error: "unauthorized" }, 401);
+  const result = await reconcileThreads(c.env);
+  return c.json({ ok: true, ...result });
+});
+
 // ---- auth ----
 app.use("/api/*", async (c, next) => {
   const auth = c.req.header("authorization") || "";

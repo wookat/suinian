@@ -40,6 +40,7 @@ function fakeEnv(notes: FakeNote[], threads: FakeThread[]) {
         },
         async first() {
           if (sql.includes("COUNT(*) AS c FROM notes WHERE thread_id")) {
+            if (binds[0] === "t_boom") throw new Error("D1 exploded");
             let c = 0;
             for (const n of noteMap.values()) if (n.thread_id === binds[0]) c++;
             return { c };
@@ -113,5 +114,16 @@ describe("reconcileThreads", () => {
     expect(threadMap.has("t2")).toBe(true);
     await reconcileThreads(env);
     expect(threadMap.has("t2")).toBe(false);
+  });
+
+  it("keeps sweeping when one thread's queries fail", async () => {
+    const { env, threadMap } = fakeEnv([], [
+      { id: "t_boom", user_id: "u1", note_count: 2 },
+      { id: "t_orphan", user_id: "u1", note_count: 2 },
+    ]);
+    const r = await reconcileThreads(env);
+    expect(r.deleted).toBe(1);
+    expect(threadMap.has("t_boom")).toBe(true);
+    expect(threadMap.has("t_orphan")).toBe(false);
   });
 });
