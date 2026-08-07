@@ -1,5 +1,6 @@
 import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
+import { findGraphThreadMate } from "./graph";
 
 /** bge-m3 cosine similarity above which two ideas join the same thread directly. */
 const SIM_JOIN = 0.76;
@@ -183,6 +184,28 @@ async function deepseekConfirmPair(env: Env, a: string, b: string): Promise<bool
 export async function clusterNote(env: Env, note: NoteRow): Promise<void> {
   try {
     if (note.category !== "idea") return;
+    // graph signal first: an idea sharing entities/relations with an existing
+    // idea joins its thread regardless of embedding similarity
+    if (!note.is_sensitive) {
+      const mate = await findGraphThreadMate(env, note);
+      if (mate) {
+        console.log(`threads: graph mate note=${note.id} mate=${mate.note_id} shared=${mate.shared}`);
+        // still store the embedding so search/ask recall keeps working
+        const v = await embed(env, `${note.title ?? ""}\n${note.content}`);
+        if (v) await saveEmbedding(env, note.id, v);
+        let threadId = mate.thread_id;
+        if (!threadId) {
+          const m = await env.DB.prepare("SELECT title, content FROM notes WHERE id = ?")
+            .bind(mate.note_id)
+            .first<{ title: string | null; content: string }>();
+          threadId = await newThread(env, note.user_id, m?.title || note.title || note.content.slice(0, 20));
+          await attachNoteToThread(env, mate.note_id, threadId);
+        }
+        await attachNoteToThread(env, note.id, threadId);
+        await summarizeThread(env, threadId, note.title || undefined);
+        return;
+      }
+    }
     // sensitive notes never enter the vector store (content is encrypted at rest)
     const vector = note.is_sensitive ? null : await embed(env, `${note.title ?? ""}\n${note.content}`);
     if (vector) {

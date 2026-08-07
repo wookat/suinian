@@ -80,8 +80,30 @@ export interface Thread {
   updated_at: string
 }
 
+export interface ThreadGraphEntity {
+  id: string
+  name: string
+  type: string
+  note_count: number
+}
+
+export interface ThreadGraphRelation {
+  src: string
+  relation: string
+  relation_label: string
+  dst: string
+  confidence: number
+  note_id: string | null
+}
+
+export interface ThreadGraph {
+  entities: ThreadGraphEntity[]
+  relations: ThreadGraphRelation[]
+}
+
 export interface ThreadDetail extends Thread {
   notes: Note[]
+  graph?: ThreadGraph | null
 }
 
 export interface ThreadsResponse {

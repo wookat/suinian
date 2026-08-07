@@ -228,9 +228,9 @@ export async function getThreads(): Promise<ThreadsResponse> {
 export async function getThread(id: string): Promise<ThreadDetail> {
   if (loadSettings().useMock) return mockGetThread(id)
   const res = await realFetch<
-    ThreadDetail & { thread?: ThreadDetail; notes?: Record<string, unknown>[] }
+    ThreadDetail & { thread?: ThreadDetail; notes?: Record<string, unknown>[]; graph?: ThreadDetail["graph"] }
   >(`/api/threads/${id}`)
-  const detail = (res.thread ? { ...res.thread, notes: res.notes ?? [] } : res) as ThreadDetail
+  const detail = (res.thread ? { ...res.thread, notes: res.notes ?? [], graph: res.graph ?? null } : res) as ThreadDetail
   return {
     ...detail,
     notes: (detail.notes ?? []).map((n) => normalizeNote(n as unknown as Record<string, unknown>)),
