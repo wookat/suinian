@@ -26,6 +26,6 @@
     "@types/qrcode-terminal": "0.12.2",
     "tsx": "4.23.8",
     "typescript": "5.9.3",
-    "vitest": "3.2.7"
+    "vitest": "4.1.10"
   }
 }
