@@ -61,6 +61,7 @@ export function SettingsPage() {
   const [exporting, setExporting] = useState<"json" | "markdown" | null>(null)
   const [exportMsg, setExportMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [importSource, setImportSource] = useState<ImportSource>("cubox")
+  const [guideOpen, setGuideOpen] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
@@ -468,16 +469,35 @@ export function SettingsPage() {
         />
         <p className="text-xs text-muted-foreground">
           正在从 Cubox / flomo 搬家？
-          <a
-            href="https://github.com/wookat/suinian/blob/main/docs/migrate-from-cubox.md"
-            target="_blank"
-            rel="noreferrer"
+          <button
+            onClick={() => setGuideOpen((v) => !v)}
             className="ml-1 font-medium text-primary underline underline-offset-2"
           >
             查看迁移指南
-          </a>
+          </button>
           ，三步完成导出、导入与验收。
         </p>
+        {guideOpen && (
+          <div className="space-y-2 rounded-lg border bg-secondary/40 p-3 text-xs leading-relaxed">
+            <p className="font-medium">三步完成迁移（原创建时间与标签全部保留）：</p>
+            <ol className="list-decimal space-y-1 pl-4">
+              <li>
+                <span className="font-medium">导出</span>：Cubox 在「共享/导出」选 CSV（推荐，书签 HTML / txt 也支持）；flomo
+                在「设置 → 账号详情 → 导出所有数据（HTML）」，解压后取其中的 HTML 文件；其他工具导出 Markdown / 纯文本也可。
+              </li>
+              <li>
+                <span className="font-medium">导入</span>：在上方选择对应来源 →「选择文件导入」，完成后显示导入统计；重复导入同一文件会自动跳过已有条目，放心多试。
+              </li>
+              <li>
+                <span className="font-medium">验收</span>：回首页时间流按原时间抽查几条历史笔记；AI
+                分拣、线索聚类会在后台陆续完成；之后每天首页的「今日回顾」还会把老笔记重新翻出来。
+              </li>
+            </ol>
+            <p className="text-muted-foreground">
+              提示：flomo 压缩包里的图片暂不导入（正文文字全部保留）；来源选错时会提示「未能解析出笔记」，不会写入脏数据。
+            </p>
+          </div>
+        )}
         <Button
           variant="outline"
           onClick={() => importInputRef.current?.click()}
