@@ -1,7 +1,7 @@
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import { chatComplete } from "./ai";
-import { parseHtmlMeta, isBlockedTitle } from "./linkmeta";
+import { parseHtmlMeta, isBlockedTitle, ssrfSafeFetch, FETCH_PROFILES, fallbackTitleFromUrl } from "./linkmeta";
 import { sanitizeTags } from "./triage";
 import type { Env, NoteMeta, NoteRow } from "./types";
 
@@ -9,8 +9,6 @@ const MAX_HTML_BYTES = 2 * 1024 * 1024; // 2MB
 const FETCH_TIMEOUT_MS = 10_000;
 const EXCERPT_CHARS = 2000;
 
-const BROWSER_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 export interface ArticleExtract {
   title: string | null;
@@ -94,26 +92,35 @@ export function extractArticle(html: string, url: string): ArticleExtract {
   return { title, site, excerpt, description: meta.description };
 }
 
-/** Fetch a URL (2MB / 10s caps) and extract the article; never throws. */
+/**
+ * Fetch a URL (2MB / 10s caps, SSRF-guarded) and extract the article,
+ * retrying UA/Referer profiles for SSR anti-bot sites; never throws.
+ */
 export async function fetchArticle(url: string): Promise<ArticleExtract | null> {
-  try {
-    const res = await fetch(url, {
-      redirect: "follow",
-      headers: {
-        "user-agent": BROWSER_UA,
-        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-      },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-    const ct = res.headers.get("content-type") || "";
-    if (!res.ok || !ct.includes("html")) return null;
-    const html = await readBodyCapped(res, MAX_HTML_BYTES);
-    if (!html) return null;
-    return extractArticle(html, url);
-  } catch {
-    return null;
+  let best: ArticleExtract | null = null;
+  for (const profile of FETCH_PROFILES) {
+    try {
+      const res = await ssrfSafeFetch(url, {
+        headers: {
+          ...profile,
+          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (!res) return best; // blocked by SSRF guard: retrying won't help
+      const ct = res.headers.get("content-type") || "";
+      if (!res.ok || !ct.includes("html")) continue;
+      const html = await readBodyCapped(res, MAX_HTML_BYTES);
+      if (!html) continue;
+      const extract = extractArticle(html, url);
+      if (extract.excerpt && extract.title) return extract;
+      if (!best || (extract.title && !best.title) || (extract.excerpt && !best.excerpt)) best = extract;
+    } catch {
+      /* try next profile */
+    }
   }
+  return best;
 }
 
 export interface LinkSummary {
@@ -197,11 +204,23 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
   meta.link_fetched_at = new Date().toISOString();
 
   if (!extract || !extract.excerpt) {
-    // title-only fallback: keep the link + its domain and record a readable status
+    // title-only fallback: keep the link + its domain and record a readable status;
+    // when no title could be fetched at all, fall back to domain + readable path
+    // so the card never shows just a bare URL
     meta.link_status = extract ? "no_content" : "fetch_failed";
     meta.link_site = extract?.site ?? meta.link_site ?? hostnameOf(note.url) ?? undefined;
-    await env.DB.prepare("UPDATE notes SET meta = ?, updated_at = datetime('now') WHERE id = ?")
-      .bind(JSON.stringify(meta), noteId)
+    const title = extract?.title ?? null;
+    const sets = ["meta = ?", "updated_at = datetime('now')"];
+    const binds: unknown[] = [JSON.stringify(meta)];
+    if (!note.url_title) {
+      const fallback = title ?? fallbackTitleFromUrl(note.url);
+      if (fallback) {
+        sets.unshift("url_title = ?");
+        binds.unshift(fallback);
+      }
+    }
+    await env.DB.prepare(`UPDATE notes SET ${sets.join(", ")} WHERE id = ?`)
+      .bind(...binds, noteId)
       .run();
     return;
   }

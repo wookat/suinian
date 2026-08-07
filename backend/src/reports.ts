@@ -25,7 +25,14 @@ export function thisWeekRange(now: Date = new Date()): { weekStart: string; week
 
 const CATEGORY_LABEL: Record<string, string> = { idea: "想法", todo: "待办", collect: "收藏", data: "资料" };
 
-function fallbackMarkdown(weekStart: string, weekEnd: string, notes: NoteRow[]): string {
+/** Escape user-controlled text embedded into fallback markdown so it can never carry HTML/code into the renderer. */
+export function escapeMdText(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/`/g, "'");
+}
+
+export function fallbackMarkdown(weekStart: string, weekEnd: string, allNotes: NoteRow[]): string {
+  // sensitive notes are excluded entirely (even their titles), matching the AI digest path
+  const notes = allNotes.filter((n) => !n.is_sensitive);
   const byCat = new Map<string, NoteRow[]>();
   for (const n of notes) {
     const k = n.category ?? "idea";
@@ -35,7 +42,7 @@ function fallbackMarkdown(weekStart: string, weekEnd: string, notes: NoteRow[]):
   let md = `# 碎念周报（${weekStart} ~ ${weekEnd}）\n\n本周共记录 ${notes.length} 条。\n`;
   for (const [cat, rows] of byCat) {
     md += `\n## ${CATEGORY_LABEL[cat] ?? cat}（${rows.length}）\n`;
-    for (const n of rows) md += `- ${(n.title || n.content).slice(0, 60)}\n`;
+    for (const n of rows) md += `- ${escapeMdText((n.title || n.content).slice(0, 60))}\n`;
   }
   return md;
 }
@@ -49,7 +56,7 @@ export async function generateWeeklyReport(
   userId: string,
   now: Date = new Date(),
   week: "last" | "this" = "last"
-): Promise<{ id: string; week_start: string }> {
+): Promise<{ id: string; week_start: string } | null> {
   const { weekStart, weekEnd } = week === "this" ? thisWeekRange(now) : lastWeekRange(now);
   // notes created during [weekStart, weekEnd] in Shanghai time = UTC range shifted by -8h
   const { results } = await env.DB.prepare(
@@ -61,9 +68,11 @@ export async function generateWeeklyReport(
     .bind(userId, weekStart, weekEnd)
     .all<NoteRow>();
   const notes = results ?? [];
+  // no notes this week: don't store an empty "0 条" report
+  if (notes.length === 0) return null;
 
   let md = fallbackMarkdown(weekStart, weekEnd, notes);
-  if (notes.length > 0) {
+  {
     try {
       const digest = notes
         .filter((n) => !n.is_sensitive)

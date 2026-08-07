@@ -195,7 +195,7 @@ export function ThreadsPage() {
     return (
       <EmptyState
         icon={GitBranch}
-        title="线索还在酦酿"
+        title="线索还在酝酿"
         description="AI 会把分散数周的同题想法碎片自动串成线索。持续记录，线索会自然浮现。"
         actionLabel="去首页记点想法"
         onAction={() => {

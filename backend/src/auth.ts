@@ -90,39 +90,47 @@ export function registrationEnabled(v: string | undefined): boolean {
 export const RATE_LIMIT_MAX = 5;
 
 /**
- * Fixed-window per-IP rate limit backed by D1 (5/min per action+IP).
- * Trade-off: a D1 table is the simplest durable option on Workers (in-memory
- * state is per-isolate and evicted freely); a fixed minute window can allow
- * up to 2x burst across a boundary, acceptable for auth abuse throttling.
- * Fails open on D1 errors so auth never breaks because of the limiter.
+ * Fixed-window rate limit backed by D1 (5/min per action+dimension), checked
+ * across every given dimension (e.g. IP and account) — all must be under the
+ * limit. Trade-off: a D1 table is the simplest durable option on Workers
+ * (in-memory state is per-isolate and evicted freely); a fixed minute window
+ * can allow up to 2x burst across a boundary, acceptable for auth abuse
+ * throttling. Fails closed on D1 errors: if the limiter store is down we
+ * conservatively reject instead of letting unlimited attempts through.
  */
-export async function checkRateLimit(db: D1Database, action: string, ip: string): Promise<boolean> {
-  const key = `${action}:${ip}`;
+export async function checkRateLimit(db: D1Database, action: string, dims: string[]): Promise<boolean> {
   const windowStart = new Date().toISOString().slice(0, 16); // minute granularity
   try {
-    const row = await db
-      .prepare("SELECT window_start, count FROM auth_rate_limits WHERE key = ?")
-      .bind(key)
-      .first<{ window_start: string; count: number }>();
-    if (!row || row.window_start !== windowStart) {
+    let allowed = true;
+    for (const dim of dims) {
+      const key = `${action}:${dim}`;
+      const row = await db
+        .prepare("SELECT window_start, count FROM auth_rate_limits WHERE key = ?")
+        .bind(key)
+        .first<{ window_start: string; count: number }>();
+      if (!row || row.window_start !== windowStart) {
+        await db
+          .prepare(
+            "INSERT INTO auth_rate_limits (key, window_start, count) VALUES (?, ?, 1) " +
+              "ON CONFLICT(key) DO UPDATE SET window_start = excluded.window_start, count = 1"
+          )
+          .bind(key, windowStart)
+          .run();
+        continue;
+      }
+      if (row.count >= RATE_LIMIT_MAX) {
+        allowed = false;
+        continue;
+      }
       await db
-        .prepare(
-          "INSERT INTO auth_rate_limits (key, window_start, count) VALUES (?, ?, 1) " +
-            "ON CONFLICT(key) DO UPDATE SET window_start = excluded.window_start, count = 1"
-        )
-        .bind(key, windowStart)
+        .prepare("UPDATE auth_rate_limits SET count = count + 1 WHERE key = ?")
+        .bind(key)
         .run();
-      return true;
     }
-    if (row.count >= RATE_LIMIT_MAX) return false;
-    await db
-      .prepare("UPDATE auth_rate_limits SET count = count + 1 WHERE key = ?")
-      .bind(key)
-      .run();
-    return true;
+    return allowed;
   } catch (e) {
     console.error("rate limit check failed", e);
-    return true;
+    return false;
   }
 }
 

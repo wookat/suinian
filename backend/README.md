@@ -49,7 +49,7 @@ npx wrangler d1 execute suinian --remote --command \
 - `GET /api/auth/me` → `{user:{id,name,created_at,has_password}}`。
 - `DELETE /api/auth/me` → 自助注销，级联删除该用户全部笔记/embeddings/附件（含 R2 对象）/线索/周报。
 - 密码哈希：PBKDF2-HMAC-SHA256（WebCrypto），100,000 次迭代、16 字节随机盐、32 字节输出，存 `pbkdf2$<iter>$<salt b64>$<hash b64>`（Workers 无原生 argon2/bcrypt 且 WebCrypto PBKDF2 上限 10 万次迭代，故选 OWASP 认可的 PBKDF2-SHA256）。任何日志不记录密码明文。
-- 速率限制：注册/登录每 IP 每分钟 5 次（D1 `auth_rate_limits` 固定窗口计数；取舍：D1 表是 Workers 上最简单的持久方案——内存计数按 isolate 隔离且随时被回收；固定分钟窗口在边界处最多允许 2 倍突发，对登录/注册防滥用足够。D1 出错时放行，保证限流故障不影响登录）。
+- 速率限制：注册/登录按 IP + 账号名两个维度各每分钟 5 次（D1 `auth_rate_limits` 固定窗口计数；取舍：D1 表是 Workers 上最简单的持久方案——内存计数按 isolate 隔离且随时被回收；固定分钟窗口在边界处最多允许 2 倍突发，对登录/注册防滥用足够。D1 出错时保守拒绝，避免限流故障期间被无限暴力尝试）。
 
 ### POST /api/notes — 收件
 ```json

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   Check,
   Loader2,
@@ -22,6 +22,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import {
   deleteAccount,
   exportData,
+  getMe,
   importData,
   rotateToken,
   testConnection,
@@ -47,6 +48,14 @@ const THEME_OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "跟随系统", icon: Monitor },
 ]
 
+function formatLastUsed(iso: string): string {
+  // API stores UTC "YYYY-MM-DD HH:MM:SS"
+  const d = new Date(iso.includes("T") ? iso : `${iso.replace(" ", "T")}Z`)
+  if (Number.isNaN(d.getTime())) return iso
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 export function SettingsPage() {
   const [settings, setSettings] = useState(loadSettings())
   const [saved, setSaved] = useState(false)
@@ -64,7 +73,16 @@ export function SettingsPage() {
   const [guideOpen, setGuideOpen] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [lastUsedAt, setLastUsedAt] = useState<string | null>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    const s = loadSettings()
+    if (s.useMock || !s.apiBaseUrl || !s.apiToken) return
+    getMe()
+      .then((me) => setLastUsedAt(me.last_used_at))
+      .catch(() => {})
+  }, [])
 
   async function handleImportFile(file: File) {
     if (importing) return
@@ -349,6 +367,11 @@ export function SettingsPage() {
         <p className="text-xs text-muted-foreground">
           退出登录仅清除本机登录状态，云端数据不受影响，重新登录即可找回全部笔记
         </p>
+        {lastUsedAt && (
+          <p className="text-xs text-muted-foreground">
+            token 上次使用时间：{formatLastUsed(lastUsedAt)}（若非本人操作，建议立即轮换 token）
+          </p>
+        )}
         {accountMsg && (
           <p
             className={cn(
