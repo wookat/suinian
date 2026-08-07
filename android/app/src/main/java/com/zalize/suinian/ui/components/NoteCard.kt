@@ -15,7 +15,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Event
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Card
@@ -176,6 +178,7 @@ fun NoteCard(
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 CategoryBadge(note.category)
+                SourceBadge(note.rawType)
                 Spacer(Modifier.width(8.dp))
                 Text(
                     formatRelativeTime(note.createdAt),
@@ -267,8 +270,10 @@ fun NoteCard(
                 }
             }
 
-            // 链接卡片（多链接 ≤3）
-            linkCards(note).forEach { card ->
+            // 链接卡片（多链接 ≤3）：首卡显站点 + AI 摘要（可展开）+ 正文摘录（可展开）
+            var summaryOpen by rememberSaveable(note.id) { mutableStateOf(false) }
+            var excerptOpen by rememberSaveable(note.id) { mutableStateOf(false) }
+            linkCards(note).forEachIndexed { i, card ->
                 Spacer(Modifier.height(8.dp))
                 Card(
                     shape = RoundedCornerShape(12.dp),
@@ -289,19 +294,77 @@ fun NoteCard(
                                 fontWeight = FontWeight.Medium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
                             )
                         }
-                        if (card.url == note.url && note.urlSummary != null) {
+                        val isFirst = i == 0 && card.url == note.url
+                        if (isFirst && note.meta?.linkSite != null) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                note.meta.linkSite,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        if (isFirst && note.urlSummary != null) {
                             Spacer(Modifier.height(4.dp))
                             Text(
                                 note.urlSummary,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
+                                maxLines = if (summaryOpen) Int.MAX_VALUE else 2,
                                 overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable { summaryOpen = !summaryOpen },
                             )
                         }
+                        if (isFirst && note.meta?.linkExcerpt != null) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                if (excerptOpen) "收起正文摘录" else "查看正文摘录",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable { excerptOpen = !excerptOpen }
+                                    .padding(vertical = 2.dp),
+                            )
+                            if (excerptOpen) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    note.meta.linkExcerpt,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     }
+                }
+            }
+
+            // 图片笔记：视觉模型完整描述可展开（文字优先，描述作补充）
+            val imageDescription = note.meta?.imageDescription
+                ?.takeIf { note.rawType == "image" && it.isNotBlank() && it != note.content }
+            if (imageDescription != null && !note.isSensitive) {
+                var descOpen by rememberSaveable(note.id) { mutableStateOf(false) }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    if (descOpen) "收起图片描述" else "查看图片描述",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable { descOpen = !descOpen }
+                        .padding(vertical = 2.dp),
+                )
+                if (descOpen) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        imageDescription,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
@@ -318,6 +381,37 @@ fun NoteCard(
                 }
             }
         }
+    }
+}
+
+/** 来源角标：语音转写 / 图片识别 */
+@Composable
+fun SourceBadge(rawType: String) {
+    val (icon, label) = when (rawType) {
+        "voice" -> Icons.Outlined.Mic to "语音转写"
+        "image" -> Icons.Outlined.Image to "图片识别"
+        else -> return
+    }
+    Spacer(Modifier.width(6.dp))
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.size(12.dp),
+        )
+        Spacer(Modifier.width(3.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
     }
 }
 

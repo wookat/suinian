@@ -25,13 +25,6 @@ data class NotesUiState(
     val toast: String? = null,
     val cursor: String? = null,
     val loadingMore: Boolean = false,
-    // 问答模式
-    val askMode: Boolean = false,
-    val askInput: String = "",
-    val asking: Boolean = false,
-    val askAnswer: String? = null,
-    val askError: String? = null,
-    val askReferences: List<Note> = emptyList(),
 )
 
 class NotesViewModel(app: Application) : AndroidViewModel(app) {
@@ -100,36 +93,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun search() = refresh()
 
-    fun toggleAskMode() {
-        val s = _ui.value
-        _ui.value = s.copy(askMode = !s.askMode, askAnswer = null, askError = null, askReferences = emptyList())
-    }
-
-    fun setAskInput(v: String) {
-        _ui.value = _ui.value.copy(askInput = v)
-    }
-
-    fun clearAskResult() {
-        _ui.value = _ui.value.copy(askAnswer = null, askError = null, askReferences = emptyList())
-    }
-
-    fun ask() {
-        val question = _ui.value.askInput.trim()
-        if (question.isEmpty() || _ui.value.asking) return
-        _ui.value = _ui.value.copy(asking = true, askAnswer = null, askError = null, askReferences = emptyList())
-        viewModelScope.launch {
-            try {
-                val res = repo.ask(question)
-                // 引用只有 id：从当前列表 + 最近一页里尽量匹配出笔记内容
-                val pool = (_ui.value.notes + runCatching { repo.list(null, null, null).notes }.getOrDefault(emptyList()))
-                    .distinctBy { it.id }
-                val refNotes = res.references.mapNotNull { ref -> pool.firstOrNull { it.id == ref.noteId } }.take(5)
-                _ui.value = _ui.value.copy(asking = false, askAnswer = res.answer, askReferences = refNotes)
-            } catch (e: Exception) {
-                _ui.value = _ui.value.copy(asking = false, askError = e.message ?: "提问失败，请稍后重试")
-            }
-        }
-    }
+    /** 设置页轮换 API token（成功后新 token 已保存到本机） */
+    suspend fun rotateApiToken(): String = repo.rotateToken()
 
     fun toggleTodo(note: Note) {
         val target = !(note.todoDone ?: false)

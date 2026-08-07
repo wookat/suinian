@@ -1,7 +1,10 @@
 package com.zalize.suinian.data.api
 
+import com.zalize.suinian.data.AskHistoryMessage
 import com.zalize.suinian.data.AskResponse
+import com.zalize.suinian.data.AuthResponse
 import com.zalize.suinian.data.CreateNoteRequest
+import com.zalize.suinian.data.MediaIngestResponse
 import com.zalize.suinian.data.Note
 import com.zalize.suinian.data.NotesPage
 import com.zalize.suinian.data.Report
@@ -9,6 +12,7 @@ import com.zalize.suinian.data.ReportDetail
 import com.zalize.suinian.data.ReportsPage
 import com.zalize.suinian.data.ReportSummary
 import com.zalize.suinian.data.ThreadDetail
+import com.zalize.suinian.data.RotateTokenResponse
 import com.zalize.suinian.data.ThreadsPage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,7 +21,11 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.addJsonObject
+import okhttp3.MultipartBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -45,7 +53,19 @@ class ApiClient(private val baseUrl: String, private val token: String) {
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
-    private fun httpError(code: Int): ApiException = when (code) {
+    private fun httpError(code: Int, body: String? = null): ApiException {
+        val serverMsg = body?.let { parseErrorMessage(it) }
+        if (serverMsg != null) return ApiException(serverMsg)
+        return defaultHttpError(code)
+    }
+
+    private fun parseErrorMessage(body: String): String? = try {
+        json.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() && it != "unauthorized" }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun defaultHttpError(code: Int): ApiException = when (code) {
         401, 403 -> ApiException("Token 无效或没有权限，请在设置中检查 API Token")
         404 -> ApiException("内容不存在或已被删除")
         413 -> ApiException("内容过长：最多 20000 字符，请拆成多条或精简后再发")
@@ -60,8 +80,8 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             throw ApiException("网络连接失败，请检查网络后重试", e)
         }
         resp.use {
-            if (!it.isSuccessful) throw httpError(it.code)
             val text = it.body?.string().orEmpty()
+            if (!it.isSuccessful) throw httpError(it.code, text)
             return try {
                 json.decodeFromString(deserializer, text)
             } catch (e: Exception) {
@@ -153,10 +173,105 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         execute(request("/api/reports/$id").get().build(), ReportDetail.serializer()).report
     }
 
-    /** POST /api/ask  {question} */
-    suspend fun ask(question: String): AskResponse = withContext(Dispatchers.IO) {
-        val body = buildJsonObject { put("question", question) }.toString().toRequestBody(jsonMedia)
+    /** POST /api/ask  {question, history?} 多轮对话 */
+    suspend fun ask(question: String, history: List<AskHistoryMessage> = emptyList()): AskResponse = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("question", question)
+            if (history.isNotEmpty()) {
+                putJsonArray("history") {
+                    history.forEach { m ->
+                        addJsonObject {
+                            put("role", m.role)
+                            put("content", m.content)
+                        }
+                    }
+                }
+            }
+        }.toString().toRequestBody(jsonMedia)
         execute(request("/api/ask").post(body).build(), AskResponse.serializer())
+    }
+
+    /** POST /api/ingest/media（multipart：type=image|audio + file） */
+    suspend fun ingestMedia(
+        type: String,
+        bytes: ByteArray,
+        mime: String,
+        fileName: String,
+    ): MediaIngestResponse = withContext(Dispatchers.IO) {
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("type", type)
+            .addFormDataPart("source", "android")
+            .addFormDataPart("file", fileName, bytes.toRequestBody(mime.toMediaType()))
+            .build()
+        val req = request("/api/ingest/media").post(body).build()
+        val client30 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val resp = try {
+            client30.newCall(req).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use {
+            val text = it.body?.string().orEmpty()
+            if (!it.isSuccessful) throw httpError(it.code, text)
+            try {
+                json.decodeFromString(MediaIngestResponse.serializer(), text)
+            } catch (e: Exception) {
+                throw ApiException("服务器返回了无法识别的数据", e)
+            }
+        }
+    }
+
+    /** POST /api/auth/rotate-token */
+    suspend fun rotateToken(): RotateTokenResponse = withContext(Dispatchers.IO) {
+        val body = "{}".toRequestBody(jsonMedia)
+        execute(request("/api/auth/rotate-token").post(body).build(), RotateTokenResponse.serializer())
+    }
+
+    companion object {
+        private val authJson = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+        private val authMedia = "application/json; charset=utf-8".toMediaType()
+
+        /** 公开接口（无需 token）：POST /api/auth/register | /api/auth/login */
+        private suspend fun authCall(baseUrl: String, path: String, name: String, password: String): AuthResponse =
+            withContext(Dispatchers.IO) {
+                val body = buildJsonObject {
+                    put("name", name)
+                    put("password", password)
+                }.toString().toRequestBody(authMedia)
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(20, TimeUnit.SECONDS)
+                    .build()
+                val req = Request.Builder().url("${baseUrl.trimEnd('/')}$path").post(body).build()
+                val resp = try {
+                    client.newCall(req).execute()
+                } catch (e: IOException) {
+                    throw ApiException("网络连接失败，请检查网络后重试", e)
+                }
+                resp.use {
+                    val text = it.body?.string().orEmpty()
+                    if (!it.isSuccessful) {
+                        val msg = try {
+                            authJson.parseToJsonElement(text).jsonObject["error"]?.jsonPrimitive?.content
+                        } catch (_: Exception) {
+                            null
+                        }
+                        throw ApiException(msg ?: "请求失败（${it.code}），请稍后重试")
+                    }
+                    try {
+                        authJson.decodeFromString(AuthResponse.serializer(), text)
+                    } catch (e: Exception) {
+                        throw ApiException("服务器返回了无法识别的数据，请检查 API Base URL 是否正确", e)
+                    }
+                }
+            }
+
+        suspend fun register(baseUrl: String, name: String, password: String): AuthResponse =
+            authCall(baseUrl, "/api/auth/register", name, password)
+
+        suspend fun login(baseUrl: String, name: String, password: String): AuthResponse =
+            authCall(baseUrl, "/api/auth/login", name, password)
     }
 
     /** 后端可能返回 note 对象本身，或 {note: {...}}；两种都兼容 */
