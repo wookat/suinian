@@ -565,6 +565,31 @@ export function extractAskTerms(question: string, history: AskHistoryMessage[]):
   return terms;
 }
 
+const ASK_REWRITE_SYSTEM =
+  "你是检索查询改写器。把用户在多轮对话中的最后一个问题改写为不依赖上下文、可独立理解的完整问题：把代词（它/这个/那个/他们）和序数词（第一个/第二个/最后一个）替换为前文对应的具体事物，补全省略的主语和话题。只输出改写后的问题本身，不要任何解释或前缀。若问题本身已完整，原样输出。";
+
+/**
+ * Rewrite a follow-up question into a standalone one (query rewrite) so keyword
+ * recall works for pronoun/ordinal follow-ups ("第二个什么时候截止"). Falls back
+ * to the original question when there is no history or the AI is unavailable.
+ */
+export async function rewriteAskQuestion(
+  env: Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL">,
+  question: string,
+  history: AskHistoryMessage[]
+): Promise<string> {
+  if (history.length === 0) return question;
+  const rewritten = await chatComplete(env, {
+    temperature: 0,
+    max_tokens: 200,
+    timeout_ms: 15_000,
+    messages: [{ role: "system", content: ASK_REWRITE_SYSTEM }, ...history, { role: "user", content: question }],
+  });
+  const out = rewritten?.trim();
+  if (!out || out.length > 300) return question;
+  return out;
+}
+
 // ---- POST /api/ask ----
 app.post("/api/ask", async (c) => {
   const userId = c.get("userId");
@@ -573,8 +598,9 @@ app.post("/api/ask", async (c) => {
   if (!question) return c.json({ error: "question required" }, 400);
   const history = sanitizeAskHistory(body?.history);
 
-  // keyword recall: current question + recent context terms, LIKE-match, top 20 recent.
-  const terms = extractAskTerms(question, history);
+  // query rewrite: resolve pronouns/ordinals against history, then keyword recall
+  const recallQuestion = await rewriteAskQuestion(c.env, question, history);
+  const terms = extractAskTerms(recallQuestion, history);
   const conds: string[] = ["user_id = ?"];
   const binds: unknown[] = [userId];
   if (terms.length > 0) {
@@ -603,7 +629,17 @@ app.post("/api/ask", async (c) => {
 
   const noteIds = notes.map((n) => n.id);
   const context = notes
-    .map((n, i) => `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}) ${n.title ?? ""}\n${n.content.slice(0, 500)}`)
+    .map((n, i) => {
+      const tags = (JSON.parse(n.tags || "[]") as string[]).join(",");
+      const extras = [
+        n.todo_due ? `截止:${normalizeStoredTodoDue(n.todo_due) ?? n.todo_due}` : "",
+        n.todo_done ? "已完成" : "",
+        tags ? `标签:${tags}` : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+      return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}) ${n.title ?? ""}\n${n.content.slice(0, 500)}`;
+    })
     .join("\n\n");
   const answer = await chatComplete(c.env, {
     temperature: 0.3,
@@ -616,7 +652,12 @@ app.post("/api/ask", async (c) => {
           "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。可结合之前的对话上下文理解代词与省略。若笔记中没有相关信息，直接说没找到。回答用中文，简洁。",
       },
       ...history,
-      { role: "user", content: `笔记片段：\n${context || "（无相关笔记）"}\n\n问题：${question}` },
+      {
+        role: "user",
+        content: `笔记片段：\n${context || "（无相关笔记）"}\n\n问题：${question}${
+          recallQuestion !== question ? `\n（即：${recallQuestion}）` : ""
+        }`,
+      },
     ],
   });
   const references = buildAskReferences(answer ?? "", noteIds);
@@ -695,15 +736,25 @@ app.post("/api/reports/generate", async (c) => {
   return c.json({ report, week_start }, 201);
 });
 
+export const SENSITIVE_EXPORT_PLACEHOLDER = "[已加密内容]";
+
 // ---- GET /api/export ----
 app.get("/api/export", async (c) => {
   const userId = c.get("userId");
+  // sensitive notes are redacted by default; ?include_sensitive=true exports plaintext
+  const includeSensitive = c.req.query("include_sensitive") === "true";
   const [notesR, threadsR, reportsR] = await Promise.all([
     c.env.DB.prepare("SELECT * FROM notes WHERE user_id = ? ORDER BY created_at ASC").bind(userId).all<NoteRow>(),
     c.env.DB.prepare("SELECT * FROM threads WHERE user_id = ? ORDER BY updated_at DESC").bind(userId).all<ThreadRow>(),
     c.env.DB.prepare("SELECT * FROM weekly_reports WHERE user_id = ? ORDER BY week_start DESC").bind(userId).all<WeeklyReportRow>(),
   ]);
-  const notes = await Promise.all((notesR.results ?? []).map((n) => noteToJsonDecrypted(c.env, n)));
+  const notes = await Promise.all(
+    (notesR.results ?? []).map((n) =>
+      n.is_sensitive && !includeSensitive
+        ? Promise.resolve(noteToJson({ ...n, content: SENSITIVE_EXPORT_PLACEHOLDER }))
+        : noteToJsonDecrypted(c.env, n)
+    )
+  );
   const threads = threadsR.results ?? [];
   const reports = reportsR.results ?? [];
 
