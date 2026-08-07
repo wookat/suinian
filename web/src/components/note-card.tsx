@@ -180,6 +180,8 @@ export function NoteCard({
   const [revealed, setRevealed] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [metaOpen, setMetaOpen] = useState(false)
+  const [summaryOpen, setSummaryOpen] = useState(false)
+  const [excerptOpen, setExcerptOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const imageDescription =
@@ -356,23 +358,68 @@ export function NoteCard({
         ) : isLink ? (
           <div className="min-w-0 flex-1 space-y-2">
             {linkCards(note).map((card, i) => (
-              <a
+              <div
                 key={card.url}
-                href={card.url}
-                target="_blank"
-                rel="noreferrer"
-                className="group/link flex min-h-[52px] flex-col justify-center rounded-lg border bg-muted/40 p-3 transition-colors hover:bg-muted"
+                className="rounded-lg border bg-muted/40 transition-colors hover:bg-muted"
               >
-                <div className="flex items-center gap-1.5 text-sm font-medium group-hover/link:text-primary">
-                  <LinkIcon className="size-3.5 shrink-0" />
-                  <span className="truncate">{card.title ?? card.url}</span>
-                </div>
-                {i === 0 && note.url_summary && (
-                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                    {note.url_summary}
+                <a
+                  href={card.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group/link flex min-h-[52px] flex-col justify-center p-3"
+                >
+                  <div className="flex items-center gap-1.5 text-sm font-medium group-hover/link:text-primary">
+                    <LinkIcon className="size-3.5 shrink-0" />
+                    <span className="truncate">{card.title ?? card.url}</span>
+                    {i === 0 && note.meta?.link_site && (
+                      <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                        {note.meta.link_site}
+                      </span>
+                    )}
+                  </div>
+                  {i === 0 && note.url_summary && (
+                    <p
+                      className={cn(
+                        "mt-1 text-xs leading-relaxed text-muted-foreground",
+                        !summaryOpen && "line-clamp-2",
+                      )}
+                    >
+                      {note.url_summary}
+                    </p>
+                  )}
+                </a>
+                {i === 0 && (note.url_summary || note.meta?.link_excerpt) && (
+                  <div className="flex items-center gap-3 px-3 pb-2">
+                    {note.url_summary && note.url_summary.length > 60 && (
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault()
+                          setSummaryOpen((x) => !x)
+                        }}
+                        className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+                      >
+                        {summaryOpen ? "收起摘要" : "展开摘要"}
+                      </button>
+                    )}
+                    {note.meta?.link_excerpt && (
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault()
+                          setExcerptOpen((x) => !x)
+                        }}
+                        className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+                      >
+                        {excerptOpen ? "收起正文摘录" : "查看正文摘录"}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {i === 0 && excerptOpen && note.meta?.link_excerpt && (
+                  <p className="mx-3 mb-3 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-2.5 text-xs leading-relaxed text-muted-foreground">
+                    {note.meta.link_excerpt}
                   </p>
                 )}
-              </a>
+              </div>
             ))}
             {note.content !== note.url && (
               <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">

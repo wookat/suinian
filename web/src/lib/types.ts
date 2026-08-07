@@ -5,6 +5,10 @@ export type NoteCategory = "idea" | "todo" | "collect" | "data"
 export interface NoteMeta {
   raw_transcript?: string
   image_description?: string
+  link_site?: string
+  link_excerpt?: string
+  link_status?: "ok" | "no_content" | "fetch_failed"
+  link_fetched_at?: string
 }
 
 export interface Note {
