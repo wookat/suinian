@@ -83,7 +83,7 @@ export async function extractPdfText(bytes: Uint8Array): Promise<string | null> 
     const out = (Array.isArray(text) ? text.join("\n") : text ?? "").replace(/[ \t]+\n/g, "\n").trim();
     return out || null;
   } catch (err) {
-    console.error("extractPdfText: failed", err);
+    console.error("extractPdfText: failed", err instanceof Error ? err.stack || err.message : err);
     return null;
   }
 }
