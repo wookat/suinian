@@ -61,7 +61,9 @@ interface ExtractedRelation {
 const EXTRACT_SYSTEM = `你是知识图谱抽取器。从一条个人笔记中抽取具体实体与实体间关系，输出严格 JSON：
 {"entities":[{"name":"规范名","type":"person|project|concept|product|org|place|other","aliases":["别名"]}],"relations":[{"src":"实体名","dst":"实体名","relation":"supports|premise_of|belongs_to|todo_of|relates_to","confidence":0.8}]}
 规则：
-- 实体必须是笔记中出现或明确指代的具体事物（人名/项目名/产品名/组织/地点/具体概念），最多 6 个
+- 实体必须是笔记中出现或明确指代的具体事物（人名/项目名/产品名/组织/地点/书名/具体概念），最多 6 个
+- 出现的人名、产品名、书名必须抽出，不要漏；书名归 concept，人物归 person，软件/App 归 product
+- 优先用 supports/premise_of/belongs_to/todo_of 表达关系，仅在都不合适时才用 relates_to
 - 禁止抽泛化词（想法、问题、东西、事情、内容、笔记等），也不要抽时间词（周五、下周三、十月等）
 - 忽略方括号标记与前缀（如 [QA-R20]、[测试] 之类的标记），不要作为实体
 - 关系最多 4 条，src/dst 必须来自 entities 里的 name；supports=支撑依据，premise_of=前提，belongs_to=属于，todo_of=待办于，relates_to=其他相关
@@ -375,12 +377,14 @@ export async function findGraphThreadMate(
 
 export interface ThreadGraph {
   entities: { id: string; name: string; type: string; note_count: number }[];
-  relations: { src: string; relation: string; relation_label: string; dst: string; confidence: number; note_id: string | null }[];
+  relations: { src: string; src_id: string; relation: string; relation_label: string; dst: string; dst_id: string; confidence: number; note_id: string | null }[];
+  /** entity → note mention pairs within this thread, for graph highlighting. */
+  mentions: { entity_id: string; note_id: string }[];
 }
 
 /** Entities mentioned by a thread's notes + entity-entity relations among them (for the detail view). */
 export async function getThreadGraph(env: Env, userId: string, noteIds: string[]): Promise<ThreadGraph> {
-  if (noteIds.length === 0) return { entities: [], relations: [] };
+  if (noteIds.length === 0) return { entities: [], relations: [], mentions: [] };
   const ph = noteIds.map(() => "?").join(",");
   const { results: ents } = await env.DB.prepare(
     `SELECT en.id, en.name, en.type, COUNT(DISTINCT e.src_id) AS note_count
@@ -391,7 +395,7 @@ export async function getThreadGraph(env: Env, userId: string, noteIds: string[]
     .bind(userId, ...noteIds)
     .all<{ id: string; name: string; type: string; note_count: number }>();
   const entities = ents ?? [];
-  if (entities.length === 0) return { entities: [], relations: [] };
+  if (entities.length === 0) return { entities: [], relations: [], mentions: [] };
   const ids = entities.map((e) => e.id);
   const nameById = new Map(entities.map((e) => [e.id, e.name]));
   const eph = ids.map(() => "?").join(",");
@@ -405,13 +409,23 @@ export async function getThreadGraph(env: Env, userId: string, noteIds: string[]
     .all<{ src_id: string; dst_id: string; relation: string; confidence: number; note_id: string | null }>();
   const relations = (rels ?? []).map((r) => ({
     src: nameById.get(r.src_id) ?? "?",
+    src_id: r.src_id,
     relation: r.relation,
     relation_label: RELATION_LABEL[r.relation] ?? r.relation,
     dst: nameById.get(r.dst_id) ?? "?",
+    dst_id: r.dst_id,
     confidence: r.confidence,
     note_id: r.note_id,
   }));
-  return { entities, relations };
+  const { results: ments } = await env.DB.prepare(
+    `SELECT src_id AS note_id, dst_id AS entity_id FROM edges
+     WHERE user_id = ? AND src_type = 'note' AND relation = 'mentions'
+       AND src_id IN (${ph}) AND dst_id IN (${eph}) LIMIT 200`
+  )
+    .bind(userId, ...noteIds, ...ids)
+    .all<{ note_id: string; entity_id: string }>();
+  const mentions = (ments ?? []).map((m) => ({ entity_id: m.entity_id, note_id: m.note_id }));
+  return { entities, relations, mentions };
 }
 
 export interface GraphExpansion {

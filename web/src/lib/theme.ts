@@ -8,9 +8,17 @@ export function loadTheme(): ThemeMode {
   return v === "light" || v === "dark" ? v : "system"
 }
 
+const THEME_COLOR = { light: "#fafafa", dark: "#18181b" }
+
 export function applyTheme(mode: ThemeMode = loadTheme()) {
   const dark = mode === "dark" || (mode === "system" && media.matches)
   document.documentElement.classList.toggle("dark", dark)
+  const color = dark ? THEME_COLOR.dark : THEME_COLOR.light
+  document
+    .querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')
+    .forEach((m) => {
+      m.content = color
+    })
 }
 
 export function setTheme(mode: ThemeMode) {

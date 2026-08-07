@@ -24,6 +24,13 @@
   --input: oklch(0.91 0.004 90);
   --ring: oklch(0.55 0.14 155);
   --radius: 0.625rem;
+  --color-graph-person: oklch(0.72 0.14 60);
+  --color-graph-product: oklch(0.68 0.13 250);
+  --color-graph-project: oklch(0.65 0.14 155);
+  --color-graph-org: oklch(0.65 0.13 300);
+  --color-graph-place: oklch(0.7 0.12 200);
+  --color-graph-concept: oklch(0.7 0.13 20);
+  --color-graph-other: oklch(0.7 0.02 260);
 }
 
 .dark {
@@ -46,6 +53,13 @@
   --border: oklch(0.3 0.008 260);
   --input: oklch(0.3 0.008 260);
   --ring: oklch(0.72 0.13 155);
+  --color-graph-person: oklch(0.75 0.13 60);
+  --color-graph-product: oklch(0.72 0.12 250);
+  --color-graph-project: oklch(0.72 0.12 155);
+  --color-graph-org: oklch(0.7 0.12 300);
+  --color-graph-place: oklch(0.74 0.11 200);
+  --color-graph-concept: oklch(0.73 0.12 20);
+  --color-graph-other: oklch(0.65 0.02 260);
 }
 
 @theme inline {

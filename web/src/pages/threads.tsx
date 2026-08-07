@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
-import { GitBranch, ChevronLeft, RefreshCw, Network, ArrowRight } from "lucide-react"
+import { GitBranch, ChevronLeft, RefreshCw, Network } from "lucide-react"
+import { ThreadGraphView } from "@/components/thread-graph"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { NoteCard } from "@/components/note-card"
@@ -27,6 +28,7 @@ export function ThreadsPage() {
   const [detail, setDetail] = useState<ThreadDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [highlightedNoteIds, setHighlightedNoteIds] = useState<Set<string>>(new Set())
   const settingsVersion = useSettingsVersion()
 
   const load = useCallback(async () => {
@@ -62,6 +64,7 @@ export function ThreadsPage() {
   }, [])
 
   useEffect(() => {
+    setHighlightedNoteIds(new Set())
     if (!selected) {
       setDetail(null)
       return
@@ -122,33 +125,20 @@ export function ThreadsPage() {
                     <Network className="size-4 text-muted-foreground" />
                     <h3 className="text-sm font-semibold">实体与关系脉络</h3>
                   </div>
-                  <div className="mt-2.5 flex flex-wrap gap-1.5">
-                    {detail.graph.entities.map((e) => (
-                      <span
-                        key={e.id}
-                        className="inline-flex items-center gap-1 rounded-full bg-secondary px-2.5 py-0.5 text-xs text-secondary-foreground"
-                      >
-                        {e.name}
-                        {e.note_count > 1 && (
-                          <span className="text-[10px] text-muted-foreground">×{e.note_count}</span>
-                        )}
-                      </span>
-                    ))}
+                  <div className="mt-2.5">
+                    <ThreadGraphView
+                      graph={detail.graph}
+                      notes={detail.notes}
+                      highlightedNoteIds={highlightedNoteIds}
+                      onHighlightNotes={(ids) => setHighlightedNoteIds(new Set(ids))}
+                      onJumpToNote={(id) => {
+                        setHighlightedNoteIds(new Set([id]))
+                        document
+                          .getElementById(`thread-note-${id}`)
+                          ?.scrollIntoView({ behavior: "smooth", block: "center" })
+                      }}
+                    />
                   </div>
-                  {detail.graph.relations.length > 0 && (
-                    <ul className="mt-3 space-y-1.5 border-t pt-3">
-                      {detail.graph.relations.map((r, i) => (
-                        <li key={i} className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                          <span className="font-medium text-foreground">{r.src}</span>
-                          <span className="inline-flex items-center gap-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">
-                            {r.relation_label}
-                            <ArrowRight className="size-3" />
-                          </span>
-                          <span className="font-medium text-foreground">{r.dst}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
                 </Card>
               )}
               <div className="relative space-y-3 pl-4 before:absolute before:inset-y-2 before:left-1 before:w-px before:bg-border">
@@ -157,7 +147,7 @@ export function ThreadsPage() {
                   const prev = i > 0 ? timelineDate(detail.notes[i - 1].created_at) : null
                   const showDate = date !== prev
                   return (
-                    <div key={n.id} className="relative">
+                    <div key={n.id} id={`thread-note-${n.id}`} className="relative">
                       {showDate && (
                         <p className="relative mb-1.5 pt-1 text-xs font-medium text-muted-foreground">
                           <span className="absolute -left-[13.5px] top-2 size-2 rounded-full bg-border" />
@@ -165,7 +155,16 @@ export function ThreadsPage() {
                         </p>
                       )}
                       <span className="absolute -left-[13.5px] top-5 size-2 rounded-full bg-primary/60" />
-                      <NoteCard note={n} />
+                      <NoteCard
+                        note={n}
+                        className={
+                          highlightedNoteIds.has(n.id)
+                            ? "ring-2 ring-ring ring-offset-2 ring-offset-background"
+                            : highlightedNoteIds.size > 0
+                              ? "opacity-50"
+                              : undefined
+                        }
+                      />
                     </div>
                   )
                 })}

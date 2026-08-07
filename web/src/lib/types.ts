@@ -95,16 +95,24 @@ export interface ThreadGraphEntity {
 
 export interface ThreadGraphRelation {
   src: string
+  src_id: string
   relation: string
   relation_label: string
   dst: string
+  dst_id: string
   confidence: number
   note_id: string | null
+}
+
+export interface ThreadGraphMention {
+  entity_id: string
+  note_id: string
 }
 
 export interface ThreadGraph {
   entities: ThreadGraphEntity[]
   relations: ThreadGraphRelation[]
+  mentions?: ThreadGraphMention[]
 }
 
 export interface ThreadDetail extends Thread {
