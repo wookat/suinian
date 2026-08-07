@@ -11,6 +11,8 @@ export type Env = {
   SUINIAN_ENC_KEY?: string;
   /** "false"/"0"/"off" disables /api/auth/register (default: enabled). */
   REGISTRATION_ENABLED?: string;
+  /** Extra CORS origins, comma-separated; "*" allows any origin (self-host). */
+  CORS_ALLOWED_ORIGINS?: string;
   /** Secret token guarding /api/admin/* maintenance endpoints; unset = endpoints disabled. */
   ADMIN_TOKEN?: string;
 };

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { app, SENSITIVE_EXPORT_PLACEHOLDER } from "../src/index";
+import { app } from "../src/index";
+import { SENSITIVE_EXPORT_PLACEHOLDER } from "../src/constants";
 
 const BASE_NOTE = {
   id: "n1",

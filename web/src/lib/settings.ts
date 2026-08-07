@@ -10,11 +10,15 @@ export interface Settings {
 
 const OFFICIAL_API_BASE = "https://suinian-api.zalize.com"
 
-/** Suggested API base for register/login forms: saved value, or the official
- * instance when the page is served from the hosted domain. */
+/** Build-time API base (e.g. VITE_API_BASE=http://127.0.0.1:8787 for local dev). */
+const ENV_API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.trim() ?? ""
+
+/** Suggested API base for register/login forms: saved value, build-time env,
+ * or the official instance when the page is served from the hosted domain. */
 export function defaultApiBase(): string {
   const saved = loadSettings().apiBaseUrl.trim()
   if (saved) return saved
+  if (ENV_API_BASE) return ENV_API_BASE
   if (window.location.hostname.endsWith("zalize.com")) return OFFICIAL_API_BASE
   return ""
 }
@@ -27,7 +31,7 @@ export function loadSettings(): Settings {
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<Settings>
       return {
-        apiBaseUrl: parsed.apiBaseUrl ?? "",
+        apiBaseUrl: parsed.apiBaseUrl || ENV_API_BASE,
         apiToken: parsed.apiToken ?? "",
         useMock: parsed.useMock ?? true,
         // existing installs with a token already made their choice
@@ -37,7 +41,7 @@ export function loadSettings(): Settings {
   } catch {
     // ignore corrupted settings
   }
-  return { apiBaseUrl: "", apiToken: "", useMock: true, onboarded: false }
+  return { apiBaseUrl: ENV_API_BASE, apiToken: "", useMock: true, onboarded: false }
 }
 
 export const SETTINGS_CHANGED_EVENT = "suinian:settings-changed"

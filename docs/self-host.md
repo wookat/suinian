@@ -1,20 +1,22 @@
 # 碎念自部署指南（约 30 分钟跑通全链）
 
-目标：在你自己的 Cloudflare 账号里跑起完整的碎念 —— 后端 API（Workers + D1）+ Web 端（Pages），可选微信入口（bot 桥）。
+目标：在你自己的 Cloudflare 账号里跑起完整的碎念 —— 后端 API（Workers + D1 + R2）+ Web 端（Pages），可选微信入口（bot 桥）。
+
+> **懒人通道**：`bash scripts/setup.sh` 交互式一键完成本页 1–2 节的全部步骤（建 D1 / R2、改 wrangler.toml、migrations、secrets、部署 Worker + Pages、配 CORS）。以下是手动步骤。
 
 ## 前置条件
 
-- [Cloudflare 账号](https://dash.cloudflare.com/)（免费版即可：Workers / D1 / Pages / Workers AI 免费额度足够个人使用）
+- [Cloudflare 账号](https://dash.cloudflare.com/)（免费版即可：Workers / D1 / R2 / Pages / Workers AI 免费额度足够个人使用）
 - AI 供给（二选一）：直接用 Cloudflare Workers AI（推荐，无需额外账号），或 [DeepSeek API Key](https://platform.deepseek.com/) / 任意 OpenAI 兼容 API（按量付费，个人用量极低）
 - Node.js ≥ 20 与 npm
 - `git clone https://github.com/wookat/suinian.git`
+- 认证：`npx wrangler login`（浏览器授权），或设置 `CLOUDFLARE_API_TOKEN` 环境变量。用 API token 时需要 **Workers Scripts / D1 / R2 / Pages / Workers AI** 的编辑权限（权限不够时 `r2 bucket create` 或 `wrangler deploy` 会报 `Authentication error [code: 10000]`）
 
-## 1. 后端（Cloudflare Workers + D1）
+## 1. 后端（Cloudflare Workers + D1 + R2）
 
 ```bash
 cd backend
 npm install
-npx wrangler login          # 首次：浏览器授权 Cloudflare
 ```
 
 ### 1.1 创建 D1 数据库
@@ -32,17 +34,15 @@ npx wrangler d1 create suinian
 npx wrangler d1 migrations apply suinian --remote
 ```
 
-> ⚠️ 仓库锁定的 wrangler v3.99 在部分环境下 `d1 migrations apply --remote` 有已知兼容问题。若报错，可用 Cloudflare REST API 逐条执行迁移（`CLOUDFLARE_API_TOKEN` 需 D1 编辑权限，`ACCOUNT_ID`/`DB_ID` 见 dash 或 `d1 create` 输出）：
->
-> ```bash
-> for f in migrations/*.sql; do
->   curl -sX POST "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/d1/database/$DB_ID/query" \
->     -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
->     --data "$(jq -n --arg sql "$(cat $f)" '{sql:$sql}')"
-> done
-> ```
+### 1.3 创建 R2 bucket（存语音/图片/文件原件）
 
-### 1.3 设置密钥
+```bash
+npx wrangler r2 bucket create suinian-media
+```
+
+bucket 名如果改了，同步改 `wrangler.toml` 里 `[[r2_buckets]]` 的 `bucket_name`。R2 首次使用需在 dash 里启用（免费，无需绑卡可用免费额度）。
+
+### 1.4 设置密钥
 
 AI 供给二选一：
 
@@ -68,13 +68,15 @@ npx wrangler secret put DEEPSEEK_API_KEY
 openssl rand -base64 32 | npx wrangler secret put SUINIAN_ENC_KEY
 ```
 
-### 1.4 部署 & 创建用户
+### 1.5 部署 & 创建用户
 
 ```bash
 npx wrangler deploy
 ```
 
-### 1.5 创建账号（二选一）
+部署完成后输出类似 `https://suinian-api.<你的子域>.workers.dev` 的地址。新开通的 workers.dev 子域需要 1–2 分钟生效（期间访问会报 `error code: 1042`，稍等即可）。
+
+### 1.6 创建账号（二选一）
 
 **方式 A：自助注册（推荐）**——直接在 Web 端首页引导里选「注册新账号」，或调接口：
 
@@ -106,8 +108,19 @@ Web 端是纯静态 SPA，API 地址与 token 在**页面的设置页**填写（
 cd web
 npm install
 npm run build                # tsc + vite build，输出 dist/
-npx wrangler pages deploy dist --project-name suinian
+npx wrangler pages deploy dist --project-name suinian --branch main
 ```
+
+### 2.1 允许你的 Web 域名跨域访问 API（必做，否则注册/登录报「网络连接失败」）
+
+API 默认只允许官方域名与本地开发端口跨域。自部署的 Pages 域名（如 `https://suinian.pages.dev` 或你的自定义域）要加进 `backend/wrangler.toml` 的 `[vars]`：
+
+```toml
+[vars]
+CORS_ALLOWED_ORIGINS = "https://你的域名.pages.dev"   # 多个用逗号分隔；"*" 允许任意来源
+```
+
+然后重新 `npx wrangler deploy`。API 只用 Bearer token（无 cookie），个人实例设 `"*"` 也是安全的。
 
 部署完成后打开 Pages 给的地址（或绑定自己的域名）：
 
@@ -134,8 +147,28 @@ Docker / systemd 生产部署方式同样见 [skill/README.md](../skill/README.m
 
 自行构建 APK（需 JDK 17 + Android SDK），安装后在设置页填同样的 API 地址与 token。见 [android/README.md](../android/README.md)。
 
+## 本地开发（不部署也能跑）
+
+无需任何 Cloudflare 资源与 API key，全部跑在本地（D1/R2 用本地模拟，AI 用内置 mock）：
+
+```bash
+# 后端
+cd backend && npm install
+cp .dev.vars.example .dev.vars   # 默认 AI_MODEL=mock，无 key 也能跑通分拣/问答
+npm run dev:init                 # 本地 D1 建表（首次或 migrations 变更后执行）
+npm run dev                      # http://127.0.0.1:8787
+
+# Web 端（另开终端）
+cd web && npm install
+cp .env.example .env.local       # VITE_API_BASE=http://127.0.0.1:8787
+npm run dev                      # http://localhost:5173，注册个本地账号即可用
+```
+
 ## 常见问题
 
+- **`wrangler dev` / `wrangler deploy` 报 `Authentication error [code: 10000]`？** API token 权限不够，需要 Workers Scripts / D1 / R2 / Pages 编辑权限；或改用 `npx wrangler login`。
+- **刚部署完访问 404 / `error code: 1042`？** 新 workers.dev 子域需 1–2 分钟生效，稍等重试。
+- **Web 端注册/登录报「网络连接失败」？** 大概率是 CORS：把你的 Web 域名加进 `CORS_ALLOWED_ORIGINS`（见 2.1 节）。
 - **周报没生成？** cron 在每周一 08:00（Asia/Shanghai）跑；可 `POST /api/reports/generate` 手动触发验证。
 - **线索没聚出来？** 聚类只对 `idea` 类笔记生效，需要至少两条相近主题的想法；可 `POST /api/threads/rebuild` 全量重建。
 - **Workers AI 不可用？** 聚类会自动降级为 DeepSeek 判断，功能不受影响。

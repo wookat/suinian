@@ -1,0 +1,18 @@
+# Local development variables for `wrangler dev` — copy to .dev.vars and edit.
+# .dev.vars is gitignored; never commit real keys.
+
+# AI backend. `mock` = deterministic offline responses (no key needed) so the
+# whole note pipeline runs locally. Delete this line (or set a real model name)
+# and set DEEPSEEK_API_KEY to use a real provider.
+AI_MODEL=mock
+
+# DeepSeek (or any OpenAI-compatible) API key, used when AI_MODEL is not `mock`
+# or `workers-ai:*`.
+# DEEPSEEK_API_KEY=sk-...
+
+# Optional: override the OpenAI-compatible endpoint (defaults to DeepSeek).
+# AI_BASE_URL=https://api.deepseek.com
+
+# Optional: 32-byte base64 key for AES-256-GCM encryption of sensitive notes.
+# Generate: openssl rand -base64 32
+# SUINIAN_ENC_KEY=

@@ -21,6 +21,35 @@
 | `android/` | `./gradlew assembleDebug` |
 
 4. PR 描述里说明动机与改动点；界面改动请附截图
+5. PR 会自动跑 CI（backend 测试+typecheck、web lint+build、extension/mcp typecheck+build），合并前需全绿
+
+## 本地起服务（无 Cloudflare 资源、无 API key 也能跑）
+
+```bash
+# 后端：本地 D1 + 内置 mock AI
+cd backend && npm install
+cp .dev.vars.example .dev.vars   # 默认 AI_MODEL=mock
+npm run dev:init                 # 本地 D1 建表
+npm run dev                      # http://127.0.0.1:8787
+
+# Web 端（另开终端）
+cd web && npm install
+cp .env.example .env.local       # VITE_API_BASE 指向本地后端
+npm run dev                      # http://localhost:5173
+```
+
+## 目录结构
+
+| 目录 | 内容 |
+|---|---|
+| `backend/` | Cloudflare Workers API（Hono + D1 + R2 + Workers AI），`src/index.ts` 为入口路由，`migrations/` 为 D1 建表脚本，`test/` 为 vitest 单测 |
+| `web/` | React + Vite PWA（时间流/线索/周报），纯静态部署到 Pages |
+| `extension/` | 浏览器剪藏扩展（WXT） |
+| `mcp/` | 本地 stdio MCP server（远程 MCP 在 backend `/mcp`） |
+| `skill/` | 微信 bot 桥（Node 常驻进程）与 OmniBox skill |
+| `android/` | Android App（分享面板 + 小组件） |
+| `docs/` | 自部署、MCP、导入迁移等文档 |
+| `scripts/` | `setup.sh` 一键自部署等脚本 |
 
 ## 开发环境
 
