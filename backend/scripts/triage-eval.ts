@@ -25,6 +25,7 @@ type NoteJson = {
   tags: string[];
   title: string | null;
   todo_due: string | null;
+  is_sensitive: boolean;
 };
 
 function shanghaiIso(offsetDays = 0): string {
@@ -48,6 +49,8 @@ interface EvalCase {
   due?: string | null;
   /** tags must not contain any of these substrings */
   forbiddenTagParts?: string[];
+  /** expected is_sensitive; undefined = don't check */
+  sensitive?: boolean;
 }
 
 const CASES: EvalCase[] = [
@@ -61,7 +64,24 @@ const CASES: EvalCase[] = [
   { content: `${PREFIX} https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API 讲 Service Worker 的文档`, category: "collect" },
   { content: `${PREFIX} 突然想到：碎念的周报可以做成邮件推送，让用户被动回顾`, category: "idea" },
   { content: `${PREFIX} 【灵感】给时间流加一个按月折叠的视图`, category: "idea", forbiddenTagParts: ["灵感】", "【"] },
-  { content: `${PREFIX} 家里 Wi-Fi 密码改成了 hunter2-demo`, category: "data" },
+  { content: `${PREFIX} 家里 Wi-Fi 密码改成了 hunter2-demo`, category: "data", sensitive: true },
+  // R22：技术文档/长文不得误判敏感（模拟文件入库的技术 txt 内容）
+  {
+    content: `${PREFIX} JWT 认证笔记：access token 短效期（15分钟），refresh token 长效期（7天），刷新时服务端校验 refresh token 后签发新的 access token，客户端存在 httpOnly cookie 里避免 XSS 窃取`, 
+    category: "data",
+    sensitive: false,
+  },
+  {
+    content: `${PREFIX} 部署文档节选：配置 API key 的步骤——在控制台生成 key 后写入环境变量 SUINIAN_API_KEY，代码里用 process.env 读取，绝不要硬编码。示例：curl -H "Authorization: Bearer <token>" https://api.example.com/v1/notes`,
+    category: "data",
+    sensitive: false,
+  },
+  {
+    content: `${PREFIX} Python 密码学入门笔记：哈希函数（SHA-256）不可逆，适合存储密码摘要；对称加密（AES-GCM）适合加密数据；非对称（RSA/Ed25519）适合签名与密钥交换。常见错误是自己发明加密算法`,
+    category: "data",
+    sensitive: false,
+  },
+  { content: `${PREFIX} 公司 VPN 密码是 Vp2026@qa-demo，账号 qa.tester`, category: "data", sensitive: true },
 ];
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -102,6 +122,8 @@ async function main() {
     let dueOk = 0;
     let tagOk = 0;
     let tagChecked = 0;
+    let sensChecked = 0;
+    let sensOk = 0;
     for (const c of CASES) {
       const n = notes.find((x) => x.content === c.content);
       const cat = n?.category ?? "(unsorted)";
@@ -115,6 +137,12 @@ async function main() {
         if (duePass) dueOk++;
         line += ` | due ${duePass ? "✅" : "❌"} got=${n?.todo_due ?? "null"} want=${c.due ?? "null"}`;
       }
+      if (c.sensitive !== undefined) {
+        sensChecked++;
+        const got = n?.is_sensitive === true;
+        if (got === c.sensitive) sensOk++;
+        else line += ` | sensitive ❌ got=${got} want=${c.sensitive}`;
+      }
       const noisy = (n?.tags ?? []).filter((t) =>
         [...(c.forbiddenTagParts ?? []), "QA", "EVAL"].some((p) => t.includes(p))
       );
@@ -124,7 +152,7 @@ async function main() {
       console.log(line);
     }
     console.log(
-      `\ncategory: ${catOk}/${CASES.length}  todo_due: ${dueOk}/${dueChecked}  tags 无前缀污染: ${tagOk}/${tagChecked}`
+      `\ncategory: ${catOk}/${CASES.length}  todo_due: ${dueOk}/${dueChecked}  tags 无前缀污染: ${tagOk}/${tagChecked}  sensitive: ${sensOk}/${sensChecked}`
     );
   } finally {
     for (const id of created) {

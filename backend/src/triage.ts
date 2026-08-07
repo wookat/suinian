@@ -53,25 +53,39 @@ export function buildTriagePrompt(now: Date = new Date(), existingTags: string[]
   - 「https://example.com/abc 一篇讲向量检索的文章」→ collect（纯链接即收藏）
   - 「明天下午3点和设计师对稿」→ todo，todo_due=${tomorrow.iso}T15:00:00+08:00
   - 「下周一晚上8点提醒我给客户回邮件」→ todo，todo_due=${nextMon.iso}T20:00:00+08:00
-  - 「Wi-Fi 密码是 xxxx」→ data，且 is_sensitive=true
+  - 「Wi-Fi 密码是 hunter2-demo」→ data，且 is_sensitive=true
   - 「感觉周报功能可以做成邮件推送」→ idea
 - tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）。标签必须是内容的主题词，不得照抄内容开头的括号前缀/标记/序号（如「[xxx]」「【xxx】」「1.」之类）${tagHint}
 - title: 一句话短标题（<=20字），同样不要把括号前缀/序号抄进标题
-- is_sensitive: 是否含敏感信息 (boolean)。只要内容中出现密码、口令、密钥、API key、token、验证码、身份证号、银行卡号、账号+密码组合等任何一项，必须为 true，宁可误判为 true
+- is_sensitive: 是否含真实机密 (boolean)。仅当内容中出现真实可用的机密「具体值」时才为 true：密码/口令/密钥/API key/token 的具体值、完整身份证号、银行卡号、手机号+姓名组合、账号+密码组合。以下情况必须为 false：技术文档/教程/笔记只是讨论密码、token、密钥等概念而未出现具体秘密值；代码片段中的变量名/占位符（如 <token>、your-api-key、xxx）；普通长文、文件内容中的 ID/哈希/版本号等非机密长字符串。判例：
+  - 「服务器 root 密码是 P@ssw0rd123」→ true（出现密码具体值）
+  - 「OpenAI key: sk-abc123def456…」→ true（出现密钥具体值）
+  - 「JWT token 的刷新机制：access token 短效期，refresh token 长效期」→ false（只讨论概念，无具体值）
+  - 「配置 API key 的步骤：在控制台生成 key 后写入环境变量」→ false（教程，无具体值）
+  - 「curl -H "Authorization: Bearer <token>" 调用接口」→ false（占位符不是真实机密）
 - todo_due: 若是待办且能推断截止时间，基于上面给出的今天日期与星期换算（如"周五之前"= 从今天起最近的周五）。内容中有具体时刻（如"下午三点半""晚上8点"）时输出带时刻和时区偏移的 ISO 8601 "YYYY-MM-DDTHH:mm:00+08:00"（24 小时制，Asia/Shanghai 固定 +08:00，如 "2026-08-07T15:30:00+08:00"）；只有日期没有时刻时仅输出 "YYYY-MM-DD"；无法推断则 null。绝不要输出早于今天的日期
 只输出 JSON。标签禁止包含密码、密钥、卡号等敏感值本身。`;
 }
 
 // ---- sensitive detection fallback (regex) ----
-const SENSITIVE_KEYWORD_RE =
-  /密码|口令|密钥|秘钥|私钥|passw(or)?d|passphrase|secret|api[\s_-]?key|token|access[\s_-]?key|验证码|身份证|银行卡|卡号|cvv|pin\s?码/i;
-const SENSITIVE_VALUE_RE =
-  /(密码|口令|passw(or)?d|pwd)[^\S\n]*[:：是为]?[^\S\n]*\S{4,}|\b\d{15,19}\b|\b[A-Za-z0-9_\-]{20,}\b|sk-[A-Za-z0-9]{10,}/i;
+// Backstop only: force-flags content that clearly contains a real credential VALUE.
+// Mentions of 密码/token/密钥 as concepts (tech docs, tutorials, code) must NOT match.
+const SENSITIVE_ASSIGN_RE =
+  /(密码|口令|密钥|秘钥|私钥|passw(?:or)?d|passphrase|pwd|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|验证码|pin\s?码?)[^\S\n]{0,4}(改成了|改为|设为|设置为|更新为|[:：=是为])[^\S\n]*([^\s，。；,;]{4,})/i;
+const SENSITIVE_KEY_LITERAL_RE =
+  /\bsk-[A-Za-z0-9_\-]{16,}\b|\bAKIA[0-9A-Z]{16}\b|\bghp_[A-Za-z0-9]{20,}\b|\bxox[bap]-[A-Za-z0-9\-]{10,}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+const ID_CARD_RE = /身份证[^\n]{0,10}\d{17}[\dXx]\b|\b\d{17}[Xx]\b/;
+const BANK_CARD_RE = /(银行卡|卡号|储蓄卡|信用卡)[^\n]{0,10}\d{12,19}\b/;
+// values that are placeholders/templates, not real secrets
+const PLACEHOLDER_VALUE_RE = /^(<|\{|\[|\*{2,}|x{3,}|你的|your[-_]?|占位)/i;
 
-/** Regex fallback: does the content look like it contains a credential/secret? */
+/** Regex fallback: does the content look like it contains a real credential value? */
 export function detectSensitive(content: string): boolean {
-  if (!SENSITIVE_KEYWORD_RE.test(content)) return false;
-  return SENSITIVE_VALUE_RE.test(content) || /密码|口令|密钥|秘钥|私钥|验证码|身份证|银行卡/.test(content);
+  const assign = content.match(SENSITIVE_ASSIGN_RE);
+  if (assign && !PLACEHOLDER_VALUE_RE.test(assign[3])) return true;
+  return (
+    SENSITIVE_KEY_LITERAL_RE.test(content) || ID_CARD_RE.test(content) || BANK_CARD_RE.test(content)
+  );
 }
 
 const TAG_SECRET_RE = /^(?=.*\d)[A-Za-z0-9_\-@#$%.]{6,}$|^\d{6,}$|^sk-/i;

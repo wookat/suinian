@@ -398,23 +398,48 @@ app.patch("/api/notes/:id", async (c) => {
   const body = await c.req.json<Record<string, unknown>>().catch(() => null);
   if (!body) return c.json({ error: "invalid body" }, 400);
 
-  const existing = await c.env.DB.prepare("SELECT is_sensitive FROM notes WHERE id = ? AND user_id = ?")
+  const existing = await c.env.DB.prepare(
+    "SELECT is_sensitive, content, content_enc FROM notes WHERE id = ? AND user_id = ?"
+  )
     .bind(id, userId)
-    .first<{ is_sensitive: number }>();
+    .first<{ is_sensitive: number; content: string; content_enc: string | null }>();
   if (!existing) return c.json({ error: "not found" }, 404);
+
+  const wantSensitive =
+    typeof body.is_sensitive === "boolean" ? body.is_sensitive : !!existing.is_sensitive;
 
   const sets: string[] = [];
   const binds: unknown[] = [];
   if (typeof body.content === "string") {
     const tooLong = contentTooLong(c, body.content);
     if (tooLong) return tooLong;
-    if (existing.is_sensitive && c.env.SUINIAN_ENC_KEY) {
+    if (wantSensitive && c.env.SUINIAN_ENC_KEY) {
       sets.push("content = ?", "content_enc = ?");
       binds.push(ENC_PLACEHOLDER, await encryptContent(c.env.SUINIAN_ENC_KEY, body.content));
     } else {
-      sets.push("content = ?");
-      binds.push(body.content);
+      sets.push("content = ?", "content_enc = ?");
+      binds.push(body.content, null);
     }
+  } else if (typeof body.is_sensitive === "boolean" && body.is_sensitive !== !!existing.is_sensitive) {
+    if (wantSensitive) {
+      // mark sensitive: encrypt the current plaintext at rest
+      if (c.env.SUINIAN_ENC_KEY) {
+        sets.push("content = ?", "content_enc = ?");
+        binds.push(ENC_PLACEHOLDER, await encryptContent(c.env.SUINIAN_ENC_KEY, existing.content));
+      }
+    } else {
+      // unmark sensitive: restore plaintext from ciphertext (or keep stored content)
+      const plain =
+        existing.content_enc && c.env.SUINIAN_ENC_KEY
+          ? await decryptContent(c.env.SUINIAN_ENC_KEY, existing.content_enc)
+          : null;
+      sets.push("content = ?", "content_enc = ?");
+      binds.push(plain ?? existing.content, null);
+    }
+  }
+  if (typeof body.is_sensitive === "boolean") {
+    sets.push("is_sensitive = ?");
+    binds.push(body.is_sensitive ? 1 : 0);
   }
   if (typeof body.todo_done === "boolean") {
     sets.push("todo_done = ?");
@@ -445,7 +470,11 @@ app.patch("/api/notes/:id", async (c) => {
   if (!res.meta.changes) return c.json({ error: "not found" }, 404);
   const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
   c.executionCtx.waitUntil(upsertNoteEmbedding(c.env, note!));
-  if (typeof body.content === "string") c.executionCtx.waitUntil(extractGraph(c.env, note!));
+  const sensitivityChanged =
+    typeof body.is_sensitive === "boolean" && body.is_sensitive !== !!existing.is_sensitive;
+  // extractGraph purges graph rows for sensitive notes and (re-)extracts otherwise
+  if (typeof body.content === "string" || sensitivityChanged)
+    c.executionCtx.waitUntil(extractGraph(c.env, note!));
   return c.json({ note: await noteToJsonDecrypted(c.env, note!) });
 });
 

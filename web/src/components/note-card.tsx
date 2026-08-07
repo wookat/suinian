@@ -16,6 +16,8 @@ import {
   Check,
   Eye,
   EyeOff,
+  ShieldOff,
+  ShieldAlert,
   CalendarClock,
   Loader2,
   Mic,
@@ -158,6 +160,7 @@ interface NoteCardProps {
   onTagClick?: (tag: string) => void
   onEdit?: (note: Note, content: string) => void
   onDelete?: (note: Note) => void
+  onToggleSensitive?: (note: Note) => void
   categoryFilterActive?: boolean
   className?: string
 }
@@ -168,6 +171,7 @@ export function NoteCard({
   onTagClick,
   onEdit,
   onDelete,
+  onToggleSensitive,
   categoryFilterActive = false,
   className,
 }: NoteCardProps) {
@@ -313,6 +317,18 @@ export function NoteCard({
                     {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
                     {copied ? "已复制" : "复制内容"}
                   </button>
+                  {onToggleSensitive && (
+                    <button
+                      onClick={() => {
+                        setMenuOpen(false)
+                        onToggleSensitive(note)
+                      }}
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent"
+                    >
+                      {sensitive ? <ShieldOff className="size-3.5" /> : <ShieldAlert className="size-3.5" />}
+                      {sensitive ? "取消敏感标记" : "标记为敏感"}
+                    </button>
+                  )}
                   {onDelete && (
                     <button
                       onClick={handleDelete}

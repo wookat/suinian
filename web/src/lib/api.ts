@@ -194,11 +194,12 @@ export async function downloadNoteFile(noteId: string, fileName: string): Promis
 
 export async function patchNote(
   id: string,
-  patch: Partial<Pick<Note, "todo_done" | "category" | "tags" | "content">>,
+  patch: Partial<Pick<Note, "todo_done" | "category" | "tags" | "content" | "is_sensitive">>,
 ): Promise<Note> {
   if (loadSettings().useMock) return mockPatchNote(id, patch)
   const body: Record<string, unknown> = { ...patch }
   if (patch.todo_done != null) body.todo_done = patch.todo_done === 1
+  if (patch.is_sensitive != null) body.is_sensitive = patch.is_sensitive === 1
   const res = await realFetch<Record<string, unknown>>(`/api/notes/${id}`, {
     method: "PATCH",
     body: JSON.stringify(body),

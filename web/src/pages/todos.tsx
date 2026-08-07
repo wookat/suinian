@@ -70,6 +70,16 @@ export function TodosPage() {
     }
   }
 
+  async function handleToggleSensitive(note: Note) {
+    const next = note.is_sensitive === 1 ? 0 : 1
+    try {
+      const fresh = await patchNote(note.id, { is_sensitive: next })
+      setNotes((ns) => ns.map((n) => (n.id === note.id ? fresh : n)))
+    } catch {
+      // keep original note on failure
+    }
+  }
+
   async function handleEdit(note: Note, content: string) {
     setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, content } : n)))
     try {
@@ -149,6 +159,7 @@ export function TodosPage() {
                 onToggleTodo={(note) => void toggleTodo(note)}
                 onEdit={(note, content) => void handleEdit(note, content)}
                 onDelete={(note) => void handleDelete(note)}
+                onToggleSensitive={(note) => void handleToggleSensitive(note)}
               />
             ))}
           </section>
@@ -177,6 +188,7 @@ export function TodosPage() {
                 onToggleTodo={(note) => void toggleTodo(note)}
                 onEdit={(note, content) => void handleEdit(note, content)}
                 onDelete={(note) => void handleDelete(note)}
+                onToggleSensitive={(note) => void handleToggleSensitive(note)}
               />
             ))}
         </section>
