@@ -267,7 +267,7 @@ export async function mockDeleteNote(id: string): Promise<void> {
 
 export async function mockPatchNote(
   id: string,
-  patch: Partial<Pick<Note, "todo_done" | "category" | "tags" | "content">>,
+  patch: Partial<Pick<Note, "todo_done" | "category" | "tags" | "content" | "is_sensitive">>,
 ): Promise<Note> {
   await delay(120)
   const notes = loadMockNotes()

@@ -197,6 +197,16 @@ export function TimelinePage() {
     }
   }
 
+  async function handleToggleSensitive(note: Note) {
+    const next = note.is_sensitive === 1 ? 0 : 1
+    try {
+      const fresh = await patchNote(note.id, { is_sensitive: next })
+      setNotes((ns) => ns.map((n) => (n.id === note.id ? fresh : n)))
+    } catch {
+      // keep original note on failure
+    }
+  }
+
   async function handleDelete(note: Note) {
     const prev = notes
     setNotes((ns) => ns.filter((n) => n.id !== note.id))
@@ -407,6 +417,7 @@ export function TimelinePage() {
                     onTagClick={setTag}
                     onEdit={(note, content) => void handleEdit(note, content)}
                     onDelete={(note) => void handleDelete(note)}
+                    onToggleSensitive={(note) => void handleToggleSensitive(note)}
                     categoryFilterActive={category === n.category}
                   />
                 ))}
