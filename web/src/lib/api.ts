@@ -5,8 +5,10 @@ import {
   mockDeleteNote,
   mockGetNote,
   mockGetNotes,
+  mockGenerateReport,
   mockGetReport,
   mockGetReports,
+  mockGetTodayReview,
   mockGetThread,
   mockGetThreads,
   mockPatchNote,
@@ -21,6 +23,7 @@ import type {
   ReportsResponse,
   ThreadDetail,
   ThreadsResponse,
+  TodayReviewResponse,
   WeeklyReport,
 } from "./types"
 
@@ -326,6 +329,28 @@ export async function getThread(id: string): Promise<ThreadDetail> {
 export async function getReports(): Promise<ReportsResponse> {
   if (loadSettings().useMock) return mockGetReports()
   return realFetch<ReportsResponse>("/api/reports")
+}
+
+/** 手动生成本周周报（幂等：本周已有则重新生成覆盖） */
+export async function generateReport(week: "this" | "last" = "this"): Promise<WeeklyReport> {
+  if (loadSettings().useMock) return mockGenerateReport()
+  const res = await realFetch<{ report: WeeklyReport }>("/api/reports/generate", {
+    method: "POST",
+    body: JSON.stringify({ week }),
+  })
+  return res.report
+}
+
+/** 今日回顾（那年今日 / 上月今日 / 久未回看） */
+export async function getTodayReview(): Promise<TodayReviewResponse> {
+  if (loadSettings().useMock) return mockGetTodayReview()
+  const res = await realFetch<{ date: string; items: (Omit<TodayReviewResponse["items"][number], "note"> & { note: Record<string, unknown> })[] }>(
+    "/api/review/today",
+  )
+  return {
+    date: res.date,
+    items: (res.items ?? []).map((it) => ({ ...it, note: normalizeNote(it.note) })),
+  }
 }
 
 // The reports list omits content_md; the detail endpoint returns the full report

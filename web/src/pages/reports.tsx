@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { FileText, ChevronLeft, RefreshCw } from "lucide-react"
+import { FileText, ChevronLeft, RefreshCw, Loader2, Sparkles } from "lucide-react"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { marked } from "marked"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { getReports, getReport } from "@/lib/api"
+import { getReports, getReport, generateReport } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
 import type { WeeklyReport } from "@/lib/types"
 
@@ -50,6 +50,8 @@ export function ReportsPage() {
   const [selected, setSelected] = useState<WeeklyReport | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [generating, setGenerating] = useState(false)
+  const [generateError, setGenerateError] = useState<string | null>(null)
   const settingsVersion = useSettingsVersion()
 
   const load = useCallback(async () => {
@@ -68,6 +70,44 @@ export function ReportsPage() {
   useEffect(() => {
     void load()
   }, [load, settingsVersion])
+
+  async function handleGenerate() {
+    if (generating) return
+    setGenerating(true)
+    setGenerateError(null)
+    try {
+      const report = await generateReport("this")
+      await load()
+      setSelectedId(report.id)
+    } catch (e) {
+      setGenerateError(e instanceof Error ? e.message : "生成失败，请稍后重试")
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const generateButton = (
+    <div className="space-y-2">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => void handleGenerate()}
+        disabled={generating}
+        className="w-full sm:w-auto"
+      >
+        {generating ? (
+          <>
+            <Loader2 className="animate-spin" /> 生成中，约需半分钟…
+          </>
+        ) : (
+          <>
+            <Sparkles /> 生成本周报告
+          </>
+        )}
+      </Button>
+      {generateError && <p className="text-sm text-destructive">{generateError}</p>}
+    </div>
+  )
 
   useEffect(() => {
     if (!selectedId) {
@@ -138,19 +178,23 @@ export function ReportsPage() {
 
   if (reports.length === 0)
     return (
-      <EmptyState
-        icon={FileText}
-        title="周报还未生成"
-        description="每周一自动生成「本周你在想什么」的结构化周报。持续记录，第一份周报生成后会出现在这里。"
-        actionLabel="去首页记点想法"
-        onAction={() => {
-          window.location.hash = "#/"
-        }}
-      />
+      <div className="space-y-4">
+        <EmptyState
+          icon={FileText}
+          title="周报还未生成"
+          description="每周一自动生成「本周你在想什么」的结构化周报；也可以随时手动生成本周的报告。"
+          actionLabel="去首页记点想法"
+          onAction={() => {
+            window.location.hash = "#/"
+          }}
+        />
+        <div className="flex justify-center">{generateButton}</div>
+      </div>
     )
 
   return (
     <div className="space-y-3">
+      {generateButton}
       {reports.map((r) => (
         <Card
           key={r.id}

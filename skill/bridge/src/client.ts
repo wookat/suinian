@@ -27,12 +27,28 @@ export interface AskResponse {
   error?: string
 }
 
+export interface TodayReviewResponse {
+  date: string
+  items: {
+    id: string
+    kind: 'year_ago' | 'month_ago' | 'revisit'
+    kind_label: string
+    comment: string | null
+    note: { id: string; title: string | null; content: string; created_at: string; tags?: string[] }
+  }[]
+}
+
 /** 后端 HTTP 客户端：Bearer 鉴权 + 超时 + 指数退避重试 */
 export class SuinianClient {
   constructor(private readonly cfg: Pick<BridgeConfig, 'apiUrl' | 'token' | 'requestTimeoutMs' | 'maxRetries'>) {}
 
   ingest(payload: IngestPayload): Promise<IngestResponse> {
     return this.post<IngestResponse>('/api/ingest/wechat', payload)
+  }
+
+  /** 今日回顾（每日推送用） */
+  reviewToday(): Promise<TodayReviewResponse> {
+    return this.request<TodayReviewResponse>('GET', '/api/review/today')
   }
 
   ask(payload: AskPayload): Promise<AskResponse> {
@@ -43,17 +59,21 @@ export class SuinianClient {
     return this.post<MediaIngestResponse>('/api/ingest/media', payload)
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
+  private post<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>('POST', path, body)
+  }
+
+  private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     let lastErr: unknown
     for (let attempt = 0; attempt <= this.cfg.maxRetries; attempt++) {
       try {
         const res = await fetch(`${this.cfg.apiUrl}${path}`, {
-          method: 'POST',
+          method,
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${this.cfg.token}`,
           },
-          body: JSON.stringify(body),
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
           signal: AbortSignal.timeout(this.cfg.requestTimeoutMs),
         })
         if (res.status === 401 || res.status === 403) {

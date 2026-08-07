@@ -3,6 +3,7 @@ import { Search, Sparkles, X, Loader2, RefreshCw, Plus, PenLine, SearchX } from 
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { QuickInput } from "@/components/quick-input"
+import { DailyReview } from "@/components/daily-review"
 import { NoteCard } from "@/components/note-card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -222,6 +223,8 @@ export function TimelinePage() {
 
   return (
     <div className="space-y-4">
+      <DailyReview onTagClick={setTag} />
+
       <div ref={quickInputRef}>
         <QuickInput onCreated={handleCreated} />
       </div>

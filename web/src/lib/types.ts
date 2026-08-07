@@ -135,3 +135,18 @@ export interface WeeklyReport {
 export interface ReportsResponse {
   reports: WeeklyReport[]
 }
+
+export type ReviewKind = "year_ago" | "month_ago" | "revisit"
+
+export interface DailyReviewItem {
+  id: string
+  kind: ReviewKind
+  kind_label: string
+  comment: string | null
+  note: Note
+}
+
+export interface TodayReviewResponse {
+  date: string
+  items: DailyReviewItem[]
+}

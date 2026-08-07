@@ -110,7 +110,7 @@ function makeCtx() {
       waitUntil: (p: Promise<unknown>) => tasks.push(p),
       passThroughOnException: () => {},
       props: {},
-    } as ExecutionContext,
+    } as unknown as ExecutionContext,
     tasks,
   };
 }

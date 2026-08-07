@@ -19,6 +19,7 @@ import {
   clientIp,
 } from "./auth";
 import { generateWeeklyReport, generateAllWeeklyReports } from "./reports";
+import { getTodayReview, generateAllDailyReviews } from "./review";
 import { upsertNoteEmbedding, deleteNoteEmbedding, semanticRecall, backfillEmbeddings } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteUserGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
 import {
@@ -168,6 +169,7 @@ app.delete("/api/auth/me", async (c) => {
   }
   await c.env.DB.prepare("DELETE FROM note_embeddings WHERE note_id IN (SELECT id FROM notes WHERE user_id = ?)").bind(userId).run();
   await deleteUserGraph(c.env, userId);
+  await c.env.DB.prepare("DELETE FROM daily_reviews WHERE user_id = ?").bind(userId).run();
   await c.env.DB.prepare("DELETE FROM notes WHERE user_id = ?").bind(userId).run();
   await c.env.DB.prepare("DELETE FROM threads WHERE user_id = ?").bind(userId).run();
   await c.env.DB.prepare("DELETE FROM weekly_reports WHERE user_id = ?").bind(userId).run();
@@ -538,6 +540,7 @@ app.delete("/api/notes/:id", async (c) => {
   }
   await deleteNoteEmbedding(c.env, id);
   await deleteNoteGraph(c.env, id);
+  await c.env.DB.prepare("DELETE FROM daily_reviews WHERE note_id = ?").bind(id).run();
   await c.env.DB.prepare("DELETE FROM notes WHERE id = ?").bind(id).run();
   // recount/dissolve every thread of this user (also self-heals older orphans)
   await reconcileThreads(c.env, c.get("userId"));
@@ -938,6 +941,23 @@ app.get("/api/threads/:id", async (c) => {
   return c.json({ thread, notes, graph });
 });
 
+// ---- GET /api/review/today ----
+// Today's 被动回顾 items (那年今日 / 上月今日 / 久未回看), generated on demand
+// when the daily cron hasn't produced them yet.
+app.get("/api/review/today", async (c) => {
+  const { date, items } = await getTodayReview(c.env, c.get("userId"));
+  return c.json({
+    date,
+    items: items.map((it) => ({
+      id: it.id,
+      kind: it.kind,
+      kind_label: it.kind_label,
+      comment: it.comment,
+      note: noteToJson(it.note),
+    })),
+  });
+});
+
 // ---- GET /api/reports ----
 app.get("/api/reports", async (c) => {
   const { results } = await c.env.DB.prepare(
@@ -1087,8 +1107,9 @@ export default {
       // backfill graph extraction for notes that predate the knowledge graph (rate-limited)
       ctx.waitUntil(backfillGraphExtracts(env));
     } else {
-      // daily thread title/summary refresh
+      // daily thread title/summary refresh + daily review generation
       ctx.waitUntil(refreshThreads(env));
+      ctx.waitUntil(generateAllDailyReviews(env));
     }
   },
 };

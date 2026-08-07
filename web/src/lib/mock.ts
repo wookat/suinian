@@ -8,6 +8,7 @@ import type {
   Thread,
   ThreadDetail,
   ThreadsResponse,
+  TodayReviewResponse,
   WeeklyReport,
 } from "./types"
 
@@ -378,4 +379,29 @@ export async function mockGetReport(id: string): Promise<WeeklyReport> {
   const report = seedReports.find((r) => r.id === id)
   if (!report) throw new Error("report not found")
   return report
+}
+
+export async function mockGenerateReport(): Promise<WeeklyReport> {
+  await delay(600)
+  return seedReports[0]
+}
+
+export async function mockGetTodayReview(): Promise<TodayReviewResponse> {
+  await delay(120)
+  const notes = loadMockNotes().filter((n) => n.is_sensitive !== 1)
+  const pick = notes[notes.length - 1] ?? notes[0]
+  return {
+    date: new Date().toISOString().slice(0, 10),
+    items: pick
+      ? [
+          {
+            id: "rv-1",
+            kind: "revisit",
+            kind_label: "值得回看",
+            comment: "这条记了很久没再翻过，也许正是重新审视它的好时机。",
+            note: pick,
+          },
+        ]
+      : [],
+  }
 }
