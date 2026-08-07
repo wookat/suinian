@@ -475,7 +475,9 @@ async function createNote(
 
 // ---- POST /api/notes ----
 app.post("/api/notes", async (c) => {
-  const body = await c.req.json<{ source?: string; raw_type?: string; content?: string; url?: string }>().catch(() => null);
+  const body = await c.req
+    .json<{ source?: string; raw_type?: string; content?: string; url?: string; tags?: string[] }>()
+    .catch(() => null);
   if (!body || !(body.content ?? "").trim()) return c.json({ error: "content required" }, 400);
   const tooLong = contentTooLong(c, body.content ?? "");
   if (tooLong) return tooLong;
