@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/empty-state"
 import { cn, parseDue, dueHasTime } from "@/lib/utils"
 import { getNotes, patchNote, deleteNote } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
-import type { Note } from "@/lib/types"
+import type { Note, NotePatch } from "@/lib/types"
 
 type DueGroup = "overdue" | "today" | "week" | "later" | "none"
 
@@ -80,10 +80,10 @@ export function TodosPage() {
     }
   }
 
-  async function handleEdit(note: Note, content: string) {
-    setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, content } : n)))
+  async function handleEdit(note: Note, patch: NotePatch) {
+    setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, ...patch } : n)))
     try {
-      const fresh = await patchNote(note.id, { content })
+      const fresh = await patchNote(note.id, patch)
       setNotes((ns) => ns.map((n) => (n.id === note.id ? fresh : n)))
     } catch {
       setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
@@ -157,7 +157,7 @@ export function TodosPage() {
                 key={n.id}
                 note={n}
                 onToggleTodo={(note) => void toggleTodo(note)}
-                onEdit={(note, content) => void handleEdit(note, content)}
+                onEdit={(note, patch) => void handleEdit(note, patch)}
                 onDelete={(note) => void handleDelete(note)}
                 onToggleSensitive={(note) => void handleToggleSensitive(note)}
               />
@@ -186,7 +186,7 @@ export function TodosPage() {
                 className="animate-in fade-in slide-in-from-top-2 duration-200"
                 note={n}
                 onToggleTodo={(note) => void toggleTodo(note)}
-                onEdit={(note, content) => void handleEdit(note, content)}
+                onEdit={(note, patch) => void handleEdit(note, patch)}
                 onDelete={(note) => void handleDelete(note)}
                 onToggleSensitive={(note) => void handleToggleSensitive(note)}
               />

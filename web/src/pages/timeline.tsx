@@ -1,5 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Search, Sparkles, X, Loader2, RefreshCw, Plus, PenLine, SearchX } from "lucide-react"
+import {
+  Search,
+  Sparkles,
+  X,
+  Loader2,
+  RefreshCw,
+  Plus,
+  PenLine,
+  SearchX,
+  CheckSquare,
+  Trash2,
+  Tag,
+  FolderInput,
+} from "lucide-react"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { QuickInput } from "@/components/quick-input"
@@ -10,10 +23,17 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import { AskChat } from "@/components/ask-chat"
-import { getNotes, getNote, patchNote, deleteNote, ApiError, NetworkError } from "@/lib/api"
+import { getNotes, getNote, patchNote, deleteNote, batchNotes, ApiError, NetworkError } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
 import { cn } from "@/lib/utils"
-import type { Note } from "@/lib/types"
+import type { Note, NoteCategory, NotePatch } from "@/lib/types"
+
+const CATEGORY_OPTIONS: { value: NoteCategory; label: string }[] = [
+  { value: "idea", label: "想法" },
+  { value: "todo", label: "待办" },
+  { value: "collect", label: "收藏" },
+  { value: "data", label: "资料" },
+]
 
 const CATEGORY_TABS = [
   { value: "", label: "全部" },
@@ -66,6 +86,135 @@ export function TimelinePage() {
   const pollersRef = useRef<Map<string, number>>(new Map())
   const quickInputRef = useRef<HTMLDivElement>(null)
   const settingsVersion = useSettingsVersion()
+
+  // 多选批量操作
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [batchBusy, setBatchBusy] = useState(false)
+  const [tagPanelOpen, setTagPanelOpen] = useState(false)
+  const [catPanelOpen, setCatPanelOpen] = useState(false)
+  const [batchTagInput, setBatchTagInput] = useState("")
+  const [toast, setToast] = useState<{ message: string; undo?: () => void } | null>(null)
+  const toastTimerRef = useRef<number | null>(null)
+  const pendingDeleteRef = useRef<{ ids: string[]; timer: number } | null>(null)
+
+  const showToast = useCallback((message: string, undo?: () => void, ms = 6000) => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
+    setToast({ message, undo })
+    toastTimerRef.current = window.setTimeout(() => setToast(null), ms)
+  }, [])
+
+  const flushPendingDelete = useCallback(() => {
+    const pending = pendingDeleteRef.current
+    if (!pending) return
+    window.clearTimeout(pending.timer)
+    pendingDeleteRef.current = null
+    void batchNotes("delete", pending.ids).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const flush = () => flushPendingDelete()
+    window.addEventListener("beforeunload", flush)
+    return () => {
+      window.removeEventListener("beforeunload", flush)
+      flush()
+      if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
+    }
+  }, [flushPendingDelete])
+
+  function exitSelectMode() {
+    setSelectMode(false)
+    setSelectedIds(new Set())
+    setTagPanelOpen(false)
+    setCatPanelOpen(false)
+  }
+
+  function toggleSelected(note: Note) {
+    setSelectedIds((ids) => {
+      const next = new Set(ids)
+      if (next.has(note.id)) next.delete(note.id)
+      else next.add(note.id)
+      return next
+    })
+  }
+
+  function batchDelete() {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    if (!window.confirm(`确定删除选中的 ${ids.length} 条碎念吗？`)) return
+    flushPendingDelete()
+    const removed = notes.filter((n) => selectedIds.has(n.id))
+    setNotes((ns) => ns.filter((n) => !selectedIds.has(n.id)))
+    exitSelectMode()
+    const timer = window.setTimeout(() => {
+      pendingDeleteRef.current = null
+      void batchNotes("delete", ids).catch(() => void load())
+    }, 6000)
+    pendingDeleteRef.current = { ids, timer }
+    showToast(`已删除 ${ids.length} 条`, () => {
+      const pending = pendingDeleteRef.current
+      if (pending) {
+        window.clearTimeout(pending.timer)
+        pendingDeleteRef.current = null
+      }
+      setNotes((ns) => {
+        const restored = [...ns, ...removed]
+        restored.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+        return restored
+      })
+      setToast(null)
+    })
+  }
+
+  async function batchAddTag() {
+    const tag = batchTagInput.trim().replace(/^#/, "")
+    const ids = [...selectedIds]
+    if (!tag || ids.length === 0) return
+    setBatchBusy(true)
+    try {
+      await batchNotes("add_tags", ids, { tags: [tag] })
+      setNotes((ns) =>
+        ns.map((n) => (selectedIds.has(n.id) && !n.tags.includes(tag) ? { ...n, tags: [...n.tags, tag] } : n)),
+      )
+      setBatchTagInput("")
+      setTagPanelOpen(false)
+      exitSelectMode()
+      showToast(`已为 ${ids.length} 条加上 #${tag}`, () => {
+        void batchNotes("remove_tags", ids, { tags: [tag] }).then(() => void load())
+        setToast(null)
+      })
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+
+  async function batchSetCategory(cat: NoteCategory) {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    setBatchBusy(true)
+    const previous = notes
+      .filter((n) => selectedIds.has(n.id))
+      .map((n) => ({ id: n.id, category: n.category }))
+    try {
+      await batchNotes("set_category", ids, { category: cat })
+      setNotes((ns) => ns.map((n) => (selectedIds.has(n.id) ? { ...n, category: cat } : n)))
+      setCatPanelOpen(false)
+      exitSelectMode()
+      const label = CATEGORY_OPTIONS.find((c) => c.value === cat)?.label ?? cat
+      showToast(`已将 ${ids.length} 条改为「${label}」`, () => {
+        void Promise.allSettled(
+          previous.filter((p) => p.category).map((p) => patchNote(p.id, { category: p.category! })),
+        ).then(() => void load())
+        setToast(null)
+      })
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBatchBusy(false)
+    }
+  }
 
   const load = useCallback(async () => {
     abortRef.current?.abort()
@@ -188,10 +337,10 @@ export function TimelinePage() {
     }
   }
 
-  async function handleEdit(note: Note, content: string) {
-    setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, content } : n)))
+  async function handleEdit(note: Note, patch: NotePatch) {
+    setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, ...patch } : n)))
     try {
-      const fresh = await patchNote(note.id, { content })
+      const fresh = await patchNote(note.id, patch)
       setNotes((ns) => ns.map((n) => (n.id === note.id ? fresh : n)))
     } catch {
       setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
@@ -270,6 +419,15 @@ export function TimelinePage() {
         >
           <Sparkles />
           问答
+        </Button>
+        <Button
+          variant={selectMode ? "default" : "outline"}
+          size="sm"
+          className="h-9"
+          onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+        >
+          <CheckSquare />
+          {selectMode ? "退出选择" : "选择"}
         </Button>
       </div>
 
@@ -418,15 +576,119 @@ export function TimelinePage() {
                     note={n}
                     onToggleTodo={(note) => void toggleTodo(note)}
                     onTagClick={setTag}
-                    onEdit={(note, content) => void handleEdit(note, content)}
+                    onEdit={(note, patch) => void handleEdit(note, patch)}
                     onDelete={(note) => void handleDelete(note)}
                     onToggleSensitive={(note) => void handleToggleSensitive(note)}
                     categoryFilterActive={category === n.category}
+                    selectable={selectMode}
+                    selected={selectedIds.has(n.id)}
+                    onSelectToggle={toggleSelected}
                   />
                 ))}
               </div>
             </section>
           ))}
+        </div>
+      )}
+
+      {/* 批量操作栏 */}
+      {selectMode && (
+        <div className="fixed inset-x-0 bottom-14 z-30 px-4 md:bottom-4 md:pl-56">
+          <div className="mx-auto max-w-2xl rounded-xl border bg-card p-3 shadow-lg lg:max-w-3xl">
+            {tagPanelOpen && (
+              <div className="mb-2 flex items-center gap-2">
+                <Input
+                  value={batchTagInput}
+                  onChange={(e) => setBatchTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.nativeEvent.isComposing) void batchAddTag()
+                  }}
+                  placeholder="输入标签名…"
+                  className="h-8 flex-1"
+                  autoFocus
+                />
+                <Button size="sm" disabled={batchBusy || !batchTagInput.trim()} onClick={() => void batchAddTag()}>
+                  {batchBusy ? <Loader2 className="animate-spin" /> : "确定"}
+                </Button>
+              </div>
+            )}
+            {catPanelOpen && (
+              <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                {CATEGORY_OPTIONS.map((c) => (
+                  <Button
+                    key={c.value}
+                    size="sm"
+                    variant="outline"
+                    disabled={batchBusy}
+                    onClick={() => void batchSetCategory(c.value)}
+                  >
+                    {c.label}
+                  </Button>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium">已选 {selectedIds.size} 条</span>
+              <button
+                onClick={() =>
+                  setSelectedIds(
+                    selectedIds.size === notes.length
+                      ? new Set()
+                      : new Set(notes.map((n) => n.id)),
+                  )
+                }
+                className="text-xs font-medium text-muted-foreground hover:text-foreground"
+              >
+                {selectedIds.size === notes.length ? "清空" : "全选"}
+              </button>
+              <div className="ml-auto flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={selectedIds.size === 0 || batchBusy}
+                  onClick={() => {
+                    setTagPanelOpen((x) => !x)
+                    setCatPanelOpen(false)
+                  }}
+                >
+                  <Tag /> 打标签
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={selectedIds.size === 0 || batchBusy}
+                  onClick={() => {
+                    setCatPanelOpen((x) => !x)
+                    setTagPanelOpen(false)
+                  }}
+                >
+                  <FolderInput /> 改分类
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={selectedIds.size === 0 || batchBusy}
+                  onClick={batchDelete}
+                >
+                  <Trash2 /> 删除
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 撤销提示 */}
+      {toast && (
+        <div className="fixed inset-x-0 bottom-28 z-40 flex justify-center px-4 md:bottom-16 md:pl-52">
+          <div className="flex items-center gap-3 rounded-full border bg-popover px-4 py-2 text-sm shadow-lg animate-in fade-in slide-in-from-bottom-2">
+            <span>{toast.message}</span>
+            {toast.undo && (
+              <button onClick={toast.undo} className="font-medium text-primary hover:underline">
+                撤销
+              </button>
+            )}
+          </div>
         </div>
       )}
 

@@ -1,4 +1,5 @@
 import type {
+  NotePatch,
   AskResponse,
   CreateNotePayload,
   Note,
@@ -268,7 +269,7 @@ export async function mockDeleteNote(id: string): Promise<void> {
 
 export async function mockPatchNote(
   id: string,
-  patch: Partial<Pick<Note, "todo_done" | "category" | "tags" | "content" | "is_sensitive">>,
+  patch: NotePatch,
 ): Promise<Note> {
   await delay(120)
   const notes = loadMockNotes()
