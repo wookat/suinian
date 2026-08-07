@@ -1,0 +1,29 @@
+{
+  "name": "suinian-mcp",
+  "version": "0.1.0",
+  "description": "碎念 Suinian MCP server（本地 stdio 版）：让 Claude Desktop / Claude Code / Cursor / Codex 直接读写你的碎念",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "suinian-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.7.2"
+  }
+}

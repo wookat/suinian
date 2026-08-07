@@ -2,7 +2,7 @@
 
 # 碎念 Suinian
 
-**开源可自部署的 AI 收件箱：微信里丢，AI 分拣、串线索、每周报告。**
+**像发消息一样记录一切：什么都能丢，AI 自动分拣、串线索、每周报告。开源可自部署。**
 
 *An open-source, self-hostable AI inbox: dump anything into WeChat (or Web/API), AI sorts it, threads recurring thoughts, and reports weekly.* — [English README](README.en.md)
 
@@ -10,9 +10,9 @@
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers%20%2B%20D1-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-想法、链接、待办、密码、文件——只管往微信（或 Web / Android）里丢，AI 帮你分拣归类、把散落数周的同题碎片串成思考线索，每周一告诉你「你最近在想什么」。
+想法、链接、待办、密码、文件——只管往微信（或 Web / Android / 浏览器剪藏 / MCP）里丢，AI 帮你分拣归类、把散落数周的同题碎片串成思考线索，每周一告诉你「你最近在想什么」。
 
-[在线体验（演示模式）](https://suinian.zalize.com) · [3 分钟自部署](docs/self-host.md) · [技术 SPEC](docs/SPEC.md)
+[在线体验（演示模式）](https://suinian.zalize.com) · [3 分钟自部署](docs/self-host.md) · [接入 Claude / Cursor（MCP）](docs/mcp.md) · [技术 SPEC](docs/SPEC.md)
 
 <img src="docs/assets/screenshot-timeline-light.png" alt="碎念时间流（浅色）" width="80%" />
 <img src="docs/assets/screenshot-timeline-dark.png" alt="碎念时间流（深色）" width="80%" />
@@ -33,6 +33,7 @@
 | **自动思考线索聚类** | ✅ | ⚠️ 仅被动提醒 | ❌ | ❌ | ❌ |
 | 周报 | ✅ | ❌（可让 Agent 定时） | ❌ | ✅（md） | ⚠️ API 可自建 |
 | 敏感内容加密（AES-256-GCM） | ✅ | 密码锁（非 e2e） | ❌ | ❌ | ❌ |
+| MCP（Claude/Cursor/Codex 直连） | ✅ 远程+stdio | ❌ | ⚠️ skill | ⚠️ skill | ⚠️ API 自建 |
 | 开源自部署 | ✅ | ❌ | ❌ | ⚠️ 仅 skill | ❌ |
 | 免费 | ✅ | Agent 要 MAX | 转向收费 | ✅ | 订阅 |
 
@@ -41,6 +42,16 @@
 Cubox 已官宣 **2027-05 停止速记/文件功能**，正在找新家？碎念三步接收你的全部数据：旧工具导出（Cubox CSV / flomo HTML / Markdown / 纯文本）→ 设置页「导入数据」上传 → 原创建时间与标签全部保留，AI 自动补分拣、串线索。迁移完成后每天还有「今日回顾」把老笔记重新翻出来。
 
 👉 [完整迁移指南](docs/migrate-from-cubox.md)
+
+## 哪里都能丢进来
+
+| 入口 | 一句话 | 去哪里 |
+|---|---|---|
+| 微信 bot | 给 bot 发消息就是记录，`?` 开头即问答 | [skill/](skill/) |
+| 浏览器剪藏扩展 | 网页选中右键一键收进碎念 | [extension/](extension/) |
+| Android | 系统分享面板 + 桌面小组件速记 | [android/](android/) |
+| Web · PWA | 手机桌面装成 App，离线可用 | [suinian.zalize.com](https://suinian.zalize.com) |
+| MCP | Claude Desktop / Claude Code / Cursor / Codex 里直接读写碎念 | [docs/mcp.md](docs/mcp.md) |
 
 ## 架构
 
