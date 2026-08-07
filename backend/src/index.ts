@@ -643,10 +643,11 @@ export async function rewriteAskQuestion(
 // ---- POST /api/ask ----
 app.post("/api/ask", async (c) => {
   const userId = c.get("userId");
-  const body = await c.req.json<{ question?: string; history?: unknown }>().catch(() => null);
+  const body = await c.req.json<{ question?: string; history?: unknown; graph?: unknown }>().catch(() => null);
   const question = (body?.question ?? "").trim();
   if (!question) return c.json({ error: "question required" }, 400);
   const history = sanitizeAskHistory(body?.history);
+  const useGraph = body?.graph !== false; // graph:false disables GraphRAG expansion (A/B comparison)
 
   // query rewrite: resolve pronouns/ordinals against history, then keyword recall
   const recallQuestion = await rewriteAskQuestion(c.env, question, history);
@@ -686,7 +687,7 @@ app.post("/api/ask", async (c) => {
   // related fragments (shared entities/relations) join the context
   const graphNoteIds = new Set<string>();
   let graphTriples: string[] = [];
-  if (notes.length > 0) {
+  if (useGraph && notes.length > 0) {
     const expansion = await graphExpand(c.env, userId, notes.map((n) => n.id), 5);
     graphTriples = expansion.triples;
     const missing = expansion.note_ids.filter((nid) => !notes.some((n) => n.id === nid));
@@ -771,7 +772,9 @@ app.get("/api/threads", async (c) => {
 
 // ---- POST /api/threads/rebuild ----
 app.post("/api/threads/rebuild", async (c) => {
-  const result = await rebuildThreads(c.env, c.get("userId"));
+  // mode=similarity re-clusters with the pre-graph embedding-only algorithm (A/B comparison & debugging)
+  const body = await c.req.json<{ mode?: string }>().catch(() => null);
+  const result = await rebuildThreads(c.env, c.get("userId"), { useGraph: body?.mode !== "similarity" });
   const { results } = await c.env.DB.prepare(
     "SELECT * FROM threads WHERE user_id = ? AND note_count > 0 ORDER BY updated_at DESC LIMIT 100"
   )

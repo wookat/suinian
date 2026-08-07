@@ -181,12 +181,12 @@ async function deepseekConfirmPair(env: Env, a: string, b: string): Promise<bool
  * Falls back to a DeepSeek title-match when Workers AI is unavailable.
  * Never throws.
  */
-export async function clusterNote(env: Env, note: NoteRow): Promise<void> {
+export async function clusterNote(env: Env, note: NoteRow, opts?: { useGraph?: boolean }): Promise<void> {
   try {
     if (note.category !== "idea") return;
     // graph signal first: an idea sharing entities/relations with an existing
     // idea joins its thread regardless of embedding similarity
-    if (!note.is_sensitive) {
+    if (!note.is_sensitive && opts?.useGraph !== false) {
       const mate = await findGraphThreadMate(env, note);
       if (mate) {
         console.log(`threads: graph mate note=${note.id} mate=${mate.note_id} shared=${mate.shared}`);
@@ -318,7 +318,11 @@ async function pickThreadByDeepseek(env: Env, note: NoteRow): Promise<string | n
  * from threads, drop the resulting empty threads, then run clusterNote over
  * each idea in chronological order.
  */
-export async function rebuildThreads(env: Env, userId: string): Promise<{ ideas: number; threads: number }> {
+export async function rebuildThreads(
+  env: Env,
+  userId: string,
+  opts?: { useGraph?: boolean }
+): Promise<{ ideas: number; threads: number }> {
   const { results: ideas } = await env.DB.prepare(
     `SELECT * FROM notes WHERE user_id = ? AND category = 'idea'
        AND created_at >= datetime('now', '-90 days')
@@ -339,7 +343,7 @@ export async function rebuildThreads(env: Env, userId: string): Promise<{ ideas:
     .bind(userId)
     .run();
   for (const n of rows) {
-    await clusterNote(env, { ...n, thread_id: null });
+    await clusterNote(env, { ...n, thread_id: null }, opts);
   }
   const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM threads WHERE user_id = ? AND note_count > 0")
     .bind(userId)
