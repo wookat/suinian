@@ -5,6 +5,7 @@ import { triageNote, loadTopTags, normalizeTodoDue, FALLBACK_TRIAGE } from "./tr
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
+import { enrichLinkInto, backfillLinkExtracts } from "./extract";
 import { clusterNote, refreshThreads, rebuildThreads } from "./threads";
 import { chatComplete } from "./ai";
 import {
@@ -263,7 +264,8 @@ async function createNote(
     return triage;
   };
 
-  // link metadata always in background
+  // link metadata always in background; full article extraction + AI summary
+  // runs after triage so the tag merge never races with applyTriage
   if (urls.length > 0) waitUntil(fetchLinkMetaInto(c.env, id, urls));
 
   let triage: TriageResult | null = null;
@@ -273,6 +275,7 @@ async function createNote(
       (async () => {
         const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
         if (n) await clusterNote(c.env, n);
+        if (url) await enrichLinkInto(c.env, id);
       })()
     );
   } else {
@@ -281,6 +284,7 @@ async function createNote(
         await runTriage();
         const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
         if (n) await clusterNote(c.env, n);
+        if (url) await enrichLinkInto(c.env, id);
       })()
     );
   }
@@ -754,6 +758,8 @@ export default {
     } else if (event.cron === "*/10 * * * *") {
       // sweep notes whose async triage failed or was cancelled
       ctx.waitUntil(retriageUnsorted(env));
+      // backfill article extraction for link notes (a few per run, rate-limited)
+      ctx.waitUntil(backfillLinkExtracts(env));
     } else {
       // daily thread title/summary refresh
       ctx.waitUntil(refreshThreads(env));

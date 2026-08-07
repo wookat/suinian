@@ -44,6 +44,14 @@ export interface NoteMeta {
   raw_transcript?: string;
   /** Full vision-model description (image notes). */
   image_description?: string;
+  /** Site name of the linked page (link notes). */
+  link_site?: string;
+  /** Extracted article text, first ~2k chars (link notes). */
+  link_excerpt?: string;
+  /** Result of the last article-extraction attempt (link notes). */
+  link_status?: "ok" | "no_content" | "fetch_failed";
+  /** ISO timestamp of the last article-extraction attempt (link notes). */
+  link_fetched_at?: string;
 }
 
 export interface NoteRow {
