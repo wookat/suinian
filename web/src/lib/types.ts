@@ -56,6 +56,10 @@ export interface CreateNotePayload {
   raw_type: NoteRawType
   content: string
   url?: string
+  /** 手动打标（# 内联指令）：入库即带标签且不被 AI 改写 */
+  tags?: string[]
+  /** 原样保存（! 内联指令）：跳过 AI 分拣，存为「想法」 */
+  skip_triage?: boolean
 }
 
 export interface AskReference {

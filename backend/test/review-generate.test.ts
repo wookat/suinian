@@ -92,6 +92,13 @@ describe("generateAllDailyReviews", () => {
   it("returns sweep stats and counts empty users", async () => {
     const { env } = fakeEnv({ users: ["u1", "u2"], relaxedNotes: [] });
     const stats = await generateAllDailyReviews(env);
-    expect(stats).toEqual({ users: 2, generated: 0, empty: 2, failed: 0 });
+    expect(stats).toEqual({ users: 2, generated: 0, already: 0, empty: 2, failed: 0 });
+  });
+
+  it("counts users whose reviews already exist as already, and writes a heartbeat", async () => {
+    const { env, inserted } = fakeEnv({ users: ["u1"], relaxedNotes: [makeNote("n1", "一条足够长的旧笔记内容")] });
+    expect(await generateAllDailyReviews(env)).toMatchObject({ generated: 1, already: 0 });
+    expect(await generateAllDailyReviews(env)).toMatchObject({ generated: 0, already: 1 });
+    expect(inserted.length).toBe(1);
   });
 });

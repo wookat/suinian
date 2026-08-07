@@ -82,6 +82,8 @@ export function TimelinePage() {
   const [searchInput, setSearchInput] = useState("")
   const [search, setSearch] = useState("")
   const [askMode, setAskMode] = useState(false)
+  // ? 内联指令：速记框直接提问 → 打开问答面板并发送
+  const [askPrefill, setAskPrefill] = useState<string | null>(null)
   const [tagsExpanded, setTagsExpanded] = useState(false)
   const [mobileTagsExpanded, setMobileTagsExpanded] = useState(false)
   const [debouncing, setDebouncing] = useState(false)
@@ -438,7 +440,13 @@ export function TimelinePage() {
       <DailyReview onTagClick={setTag} />
 
       <div ref={quickInputRef}>
-        <QuickInput onCreated={handleCreated} />
+        <QuickInput
+          onCreated={handleCreated}
+          onAsk={(q) => {
+            setAskMode(true)
+            setAskPrefill(q)
+          }}
+        />
       </div>
 
       <div className="flex gap-2">
@@ -494,7 +502,13 @@ export function TimelinePage() {
         </Button>
       </div>
 
-      {askMode && <AskChat onTagClick={setTag} />}
+      {askMode && (
+        <AskChat
+          onTagClick={setTag}
+          initialQuestion={askPrefill}
+          onInitialQuestionConsumed={() => setAskPrefill(null)}
+        />
+      )}
 
       <div className="flex gap-1 overflow-x-auto pb-1">
         {CATEGORY_TABS.map((t) => (
