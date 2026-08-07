@@ -296,9 +296,9 @@ describe("SSRF guard (M-1)", () => {
 
 describe("readable title fallback (P1-1)", () => {
   it("builds domain + readable path", () => {
-    expect(fallbackTitleFromUrl("https://36kr.com/p/3340813269088645")).toBe("36kr.com/p/3340813269088645");
+    expect(fallbackTitleFromUrl("https://36kr.com/p/3340813269088645")).toBe("36kr.com › p/3340813269088645");
     expect(fallbackTitleFromUrl("https://example.com/")).toBe("example.com");
-    expect(fallbackTitleFromUrl("https://a.com/x/%E4%B8%AD%E6%96%87")).toBe("a.com/x/中文");
+    expect(fallbackTitleFromUrl("https://a.com/x/%E4%B8%AD%E6%96%87")).toBe("a.com › x/中文");
   });
 });
 

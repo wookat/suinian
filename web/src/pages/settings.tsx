@@ -48,6 +48,84 @@ const THEME_OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "跟随系统", icon: Monitor },
 ]
 
+type SwStatus = {
+  supported: boolean
+  registered: boolean
+  active: boolean
+  controlling: boolean
+  offlineReady: boolean
+}
+
+function useSwStatus(): SwStatus | null {
+  const [status, setStatus] = useState<SwStatus | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    async function check() {
+      if (!("serviceWorker" in navigator)) {
+        if (!cancelled)
+          setStatus({ supported: false, registered: false, active: false, controlling: false, offlineReady: false })
+        return
+      }
+      try {
+        const reg = await navigator.serviceWorker.getRegistration()
+        let offlineReady = false
+        if ("caches" in window) {
+          const keys = await caches.keys()
+          offlineReady = keys.some((k) => k.includes("precache"))
+        }
+        if (!cancelled)
+          setStatus({
+            supported: true,
+            registered: !!reg,
+            active: !!reg?.active,
+            controlling: !!navigator.serviceWorker.controller,
+            offlineReady,
+          })
+      } catch {
+        if (!cancelled)
+          setStatus({ supported: true, registered: false, active: false, controlling: false, offlineReady: false })
+      }
+    }
+    void check()
+    const t = setInterval(() => void check(), 5000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [])
+  return status
+}
+
+function SwStatusCard() {
+  const status = useSwStatus()
+  if (!status) return null
+  const ok = status.active && status.offlineReady
+  const text = !status.supported
+    ? "当前浏览器不支持离线缓存（Service Worker）"
+    : ok
+      ? `离线可用：页面已缓存，断网也能打开${status.controlling ? "" : "（刷新后接管本页）"}`
+      : status.registered
+        ? "离线缓存正在安装中，稍后刷新可生效"
+        : "离线缓存未注册，刷新页面重试"
+  return (
+    <Card className="p-4">
+      <h2 className="text-sm font-medium">离线与更新（PWA）</h2>
+      <p
+        className={cn(
+          "mt-2 flex items-center gap-1.5 text-sm",
+          ok ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground",
+        )}
+      >
+        {ok ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
+        {text}
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        有新版本时页面会弹出「点击刷新」提示；离线时可浏览已缓存的笔记/线索/周报
+      </p>
+    </Card>
+  )
+}
+
 function formatLastUsed(iso: string): string {
   // API stores UTC "YYYY-MM-DD HH:MM:SS"
   const d = new Date(iso.includes("T") ? iso : `${iso.replace(" ", "T")}Z`)
@@ -578,6 +656,8 @@ export function SettingsPage() {
           )}
         </Button>
       </Card>
+
+      <SwStatusCard />
 
       <Card className="p-4">
         <h2 className="text-sm font-medium">外观</h2>

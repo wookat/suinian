@@ -450,7 +450,10 @@ export function NoteCard({
                   <div className="flex items-center gap-1.5 text-sm font-medium group-hover/link:text-primary">
                     <LinkIcon className="size-3.5 shrink-0" />
                     <span className="truncate">{card.title ?? shortLink(card.url)}</span>
-                    {i === 0 && card.title && note.meta?.link_site && (
+                    {i === 0 &&
+                      card.title &&
+                      note.meta?.link_site &&
+                      !card.title.startsWith(note.meta.link_site) && (
                       <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                         {note.meta.link_site}
                       </span>

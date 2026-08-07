@@ -170,7 +170,7 @@ export function fallbackTitleFromUrl(url: string): string | null {
       /* keep raw path */
     }
     const tail = path.split("/").filter(Boolean).slice(-2).join("/");
-    return tail ? `${u.hostname}/${tail}`.slice(0, 300) : u.hostname;
+    return tail ? `${u.hostname} › ${tail}`.slice(0, 300) : u.hostname;
   } catch {
     return null;
   }
