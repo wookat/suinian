@@ -33,13 +33,13 @@ notes(
 threads(id, user_id, title, summary, note_count, updated_at)  -- 思考线索
 weekly_reports(id, user_id, week_start, content_md, created_at)
 attachments(id, note_id, r2_key, mime, size)
-note_embeddings(note_id, vector)  -- 聚类 embedding（JSON 数组）
+note_embeddings(note_id, vector)  -- 语义检索/聚类 embedding（JSON 数组，bge-m3 1024 维）
 ```
 
 ## API（backend, Hono on Workers）
 - `POST /api/notes` 收件（鉴权 Bearer token）：{source, raw_type, content, url?}
   - 入库后异步触发管线：分类→标签→(链接)抓取摘要→线索归并
-- `GET /api/notes?category=&tag=&q=&cursor=` 时间流+筛选+全文搜
+- `GET /api/notes?category=&tag=&q=&cursor=` 时间流+筛选+混合搜索（首页无筛选时：关键词 LIKE + 语义召回去重合并按相关度排序，返回的 note 带 `match: keyword|semantic|both`；语义失败自动降级纯关键词）
 - `GET /api/threads` / `GET /api/threads/:id`（含碎片列表）
 - `POST /api/ask` 自然语言问答（检索+LLM 汇总，返回引用 note ids）
 - `GET /api/reports` / `GET /api/reports/:id` 周报；`POST /api/reports/generate` 手动触发（可传 `{"week":"this"}`）
@@ -52,7 +52,8 @@ note_embeddings(note_id, vector)  -- 聚类 embedding（JSON 数组）
 2. **链接抓取**：Workers fetch → readability 抽正文 → 摘要（公众号/小红书后续专项）
 3. **线索聚类**：新想法入库时与近 90 天 idea 类做 embedding 相似度（Workers AI `@cf/baai/bge-m3`，余弦阈值 0.78，向量存 note_embeddings 表；不可用时降级 DeepSeek 按标题判断），超阈值归入已有 thread 或建新 thread；每日 cron 重整 thread 标题/摘要
 4. **周报**：本周 notes 汇总 → 结构化周报 markdown
-5. **问答**：关键词+向量召回 top-K → LLM 生成回答附引用
+5. **问答**：query rewrite 后混合召回（关键词 LIKE + 语义 top-K）→ LLM 生成回答附引用
+6. **语义检索**：笔记入库/更新时异步用 Workers AI `@cf/baai/bge-m3` 生成 embedding 存 note_embeddings（可选 Vectorize 镜像，wrangler.toml 取消注释即启用；无 binding 时 D1 暴力余弦，个人量级足够）；存量笔记由 10 分钟 cron 限速补嵌入；**敏感笔记不生成 embedding**（避免明文进向量库，标记敏感时同步删除已有向量），删笔记/删账号同步删向量
 
 ## 微信接入（skill/ + bot 实例）
 - 基于 openclaw/wechatbot SDK（Node）：扫码绑定、长轮询收消息

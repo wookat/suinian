@@ -1,6 +1,8 @@
 export type Env = {
   DB: D1Database;
   AI?: Ai;
+  /** Optional Vectorize index; when absent semantic recall falls back to D1-stored vectors. */
+  VECTORIZE?: VectorizeIndex;
   MEDIA?: R2Bucket;
   DEEPSEEK_API_KEY: string;
   DEEPSEEK_BASE_URL: string;
