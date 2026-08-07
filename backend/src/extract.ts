@@ -46,6 +46,10 @@ async function readBodyCapped(res: Response, maxBytes: number): Promise<string> 
   return new TextDecoder("utf-8").decode(buf);
 }
 
+function normalizeText(s: string): string {
+  return s.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function hostnameOf(url: string): string | null {
   try {
     return new URL(url).hostname;
@@ -66,12 +70,22 @@ export function extractArticle(html: string, url: string): ArticleExtract {
       html.match(/<meta[^>]+content=["']([^"']*)["'][^>]*property=["']og:site_name["']/i);
     if (siteM) site = siteM[1].trim().slice(0, 100) || null;
     const { document } = parseHTML(html);
+    // WeChat articles keep the body in #js_content (hidden until JS runs),
+    // which Readability misjudges — read known content containers first
+    for (const sel of ["#js_content", ".rich_media_content"]) {
+      const el = document.querySelector(sel);
+      const text = normalizeText(el?.textContent ?? "");
+      if (text.length >= 200) {
+        excerpt = text.slice(0, EXCERPT_CHARS);
+        break;
+      }
+    }
     const article = new Readability(document, { charThreshold: 100 }).parse();
     if (article) {
       if (article.title) title = article.title.slice(0, 300);
       if (article.siteName && !site) site = article.siteName.slice(0, 100);
-      const text = (article.textContent ?? "").replace(/\n{3,}/g, "\n\n").replace(/[ \t]+/g, " ").trim();
-      if (text.length >= 80) excerpt = text.slice(0, EXCERPT_CHARS);
+      const text = normalizeText(article.textContent ?? "");
+      if (!excerpt && text.length >= 80) excerpt = text.slice(0, EXCERPT_CHARS);
     }
   } catch {
     // fall through to meta-only result
