@@ -11,11 +11,13 @@ import {
   RefreshCw,
   UserPlus,
   Trash2,
+  Download,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { deleteAccount, rotateToken, testConnection, type TestConnectionResult } from "@/lib/api"
+import { Checkbox } from "@/components/ui/checkbox"
+import { deleteAccount, exportData, rotateToken, testConnection, type TestConnectionResult } from "@/lib/api"
 import { loadSettings, saveSettings } from "@/lib/settings"
 import { loadTheme, setTheme, type ThemeMode } from "@/lib/theme"
 import { cn } from "@/lib/utils"
@@ -36,6 +38,29 @@ export function SettingsPage() {
   const [rotating, setRotating] = useState(false)
   const [accountMsg, setAccountMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [includeSensitive, setIncludeSensitive] = useState(false)
+  const [exporting, setExporting] = useState<"json" | "markdown" | null>(null)
+  const [exportMsg, setExportMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  async function handleExport(format: "json" | "markdown") {
+    if (exporting) return
+    setExporting(format)
+    setExportMsg(null)
+    try {
+      const { blob, filename } = await exportData(format, includeSensitive)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      setExportMsg({ ok: true, text: `已导出 ${filename}${includeSensitive ? "（含敏感内容明文）" : "（敏感内容已脱敏）"}` })
+    } catch (e) {
+      setExportMsg({ ok: false, text: e instanceof Error ? e.message : "导出失败，请稍后重试" })
+    } finally {
+      setExporting(null)
+    }
+  }
 
   async function copyToken() {
     const token = loadSettings().apiToken
@@ -285,6 +310,71 @@ export function SettingsPage() {
               <CircleAlert className="size-4 shrink-0" />
             )}
             {accountMsg.text}
+          </p>
+        )}
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <div>
+          <h2 className="text-sm font-medium">导出数据</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            导出全部笔记/线索/周报。敏感笔记默认脱敏，勾选后才会明文导出
+          </p>
+        </div>
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <Checkbox
+            checked={includeSensitive}
+            onCheckedChange={(v) => setIncludeSensitive(v === true)}
+          />
+          包含敏感内容（明文导出密码等加密笔记）
+        </label>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Button
+            variant="outline"
+            onClick={() => void handleExport("json")}
+            disabled={exporting !== null}
+            className="w-full sm:w-auto"
+          >
+            {exporting === "json" ? (
+              <>
+                <Loader2 className="animate-spin" /> 导出中…
+              </>
+            ) : (
+              <>
+                <Download /> 导出 JSON
+              </>
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => void handleExport("markdown")}
+            disabled={exporting !== null}
+            className="w-full sm:w-auto"
+          >
+            {exporting === "markdown" ? (
+              <>
+                <Loader2 className="animate-spin" /> 导出中…
+              </>
+            ) : (
+              <>
+                <Download /> 导出 Markdown
+              </>
+            )}
+          </Button>
+        </div>
+        {exportMsg && (
+          <p
+            className={cn(
+              "flex items-center gap-1.5 text-sm",
+              exportMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+            )}
+          >
+            {exportMsg.ok ? (
+              <CircleCheck className="size-4 shrink-0" />
+            ) : (
+              <CircleAlert className="size-4 shrink-0" />
+            )}
+            {exportMsg.text}
           </p>
         )}
       </Card>

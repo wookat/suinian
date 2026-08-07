@@ -193,6 +193,33 @@ export async function ask(
   }
 }
 
+export async function exportData(
+  format: "json" | "markdown",
+  includeSensitive: boolean,
+): Promise<{ blob: Blob; filename: string }> {
+  const { apiBaseUrl, apiToken, useMock } = loadSettings()
+  if (useMock || !apiBaseUrl) throw new Error("演示模式不支持导出，请先配置真实 API")
+  const params = new URLSearchParams()
+  if (format === "markdown") params.set("format", "markdown")
+  if (includeSensitive) params.set("include_sensitive", "true")
+  const qs = params.toString()
+  let res: Response
+  try {
+    res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/export${qs ? `?${qs}` : ""}`, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+    })
+  } catch {
+    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    throw new ApiError(res.status, text || res.statusText)
+  }
+  const blob = await res.blob()
+  const date = new Date().toISOString().slice(0, 10)
+  return { blob, filename: `suinian-export-${date}.${format === "markdown" ? "md" : "json"}` }
+}
+
 export async function getThreads(): Promise<ThreadsResponse> {
   if (loadSettings().useMock) return mockGetThreads()
   return realFetch<ThreadsResponse>("/api/threads")
