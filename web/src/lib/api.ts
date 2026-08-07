@@ -207,6 +207,15 @@ export async function patchNote(
   return normalizeNote((res.note ?? res) as Record<string, unknown>)
 }
 
+/** 手动重试链接标题/正文抓取，返回更新后的笔记 */
+export async function refetchLink(id: string): Promise<Note> {
+  if (loadSettings().useMock) throw new Error("演示模式不支持重新抓取")
+  const res = await realFetch<Record<string, unknown>>(`/api/notes/${id}/refetch-link`, {
+    method: "POST",
+  })
+  return normalizeNote((res.note ?? res) as Record<string, unknown>)
+}
+
 export async function deleteNote(id: string): Promise<void> {
   if (loadSettings().useMock) return mockDeleteNote(id)
   await realFetch<{ ok: boolean }>(`/api/notes/${id}`, { method: "DELETE" })

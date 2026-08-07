@@ -28,10 +28,20 @@ function decodeEntities(s: string): string {
     .trim();
 }
 
+/** Titles of anti-bot / error interstitials that must never be saved as a page title. */
+const BLOCKED_TITLE_RE =
+  /^(环境异常|参数错误|验证|安全验证|访问异常|请在微信客户端打开链接)$|Just a moment|Access Denied|Attention Required|403 Forbidden|404 Not Found/i;
+
+/** True when a fetched page title is an anti-bot/error interstitial, not real content. */
+export function isBlockedTitle(title: string | null): boolean {
+  return !!title && BLOCKED_TITLE_RE.test(title.trim());
+}
+
 /** Parse <title> and meta description from an HTML string. */
 export function parseHtmlMeta(html: string): { title: string | null; description: string | null } {
   const titleM = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  const title = titleM ? decodeEntities(titleM[1]).slice(0, 300) : null;
+  let title = titleM ? decodeEntities(titleM[1]).slice(0, 300) : null;
+  if (isBlockedTitle(title)) title = null;
   const descM =
     html.match(/<meta[^>]+name=["']description["'][^>]*content=["']([^"']*)["']/i) ||
     html.match(/<meta[^>]+content=["']([^"']*)["'][^>]*name=["']description["']/i) ||
