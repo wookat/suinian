@@ -30,6 +30,7 @@ import {
   AUDIO_FAILED_PLACEHOLDER,
   IMAGE_FAILED_PLACEHOLDER,
 } from "./media";
+import { detectFileKind, buildFileNote, buildFileReply } from "./files";
 
 type Vars = { userId: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -474,6 +475,33 @@ app.delete("/api/notes/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// ---- GET /api/notes/:id/file ----
+// Proxy-download the original attachment from R2 (owner-only; bearer auth
+// already enforced by the /api/* middleware).
+app.get("/api/notes/:id/file", async (c) => {
+  const id = c.req.param("id");
+  const note = await c.env.DB.prepare("SELECT id, meta FROM notes WHERE id = ? AND user_id = ?")
+    .bind(id, c.get("userId"))
+    .first<{ id: string; meta: string | null }>();
+  if (!note) return c.json({ error: "not found" }, 404);
+  if (!c.env.MEDIA) return c.json({ error: "media storage not configured" }, 404);
+  const att = await c.env.DB.prepare("SELECT r2_key, mime FROM attachments WHERE note_id = ? ORDER BY rowid DESC LIMIT 1")
+    .bind(id)
+    .first<{ r2_key: string; mime: string | null }>();
+  if (!att) return c.json({ error: "no attachment" }, 404);
+  const obj = await c.env.MEDIA.get(att.r2_key);
+  if (!obj) return c.json({ error: "attachment missing" }, 404);
+  const fileName = parseNoteMeta(note.meta)?.file_name || att.r2_key.split("/").pop() || "file";
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": att.mime || obj.httpMetadata?.contentType || "application/octet-stream",
+      "Content-Length": String(obj.size),
+      "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+      "Cache-Control": "private, no-store",
+    },
+  });
+});
+
 // ---- POST /api/ingest/wechat ----
 app.post("/api/ingest/wechat", async (c) => {
   const body = await c.req.json<{ content?: string; url?: string; raw_type?: string }>().catch(() => null);
@@ -496,11 +524,43 @@ app.post("/api/ingest/wechat", async (c) => {
 });
 
 // ---- POST /api/ingest/media ----
-// audio -> Whisper transcription, image -> vision text extraction; the extracted
-// text becomes the note content and flows through the normal async triage pipeline.
+// audio -> Whisper transcription, image -> vision text extraction, file ->
+// text extraction (+ AI summary for long docs); the extracted text becomes
+// the note content and flows through the normal async triage pipeline.
 app.post("/api/ingest/media", async (c) => {
   const parsed = await parseMediaRequest(c.req.raw);
   if ("error" in parsed) return c.json({ error: parsed.error }, parsed.status);
+
+  if (parsed.type === "file") {
+    const fileName = parsed.fileName || "file";
+    const kind = detectFileKind(parsed.fileName, parsed.mime);
+    if (!kind) {
+      return c.json({ error: "不支持的文件类型：目前支持 PDF / txt / md / docx" }, 400);
+    }
+    const result = await buildFileNote(c.env, kind, fileName, parsed.bytes);
+    const tooLongFile = contentTooLong(c, result.content);
+    if (tooLongFile) return tooLongFile;
+    const meta: NoteMeta = {
+      file_name: fileName,
+      file_mime: parsed.mime,
+      file_size: parsed.bytes.length,
+      file_kind: kind,
+      file_status: result.extracted ? "ok" : "extract_failed",
+      ...(result.excerpt ? { file_excerpt: result.excerpt } : {}),
+    };
+    const { note } = await createNote(
+      c,
+      c.get("userId"),
+      { source: parsed.source || "api", raw_type: "file", content: result.content, meta },
+      (p) => c.executionCtx.waitUntil(p),
+      { syncTriage: false }
+    );
+    // 原件必须存档成功（下载依赖 R2），失败则同步等待并如实报错
+    const r2Key = await storeOriginal(c.env, c.get("userId"), note.id, parsed);
+    if (!r2Key && c.env.MEDIA) console.error("file ingest: R2 archive failed for note", note.id);
+    const reply = buildFileReply(fileName, result.content, result.extracted);
+    return c.json({ note: noteToJson(note), text: result.content, extracted: result.extracted, reply }, 201);
+  }
 
   let content: string | null = null;
   let meta: NoteMeta | null = null;

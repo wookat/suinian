@@ -3,7 +3,7 @@ import { chatComplete } from "./ai";
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
 
-export type MediaType = "audio" | "image";
+export type MediaType = "audio" | "image" | "file";
 
 export const WHISPER_MODEL = "@cf/openai/whisper-large-v3-turbo";
 export const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
@@ -62,7 +62,9 @@ export async function parseMediaRequest(req: Request): Promise<MediaIngestReques
     source = body.source;
   }
 
-  if (type !== "audio" && type !== "image") return { error: "type must be audio or image", status: 400 };
+  if (type !== "audio" && type !== "image" && type !== "file") {
+    return { error: "type must be audio, image or file", status: 400 };
+  }
   if (!bytes || bytes.length === 0) return { error: "empty file", status: 400 };
   return { type, bytes, mime, fileName, source };
 }
@@ -216,7 +218,7 @@ export async function storeOriginal(
   req: MediaIngestRequest
 ): Promise<string | null> {
   if (!env.MEDIA) return null;
-  const safeName = (req.fileName || (req.type === "audio" ? "audio" : "image")).replace(/[^\w.\-\u4e00-\u9fff]/g, "_");
+  const safeName = (req.fileName || req.type).replace(/[^\w.\-\u4e00-\u9fff]/g, "_");
   const key = `media/${userId}/${noteId}/${Date.now()}-${safeName}`;
   try {
     await env.MEDIA.put(key, req.bytes, { httpMetadata: { contentType: req.mime } });

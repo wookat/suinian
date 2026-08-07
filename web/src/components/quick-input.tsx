@@ -1,8 +1,8 @@
 import { useRef, useState } from "react"
-import { Send, Loader2, ImagePlus } from "lucide-react"
+import { Send, Loader2, Paperclip } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
-import { ApiError, createNote, ingestImage, MAX_MEDIA_BYTES } from "@/lib/api"
+import { ApiError, createNote, ingestMedia, MAX_MEDIA_BYTES, SUPPORTED_FILE_EXTS } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import type { Note } from "@/lib/types"
 
@@ -39,20 +39,22 @@ export function QuickInput({ onCreated }: { onCreated: (note: Note) => void }) {
     }
   }
 
-  async function uploadImage(file: File) {
+  async function uploadMedia(file: File) {
     if (uploading) return
-    if (!file.type.startsWith("image/")) {
-      setError("只支持上传图片文件")
+    const isImage = file.type.startsWith("image/")
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? ""
+    if (!isImage && !SUPPORTED_FILE_EXTS.includes(ext)) {
+      setError("只支持图片或 PDF / txt / md / docx 文件")
       return
     }
     if (file.size > MAX_MEDIA_BYTES) {
-      setError(`图片过大：最多 ${MAX_MEDIA_BYTES / 1024 / 1024}MB`)
+      setError(`文件过大：最多 ${MAX_MEDIA_BYTES / 1024 / 1024}MB`)
       return
     }
     setUploading(true)
     setError(null)
     try {
-      const note = await ingestImage(file)
+      const note = await ingestMedia(file, isImage ? "image" : "file")
       onCreated(note)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -71,7 +73,7 @@ export function QuickInput({ onCreated }: { onCreated: (note: Note) => void }) {
           const file = item?.getAsFile()
           if (file) {
             e.preventDefault()
-            void uploadImage(file)
+            void uploadMedia(file)
           }
         }}
         onKeyDown={(e) => {
@@ -85,17 +87,17 @@ export function QuickInput({ onCreated }: { onCreated: (note: Note) => void }) {
       />
       <div className="mt-1 flex items-center justify-between gap-2">
         <span className="min-w-0 truncate text-xs text-muted-foreground">
-          想法 / 待办 / 链接 / 资料 / 图片，AI 自动分拣
+          想法 / 待办 / 链接 / 资料 / 图片 / 文件，AI 自动分拣
         </span>
         <div className="flex shrink-0 items-center gap-2">
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/*,.pdf,.txt,.md,.markdown,.docx"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0]
-              if (file) void uploadImage(file)
+              if (file) void uploadMedia(file)
               e.target.value = ""
             }}
           />
@@ -104,10 +106,10 @@ export function QuickInput({ onCreated }: { onCreated: (note: Note) => void }) {
             variant="outline"
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            aria-label="上传图片，AI 提取文字"
-            title="上传图片，AI 提取文字（也可直接粘贴）"
+            aria-label="上传图片或文件，AI 提取内容"
+            title="上传图片或文件（PDF/txt/md/docx），AI 提取内容"
           >
-            {uploading ? <Loader2 className="animate-spin" /> : <ImagePlus />}
+            {uploading ? <Loader2 className="animate-spin" /> : <Paperclip />}
           </Button>
           {length >= COUNTER_THRESHOLD && (
             <span

@@ -159,3 +159,50 @@ describe('handleMessage 媒体消息（语音/图片）', () => {
     expect(reply).toContain('保存失败')
   })
 })
+
+describe('handleMessage 文件消息', () => {
+  const pdfMedia = { mime: 'application/pdf', size: 3, data: Buffer.from('pdf'), fileName: '报告.pdf' }
+
+  it('支持的文件 → ingestMedia type=file 并回复存档确认', async () => {
+    const client = fakeClient({
+      ingestMedia: vi.fn(async () => ({ note: { id: 'n5' }, reply: '已存档：报告.pdf · 季度营收摘要' })),
+    })
+    const reply = await handleMessage(client, {
+      userId: 'u1', text: '', type: 'file', media: [pdfMedia],
+    })
+    expect(reply).toBe('已存档：报告.pdf · 季度营收摘要')
+    expect((client.ingestMedia as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      type: 'file', mime: 'application/pdf', file_name: '报告.pdf', source: 'wechat',
+    })
+    expect(client.ingest).not.toHaveBeenCalled()
+  })
+
+  it('不支持的扩展名 → 兜底仅存档文件名走普通 ingest', async () => {
+    const client = fakeClient()
+    await handleMessage(client, {
+      userId: 'u1', text: '', type: 'file',
+      media: [{ mime: 'application/zip', size: 3, data: Buffer.from('zip'), fileName: 'a.zip' }],
+    })
+    expect(client.ingestMedia).not.toHaveBeenCalled()
+    expect((client.ingest as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      raw_type: 'file', content: '【文件】a.zip',
+    })
+  })
+
+  it('上传失败 → 兜底仅存档文件名', async () => {
+    const client = fakeClient({ ingestMedia: vi.fn(async () => { throw new Error('boom') }) })
+    await handleMessage(client, { userId: 'u1', text: '', type: 'file', media: [pdfMedia] })
+    expect((client.ingest as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      raw_type: 'file', content: '【文件】报告.pdf',
+    })
+  })
+
+  it('下载失败（无 data）→ 用消息文本兜底', async () => {
+    const client = fakeClient()
+    await handleMessage(client, { userId: 'u1', text: '合同.docx', type: 'file' })
+    expect(client.ingestMedia).not.toHaveBeenCalled()
+    expect((client.ingest as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      raw_type: 'file', content: '【文件】合同.docx',
+    })
+  })
+})

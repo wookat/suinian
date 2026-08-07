@@ -9,6 +9,12 @@ export interface NoteMeta {
   link_excerpt?: string
   link_status?: "ok" | "no_content" | "fetch_failed"
   link_fetched_at?: string
+  file_name?: string
+  file_mime?: string
+  file_size?: number
+  file_kind?: string
+  file_excerpt?: string
+  file_status?: "ok" | "extract_failed"
 }
 
 export interface Note {

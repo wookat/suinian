@@ -54,6 +54,18 @@ export interface NoteMeta {
   link_status?: "ok" | "no_content" | "fetch_failed";
   /** ISO timestamp of the last article-extraction attempt (link notes). */
   link_fetched_at?: string;
+  /** Original file name (file notes). */
+  file_name?: string;
+  /** Original file MIME type (file notes). */
+  file_mime?: string;
+  /** Original file size in bytes (file notes). */
+  file_size?: number;
+  /** Detected file kind: pdf / txt / md / docx (file notes). */
+  file_kind?: string;
+  /** Extracted full-text excerpt, first ~6k chars (long file notes). */
+  file_excerpt?: string;
+  /** Result of the text extraction attempt (file notes). */
+  file_status?: "ok" | "extract_failed";
 }
 
 export interface NoteRow {

@@ -25,21 +25,31 @@ export interface IngestPayload {
 }
 
 export interface MediaIngestPayload {
-  type: 'audio' | 'image'
+  type: 'audio' | 'image' | 'file'
   data_base64: string
   mime: string
   file_name?: string
   source: 'wechat'
 }
 
-/** 需要走 /api/ingest/media 的媒体（语音/图片且已下载到字节）→ payload；否则 null */
+/** 后端支持提取/存档的文件扩展名（与 backend/src/files.ts 保持一致） */
+export const SUPPORTED_FILE_EXTS = ['pdf', 'txt', 'md', 'markdown', 'docx']
+
+/** 文件消息是否属于后端支持的可提取类型 */
+export function isSupportedFile(fileName?: string): boolean {
+  const ext = fileName?.split('.').pop()?.toLowerCase()
+  return !!ext && SUPPORTED_FILE_EXTS.includes(ext)
+}
+
+/** 需要走 /api/ingest/media 的媒体（语音/图片/文件且已下载到字节）→ payload；否则 null */
 export function toMediaIngestPayload(msg: NormalizedMessage): MediaIngestPayload | null {
-  if (msg.type !== 'voice' && msg.type !== 'image') return null
+  if (msg.type !== 'voice' && msg.type !== 'image' && msg.type !== 'file') return null
   const media = msg.media?.[0]
   if (!media?.data || media.data.length === 0) return null
   if (media.data.length > MAX_MEDIA_BYTES) return null
+  if (msg.type === 'file' && !isSupportedFile(media.fileName)) return null
   return {
-    type: msg.type === 'voice' ? 'audio' : 'image',
+    type: msg.type === 'voice' ? 'audio' : msg.type === 'image' ? 'image' : 'file',
     data_base64: media.data.toString('base64'),
     mime: media.mime,
     file_name: media.fileName,
