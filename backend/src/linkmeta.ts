@@ -37,10 +37,22 @@ export function isBlockedTitle(title: string | null): boolean {
   return !!title && BLOCKED_TITLE_RE.test(title.trim());
 }
 
-/** Parse <title> and meta description from an HTML string. */
+/**
+ * Parse title and meta description from an HTML string. Title resolution
+ * order: <title> → og:title → twitter:title → `var msg_title = "…"` (WeChat
+ * mp pages ship an empty <title> and keep the real one in og:title / JS vars).
+ */
 export function parseHtmlMeta(html: string): { title: string | null; description: string | null } {
   const titleM = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  let title = titleM ? decodeEntities(titleM[1]).slice(0, 300) : null;
+  let title: string | null = titleM ? decodeEntities(titleM[1]).slice(0, 300) : null;
+  if (!title) {
+    const m =
+      html.match(/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']*)["']/i) ||
+      html.match(/<meta[^>]+content=["']([^"']*)["'][^>]*property=["']og:title["']/i) ||
+      html.match(/<meta[^>]+name=["']twitter:title["'][^>]*content=["']([^"']*)["']/i) ||
+      html.match(/var\s+msg_title\s*=\s*['"]([^'"]+)['"]/);
+    if (m) title = decodeEntities(m[1]).slice(0, 300) || null;
+  }
   if (isBlockedTitle(title)) title = null;
   const descM =
     html.match(/<meta[^>]+name=["']description["'][^>]*content=["']([^"']*)["']/i) ||
@@ -58,9 +70,12 @@ export async function fetchLinkMeta(
     const res = await fetch(url, {
       redirect: "follow",
       headers: {
+        // browser-like UA: many sites (WeChat mp, big media) serve interstitials
+        // or empty meta to obvious bot UAs
         "user-agent":
-          "Mozilla/5.0 (compatible; SuinianBot/1.0; +https://suinian.zalize.com)",
-        accept: "text/html,application/xhtml+xml",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
       },
       signal: AbortSignal.timeout(8000),
     });
