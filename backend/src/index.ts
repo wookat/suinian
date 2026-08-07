@@ -32,6 +32,7 @@ import {
   IMAGE_FAILED_PLACEHOLDER,
 } from "./media";
 import { detectFileKind, buildFileNote, buildFileReply } from "./files";
+import { parseImportFile, runImport, IMPORT_SOURCES, type ImportSource } from "./import";
 
 type Vars = { userId: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -212,10 +213,17 @@ const CATEGORY_LABEL: Record<string, string> = {
 };
 
 async function applyTriage(env: Env, noteId: string, triage: TriageResult, content: string): Promise<void> {
+  // imported notes carry their original tags in meta.import_tags: keep them
+  // first and union in the AI-suggested ones
+  const row = await env.DB.prepare("SELECT meta FROM notes WHERE id = ?").bind(noteId).first<{ meta: string | null }>();
+  const importTags = parseNoteMeta(row?.meta ?? null)?.import_tags;
+  const tags = Array.isArray(importTags)
+    ? [...new Set([...importTags, ...triage.tags])].slice(0, 6)
+    : triage.tags;
   const sets = ["category = ?", "tags = ?", "title = ?", "is_sensitive = ?", "todo_due = ?"];
   const binds: unknown[] = [
     triage.category,
-    JSON.stringify(triage.tags),
+    JSON.stringify(tags),
     triage.title || null,
     triage.is_sensitive ? 1 : 0,
     triage.todo_due ?? null,
@@ -924,6 +932,43 @@ app.post("/api/reports/generate", async (c) => {
   const { id, week_start } = await generateWeeklyReport(c.env, c.get("userId"), new Date(), week);
   const report = await c.env.DB.prepare("SELECT * FROM weekly_reports WHERE id = ?").bind(id).first<WeeklyReportRow>();
   return c.json({ report, week_start }, 201);
+});
+
+// ---- POST /api/import ----
+// Bulk-import notes from Cubox / flomo / Markdown / plain-text export files.
+// Inserts rows with category NULL so the existing cron sweep gradually runs
+// triage / embeddings / graph / link extraction without bursting AI quota.
+const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
+
+app.post("/api/import", async (c) => {
+  const userId = c.get("userId");
+  let source = "";
+  let text = "";
+  const ct = c.req.header("content-type") || "";
+  if (ct.includes("multipart/form-data")) {
+    const form = await c.req.raw.formData().catch(() => null);
+    if (!form) return c.json({ error: "invalid form data" }, 400);
+    source = String(form.get("source") ?? "");
+    const file = form.get("file");
+    if (!(file instanceof File)) return c.json({ error: "file required" }, 400);
+    if (file.size > MAX_IMPORT_BYTES) return c.json({ error: "文件过大：最大支持 20MB" }, 413);
+    text = await file.text();
+  } else {
+    const body = await c.req.json<{ source?: unknown; content?: unknown }>().catch(() => null);
+    source = typeof body?.source === "string" ? body.source : "";
+    text = typeof body?.content === "string" ? body.content : "";
+    if (text.length > MAX_IMPORT_BYTES) return c.json({ error: "内容过大：最大支持 20MB" }, 413);
+  }
+  if (!IMPORT_SOURCES.includes(source as ImportSource)) {
+    return c.json({ error: "source 需为 cubox / flomo / markdown / text 之一" }, 400);
+  }
+  if (!text.trim()) return c.json({ error: "文件内容为空" }, 400);
+  const items = parseImportFile(source as ImportSource, text);
+  if (items.length === 0) {
+    return c.json({ error: "未能从文件中解析出笔记，请确认选择的来源与导出格式是否匹配" }, 400);
+  }
+  const stats = await runImport(c.env.DB, userId, source as ImportSource, items);
+  return c.json(stats, 201);
 });
 
 export const SENSITIVE_EXPORT_PLACEHOLDER = "[已加密内容]";

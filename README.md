@@ -116,6 +116,8 @@ npx wrangler pages deploy dist --project-name suinian
 
 **API / Agent 接入**：REST API 全量文档化（[backend/README.md](backend/README.md)），可作为个人记忆源接入 Claude / OpenClaw / 任意 agent，见 [docs/integrations.md](docs/integrations.md)。
 
+**从 Cubox / flomo 迁移**：设置页「导入数据」一键导入 Cubox（CSV / 书签 HTML / txt）、flomo（HTML）及通用 Markdown / 纯文本导出文件：保留原创建时间与标签、链接走既有抓取管线、重复自动跳过，AI 分拣/线索/图谱后台陆续补齐。详见 [docs/import.md](docs/import.md)。
+
 ## 贡献与许可
 
 欢迎 Issue / PR，见 [CONTRIBUTING.md](CONTRIBUTING.md)。代码以 [MIT License](LICENSE) 开源。

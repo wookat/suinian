@@ -263,6 +263,49 @@ export async function exportData(
   return { blob, filename: `suinian-export-${date}.${format === "markdown" ? "md" : "json"}` }
 }
 
+export type ImportSource = "cubox" | "flomo" | "markdown" | "text"
+
+export interface ImportStats {
+  total: number
+  imported: number
+  skipped: number
+  failed: number
+}
+
+export const MAX_IMPORT_BYTES = 20 * 1024 * 1024
+
+/** 导入 Cubox / flomo / Markdown / 纯文本导出文件，批量入库 */
+export async function importData(file: File, source: ImportSource): Promise<ImportStats> {
+  const { apiBaseUrl, apiToken, useMock } = loadSettings()
+  if (useMock || !apiBaseUrl) throw new Error("演示模式不支持导入，请先配置真实 API")
+  if (file.size > MAX_IMPORT_BYTES) throw new Error("文件过大：最大支持 20MB")
+  const form = new FormData()
+  form.set("source", source)
+  form.set("file", file)
+  let res: Response
+  try {
+    res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/import`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiToken}` },
+      body: form,
+    })
+  } catch {
+    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    let message = text || res.statusText
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown }
+      if (typeof parsed.error === "string" && parsed.error) message = parsed.error
+    } catch {
+      // not JSON, keep raw text
+    }
+    throw new ApiError(res.status, message)
+  }
+  return res.json() as Promise<ImportStats>
+}
+
 export async function getThreads(): Promise<ThreadsResponse> {
   if (loadSettings().useMock) return mockGetThreads()
   return realFetch<ThreadsResponse>("/api/threads")
