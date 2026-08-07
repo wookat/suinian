@@ -390,12 +390,15 @@ export async function getReports(): Promise<ReportsResponse> {
   return realFetch<ReportsResponse>("/api/reports")
 }
 
-/** 手动生成本周周报（幂等：本周已有则重新生成覆盖） */
-export async function generateReport(week: "this" | "last" = "this"): Promise<WeeklyReport> {
+/** 手动生成本周/本月报告（幂等：同期已有则重新生成覆盖） */
+export async function generateReport(
+  which: "this" | "last" = "this",
+  period: "week" | "month" = "week",
+): Promise<WeeklyReport> {
   if (loadSettings().useMock) return mockGenerateReport()
   const res = await realFetch<{ report: WeeklyReport }>("/api/reports/generate", {
     method: "POST",
-    body: JSON.stringify({ week }),
+    body: JSON.stringify({ week: which, which, period }),
   })
   return res.report
 }

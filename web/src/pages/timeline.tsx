@@ -34,6 +34,8 @@ const CATEGORY_OPTIONS: { value: NoteCategory; label: string }[] = [
   { value: "todo", label: "待办" },
   { value: "collect", label: "收藏" },
   { value: "data", label: "资料" },
+  { value: "expense", label: "支出" },
+  { value: "income", label: "收入" },
 ]
 
 const CATEGORY_TABS = [
@@ -42,6 +44,8 @@ const CATEGORY_TABS = [
   { value: "todo", label: "待办" },
   { value: "collect", label: "收藏" },
   { value: "data", label: "资料" },
+  { value: "expense", label: "支出" },
+  { value: "income", label: "收入" },
 ] as const
 
 const TOP_TAGS = 12

@@ -23,7 +23,22 @@ export function thisWeekRange(now: Date = new Date()): { weekStart: string; week
   return { weekStart: monday.toISOString().slice(0, 10), weekEnd: sh.toISOString().slice(0, 10) };
 }
 
-const CATEGORY_LABEL: Record<string, string> = { idea: "想法", todo: "待办", collect: "收藏", data: "资料" };
+/** Previous calendar month in Asia/Shanghai as [monthStart, monthEnd] (both inclusive, YYYY-MM-DD). */
+export function lastMonthRange(now: Date = new Date()): { monthStart: string; monthEnd: string } {
+  const sh = new Date(now.getTime() + 8 * 3600 * 1000);
+  const first = new Date(Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth() - 1, 1));
+  const last = new Date(Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), 0));
+  return { monthStart: first.toISOString().slice(0, 10), monthEnd: last.toISOString().slice(0, 10) };
+}
+
+/** Current calendar month (1st..today) in Asia/Shanghai. */
+export function thisMonthRange(now: Date = new Date()): { monthStart: string; monthEnd: string } {
+  const sh = new Date(now.getTime() + 8 * 3600 * 1000);
+  const first = new Date(Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), 1));
+  return { monthStart: first.toISOString().slice(0, 10), monthEnd: sh.toISOString().slice(0, 10) };
+}
+
+const CATEGORY_LABEL: Record<string, string> = { idea: "想法", todo: "待办", collect: "收藏", data: "资料", expense: "支出", income: "收入" };
 
 /** Escape user-controlled text embedded into fallback markdown so it can never carry HTML/code into the renderer. */
 export function escapeMdText(s: string): string {
@@ -79,7 +94,57 @@ export function todoSection(stats: TodoStats): string {
   return md;
 }
 
-export function fallbackMarkdown(weekStart: string, weekEnd: string, allNotes: NoteRow[]): string {
+export interface FinanceStats {
+  expenseCount: number;
+  incomeCount: number;
+  /** Totals per currency, e.g. { CNY: { expense: 123, income: 0 } }. Only counts notes with a known amount. */
+  totals: Record<string, { expense: number; income: number }>;
+  /** Finance notes without an extractable amount (excluded from totals). */
+  unknownAmount: number;
+}
+
+/** Sum the period's expense/income notes per currency. */
+export function financeStats(periodNotes: NoteRow[]): FinanceStats {
+  const stats: FinanceStats = { expenseCount: 0, incomeCount: 0, totals: {}, unknownAmount: 0 };
+  for (const n of periodNotes) {
+    if (n.category !== "expense" && n.category !== "income") continue;
+    if (n.category === "expense") stats.expenseCount++;
+    else stats.incomeCount++;
+    if (typeof n.amount === "number" && Number.isFinite(n.amount)) {
+      const cur = n.currency || "CNY";
+      if (!stats.totals[cur]) stats.totals[cur] = { expense: 0, income: 0 };
+      stats.totals[cur][n.category] += n.amount;
+    } else {
+      stats.unknownAmount++;
+    }
+  }
+  return stats;
+}
+
+const CURRENCY_SYMBOL: Record<string, string> = { CNY: "¥", USD: "$", EUR: "€", GBP: "£", JPY: "JP¥", HKD: "HK$" };
+
+export function formatAmount(amount: number, currency: string): string {
+  const sym = CURRENCY_SYMBOL[currency];
+  const num = Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
+  return sym ? `${sym}${num}` : `${num} ${currency}`;
+}
+
+export function financeSection(stats: FinanceStats): string {
+  if (stats.expenseCount === 0 && stats.incomeCount === 0) return "";
+  let md = `\n## 收支合计\n本期记了 ${stats.expenseCount} 笔支出、${stats.incomeCount} 笔收入。\n`;
+  for (const [cur, t] of Object.entries(stats.totals)) {
+    md += `- ${cur}：支出 ${formatAmount(t.expense, cur)}，收入 ${formatAmount(t.income, cur)}，结余 ${formatAmount(t.income - t.expense, cur)}\n`;
+  }
+  if (stats.unknownAmount > 0) md += `- 另有 ${stats.unknownAmount} 笔未识别出金额，未计入合计\n`;
+  return md;
+}
+
+export function fallbackMarkdown(
+  weekStart: string,
+  weekEnd: string,
+  allNotes: NoteRow[],
+  periodLabel: "week" | "month" = "week"
+): string {
   // sensitive notes are excluded entirely (even their titles), matching the AI digest path
   const notes = allNotes.filter((n) => !n.is_sensitive);
   const byCat = new Map<string, NoteRow[]>();
@@ -88,7 +153,9 @@ export function fallbackMarkdown(weekStart: string, weekEnd: string, allNotes: N
     if (!byCat.has(k)) byCat.set(k, []);
     byCat.get(k)!.push(n);
   }
-  let md = `# 碎念周报（${weekStart} ~ ${weekEnd}）\n\n本周共记录 ${notes.length} 条。\n`;
+  const label = periodLabel === "month" ? "月报" : "周报";
+  const unit = periodLabel === "month" ? "本月" : "本周";
+  let md = `# 碎念${label}（${weekStart} ~ ${weekEnd}）\n\n${unit}共记录 ${notes.length} 条。\n`;
   for (const [cat, rows] of byCat) {
     md += `\n## ${CATEGORY_LABEL[cat] ?? cat}（${rows.length}）\n`;
     for (const n of rows) md += `- ${escapeMdText((n.title || n.content).slice(0, 60))}\n`;
@@ -97,22 +164,33 @@ export function fallbackMarkdown(weekStart: string, weekEnd: string, allNotes: N
 }
 
 /**
- * Generate & store the weekly report for one user. Returns the report id.
- * Regenerating for the same week replaces the previous report.
+ * Generate & store the weekly or monthly report for one user. Returns the
+ * report id. Regenerating for the same period replaces the previous report.
  */
-export async function generateWeeklyReport(
+export async function generatePeriodReport(
   env: Env,
   userId: string,
   now: Date = new Date(),
-  week: "last" | "this" = "last"
+  which: "last" | "this" = "last",
+  period: "week" | "month" = "week"
 ): Promise<{ id: string; week_start: string } | null> {
-  const { weekStart, weekEnd } = week === "this" ? thisWeekRange(now) : lastWeekRange(now);
+  let weekStart: string;
+  let weekEnd: string;
+  if (period === "month") {
+    const r = which === "this" ? thisMonthRange(now) : lastMonthRange(now);
+    weekStart = r.monthStart;
+    weekEnd = r.monthEnd;
+  } else {
+    const r = which === "this" ? thisWeekRange(now) : lastWeekRange(now);
+    weekStart = r.weekStart;
+    weekEnd = r.weekEnd;
+  }
   // notes created during [weekStart, weekEnd] in Shanghai time = UTC range shifted by -8h
   const { results } = await env.DB.prepare(
     `SELECT * FROM notes WHERE user_id = ?
        AND datetime(created_at, '+8 hours') >= datetime(? || ' 00:00:00')
        AND datetime(created_at, '+8 hours') <= datetime(? || ' 23:59:59')
-     ORDER BY created_at ASC LIMIT 300`
+     ORDER BY created_at ASC LIMIT ${period === "month" ? 1000 : 300}`
   )
     .bind(userId, weekStart, weekEnd)
     .all<NoteRow>();
@@ -123,7 +201,9 @@ export async function generateWeeklyReport(
   const stats = await todoStatsForWeek(env, userId, weekStart, weekEnd, notes).catch(
     (): TodoStats => ({ created: 0, createdDone: 0, doneInWeek: 0, openTitles: [], doneTitles: [] })
   );
-  let md = fallbackMarkdown(weekStart, weekEnd, notes) + todoSection(stats);
+  const finance = financeStats(notes);
+  const finMd = financeSection(finance);
+  let md = fallbackMarkdown(weekStart, weekEnd, notes, period) + todoSection(stats) + finMd;
   {
     try {
       const digest = notes
@@ -133,20 +213,31 @@ export async function generateWeeklyReport(
             n.category === "todo"
               ? `待办·${n.todo_done ? "已完成" : "未完成"}`
               : CATEGORY_LABEL[n.category ?? "idea"];
-          return `${i + 1}. [${cat}] (${n.created_at.slice(0, 10)}) ${(n.title || n.content).slice(0, 200)}`;
+          const amt =
+            (n.category === "expense" || n.category === "income") && typeof n.amount === "number"
+              ? ` 金额=${formatAmount(n.amount, n.currency || "CNY")}`
+              : "";
+          return `${i + 1}. [${cat}]${amt} (${n.created_at.slice(0, 10)}) ${(n.title || n.content).slice(0, 200)}`;
         })
         .join("\n");
+      const label = period === "month" ? "月报" : "周报";
+      const unit = period === "month" ? "本月" : "本周";
+      const prev = period === "month" ? "上个月" : "上周";
+      const financeHint =
+        finance.expenseCount + finance.incomeCount > 0
+          ? `、收支合计（直接使用这份统计，不要自己重算：${finMd.replace(/\n/g, " ").trim()}）`
+          : "";
       const text = (
         await chatComplete(env, {
           temperature: 0.4,
-          max_tokens: 1200,
+          max_tokens: period === "month" ? 1600 : 1200,
           timeout_ms: 40_000,
           messages: [
             {
               role: "system",
-              content: `你是「碎念」周报助手。根据用户上周（${weekStart} ~ ${weekEnd}）记录的碎片，写一份 markdown 周报：一级标题为「碎念周报（${weekStart} ~ ${weekEnd}）」，内容包括：本周概览（数量/主题分布）、主要在想什么（归纳 2-4 个主题并展开）、待办盘点（完成/未完成，本周新增待办 ${stats.created} 条、共完成 ${stats.doneInWeek} 条）、值得回顾的收藏。语气亲切、简洁，用中文。不要编造笔记中没有的内容。`,
+              content: `你是「碎念」${label}助手。根据用户${prev}（${weekStart} ~ ${weekEnd}）记录的碎片，写一份 markdown ${label}：一级标题为「碎念${label}（${weekStart} ~ ${weekEnd}）」，内容包括：${unit}概览（数量/主题分布）、主要在想什么（归纳 2-4 个主题并展开）、待办盘点（完成/未完成，${unit}新增待办 ${stats.created} 条、共完成 ${stats.doneInWeek} 条）${financeHint}、值得回顾的收藏。语气亲切、简洁，用中文。不要编造笔记中没有的内容。`,
             },
-            { role: "user", content: digest || "（本周没有记录）" },
+            { role: "user", content: digest || `（${unit}没有记录）` },
           ],
         })
       )?.trim();
@@ -157,9 +248,9 @@ export async function generateWeeklyReport(
   }
 
   const existing = await env.DB.prepare(
-    "SELECT id FROM weekly_reports WHERE user_id = ? AND week_start = ?"
+    "SELECT id FROM weekly_reports WHERE user_id = ? AND week_start = ? AND period = ?"
   )
-    .bind(userId, weekStart)
+    .bind(userId, weekStart, period)
     .first<{ id: string }>();
   if (existing) {
     await env.DB.prepare("UPDATE weekly_reports SET content_md = ?, created_at = datetime('now') WHERE id = ?")
@@ -169,11 +260,34 @@ export async function generateWeeklyReport(
   }
   const id = crypto.randomUUID();
   await env.DB.prepare(
-    "INSERT INTO weekly_reports (id, user_id, week_start, content_md) VALUES (?, ?, ?, ?)"
+    "INSERT INTO weekly_reports (id, user_id, week_start, period, content_md) VALUES (?, ?, ?, ?, ?)"
   )
-    .bind(id, userId, weekStart, md)
+    .bind(id, userId, weekStart, period, md)
     .run();
   return { id, week_start: weekStart };
+}
+
+/**
+ * Generate & store the weekly report for one user. Returns the report id.
+ * Regenerating for the same week replaces the previous report.
+ */
+export function generateWeeklyReport(
+  env: Env,
+  userId: string,
+  now: Date = new Date(),
+  week: "last" | "this" = "last"
+): Promise<{ id: string; week_start: string } | null> {
+  return generatePeriodReport(env, userId, now, week, "week");
+}
+
+/** Monthly counterpart of generateWeeklyReport (calendar months, Asia/Shanghai). */
+export function generateMonthlyReport(
+  env: Env,
+  userId: string,
+  now: Date = new Date(),
+  month: "last" | "this" = "last"
+): Promise<{ id: string; week_start: string } | null> {
+  return generatePeriodReport(env, userId, now, month, "month");
 }
 
 /** Weekly cron: generate reports for all users. */
@@ -182,6 +296,18 @@ export async function generateAllWeeklyReports(env: Env): Promise<void> {
   for (const u of results ?? []) {
     try {
       await generateWeeklyReport(env, u.id);
+    } catch {
+      /* per-user failures shouldn't stop the sweep */
+    }
+  }
+}
+
+/** Monthly cron (1st of each month): generate last month's report for all users. */
+export async function generateAllMonthlyReports(env: Env): Promise<void> {
+  const { results } = await env.DB.prepare("SELECT id FROM users").all<{ id: string }>();
+  for (const u of results ?? []) {
+    try {
+      await generateMonthlyReport(env, u.id);
     } catch {
       /* per-user failures shouldn't stop the sweep */
     }

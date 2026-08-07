@@ -23,6 +23,8 @@ function noteRow(over: Partial<NoteRow>): NoteRow {
     todo_due: null,
     todo_done: 0,
     done_at: null,
+    amount: null,
+    currency: null,
     meta: null,
     created_at: "2026-08-07T00:00:00Z",
     updated_at: "2026-08-07T00:00:00Z",

@@ -26,6 +26,8 @@ type NoteJson = {
   title: string | null;
   todo_due: string | null;
   is_sensitive: boolean;
+  amount: number | null;
+  currency: string | null;
 };
 
 function shanghaiIso(offsetDays = 0): string {
@@ -44,7 +46,11 @@ function nearestFridayIso(): string {
 
 interface EvalCase {
   content: string;
-  category: "idea" | "todo" | "collect" | "data";
+  category: "idea" | "todo" | "collect" | "data" | "expense" | "income";
+  /** expected amount (null = amount must be null); undefined = don't check */
+  amount?: number | null;
+  /** expected currency; only checked when amount is checked */
+  currency?: string;
   /** expected due date (YYYY-MM-DD part) or null for "no due"; undefined = don't check */
   due?: string | null;
   /** tags must not contain any of these substrings */
@@ -82,6 +88,14 @@ const CASES: EvalCase[] = [
     sensitive: false,
   },
   { content: `${PREFIX} 公司 VPN 密码是 Vp2026@qa-demo，账号 qa.tester`, category: "data", sensitive: true },
+  // R40：收支记账分拣
+  { content: `${PREFIX} 午饭黄焖鸡 23 块`, category: "expense", amount: 23, currency: "CNY" },
+  { content: `${PREFIX} 报销到账 1200 元`, category: "income", amount: 1200, currency: "CNY" },
+  { content: `${PREFIX} 在 App Store 付了 4.99 美元订阅`, category: "expense", amount: 4.99, currency: "USD" },
+  // 金额不确定时不要瞎猜
+  { content: `${PREFIX} 今天买了杯咖啡，没看多少钱`, category: "expense", amount: null },
+  // 还没发生的花钱是待办，不是支出
+  { content: `${PREFIX} 周末记得去买猫粮`, category: "todo" },
 ];
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -124,6 +138,8 @@ async function main() {
     let tagChecked = 0;
     let sensChecked = 0;
     let sensOk = 0;
+    let amtChecked = 0;
+    let amtOk = 0;
     for (const c of CASES) {
       const n = notes.find((x) => x.content === c.content);
       const cat = n?.category ?? "(unsorted)";
@@ -136,6 +152,13 @@ async function main() {
         const duePass = gotDate === c.due;
         if (duePass) dueOk++;
         line += ` | due ${duePass ? "✅" : "❌"} got=${n?.todo_due ?? "null"} want=${c.due ?? "null"}`;
+      }
+      if (c.amount !== undefined) {
+        amtChecked++;
+        const gotAmt = n?.amount ?? null;
+        const amtPass = gotAmt === c.amount && (c.currency === undefined || (n?.currency ?? null) === (c.amount === null ? null : c.currency));
+        if (amtPass) amtOk++;
+        else line += ` | amount ❌ got=${gotAmt}${n?.currency ? ` ${n.currency}` : ""} want=${c.amount}${c.currency ? ` ${c.currency}` : ""}`;
       }
       if (c.sensitive !== undefined) {
         sensChecked++;
@@ -152,7 +175,7 @@ async function main() {
       console.log(line);
     }
     console.log(
-      `\ncategory: ${catOk}/${CASES.length}  todo_due: ${dueOk}/${dueChecked}  tags 无前缀污染: ${tagOk}/${tagChecked}  sensitive: ${sensOk}/${sensChecked}`
+      `\ncategory: ${catOk}/${CASES.length}  todo_due: ${dueOk}/${dueChecked}  tags 无前缀污染: ${tagOk}/${tagChecked}  sensitive: ${sensOk}/${sensChecked}  amount: ${amtOk}/${amtChecked}`
     );
   } finally {
     for (const id of created) {
