@@ -108,6 +108,9 @@ Query：`category=idea|todo|collect|data`、`tag=标签`、`q=关键词`（LIKE 
 ### GET /api/export — 全量导出
 默认 JSON `{exported_at, notes, threads, reports}`；`?format=markdown`（或 `?format=md`）返回 markdown 附件（`content-disposition: attachment`）。
 
+### POST /api/import — 批量导入
+从 Cubox（CSV / 书签 HTML / txt）、flomo（HTML）、通用 Markdown / 纯文本导出文件批量导入笔记。multipart 表单 `source`（`cubox`/`flomo`/`markdown`/`text`）+ `file`（≤20MB），或 JSON `{source, content}`。返回 `{total, imported, skipped, failed}`。保留原创建时间与标签，同内容+时间去重，AI 分拣/嵌入/图谱由 cron 补处理机制逐步完成。详见 [docs/import.md](../docs/import.md)。
+
 ### 其他
 - `GET /health` 公开健康检查。
 - 所有 404（含不存在的 thread/report id 与未知路由）统一返回 JSON `{"error":"not found"}`。

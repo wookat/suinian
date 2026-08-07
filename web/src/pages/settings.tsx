@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import {
   Check,
   Loader2,
@@ -13,15 +13,33 @@ import {
   Trash2,
   Download,
   LogOut,
+  Upload,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { deleteAccount, exportData, rotateToken, testConnection, type TestConnectionResult } from "@/lib/api"
+import {
+  deleteAccount,
+  exportData,
+  importData,
+  rotateToken,
+  testConnection,
+  MAX_IMPORT_BYTES,
+  type ImportSource,
+  type ImportStats,
+  type TestConnectionResult,
+} from "@/lib/api"
 import { loadSettings, saveSettings } from "@/lib/settings"
 import { loadTheme, setTheme, type ThemeMode } from "@/lib/theme"
 import { cn } from "@/lib/utils"
+
+const IMPORT_SOURCES: { value: ImportSource; label: string; hint: string; accept: string }[] = [
+  { value: "cubox", label: "Cubox", hint: "支持 Cubox 导出的 CSV / 书签 HTML / txt 文件", accept: ".csv,.html,.htm,.txt" },
+  { value: "flomo", label: "flomo", hint: "支持 flomo 导出压缩包里的 HTML 文件（如 index.html）", accept: ".html,.htm" },
+  { value: "markdown", label: "Markdown", hint: "按 --- 分隔线或标题拆条；段落首行为日期时作为原创建时间", accept: ".md,.markdown,.txt" },
+  { value: "text", label: "纯文本", hint: "按空行拆条，每段一条笔记", accept: ".txt,.md" },
+]
 
 const THEME_OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: "light", label: "浅色", icon: Sun },
@@ -42,6 +60,32 @@ export function SettingsPage() {
   const [includeSensitive, setIncludeSensitive] = useState(false)
   const [exporting, setExporting] = useState<"json" | "markdown" | null>(null)
   const [exportMsg, setExportMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [importSource, setImportSource] = useState<ImportSource>("cubox")
+  const [importing, setImporting] = useState(false)
+  const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const importInputRef = useRef<HTMLInputElement>(null)
+
+  async function handleImportFile(file: File) {
+    if (importing) return
+    if (file.size > MAX_IMPORT_BYTES) {
+      setImportMsg({ ok: false, text: "文件过大：最大支持 20MB" })
+      return
+    }
+    setImporting(true)
+    setImportMsg(null)
+    try {
+      const stats: ImportStats = await importData(file, importSource)
+      setImportMsg({
+        ok: true,
+        text: `导入完成：共解析 ${stats.total} 条，成功 ${stats.imported} 条，跳过重复 ${stats.skipped} 条${stats.failed > 0 ? `，失败 ${stats.failed} 条` : ""}。AI 分拣/线索/图谱会在后台陆续完成`,
+      })
+    } catch (e) {
+      setImportMsg({ ok: false, text: e instanceof Error ? e.message : "导入失败，请稍后重试" })
+    } finally {
+      setImporting(false)
+      if (importInputRef.current) importInputRef.current.value = ""
+    }
+  }
 
   async function handleExport(format: "json" | "markdown") {
     if (exporting) return
@@ -382,6 +426,75 @@ export function SettingsPage() {
               <CircleAlert className="size-4 shrink-0" />
             )}
             {exportMsg.text}
+          </p>
+        )}
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <div>
+          <h2 className="text-sm font-medium">导入数据</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            从 Cubox / flomo / Markdown / 纯文本导出文件批量导入笔记，保留原创建时间与标签，重复内容自动跳过（单文件最大 20MB）
+          </p>
+        </div>
+        <div className="flex gap-1 rounded-lg bg-secondary p-1">
+          {IMPORT_SOURCES.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setImportSource(opt.value)}
+              className={cn(
+                "flex-1 rounded-md px-2 py-1.5 text-sm font-medium transition-colors",
+                importSource === opt.value
+                  ? "bg-card shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {IMPORT_SOURCES.find((o) => o.value === importSource)?.hint}
+        </p>
+        <input
+          ref={importInputRef}
+          type="file"
+          accept={IMPORT_SOURCES.find((o) => o.value === importSource)?.accept}
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) void handleImportFile(f)
+          }}
+        />
+        <Button
+          variant="outline"
+          onClick={() => importInputRef.current?.click()}
+          disabled={importing}
+          className="w-full sm:w-auto"
+        >
+          {importing ? (
+            <>
+              <Loader2 className="animate-spin" /> 导入中，请勿关闭页面…
+            </>
+          ) : (
+            <>
+              <Upload /> 选择文件导入
+            </>
+          )}
+        </Button>
+        {importMsg && (
+          <p
+            className={cn(
+              "flex items-center gap-1.5 text-sm",
+              importMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+            )}
+          >
+            {importMsg.ok ? (
+              <CircleCheck className="size-4 shrink-0" />
+            ) : (
+              <CircleAlert className="size-4 shrink-0" />
+            )}
+            {importMsg.text}
           </p>
         )}
       </Card>

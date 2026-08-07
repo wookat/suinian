@@ -66,6 +66,10 @@ export interface NoteMeta {
   file_excerpt?: string;
   /** Result of the text extraction attempt (file notes). */
   file_status?: "ok" | "extract_failed";
+  /** Export source this note was imported from (imported notes). */
+  import_source?: string;
+  /** Original tags from the export file, merged back after AI triage (imported notes). */
+  import_tags?: string[];
 }
 
 export interface NoteRow {
