@@ -1,4 +1,15 @@
-import { Sparkles, KeyRound, UserPlus, ChevronRight } from "lucide-react"
+import {
+  Sparkles,
+  KeyRound,
+  UserPlus,
+  ChevronRight,
+  MessageCircle,
+  Scissors,
+  Smartphone,
+  Globe,
+  Bot,
+  PackageOpen,
+} from "lucide-react"
 import { loadSettings, saveSettings } from "@/lib/settings"
 
 const CHOICES = [
@@ -22,8 +33,18 @@ const CHOICES = [
   },
 ] as const
 
+const REPO = "https://github.com/wookat/suinian"
+
+const CHANNELS = [
+  { icon: MessageCircle, label: "微信 bot", blurb: "给 bot 发消息就是记录", href: `${REPO}/tree/main/skill` },
+  { icon: Scissors, label: "剪藏扩展", blurb: "网页选中一键收进碎念", href: `${REPO}/tree/main/extension` },
+  { icon: Smartphone, label: "Android", blurb: "系统分享 + 桌面小组件", href: `${REPO}/tree/main/android` },
+  { icon: Globe, label: "Web · PWA", blurb: "手机桌面装成 App", href: "#/" },
+  { icon: Bot, label: "MCP", blurb: "Claude / Cursor 里直接读写", href: `${REPO}/blob/main/docs/mcp.md` },
+] as const
+
 export function Onboarding() {
-  function choose(action: (typeof CHOICES)[number]["action"]) {
+  function choose(action: (typeof CHOICES)[number]["action"] | "import") {
     if (action === "demo") {
       saveSettings({ ...loadSettings(), useMock: true, onboarded: true })
     } else if (action === "register") {
@@ -37,7 +58,7 @@ export function Onboarding() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-xl border bg-card p-6 shadow-lg animate-in fade-in zoom-in-95 duration-300">
+      <div className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-xl border bg-card p-6 shadow-lg animate-in fade-in zoom-in-95 duration-300">
         <div className="mb-1 flex items-center gap-2">
           <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
             碎
@@ -45,7 +66,8 @@ export function Onboarding() {
           <h2 className="text-lg font-semibold">欢迎来到碎念</h2>
         </div>
         <p className="mb-4 text-sm text-muted-foreground">
-          什么都能丢的 AI 收件箱：随手一丢，AI 分拣、串线索、每周报告。先选一个开始方式：
+          像发消息一样记录一切：什么都能丢——想法、链接、语音、账目、密码，AI
+          自动分拣打标签、把碎片串成思考线索，每周告诉你「你最近在想什么」。
         </p>
         <div className="space-y-2">
           {CHOICES.map((c) => {
@@ -68,6 +90,53 @@ export function Onboarding() {
             )
           })}
         </div>
+
+        <button
+          onClick={() => choose("import")}
+          className="mt-3 flex w-full items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-left transition-colors hover:bg-amber-500/20"
+        >
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/15">
+            <PackageOpen className="size-4.5 text-amber-600 dark:text-amber-400" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium">Cubox / flomo 搬家？三步搬完</span>
+            <span className="block text-xs text-muted-foreground">
+              Cubox 速记 2027-05 停服。导出文件 → 设置页一键导入 → 原时间与标签全保留，AI 自动补分拣、串线索
+            </span>
+          </span>
+          <ChevronRight className="mt-2 size-4 shrink-0 text-muted-foreground" />
+        </button>
+
+        <div className="mt-4">
+          <p className="mb-2 text-xs font-medium text-muted-foreground">哪里都能丢进来</p>
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+            {CHANNELS.map((ch) => {
+              const Icon = ch.icon
+              return (
+                <a
+                  key={ch.label}
+                  href={ch.href}
+                  target={ch.href.startsWith("http") ? "_blank" : undefined}
+                  rel="noreferrer"
+                  className="rounded-lg border p-2 transition-colors hover:bg-accent"
+                >
+                  <span className="flex items-center gap-1.5 text-xs font-medium">
+                    <Icon className="size-3.5 shrink-0" />
+                    {ch.label}
+                  </span>
+                  <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">{ch.blurb}</span>
+                </a>
+              )
+            })}
+          </div>
+        </div>
+
+        <p className="mt-4 text-center text-[11px] text-muted-foreground">
+          开源可自部署 · 数据在你自己的 Cloudflare 账号里 ·{" "}
+          <a href={REPO} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+            GitHub
+          </a>
+        </p>
       </div>
     </div>
   )

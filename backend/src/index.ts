@@ -34,6 +34,7 @@ import {
 } from "./media";
 import { detectFileKind, buildFileNote, buildFileReply } from "./files";
 import { parseImportFile, runImport, IMPORT_SOURCES, type ImportSource } from "./import";
+import { registerMcpRoute } from "./mcp";
 
 type Vars = { userId: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -1448,6 +1449,9 @@ app.get("/api/export", async (c) => {
     reports,
   });
 });
+
+// ---- MCP (Model Context Protocol) endpoint: /mcp, Streamable HTTP ----
+registerMcpRoute(app);
 
 export { app };
 
