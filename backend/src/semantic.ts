@@ -4,7 +4,7 @@ import { cosineSim } from "./threads";
 const EMBED_MODEL = "@cf/baai/bge-m3";
 
 /** Cosine similarity above which a note counts as a semantic match for search/ask recall. */
-export const SEMANTIC_MIN_SCORE = 0.5;
+export const SEMANTIC_MIN_SCORE = 0.45;
 
 export async function embedText(env: Env, text: string): Promise<number[] | null> {
   if (!env.AI) return null;
