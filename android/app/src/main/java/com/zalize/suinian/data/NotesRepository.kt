@@ -85,10 +85,26 @@ class NotesRepository(
         return client.getReport(id)
     }
 
-    suspend fun ask(question: String): AskResponse {
+    suspend fun ask(question: String, history: List<AskHistoryMessage> = emptyList()): AskResponse {
         val (client, mock) = api()
         if (mock) return AskResponse(answer = "Mock 模式下问答不可用，请在设置中关闭 Mock 并连接真实后端。")
-        return client.ask(question)
+        return client.ask(question, history)
+    }
+
+    /** 图片上传：POST /api/ingest/media type=image（后端视觉识别成文字笔记） */
+    suspend fun sendImage(bytes: ByteArray, mime: String, fileName: String): MediaIngestResponse {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下图片上传不可用，请在设置中关闭 Mock")
+        return client.ingestMedia("image", bytes, mime, fileName)
+    }
+
+    /** 轮换 API token，成功后自动保存新 token */
+    suspend fun rotateToken(): String {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用")
+        val newToken = client.rotateToken().apiToken
+        if (newToken.isNotBlank()) settingsRepo.setToken(newToken)
+        return newToken
     }
 
     /** 重试队列：全部成功返回 true */

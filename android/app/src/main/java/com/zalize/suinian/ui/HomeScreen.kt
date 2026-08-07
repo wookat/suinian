@@ -107,89 +107,21 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
 
         Spacer(Modifier.height(8.dp))
 
-        // 搜索框 / 问答框
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = if (ui.askMode) ui.askInput else ui.query,
-                onValueChange = { if (ui.askMode) vm.setAskInput(it) else vm.setQuery(it) },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text(if (ui.askMode) "问问你的笔记，例如：我之前想过的那个点子…" else "搜索碎念…") },
-                shape = RoundedCornerShape(16.dp),
-                singleLine = true,
-                leadingIcon = {
-                    Icon(
-                        if (ui.askMode) Icons.Outlined.AutoAwesome else Icons.Outlined.Search,
-                        contentDescription = null,
-                    )
-                },
-                trailingIcon = {
-                    IconButton(onClick = { if (ui.askMode) vm.ask() else vm.search() }) {
-                        Icon(
-                            Icons.AutoMirrored.Outlined.Send,
-                            contentDescription = if (ui.askMode) "提问" else "搜索",
-                        )
-                    }
-                },
-            )
-            Spacer(Modifier.width(8.dp))
-            FilterChip(
-                selected = ui.askMode,
-                onClick = { vm.toggleAskMode() },
-                label = { Text("问答") },
-                leadingIcon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
-            )
-        }
-
-        // 问答结果卡
-        if (ui.askMode && (ui.asking || ui.askAnswer != null || ui.askError != null)) {
-            Spacer(Modifier.height(8.dp))
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-                ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-            ) {
-                Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                    when {
-                        ui.asking -> Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.width(18.dp).height(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("正在思考…", style = MaterialTheme.typography.bodyMedium)
-                        }
-                        ui.askError != null -> Text(
-                            ui.askError!!,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                        else -> {
-                            Row {
-                                Text(
-                                    ui.askAnswer.orEmpty(),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                IconButton(onClick = { vm.clearAskResult() }) {
-                                    Icon(Icons.Outlined.Close, contentDescription = "关闭回答")
-                                }
-                            }
-                            if (ui.askReferences.isNotEmpty()) {
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    "引用笔记（${ui.askReferences.size}）",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                ui.askReferences.forEach { note ->
-                                    Spacer(Modifier.height(6.dp))
-                                    NoteCard(note)
-                                }
-                            }
-                        }
-                    }
+        // 搜索框（问答已移到底部「问答」Tab，多轮对话）
+        OutlinedTextField(
+            value = ui.query,
+            onValueChange = { vm.setQuery(it) },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("搜索碎念…") },
+            shape = RoundedCornerShape(16.dp),
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+            trailingIcon = {
+                IconButton(onClick = { vm.search() }) {
+                    Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "搜索")
                 }
-            }
-        }
+            },
+        )
 
         Spacer(Modifier.height(8.dp))
 

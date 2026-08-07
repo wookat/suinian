@@ -43,8 +43,10 @@ import com.zalize.suinian.data.SendResult
 import com.zalize.suinian.ui.theme.SuinianTheme
 import kotlinx.coroutines.launch
 
-/** 分享入的一条内容 */
-private data class SharedItem(val rawType: String, val content: String, val url: String?)
+/** 分享入的一条内容（图片带 uri，确认后读字节上传） */
+private data class SharedItem(val rawType: String, val content: String, val url: String?, val imageUri: Uri? = null)
+
+private const val MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 /** 任何 app「分享 → 碎念」的轻量确认页 */
 class ShareActivity : ComponentActivity() {
@@ -84,7 +86,7 @@ class ShareActivity : ComponentActivity() {
 
         fun addImage(uri: Uri?) {
             if (uri == null) return
-            items.add(SharedItem("image", "[图片] ${uri.lastPathSegment ?: uri}", null))
+            items.add(SharedItem("image", "[图片] ${uri.lastPathSegment ?: uri}", null, imageUri = uri))
         }
 
         when (action) {
@@ -112,7 +114,36 @@ class ShareActivity : ComponentActivity() {
         val app = application as SuinianApp
         lifecycleScope.launch {
             var queued = false
+            var failed = 0
+            var uploadedImages = 0
             for (item in items) {
+                if (item.imageUri != null) {
+                    // 图片：读字节 -> POST /api/ingest/media type=image（后端视觉识别成文字笔记）
+                    try {
+                        val bytes = contentResolver.openInputStream(item.imageUri)?.use { it.readBytes() }
+                        if (bytes == null || bytes.isEmpty()) {
+                            failed++
+                            continue
+                        }
+                        if (bytes.size > MAX_IMAGE_BYTES) {
+                            Toast.makeText(this@ShareActivity, "图片过大：最多 10MB", Toast.LENGTH_SHORT).show()
+                            failed++
+                            continue
+                        }
+                        val mime = contentResolver.getType(item.imageUri) ?: "image/jpeg"
+                        val fileName = item.imageUri.lastPathSegment ?: "image"
+                        app.repository.sendImage(bytes, mime, fileName)
+                        uploadedImages++
+                        if (remark.isNotBlank()) {
+                            app.repository.send(
+                                CreateNoteRequest(source = "android", rawType = "text", content = "备注：${remark.trim()}", url = null)
+                            )
+                        }
+                    } catch (e: Exception) {
+                        failed++
+                    }
+                    continue
+                }
                 val content = if (remark.isBlank()) item.content else "${item.content}\n\n备注：${remark.trim()}"
                 val result = app.repository.send(
                     CreateNoteRequest(source = "android", rawType = item.rawType, content = content, url = item.url)
@@ -120,7 +151,10 @@ class ShareActivity : ComponentActivity() {
                 if (result is SendResult.Queued) queued = true
             }
             val msg = when {
+                failed > 0 && uploadedImages == 0 && items.all { it.imageUri != null } -> "图片上传失败，请检查网络后重试"
+                failed > 0 -> "部分内容上传失败（$failed 条）"
                 queued -> "网络不佳，已暂存稍后自动重试"
+                uploadedImages > 0 -> "已上传，AI 正在识别图片文字"
                 items.size > 1 -> "已存 ${items.size} 条到碎念"
                 else -> "已存到碎念"
             }

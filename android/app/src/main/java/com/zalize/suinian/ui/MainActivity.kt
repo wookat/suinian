@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Notes
 import androidx.compose.material.icons.outlined.AccountTree
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Settings
@@ -49,6 +50,7 @@ private data class Tab(
 private val tabs = listOf(
     Tab("home", "碎念", Icons.AutoMirrored.Outlined.Notes),
     Tab("todos", "待办", Icons.Outlined.CheckCircle),
+    Tab("ask", "问答", Icons.Outlined.AutoAwesome),
     Tab("threads", "线索", Icons.Outlined.AccountTree),
     Tab("reports", "周报", Icons.Outlined.Description),
 )
@@ -85,8 +87,24 @@ class MainActivity : ComponentActivity() {
 fun SuinianNavHost(focusQuickNoteSignal: Int) {
     val navController = rememberNavController()
     val vm: NotesViewModel = viewModel()
+    val askVm: AskViewModel = viewModel()
     val snackbarHostState = remember { SnackbarHostState() }
     val ui by vm.ui.collectAsState()
+
+    // 首启引导：未完成引导（且未配 token）先走注册/登录/填 token
+    val loadedSettings by vm.settingsRepo.settings.collectAsState(initial = null)
+    val settingsSnapshot = loadedSettings ?: return
+    var onboardingJustDone by remember { mutableStateOf(false) }
+    if (!settingsSnapshot.onboardingDone && !onboardingJustDone) {
+        OnboardingScreen(
+            settingsRepo = vm.settingsRepo,
+            onDone = {
+                onboardingJustDone = true
+                vm.refresh()
+            },
+        )
+        return
+    }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         vm.refresh()
@@ -122,6 +140,7 @@ fun SuinianNavHost(focusQuickNoteSignal: Int) {
                         Text(
                             when (currentRoute) {
                                 "todos" -> "待办"
+                                "ask" -> "问答"
                                 "threads" -> "思考线索"
                                 "reports" -> "每周报告"
                                 else -> "碎念"
@@ -172,6 +191,9 @@ fun SuinianNavHost(focusQuickNoteSignal: Int) {
             }
             composable("todos") {
                 TodosScreen()
+            }
+            composable("ask") {
+                AskScreen(vm = askVm)
             }
             composable("threads") {
                 ThreadsScreen(onOpenThread = { id -> navController.navigate("threads/$id") })

@@ -36,6 +36,15 @@ object FlexibleBooleanSerializer : KSerializer<Boolean> {
     override fun serialize(encoder: Encoder, value: Boolean) = encoder.encodeBoolean(value)
 }
 
+/** notes.meta JSON：语音原稿 / 图片描述 / 链接站点与正文摘录 */
+@Serializable
+data class NoteMeta(
+    @SerialName("raw_transcript") val rawTranscript: String? = null,
+    @SerialName("image_description") val imageDescription: String? = null,
+    @SerialName("link_site") val linkSite: String? = null,
+    @SerialName("link_excerpt") val linkExcerpt: String? = null,
+)
+
 /** Note，字段形状与 docs/SPEC.md D1 notes 表一致 */
 @Serializable
 data class Note(
@@ -59,6 +68,7 @@ data class Note(
     @SerialName("todo_done")
     @Serializable(with = FlexibleBooleanSerializer::class)
     val todoDone: Boolean? = null,
+    val meta: NoteMeta? = null,
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("updated_at") val updatedAt: String? = null,
 )
@@ -140,4 +150,39 @@ data class AskReference(
 data class AskResponse(
     val answer: String = "",
     val references: List<AskReference> = emptyList(),
+    val notes: List<Note> = emptyList(),
+)
+
+/** /api/ask 多轮对话 history 元素 */
+@Serializable
+data class AskHistoryMessage(
+    val role: String, // user|assistant
+    val content: String,
+)
+
+/** /api/auth/register 与 /api/auth/login 响应 */
+@Serializable
+data class AuthUser(
+    val id: String,
+    val name: String = "",
+)
+
+@Serializable
+data class AuthResponse(
+    val user: AuthUser,
+    @SerialName("api_token") val apiToken: String = "",
+)
+
+/** POST /api/auth/rotate-token 响应 */
+@Serializable
+data class RotateTokenResponse(
+    @SerialName("api_token") val apiToken: String = "",
+)
+
+/** POST /api/ingest/media 响应（只取 note 与 text） */
+@Serializable
+data class MediaIngestResponse(
+    val note: Note? = null,
+    val text: String? = null,
+    val transcribed: Boolean = false,
 )

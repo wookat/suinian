@@ -16,8 +16,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,6 +55,9 @@ fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit) {
     var baseUrl by remember { mutableStateOf(settings.baseUrl) }
     var token by remember { mutableStateOf(settings.token) }
     var initialized by remember { mutableStateOf(false) }
+    var confirmRotate by remember { mutableStateOf(false) }
+    var rotating by remember { mutableStateOf(false) }
+    var rotateMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(settings) {
         if (!initialized) {
@@ -59,6 +65,33 @@ fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit) {
             token = settings.token
             initialized = true
         }
+    }
+
+    if (confirmRotate) {
+        AlertDialog(
+            onDismissRequest = { confirmRotate = false },
+            title = { Text("轮换 API Token？") },
+            text = { Text("旧 token 立即失效，其它设备（微信 bridge / Web）需要换用新 token") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRotate = false
+                    rotating = true
+                    rotateMessage = null
+                    scope.launch {
+                        try {
+                            val newToken = vm.rotateApiToken()
+                            token = newToken
+                            rotateMessage = "已轮换，新 token 已保存到本机"
+                        } catch (e: Exception) {
+                            rotateMessage = e.message ?: "轮换失败，请稍后重试"
+                        } finally {
+                            rotating = false
+                        }
+                    }
+                }) { Text("轮换") }
+            },
+            dismissButton = { TextButton(onClick = { confirmRotate = false }) { Text("取消") } },
+        )
     }
 
     Scaffold(
@@ -109,6 +142,17 @@ fun SettingsScreen(vm: NotesViewModel, onBack: () -> Unit) {
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("保存") }
+
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { confirmRotate = true },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !rotating && !settings.mockMode && settings.token.isNotBlank(),
+            ) { Text(if (rotating) "轮换中…" else "轮换 API Token") }
+            rotateMessage?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
 
             Spacer(Modifier.height(24.dp))
             Text("开关", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
