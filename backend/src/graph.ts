@@ -62,7 +62,8 @@ const EXTRACT_SYSTEM = `你是知识图谱抽取器。从一条个人笔记中�
 {"entities":[{"name":"规范名","type":"person|project|concept|product|org|place|other","aliases":["别名"]}],"relations":[{"src":"实体名","dst":"实体名","relation":"supports|premise_of|belongs_to|todo_of|relates_to","confidence":0.8}]}
 规则：
 - 实体必须是笔记中出现或明确指代的具体事物（人名/项目名/产品名/组织/地点/具体概念），最多 6 个
-- 禁止抽泛化词（想法、问题、东西、事情、内容、笔记等）
+- 禁止抽泛化词（想法、问题、东西、事情、内容、笔记等），也不要抽时间词（周五、下周三、十月等）
+- 忽略方括号标记与前缀（如 [QA-R20]、[测试] 之类的标记），不要作为实体
 - 关系最多 4 条，src/dst 必须来自 entities 里的 name；supports=支撑依据，premise_of=前提，belongs_to=属于，todo_of=待办于，relates_to=其他相关
 - confidence 是 0~1 的自评置信度
 - 没有可抽的就输出 {"entities":[],"relations":[]}。只输出 JSON。`;
@@ -238,6 +239,7 @@ export async function extractGraph(env: Env, note: NoteRow): Promise<void> {
       .filter(Boolean)
       .join("\n");
     if (!text.trim()) return;
+    console.log(`graph: extracting note=${note.id}`);
     const out = await chatComplete(env, {
       temperature: 0,
       max_tokens: 600,
@@ -246,9 +248,13 @@ export async function extractGraph(env: Env, note: NoteRow): Promise<void> {
         { role: "user", content: text },
       ],
     });
-    if (!out) return; // AI unavailable: leave unmarked so the cron retries
+    if (!out) {
+      console.log(`graph: chatComplete returned null for note=${note.id}`);
+      return; // AI unavailable: leave unmarked so the cron retries
+    }
     const parsed = parseExtraction(out);
     if (!parsed) {
+      console.log(`graph: unparseable extraction for note=${note.id}: ${out.slice(0, 150)}`);
       await markGraphExtracted(env, note.id);
       return;
     }
@@ -327,6 +333,7 @@ export async function findGraphThreadMate(
 ): Promise<{ note_id: string; thread_id: string | null; shared: number } | null> {
   try {
     const ents = await noteEntityIds(env, note.id);
+    console.log(`graph: mate lookup note=${note.id} ents=${ents.length}`);
     if (ents.length === 0) return null;
     const ph = ents.map(() => "?").join(",");
     const { results } = await env.DB.prepare(
@@ -340,16 +347,23 @@ export async function findGraphThreadMate(
       .bind(note.user_id, ...ents, note.id)
       .all<{ note_id: string; shared: number; thread_id: string | null }>();
     const rows = results ?? [];
+    console.log(`graph: mate candidates note=${note.id} rows=${rows.length} top_shared=${rows[0]?.shared ?? 0}`);
     if (rows.length === 0) return null;
-    const top = rows[0];
+    // prefer a candidate already in a thread among the top-shared ties
+    const topShared = rows[0].shared;
+    const top = rows.find((r) => r.shared === topShared && r.thread_id) ?? rows[0];
     if (top.shared >= 2) return top;
-    // single shared entity: require a strong entity-entity relation touching it
+    // single shared entity: require a strong entity-entity relation between
+    // this note's entities and the candidate note's entities (both sides)
+    const mateEnts = await noteEntityIds(env, top.note_id);
+    if (mateEnts.length === 0) return null;
+    const mph = mateEnts.map(() => "?").join(",");
     const strong = await env.DB.prepare(
       `SELECT COUNT(*) AS c FROM edges
        WHERE user_id = ? AND src_type = 'entity' AND dst_type = 'entity' AND confidence >= ?
-         AND (src_id IN (${ph}) OR dst_id IN (${ph}))`
+         AND ((src_id IN (${ph}) AND dst_id IN (${mph})) OR (src_id IN (${mph}) AND dst_id IN (${ph})))`
     )
-      .bind(note.user_id, STRONG_EDGE_CONF, ...ents, ...ents)
+      .bind(note.user_id, STRONG_EDGE_CONF, ...ents, ...mateEnts, ...mateEnts, ...ents)
       .first<{ c: number }>();
     if ((strong?.c ?? 0) > 0) return top;
     return null;
