@@ -21,9 +21,12 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   deleteAccount,
+  deleteTag,
   exportData,
   getMe,
+  getTags,
   importData,
+  renameTag,
   rotateToken,
   testConnection,
   MAX_IMPORT_BYTES,
@@ -31,7 +34,8 @@ import {
   type ImportStats,
   type TestConnectionResult,
 } from "@/lib/api"
-import { loadSettings, saveSettings } from "@/lib/settings"
+import type { TagCount } from "@/lib/types"
+import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
 import { loadTheme, setTheme, type ThemeMode } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
@@ -122,6 +126,156 @@ function SwStatusCard() {
       <p className="mt-1 text-xs text-muted-foreground">
         有新版本时页面会弹出「点击刷新」提示；离线时可浏览已缓存的笔记/线索/周报
       </p>
+    </Card>
+  )
+}
+
+function TagManagerCard() {
+  const [tags, setTags] = useState<TagCount[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [editingTag, setEditingTag] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const settingsVersion = useSettingsVersion()
+
+  useEffect(() => {
+    let cancelled = false
+    setError(null)
+    getTags()
+      .then((t) => {
+        if (!cancelled) setTags(t)
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [settingsVersion])
+
+  async function refresh() {
+    try {
+      setTags(await getTags())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function handleRename(from: string) {
+    const to = renameValue.trim().replace(/^#/, "")
+    if (!to || to === from) {
+      setEditingTag(null)
+      return
+    }
+    const merging = tags?.some((t) => t.tag === to)
+    if (merging && !window.confirm(`标签 #${to} 已存在，确定将 #${from} 合并进 #${to} 吗？`)) return
+    setBusy(true)
+    try {
+      const affected = await renameTag(from, to)
+      setMsg({ ok: true, text: `${merging ? "已合并" : "已重命名"} #${from} → #${to}，影响 ${affected} 条笔记` })
+      setEditingTag(null)
+      await refresh()
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleDelete(tag: string, count: number) {
+    if (!window.confirm(`确定删除标签 #${tag} 吗？将从 ${count} 条笔记中移除（笔记本身保留）`)) return
+    setBusy(true)
+    try {
+      const affected = await deleteTag(tag)
+      setMsg({ ok: true, text: `已删除 #${tag}，影响 ${affected} 条笔记` })
+      await refresh()
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className="space-y-3 p-4">
+      <div>
+        <h2 className="text-sm font-medium">标签管理</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          重命名会全局替换；改名到已有标签即合并；删除仅移除标签，不删笔记
+        </p>
+      </div>
+      {error ? (
+        <p className="text-sm text-destructive">{error}</p>
+      ) : tags === null ? (
+        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" /> 加载中…
+        </p>
+      ) : tags.length === 0 ? (
+        <p className="text-sm text-muted-foreground">还没有标签，AI 分拣或手动编辑后会出现在这里</p>
+      ) : (
+        <ul className="divide-y">
+          {tags.map(({ tag, count }) => (
+            <li key={tag} className="flex flex-wrap items-center gap-2 py-2">
+              {editingTag === tag ? (
+                <>
+                  <Input
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.nativeEvent.isComposing) void handleRename(tag)
+                      if (e.key === "Escape") setEditingTag(null)
+                    }}
+                    className="h-8 w-40"
+                    autoFocus
+                  />
+                  <Button size="sm" disabled={busy} onClick={() => void handleRename(tag)}>
+                    确定
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setEditingTag(null)}>
+                    取消
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <span className="min-w-0 flex-1 truncate text-sm">
+                    #{tag}
+                    <span className="ml-1.5 text-xs text-muted-foreground">{count} 条</span>
+                  </span>
+                  <button
+                    onClick={() => {
+                      setEditingTag(tag)
+                      setRenameValue(tag)
+                    }}
+                    disabled={busy}
+                    className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    重命名/合并
+                  </button>
+                  <button
+                    onClick={() => void handleDelete(tag, count)}
+                    disabled={busy}
+                    className="text-xs font-medium text-destructive/80 hover:text-destructive"
+                  >
+                    删除
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {msg && (
+        <p
+          className={cn(
+            "flex items-center gap-1.5 text-sm",
+            msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+          )}
+        >
+          {msg.ok ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
+          {msg.text}
+        </p>
+      )}
     </Card>
   )
 }
@@ -531,6 +685,8 @@ export function SettingsPage() {
           </p>
         )}
       </Card>
+
+      <TagManagerCard />
 
       <Card className="space-y-3 p-4">
         <div>

@@ -16,10 +16,13 @@ import {
 import type {
   AskHistoryMessage,
   AskResponse,
+  BatchAction,
   CreateNotePayload,
   Note,
+  NotePatch,
   NotesQuery,
   NotesResponse,
+  TagCount,
   ReportsResponse,
   ThreadDetail,
   ThreadsResponse,
@@ -195,10 +198,7 @@ export async function downloadNoteFile(noteId: string, fileName: string): Promis
   URL.revokeObjectURL(url)
 }
 
-export async function patchNote(
-  id: string,
-  patch: Partial<Pick<Note, "todo_done" | "category" | "tags" | "content" | "is_sensitive">>,
-): Promise<Note> {
+export async function patchNote(id: string, patch: NotePatch): Promise<Note> {
   if (loadSettings().useMock) return mockPatchNote(id, patch)
   const body: Record<string, unknown> = { ...patch }
   if (patch.todo_done != null) body.todo_done = patch.todo_done === 1
@@ -222,6 +222,45 @@ export async function refetchLink(id: string): Promise<Note> {
 export async function deleteNote(id: string): Promise<void> {
   if (loadSettings().useMock) return mockDeleteNote(id)
   await realFetch<{ ok: boolean }>(`/api/notes/${id}`, { method: "DELETE" })
+}
+
+/** 批量操作：删除 / 加标签 / 去标签 / 改分类（单次最多 100 条） */
+export async function batchNotes(
+  action: BatchAction,
+  ids: string[],
+  opts?: { tags?: string[]; category?: string },
+): Promise<number> {
+  if (loadSettings().useMock) throw new Error("演示模式不支持批量操作，请先配置真实 API")
+  const res = await realFetch<{ ok: boolean; affected: number }>("/api/notes/batch", {
+    method: "POST",
+    body: JSON.stringify({ action, ids, ...opts }),
+  })
+  return res.affected
+}
+
+/** 全部标签 + 使用次数（按次数降序） */
+export async function getTags(): Promise<TagCount[]> {
+  if (loadSettings().useMock) throw new Error("演示模式不支持标签管理，请先配置真实 API")
+  const res = await realFetch<{ tags: TagCount[] }>("/api/tags")
+  return res.tags
+}
+
+/** 重命名标签（全局替换；改名到已有标签即合并），返回影响的笔记数 */
+export async function renameTag(from: string, to: string): Promise<number> {
+  const res = await realFetch<{ ok: boolean; affected: number }>("/api/tags/rename", {
+    method: "POST",
+    body: JSON.stringify({ from, to }),
+  })
+  return res.affected
+}
+
+/** 从所有笔记移除标签，返回影响的笔记数 */
+export async function deleteTag(tag: string): Promise<number> {
+  const res = await realFetch<{ ok: boolean; affected: number }>("/api/tags/delete", {
+    method: "POST",
+    body: JSON.stringify({ tag }),
+  })
+  return res.affected
 }
 
 export async function ask(

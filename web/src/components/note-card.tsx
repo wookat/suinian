@@ -27,15 +27,17 @@ import {
   Download,
   CircleAlert,
   RefreshCw,
+  X,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
+import { Input } from "@/components/ui/input"
 import { downloadNoteFile, refetchLink } from "@/lib/api"
 import { cn, formatTime, parseDue, dueHasTime } from "@/lib/utils"
-import type { Note, NoteCategory } from "@/lib/types"
+import type { Note, NoteCategory, NotePatch } from "@/lib/types"
 
 const CATEGORY_META: Record<
   NoteCategory,
@@ -149,6 +151,25 @@ function formatDue(due: string): string {
 const MAX_TAGS = 3
 const CLAMP_THRESHOLD = 180
 const MAX_LINK_CARDS = 3
+const MAX_EDIT_TAGS = 6
+
+/** "YYYY-MM-DDTHH:mm" for <input type="datetime-local">, or "" when unset. */
+function dueToInput(due: string | null): string {
+  if (!due) return ""
+  const d = parseDue(due)
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** datetime-local value -> offset ISO the API understands (local timezone). */
+function inputToDue(v: string): string | null {
+  if (!v) return null
+  const offsetMin = -new Date(`${v}:00`).getTimezoneOffset()
+  const sign = offsetMin >= 0 ? "+" : "-"
+  const abs = Math.abs(offsetMin)
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${v}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+}
 
 function linkCards(note: Note): { url: string; title: string | null }[] {
   if (Array.isArray(note.url_titles) && note.url_titles.length > 0)
@@ -177,10 +198,14 @@ interface NoteCardProps {
   note: Note
   onToggleTodo?: (note: Note) => void
   onTagClick?: (tag: string) => void
-  onEdit?: (note: Note, content: string) => void
+  onEdit?: (note: Note, patch: NotePatch) => void
   onDelete?: (note: Note) => void
   onToggleSensitive?: (note: Note) => void
   categoryFilterActive?: boolean
+  /** 多选模式：显示选择框并点击卡片切换选中 */
+  selectable?: boolean
+  selected?: boolean
+  onSelectToggle?: (note: Note) => void
   className?: string
 }
 
@@ -192,6 +217,9 @@ export function NoteCard({
   onDelete,
   onToggleSensitive,
   categoryFilterActive = false,
+  selectable = false,
+  selected = false,
+  onSelectToggle,
   className,
 }: NoteCardProps) {
   const [localNote, setLocalNote] = useState<Note | null>(null)
@@ -206,6 +234,10 @@ export function NoteCard({
   const [menuOpen, setMenuOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(note.content)
+  const [editCategory, setEditCategory] = useState<NoteCategory | "">(note.category ?? "")
+  const [editTags, setEditTags] = useState<string[]>(note.tags)
+  const [editTagInput, setEditTagInput] = useState("")
+  const [editDue, setEditDue] = useState("")
   const [copied, setCopied] = useState(false)
   const [revealed, setRevealed] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -280,9 +312,26 @@ export function NoteCard({
   const longContent = note.content.length > CLAMP_THRESHOLD
 
   return (
-    <Card className={cn("group p-4 transition-shadow hover:shadow-md", className)}>
+    <Card
+      className={cn(
+        "group p-4 transition-shadow hover:shadow-md",
+        selectable && "cursor-pointer select-none",
+        selectable && selected && "border-primary ring-1 ring-primary",
+        className,
+      )}
+      onClick={selectable ? () => onSelectToggle?.(note) : undefined}
+    >
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {selectable && (
+            <Checkbox
+              checked={selected}
+              onCheckedChange={() => onSelectToggle?.(note)}
+              onClick={(e) => e.stopPropagation()}
+              aria-label={selected ? "取消选择" : "选择这条笔记"}
+              className="mr-0.5"
+            />
+          )}
           {pending ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
               <Loader2 className="size-3 animate-spin" />
@@ -336,6 +385,10 @@ export function NoteCard({
                     <button
                       onClick={() => {
                         setEditValue(note.content)
+                        setEditCategory(note.category ?? "")
+                        setEditTags(note.tags)
+                        setEditTagInput("")
+                        setEditDue(dueToInput(note.todo_due))
                         setEditing(true)
                         setMenuOpen(false)
                       }}
@@ -399,19 +452,98 @@ export function NoteCard({
           />
         )}
         {editing ? (
-          <div className="min-w-0 flex-1 space-y-2">
+          <div className="min-w-0 flex-1 space-y-3">
             <Textarea
               value={editValue}
               onChange={(e) => setEditValue(e.target.value)}
               className="min-h-[80px] text-sm"
               autoFocus
             />
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-xs text-muted-foreground" htmlFor={`cat-${note.id}`}>
+                分类
+              </label>
+              <select
+                id={`cat-${note.id}`}
+                value={editCategory}
+                onChange={(e) => setEditCategory(e.target.value as NoteCategory | "")}
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+              >
+                {!note.category && <option value="">待分拣</option>}
+                {(Object.keys(CATEGORY_META) as NoteCategory[]).map((c) => (
+                  <option key={c} value={c}>
+                    {CATEGORY_META[c].label}
+                  </option>
+                ))}
+              </select>
+              {editCategory === "todo" && (
+                <>
+                  <label className="text-xs text-muted-foreground" htmlFor={`due-${note.id}`}>
+                    期限
+                  </label>
+                  <input
+                    id={`due-${note.id}`}
+                    type="datetime-local"
+                    value={editDue}
+                    onChange={(e) => setEditDue(e.target.value)}
+                    className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                  />
+                  {editDue && (
+                    <button
+                      onClick={() => setEditDue("")}
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      清除期限
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {editTags.map((t) => (
+                <Badge key={t} variant="secondary" className="gap-1">
+                  #{t}
+                  <button
+                    onClick={() => setEditTags((ts) => ts.filter((x) => x !== t))}
+                    aria-label={`移除标签 ${t}`}
+                    className="rounded-full hover:text-destructive"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </Badge>
+              ))}
+              {editTags.length < MAX_EDIT_TAGS && (
+                <Input
+                  value={editTagInput}
+                  onChange={(e) => setEditTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                      e.preventDefault()
+                      const t = editTagInput.trim().replace(/^#/, "")
+                      if (t && !editTags.includes(t)) setEditTags((ts) => [...ts, t])
+                      setEditTagInput("")
+                    }
+                  }}
+                  placeholder="加标签…回车确认"
+                  className="h-7 w-32 text-xs"
+                />
+              )}
+            </div>
             <div className="flex gap-2">
               <Button
                 size="sm"
                 onClick={() => {
                   const v = editValue.trim()
-                  if (v && v !== note.content) onEdit?.(note, v)
+                  const patch: NotePatch = {}
+                  if (v && v !== note.content) patch.content = v
+                  if (editCategory && editCategory !== note.category) patch.category = editCategory
+                  const tagsChanged =
+                    editTags.length !== note.tags.length || editTags.some((t, i) => t !== note.tags[i])
+                  if (tagsChanged) patch.tags = editTags
+                  const due = inputToDue(editDue)
+                  if ((editCategory || note.category) === "todo" && editDue !== dueToInput(note.todo_due))
+                    patch.todo_due = due
+                  if (Object.keys(patch).length > 0) onEdit?.(note, patch)
                   setEditing(false)
                 }}
               >

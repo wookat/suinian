@@ -72,6 +72,8 @@ export interface NoteMeta {
   import_source?: string;
   /** Original tags from the export file, merged back after AI triage (imported notes). */
   import_tags?: string[];
+  /** Fields the user set by hand; AI triage / cron sweeps must not overwrite them. */
+  manual_override?: { category?: boolean; tags?: boolean };
 }
 
 export interface NoteRow {
@@ -92,6 +94,7 @@ export interface NoteRow {
   content_enc: string | null;
   todo_due: string | null;
   todo_done: number;
+  done_at: string | null;
   meta: string | null;
   created_at: string;
   updated_at: string;

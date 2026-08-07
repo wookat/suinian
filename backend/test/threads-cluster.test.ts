@@ -114,6 +114,7 @@ function makeNote(id: string, content: string, extra: Partial<NoteRow> = {}): No
     content_enc: null,
     todo_due: null,
     todo_done: 0,
+    done_at: null,
     meta: null,
     created_at: "2026-08-01 00:00:00",
     updated_at: "2026-08-01 00:00:00",

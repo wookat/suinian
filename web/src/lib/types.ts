@@ -15,6 +15,7 @@ export interface NoteMeta {
   file_kind?: string
   file_excerpt?: string
   file_status?: "ok" | "extract_failed"
+  manual_override?: { category?: boolean; tags?: boolean }
 }
 
 export interface Note {
@@ -34,6 +35,7 @@ export interface Note {
   is_sensitive: number
   todo_due: string | null
   todo_done: number | null
+  done_at?: string | null
   meta?: NoteMeta | null
   /** Search recall type when returned from a text search (semantic = no keyword hit). */
   match?: "keyword" | "semantic" | "both"
@@ -68,6 +70,23 @@ export interface AskResponse {
   references?: AskReference[]
   notes: Note[]
 }
+
+export interface NotePatch {
+  content?: string
+  title?: string
+  category?: NoteCategory
+  tags?: string[]
+  todo_due?: string | null
+  todo_done?: number
+  is_sensitive?: number
+}
+
+export interface TagCount {
+  tag: string
+  count: number
+}
+
+export type BatchAction = "delete" | "add_tags" | "remove_tags" | "set_category"
 
 export interface NotesQuery {
   category?: string

@@ -270,22 +270,31 @@ const CATEGORY_LABEL: Record<string, string> = {
   data: "资料",
 };
 
-async function applyTriage(env: Env, noteId: string, triage: TriageResult, content: string): Promise<void> {
+export async function applyTriage(env: Env, noteId: string, triage: TriageResult, content: string): Promise<void> {
   // imported notes carry their original tags in meta.import_tags: keep them
   // first and union in the AI-suggested ones
   const row = await env.DB.prepare("SELECT meta FROM notes WHERE id = ?").bind(noteId).first<{ meta: string | null }>();
-  const importTags = parseNoteMeta(row?.meta ?? null)?.import_tags;
+  const meta = parseNoteMeta(row?.meta ?? null);
+  const override = meta?.manual_override;
+  const importTags = meta?.import_tags;
   const tags = Array.isArray(importTags)
     ? [...new Set([...importTags, ...triage.tags])].slice(0, 6)
     : triage.tags;
-  const sets = ["category = ?", "tags = ?", "title = ?", "is_sensitive = ?", "todo_due = ?"];
+  const sets = ["title = ?", "is_sensitive = ?", "todo_due = ?"];
   const binds: unknown[] = [
-    triage.category,
-    JSON.stringify(tags),
     triage.title || null,
     triage.is_sensitive ? 1 : 0,
     triage.todo_due ?? null,
   ];
+  // fields the user set by hand stay untouched
+  if (!override?.category) {
+    sets.push("category = ?");
+    binds.push(triage.category);
+  }
+  if (!override?.tags) {
+    sets.push("tags = ?");
+    binds.push(JSON.stringify(tags));
+  }
   if (triage.is_sensitive && env.SUINIAN_ENC_KEY) {
     // encrypt-at-rest: ciphertext into content_enc, plaintext replaced by a placeholder
     const enc = await encryptContent(env.SUINIAN_ENC_KEY, content);
@@ -485,10 +494,10 @@ app.patch("/api/notes/:id", async (c) => {
   if (!body) return c.json({ error: "invalid body" }, 400);
 
   const existing = await c.env.DB.prepare(
-    "SELECT is_sensitive, content, content_enc FROM notes WHERE id = ? AND user_id = ?"
+    "SELECT is_sensitive, content, content_enc, meta FROM notes WHERE id = ? AND user_id = ?"
   )
     .bind(id, userId)
-    .first<{ is_sensitive: number; content: string; content_enc: string | null }>();
+    .first<{ is_sensitive: number; content: string; content_enc: string | null; meta: string | null }>();
   if (!existing) return c.json({ error: "not found" }, 404);
 
   const wantSensitive =
@@ -528,16 +537,26 @@ app.patch("/api/notes/:id", async (c) => {
     binds.push(body.is_sensitive ? 1 : 0);
   }
   if (typeof body.todo_done === "boolean") {
-    sets.push("todo_done = ?");
-    binds.push(body.todo_done ? 1 : 0);
+    sets.push("todo_done = ?", "done_at = ?");
+    binds.push(body.todo_done ? 1 : 0, body.todo_done ? new Date().toISOString() : null);
   }
+  const override: { category?: boolean; tags?: boolean } = {};
   if (typeof body.category === "string" && ["idea", "todo", "collect", "data"].includes(body.category)) {
     sets.push("category = ?");
     binds.push(body.category);
+    override.category = true;
   }
   if (Array.isArray(body.tags)) {
     sets.push("tags = ?");
     binds.push(JSON.stringify(body.tags.filter((t) => typeof t === "string")));
+    override.tags = true;
+  }
+  if (override.category || override.tags) {
+    // remember the user's hand-set values so AI triage / cron never overwrites them
+    const meta = parseNoteMeta(existing.meta) ?? {};
+    meta.manual_override = { ...meta.manual_override, ...override };
+    sets.push("meta = ?");
+    binds.push(JSON.stringify(meta));
   }
   if (typeof body.title === "string") {
     sets.push("title = ?");
@@ -555,40 +574,211 @@ app.patch("/api/notes/:id", async (c) => {
     .run();
   if (!res.meta.changes) return c.json({ error: "not found" }, 404);
   const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
-  c.executionCtx.waitUntil(upsertNoteEmbedding(c.env, note!));
+  c.executionCtx.waitUntil(capped(upsertNoteEmbedding(c.env, note!), PIPELINE_TIMEOUT_MS, `patch-embed note=${id}`));
   const sensitivityChanged =
     typeof body.is_sensitive === "boolean" && body.is_sensitive !== !!existing.is_sensitive;
   // extractGraph purges graph rows for sensitive notes and (re-)extracts otherwise
   if (typeof body.content === "string" || sensitivityChanged)
-    c.executionCtx.waitUntil(extractGraph(c.env, note!));
+    c.executionCtx.waitUntil(capped(extractGraph(c.env, note!), PIPELINE_TIMEOUT_MS, `patch-graph note=${id}`));
   return c.json({ note: await noteToJsonDecrypted(c.env, note!) });
 });
 
-// ---- DELETE /api/notes/:id ----
-app.delete("/api/notes/:id", async (c) => {
-  const id = c.req.param("id");
-  const note = await c.env.DB.prepare("SELECT thread_id FROM notes WHERE id = ? AND user_id = ?")
-    .bind(id, c.get("userId"))
-    .first<{ thread_id: string | null }>();
-  if (!note) return c.json({ error: "not found" }, 404);
-  const atts = await c.env.DB.prepare("SELECT r2_key FROM attachments WHERE note_id = ?")
+/** Delete one owned note and its attachments/embedding/graph rows; caller reconciles threads. */
+async function deleteNoteRecord(
+  env: Env,
+  userId: string,
+  id: string,
+  waitUntil: (p: Promise<unknown>) => void
+): Promise<boolean> {
+  const note = await env.DB.prepare("SELECT id FROM notes WHERE id = ? AND user_id = ?")
+    .bind(id, userId)
+    .first<{ id: string }>();
+  if (!note) return false;
+  const atts = await env.DB.prepare("SELECT r2_key FROM attachments WHERE note_id = ?")
     .bind(id)
     .all<{ r2_key: string }>();
-  await c.env.DB.prepare("DELETE FROM attachments WHERE note_id = ?").bind(id).run();
-  if (c.env.MEDIA && atts.results.length > 0) {
-    c.executionCtx.waitUntil(
-      c.env.MEDIA.delete(atts.results.map((a) => a.r2_key)).catch((e) =>
+  await env.DB.prepare("DELETE FROM attachments WHERE note_id = ?").bind(id).run();
+  if (env.MEDIA && atts.results.length > 0) {
+    waitUntil(
+      env.MEDIA.delete(atts.results.map((a) => a.r2_key)).catch((e) =>
         console.error("r2 delete failed", e)
       )
     );
   }
-  await deleteNoteEmbedding(c.env, id);
-  await deleteNoteGraph(c.env, id);
-  await c.env.DB.prepare("DELETE FROM daily_reviews WHERE note_id = ?").bind(id).run();
-  await c.env.DB.prepare("DELETE FROM notes WHERE id = ?").bind(id).run();
+  await deleteNoteEmbedding(env, id);
+  await deleteNoteGraph(env, id);
+  await env.DB.prepare("DELETE FROM daily_reviews WHERE note_id = ?").bind(id).run();
+  await env.DB.prepare("DELETE FROM notes WHERE id = ?").bind(id).run();
+  return true;
+}
+
+// ---- DELETE /api/notes/:id ----
+app.delete("/api/notes/:id", async (c) => {
+  const id = c.req.param("id");
+  const deleted = await deleteNoteRecord(c.env, c.get("userId"), id, (p) => c.executionCtx.waitUntil(p));
+  if (!deleted) return c.json({ error: "not found" }, 404);
   // recount/dissolve every thread of this user (also self-heals older orphans)
   await reconcileThreads(c.env, c.get("userId"));
   return c.json({ ok: true });
+});
+
+// ---- POST /api/notes/batch ----
+// Bulk operations over owned notes: delete / add_tags / remove_tags / set_category.
+const BATCH_MAX_IDS = 100;
+app.post("/api/notes/batch", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req
+    .json<{ action?: unknown; ids?: unknown; tags?: unknown; category?: unknown }>()
+    .catch(() => null);
+  if (!body) return c.json({ error: "invalid body" }, 400);
+  const action = body.action;
+  const ids = Array.isArray(body.ids) ? body.ids.filter((v): v is string => typeof v === "string") : [];
+  if (ids.length === 0) return c.json({ error: "ids required" }, 400);
+  if (ids.length > BATCH_MAX_IDS) return c.json({ error: `一次最多操作 ${BATCH_MAX_IDS} 条` }, 400);
+
+  if (action === "delete") {
+    let affected = 0;
+    for (const id of ids) {
+      if (await deleteNoteRecord(c.env, userId, id, (p) => c.executionCtx.waitUntil(p))) affected++;
+    }
+    if (affected > 0) await reconcileThreads(c.env, userId);
+    return c.json({ ok: true, affected });
+  }
+
+  if (action === "add_tags" || action === "remove_tags") {
+    const tags = Array.isArray(body.tags)
+      ? body.tags.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((t) => t.trim())
+      : [];
+    if (tags.length === 0) return c.json({ error: "tags required" }, 400);
+    const ph = ids.map(() => "?").join(",");
+    const { results } = await c.env.DB.prepare(
+      `SELECT id, tags, meta FROM notes WHERE user_id = ? AND id IN (${ph})`
+    )
+      .bind(userId, ...ids)
+      .all<{ id: string; tags: string; meta: string | null }>();
+    let affected = 0;
+    for (const row of results ?? []) {
+      let current: string[] = [];
+      try {
+        current = JSON.parse(row.tags || "[]") as string[];
+      } catch {
+        current = [];
+      }
+      const next =
+        action === "add_tags"
+          ? [...new Set([...current, ...tags])]
+          : current.filter((t) => !tags.includes(t));
+      if (next.length === current.length && next.every((t, i) => t === current[i])) continue;
+      const meta = parseNoteMeta(row.meta) ?? {};
+      meta.manual_override = { ...meta.manual_override, tags: true };
+      await c.env.DB.prepare(
+        "UPDATE notes SET tags = ?, meta = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?"
+      )
+        .bind(JSON.stringify(next), JSON.stringify(meta), row.id, userId)
+        .run();
+      affected++;
+    }
+    return c.json({ ok: true, affected });
+  }
+
+  if (action === "set_category") {
+    const category = body.category;
+    if (typeof category !== "string" || !["idea", "todo", "collect", "data"].includes(category))
+      return c.json({ error: "invalid category" }, 400);
+    const ph = ids.map(() => "?").join(",");
+    const { results } = await c.env.DB.prepare(
+      `SELECT id, meta FROM notes WHERE user_id = ? AND id IN (${ph})`
+    )
+      .bind(userId, ...ids)
+      .all<{ id: string; meta: string | null }>();
+    let affected = 0;
+    for (const row of results ?? []) {
+      const meta = parseNoteMeta(row.meta) ?? {};
+      meta.manual_override = { ...meta.manual_override, category: true };
+      await c.env.DB.prepare(
+        "UPDATE notes SET category = ?, meta = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?"
+      )
+        .bind(category, JSON.stringify(meta), row.id, userId)
+        .run();
+      affected++;
+    }
+    return c.json({ ok: true, affected });
+  }
+
+  return c.json({ error: "invalid action" }, 400);
+});
+
+// ---- GET /api/tags ----
+// All tags of the current user with usage counts, most used first.
+app.get("/api/tags", async (c) => {
+  const userId = c.get("userId");
+  const { results } = await c.env.DB.prepare("SELECT tags FROM notes WHERE user_id = ?")
+    .bind(userId)
+    .all<{ tags: string }>();
+  const counts = new Map<string, number>();
+  for (const r of results ?? []) {
+    try {
+      for (const t of JSON.parse(r.tags || "[]") as string[]) {
+        if (typeof t === "string" && t) counts.set(t, (counts.get(t) ?? 0) + 1);
+      }
+    } catch {
+      /* ignore bad rows */
+    }
+  }
+  const tags = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([tag, count]) => ({ tag, count }));
+  return c.json({ tags });
+});
+
+/** Replace/remove a tag across all of a user's notes; `to = null` removes it. Returns affected note count. */
+async function retagUser(env: Env, userId: string, from: string, to: string | null): Promise<number> {
+  const { results } = await env.DB.prepare(
+    "SELECT id, tags FROM notes WHERE user_id = ? AND tags LIKE ?"
+  )
+    .bind(userId, `%"${from}"%`)
+    .all<{ id: string; tags: string }>();
+  let affected = 0;
+  for (const row of results ?? []) {
+    let current: string[] = [];
+    try {
+      current = JSON.parse(row.tags || "[]") as string[];
+    } catch {
+      continue;
+    }
+    if (!current.includes(from)) continue; // LIKE can over-match substrings
+    const next = [...new Set(current.map((t) => (t === from ? to : t)).filter((t): t is string => t !== null))];
+    await env.DB.prepare("UPDATE notes SET tags = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?")
+      .bind(JSON.stringify(next), row.id, userId)
+      .run();
+    affected++;
+  }
+  return affected;
+}
+
+const MAX_TAG_CHARS = 32;
+
+// ---- POST /api/tags/rename ----
+// Rename a tag on every note; renaming onto an existing tag merges them.
+app.post("/api/tags/rename", async (c) => {
+  const body = await c.req.json<{ from?: unknown; to?: unknown }>().catch(() => null);
+  const from = typeof body?.from === "string" ? body.from.trim() : "";
+  const to = typeof body?.to === "string" ? body.to.trim() : "";
+  if (!from || !to) return c.json({ error: "from/to required" }, 400);
+  if (to.length > MAX_TAG_CHARS) return c.json({ error: `标签最长 ${MAX_TAG_CHARS} 个字符` }, 400);
+  if (from === to) return c.json({ ok: true, affected: 0 });
+  const affected = await retagUser(c.env, c.get("userId"), from, to);
+  return c.json({ ok: true, affected });
+});
+
+// ---- POST /api/tags/delete ----
+// Remove a tag from every note of the current user.
+app.post("/api/tags/delete", async (c) => {
+  const body = await c.req.json<{ tag?: unknown }>().catch(() => null);
+  const tag = typeof body?.tag === "string" ? body.tag.trim() : "";
+  if (!tag) return c.json({ error: "tag required" }, 400);
+  const affected = await retagUser(c.env, c.get("userId"), tag, null);
+  return c.json({ ok: true, affected });
 });
 
 // ---- POST /api/notes/:id/refetch-link ----
