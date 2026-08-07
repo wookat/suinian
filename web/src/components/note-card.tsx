@@ -170,7 +170,7 @@ function shortLink(url: string): string {
 
 const LINK_STATUS_TEXT: Record<string, string> = {
   fetch_failed: "未能抓取正文，已保存链接",
-  no_content: "未能提取正文，已保存链接",
+  no_content: "未能抓取正文，已保存链接",
 }
 
 interface NoteCardProps {
@@ -470,7 +470,7 @@ export function NoteCard({
                 {i === 0 && note.meta?.link_status && note.meta.link_status !== "ok" && (
                   <div className="flex items-center gap-2 px-3 pb-2 text-xs text-muted-foreground">
                     <CircleAlert className="size-3.5 shrink-0" />
-                    <span>{LINK_STATUS_TEXT[note.meta.link_status] ?? "抓取异常，已保存链接"}</span>
+                    <span>{LINK_STATUS_TEXT[note.meta.link_status] ?? "未能抓取正文，已保存链接"}</span>
                     <button
                       onClick={(e) => {
                         e.preventDefault()

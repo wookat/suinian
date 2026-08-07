@@ -289,12 +289,23 @@ describe("token rotate + me + delete", () => {
 });
 
 describe("checkRateLimit", () => {
-  it("fails open on DB errors", async () => {
+  it("fails closed on DB errors", async () => {
     const broken = {
       prepare() {
         throw new Error("boom");
       },
     } as unknown as D1Database;
-    expect(await checkRateLimit(broken, "login", "1.1.1.1")).toBe(true);
+    expect(await checkRateLimit(broken, "login", ["1.1.1.1"])).toBe(false);
+  });
+
+  it("limits per account name independently of IP", async () => {
+    const { DB } = makeEnv([]);
+    for (let i = 0; i < RATE_LIMIT_MAX; i++) {
+      expect(await checkRateLimit(DB, "login", [`ip${i}`, "acct:bob"])).toBe(true);
+    }
+    // 6th attempt on the same account from a fresh IP is rejected
+    expect(await checkRateLimit(DB, "login", ["ip-new", "acct:bob"])).toBe(false);
+    // other accounts are unaffected
+    expect(await checkRateLimit(DB, "login", ["ip-new2", "acct:carol"])).toBe(true);
   });
 });

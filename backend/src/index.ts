@@ -38,7 +38,32 @@ import { parseImportFile, runImport, IMPORT_SOURCES, type ImportSource } from ".
 type Vars = { userId: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
 
-app.use("*", cors());
+const ALLOWED_ORIGINS = [
+  "https://suinian.zalize.com",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:4173",
+];
+
+app.use(
+  "*",
+  cors({
+    origin: (origin) => (ALLOWED_ORIGINS.includes(origin) ? origin : null),
+    allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allowHeaders: ["Authorization", "Content-Type"],
+    maxAge: 86400,
+  })
+);
+
+// security response headers on every API response
+app.use("*", async (c, next) => {
+  await next();
+  c.res.headers.set("X-Content-Type-Options", "nosniff");
+  c.res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  c.res.headers.set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+  c.res.headers.set("X-Frame-Options", "DENY");
+  c.res.headers.set("Referrer-Policy", "no-referrer");
+});
 
 app.onError((err, c) => {
   console.error("unhandled error:", err);
@@ -65,11 +90,11 @@ app.post("/api/auth/register", async (c) => {
   if (!registrationEnabled(c.env.REGISTRATION_ENABLED)) {
     return c.json({ error: "注册已关闭" }, 403);
   }
-  if (!(await checkRateLimit(c.env.DB, "register", clientIp(c.req.raw)))) {
-    return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
-  }
   const body = await c.req.json<{ name?: unknown; password?: unknown }>().catch(() => null);
   const name = validateName(body?.name);
+  if (!(await checkRateLimit(c.env.DB, "register", name ? [clientIp(c.req.raw), `acct:${name}`] : [clientIp(c.req.raw)]))) {
+    return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
+  }
   if (!name) return c.json({ error: "用户名需 2-32 个字符（中英文、数字、._-）" }, 400);
   const password = validatePassword(body?.password);
   if (!password) return c.json({ error: "密码需 8-128 个字符" }, 400);
@@ -85,11 +110,11 @@ app.post("/api/auth/register", async (c) => {
 });
 
 app.post("/api/auth/login", async (c) => {
-  if (!(await checkRateLimit(c.env.DB, "login", clientIp(c.req.raw)))) {
-    return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
-  }
   const body = await c.req.json<{ name?: unknown; password?: unknown }>().catch(() => null);
   const name = validateName(body?.name);
+  if (!(await checkRateLimit(c.env.DB, "login", name ? [clientIp(c.req.raw), `acct:${name}`] : [clientIp(c.req.raw)]))) {
+    return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
+  }
   const password = typeof body?.password === "string" ? body.password : "";
   if (!name || !password) return c.json({ error: "用户名或密码错误" }, 401);
   const user = await c.env.DB.prepare("SELECT id, name, api_token, password_hash FROM users WHERE name = ?")
@@ -128,16 +153,34 @@ app.use("/api/*", async (c, next) => {
     .first<{ id: string }>();
   if (!row) return c.json({ error: "unauthorized" }, 401);
   c.set("userId", row.id);
+  const touch = c.env.DB.prepare("UPDATE users SET last_used_at = datetime('now') WHERE id = ?")
+    .bind(row.id)
+    .run()
+    .then(() => undefined)
+    .catch(() => undefined);
+  try {
+    c.executionCtx.waitUntil(touch);
+  } catch {
+    // no ExecutionContext (unit tests): the update still runs in the background
+  }
   await next();
 });
 
 // ---- authenticated auth endpoints ----
 app.get("/api/auth/me", async (c) => {
-  const user = await c.env.DB.prepare("SELECT id, name, created_at, password_hash FROM users WHERE id = ?")
+  const user = await c.env.DB.prepare("SELECT id, name, created_at, password_hash, last_used_at FROM users WHERE id = ?")
     .bind(c.get("userId"))
-    .first<{ id: string; name: string; created_at: string; password_hash: string | null }>();
+    .first<{ id: string; name: string; created_at: string; password_hash: string | null; last_used_at: string | null }>();
   if (!user) return c.json({ error: "not found" }, 404);
-  return c.json({ user: { id: user.id, name: user.name, created_at: user.created_at, has_password: !!user.password_hash } });
+  return c.json({
+    user: {
+      id: user.id,
+      name: user.name,
+      created_at: user.created_at,
+      has_password: !!user.password_hash,
+      last_used_at: user.last_used_at,
+    },
+  });
 });
 
 app.post("/api/auth/rotate-token", async (c) => {
@@ -369,7 +412,8 @@ app.post("/api/notes", async (c) => {
 app.get("/api/notes", async (c) => {
   const userId = c.get("userId");
   const { category, tag, q, cursor } = c.req.query();
-  const limit = Math.min(parseInt(c.req.query("limit") || "20", 10) || 20, 100);
+  const rawLimit = parseInt(c.req.query("limit") ?? "", 10);
+  const limit = Number.isNaN(rawLimit) ? 20 : Math.max(1, Math.min(100, rawLimit));
 
   const conds: string[] = ["user_id = ?"];
   const binds: unknown[] = [userId];
@@ -981,7 +1025,11 @@ app.get("/api/reports/:id", async (c) => {
 app.post("/api/reports/generate", async (c) => {
   const body = await c.req.json<{ week?: string }>().catch(() => null);
   const week = body?.week === "this" ? "this" : "last";
-  const { id, week_start } = await generateWeeklyReport(c.env, c.get("userId"), new Date(), week);
+  const generated = await generateWeeklyReport(c.env, c.get("userId"), new Date(), week);
+  if (!generated) {
+    return c.json({ error: week === "this" ? "本周还没有记录，先去记几条碎念吧" : "上周没有记录，暂无内容可总结" }, 422);
+  }
+  const { id, week_start } = generated;
   const report = await c.env.DB.prepare("SELECT * FROM weekly_reports WHERE id = ?").bind(id).first<WeeklyReportRow>();
   return c.json({ report, week_start }, 201);
 });

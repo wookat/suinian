@@ -400,6 +400,19 @@ export function login(baseUrl: string, name: string, password: string): Promise<
   return authPost(baseUrl, "/api/auth/login", { name, password })
 }
 
+export interface MeInfo {
+  id: string
+  name: string
+  created_at: string
+  has_password: boolean
+  last_used_at: string | null
+}
+
+export async function getMe(): Promise<MeInfo> {
+  const res = await realFetch<{ user: MeInfo }>("/api/auth/me")
+  return res.user
+}
+
 export async function rotateToken(): Promise<string> {
   const res = await realFetch<{ api_token: string }>("/api/auth/rotate-token", { method: "POST" })
   return res.api_token
