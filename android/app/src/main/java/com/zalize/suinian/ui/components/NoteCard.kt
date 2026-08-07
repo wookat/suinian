@@ -14,16 +14,22 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.TextButton
@@ -138,6 +144,29 @@ fun formatDue(iso: String): String = try {
 
 private const val MAX_LINK_CARDS = 3
 
+/** 链接抓取失败态文案（对齐 Web LINK_STATUS_TEXT） */
+private val linkStatusText = mapOf(
+    "fetch_failed" to "未能抓取正文，已保存链接",
+    "no_content" to "未能提取正文，已保存链接",
+)
+
+/** 文件类型标签 */
+fun fileKindLabel(kind: String?, mime: String?): String = when (kind) {
+    "pdf" -> "PDF"
+    "txt" -> "TXT"
+    "md" -> "Markdown"
+    "docx" -> "Word"
+    else -> mime ?: "文件"
+}
+
+/** 文件大小可读化 */
+fun formatFileSize(size: Long?): String? {
+    if (size == null || size <= 0) return null
+    if (size < 1024) return "$size B"
+    if (size < 1024 * 1024) return "%.1f KB".format(size / 1024.0)
+    return "%.1f MB".format(size / 1024.0 / 1024.0)
+}
+
 private fun linkCards(note: Note): List<UrlTitle> {
     val multi = note.urlTitles
     if (!multi.isNullOrEmpty()) return multi.take(MAX_LINK_CARDS)
@@ -151,6 +180,10 @@ fun NoteCard(
     modifier: Modifier = Modifier,
     onToggleTodo: ((Note) -> Unit)? = null,
     onDelete: ((Note) -> Unit)? = null,
+    onToggleSensitive: ((Note) -> Unit)? = null,
+    onRetryLink: ((Note) -> Unit)? = null,
+    retryingLink: Boolean = false,
+    onDownloadFile: ((Note) -> Unit)? = null,
 ) {
     var confirmDelete by rememberSaveable(note.id) { mutableStateOf(false) }
     if (confirmDelete && onDelete != null) {
@@ -186,7 +219,41 @@ fun NoteCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
-                if (onDelete != null) {
+                if (onToggleSensitive != null) {
+                    var menuOpen by rememberSaveable(note.id) { mutableStateOf(false) }
+                    IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            Icons.Outlined.MoreVert,
+                            contentDescription = "笔记操作",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text(if (note.isSensitive) "取消敏感" else "标记敏感") },
+                                leadingIcon = {
+                                    Icon(
+                                        if (note.isSensitive) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
+                                        contentDescription = null,
+                                    )
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    onToggleSensitive(note)
+                                },
+                            )
+                            if (onDelete != null) {
+                                DropdownMenuItem(
+                                    text = { Text("删除") },
+                                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                                    onClick = {
+                                        menuOpen = false
+                                        confirmDelete = true
+                                    },
+                                )
+                            }
+                        }
+                    }
+                } else if (onDelete != null) {
                     IconButton(onClick = { confirmDelete = true }, modifier = Modifier.size(28.dp)) {
                         Icon(
                             Icons.Outlined.Delete,
@@ -319,6 +386,40 @@ fun NoteCard(
                                     .clickable { summaryOpen = !summaryOpen },
                             )
                         }
+                        val failText = if (isFirst) linkStatusText[note.meta?.linkStatus] else null
+                        if (failText != null) {
+                            Spacer(Modifier.height(4.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    failText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (onRetryLink != null) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .clickable(enabled = !retryingLink) { onRetryLink(note) }
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    ) {
+                                        Icon(
+                                            Icons.Outlined.Refresh,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                        Spacer(Modifier.width(2.dp))
+                                        Text(
+                                            if (retryingLink) "重试中…" else "重试抓取",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                            }
+                        }
                         if (isFirst && note.meta?.linkExcerpt != null) {
                             Spacer(Modifier.height(4.dp))
                             Text(
@@ -334,6 +435,83 @@ fun NoteCard(
                                 Spacer(Modifier.height(4.dp))
                                 Text(
                                     note.meta.linkExcerpt,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 文件笔记卡：文件名/类型/大小 + 正文摘录（可展开）+ 下载原件
+            val fileMeta = note.meta?.takeIf { note.rawType == "file" && it.fileName != null }
+            if (fileMeta != null) {
+                Spacer(Modifier.height(8.dp))
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Outlined.Description,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    fileMeta.fileName ?: "",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                val sizeText = formatFileSize(fileMeta.fileSize)
+                                Text(
+                                    fileKindLabel(fileMeta.fileKind, fileMeta.fileMime) +
+                                        (sizeText?.let { " · $it" } ?: ""),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (onDownloadFile != null) {
+                                IconButton(onClick = { onDownloadFile(note) }, modifier = Modifier.size(32.dp)) {
+                                    Icon(
+                                        Icons.Outlined.Download,
+                                        contentDescription = "下载原件",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                        }
+                        if (fileMeta.fileStatus == "extract_failed") {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "文本提取失败，已存档原件",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        val excerpt = fileMeta.fileExcerpt?.takeIf { it.isNotBlank() }
+                        if (excerpt != null && !note.isSensitive) {
+                            var fileExcerptOpen by rememberSaveable(note.id) { mutableStateOf(false) }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                if (fileExcerptOpen) "收起正文摘录" else "查看正文摘录",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable { fileExcerptOpen = !fileExcerptOpen }
+                                    .padding(vertical = 2.dp),
+                            )
+                            if (fileExcerptOpen) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    excerpt,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -384,12 +562,13 @@ fun NoteCard(
     }
 }
 
-/** 来源角标：语音转写 / 图片识别 */
+/** 来源角标：语音转写 / 图片识别 / 文件 */
 @Composable
 fun SourceBadge(rawType: String) {
     val (icon, label) = when (rawType) {
         "voice" -> Icons.Outlined.Mic to "语音转写"
         "image" -> Icons.Outlined.Image to "图片识别"
+        "file" -> Icons.Outlined.Description to "文件"
         else -> return
     }
     Spacer(Modifier.width(6.dp))

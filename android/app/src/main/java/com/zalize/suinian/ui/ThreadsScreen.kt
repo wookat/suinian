@@ -1,6 +1,7 @@
 package com.zalize.suinian.ui
 
 import android.app.Application
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -33,6 +34,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -40,6 +42,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zalize.suinian.SuinianApp
+import com.zalize.suinian.data.GraphEntity
 import com.zalize.suinian.data.Thread
 import com.zalize.suinian.data.ThreadDetail
 import com.zalize.suinian.ui.components.NoteCard
@@ -47,6 +50,17 @@ import com.zalize.suinian.ui.components.formatRelativeTime
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+
+/** 实体类型中文标签（对齐 Web ENTITY_TYPE_LABEL） */
+fun entityTypeLabel(type: String): String = when (type) {
+    "person" -> "人物"
+    "product" -> "产品"
+    "project" -> "项目"
+    "org" -> "组织"
+    "place" -> "地点"
+    "concept" -> "概念"
+    else -> "其他"
+}
 
 data class ThreadsUiState(
     val loading: Boolean = false,
@@ -242,6 +256,94 @@ fun ThreadDetailScreen(
                                     style = MaterialTheme.typography.bodyMedium,
                                     modifier = Modifier.padding(12.dp),
                                 )
+                            }
+                        }
+                    }
+                    val graph = detail.graph
+                    if (graph != null && graph.entities.isNotEmpty()) {
+                        item {
+                            Text(
+                                "实体脉络（${graph.entities.size}）",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        item {
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                ),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                            ) {
+                                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                    graph.entities.forEach { entity ->
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(vertical = 3.dp),
+                                        ) {
+                                            Text(
+                                                entityTypeLabel(entity.type),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                            )
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                entity.name,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.weight(1f),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            if (entity.noteCount > 0) {
+                                                Text(
+                                                    "${entity.noteCount} 条",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (graph.relations.isNotEmpty()) {
+                            item {
+                                Text(
+                                    "关系（${graph.relations.size}）",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            item {
+                                Card(
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                    ),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                                ) {
+                                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                        val nameById = graph.entities.associateBy(GraphEntity::id)
+                                        graph.relations.forEach { rel ->
+                                            val src = nameById[rel.src]?.name ?: rel.src
+                                            val dst = nameById[rel.dst]?.name ?: rel.dst
+                                            Text(
+                                                "$src — ${rel.relationLabel.ifBlank { "关联" }} → $dst",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(vertical = 3.dp),
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
