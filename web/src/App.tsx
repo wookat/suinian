@@ -13,6 +13,8 @@ import { TodosPage } from "@/pages/todos"
 import { ThreadsPage } from "@/pages/threads"
 import { ReportsPage } from "@/pages/reports"
 import { SettingsPage } from "@/pages/settings"
+import { AuthPage } from "@/pages/auth"
+import { Onboarding } from "@/components/onboarding"
 import { ReloadPrompt } from "@/components/reload-prompt"
 import { PageHeader } from "@/components/page-header"
 import { RightRail } from "@/components/right-rail"
@@ -90,14 +92,41 @@ function useMockMode(): boolean {
   return mock
 }
 
+// off-nav route: register/login (linked from onboarding & settings)
+const AUTH_ROUTE = {
+  path: "auth",
+  label: "注册 / 登录",
+  icon: SettingsIcon,
+  page: AuthPage,
+  title: "注册 / 登录",
+  description: "注册新账号或用密码登录，自动配置 API token",
+} as const
+
+function useOnboarded(): boolean {
+  const [onboarded, setOnboarded] = useState(() => loadSettings().onboarded)
+  useEffect(() => {
+    const onChange = () => setOnboarded(loadSettings().onboarded)
+    window.addEventListener(SETTINGS_CHANGED_EVENT, onChange)
+    window.addEventListener("storage", onChange)
+    return () => {
+      window.removeEventListener(SETTINGS_CHANGED_EVENT, onChange)
+      window.removeEventListener("storage", onChange)
+    }
+  }, [])
+  return onboarded
+}
+
 export default function App() {
   const route = useHashRoute()
-  const active = ROUTES.find((r) => r.path === route) ?? ROUTES[0]
+  const active =
+    route === AUTH_ROUTE.path ? AUTH_ROUTE : (ROUTES.find((r) => r.path === route) ?? ROUTES[0])
   const Page = active.page
   const isMock = useMockMode()
+  const onboarded = useOnboarded()
 
   return (
     <div className="min-h-dvh">
+      {!onboarded && <Onboarding />}
       {isMock && (
         <div className="flex items-center justify-center gap-2 border-b border-amber-500/30 bg-amber-500/15 px-4 py-2 text-sm text-amber-800 backdrop-blur dark:text-amber-300 md:pl-52">
           <Info className="size-4 shrink-0" />

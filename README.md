@@ -74,8 +74,8 @@ npx wrangler d1 migrations apply suinian --remote
 npx wrangler secret put DEEPSEEK_API_KEY
 openssl rand -base64 32 | npx wrangler secret put SUINIAN_ENC_KEY
 npx wrangler deploy                     # 先删掉/改掉 wrangler.toml 里的 routes 自定义域
-npx wrangler d1 execute suinian --remote --command \
-  "INSERT INTO users (id,name,api_token) VALUES ('u_me','me','$(openssl rand -hex 24)')"
+# 创建账号：Web 端首页引导「注册新账号」即可（用户名+密码，自动配置 token）；
+# 或 curl POST /api/auth/register；不想开放注册可设 REGISTRATION_ENABLED="false"
 
 # 2) Web 端：Cloudflare Pages
 cd ../web && npm install && npm run build

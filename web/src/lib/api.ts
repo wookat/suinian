@@ -224,6 +224,53 @@ export async function getReport(id: string): Promise<WeeklyReport> {
   return res.report ?? res
 }
 
+export interface AuthResult {
+  user: { id: string; name: string }
+  api_token: string
+}
+
+async function authPost(baseUrl: string, path: string, body: unknown): Promise<AuthResult> {
+  let res: Response
+  try {
+    res = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    let message = text || res.statusText
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown }
+      if (typeof parsed.error === "string" && parsed.error) message = parsed.error
+    } catch {
+      // not JSON, keep raw text
+    }
+    throw new ApiError(res.status, message)
+  }
+  return res.json() as Promise<AuthResult>
+}
+
+export function register(baseUrl: string, name: string, password: string): Promise<AuthResult> {
+  return authPost(baseUrl, "/api/auth/register", { name, password })
+}
+
+export function login(baseUrl: string, name: string, password: string): Promise<AuthResult> {
+  return authPost(baseUrl, "/api/auth/login", { name, password })
+}
+
+export async function rotateToken(): Promise<string> {
+  const res = await realFetch<{ api_token: string }>("/api/auth/rotate-token", { method: "POST" })
+  return res.api_token
+}
+
+export async function deleteAccount(): Promise<void> {
+  await realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" })
+}
+
 export interface TestConnectionResult {
   ok: boolean
   message: string

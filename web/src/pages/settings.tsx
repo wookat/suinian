@@ -1,9 +1,21 @@
 import { useState } from "react"
-import { Check, Loader2, CircleCheck, CircleAlert, Sun, Moon, Monitor } from "lucide-react"
+import {
+  Check,
+  Loader2,
+  CircleCheck,
+  CircleAlert,
+  Sun,
+  Moon,
+  Monitor,
+  Copy,
+  RefreshCw,
+  UserPlus,
+  Trash2,
+} from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { testConnection, type TestConnectionResult } from "@/lib/api"
+import { deleteAccount, rotateToken, testConnection, type TestConnectionResult } from "@/lib/api"
 import { loadSettings, saveSettings } from "@/lib/settings"
 import { loadTheme, setTheme, type ThemeMode } from "@/lib/theme"
 import { cn } from "@/lib/utils"
@@ -20,6 +32,60 @@ export function SettingsPage() {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null)
   const [theme, setThemeState] = useState<ThemeMode>(loadTheme)
+  const [copied, setCopied] = useState(false)
+  const [rotating, setRotating] = useState(false)
+  const [accountMsg, setAccountMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
+  async function copyToken() {
+    const token = loadSettings().apiToken
+    if (!token) {
+      setAccountMsg({ ok: false, text: "当前未配置 token" })
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(token)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setAccountMsg({ ok: false, text: "复制失败，请手动从上方输入框复制" })
+    }
+  }
+
+  async function handleRotate() {
+    if (rotating) return
+    if (!window.confirm("轮换后旧 token 立即失效，其它设备（微信桥 / Android）需同步更新。确定轮换？")) return
+    setRotating(true)
+    setAccountMsg(null)
+    try {
+      const token = await rotateToken()
+      const next = { ...loadSettings(), apiToken: token }
+      setSettings(next)
+      saveSettings(next)
+      setAccountMsg({ ok: true, text: "已轮换并保存新 token，请同步更新其它设备" })
+    } catch (e) {
+      setAccountMsg({ ok: false, text: e instanceof Error ? e.message : "轮换失败，请稍后重试" })
+    } finally {
+      setRotating(false)
+    }
+  }
+
+  async function handleDeleteAccount() {
+    if (deleting) return
+    if (!window.confirm("注销将永久删除账号及全部笔记/线索/周报，无法恢复。确定继续？")) return
+    if (!window.confirm("再次确认：真的要删除账号和所有数据吗？")) return
+    setDeleting(true)
+    setAccountMsg(null)
+    try {
+      await deleteAccount()
+      saveSettings({ apiBaseUrl: "", apiToken: "", useMock: true, onboarded: false })
+      window.location.hash = "#/"
+      window.location.reload()
+    } catch (e) {
+      setAccountMsg({ ok: false, text: e instanceof Error ? e.message : "注销失败，请稍后重试" })
+      setDeleting(false)
+    }
+  }
 
   function save() {
     const next =
@@ -147,6 +213,78 @@ export function SettingsPage() {
               <CircleAlert className="size-4 shrink-0" />
             )}
             {testResult.message}
+          </p>
+        )}
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <div>
+          <h2 className="text-sm font-medium">账号</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            还没有账号？支持用户名 + 密码自助注册，注册后自动配置 token
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <Button variant="outline" onClick={() => (window.location.hash = "#/auth")} className="w-full sm:w-auto">
+            <UserPlus /> 注册 / 登录
+          </Button>
+          <Button variant="outline" onClick={() => void copyToken()} className="w-full sm:w-auto">
+            {copied ? (
+              <>
+                <Check /> 已复制
+              </>
+            ) : (
+              <>
+                <Copy /> 复制我的 API token
+              </>
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => void handleRotate()}
+            disabled={rotating}
+            className="w-full sm:w-auto"
+          >
+            {rotating ? (
+              <>
+                <Loader2 className="animate-spin" /> 轮换中…
+              </>
+            ) : (
+              <>
+                <RefreshCw /> 轮换 token
+              </>
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => void handleDeleteAccount()}
+            disabled={deleting}
+            className="w-full text-destructive hover:text-destructive sm:w-auto"
+          >
+            {deleting ? (
+              <>
+                <Loader2 className="animate-spin" /> 注销中…
+              </>
+            ) : (
+              <>
+                <Trash2 /> 注销账号
+              </>
+            )}
+          </Button>
+        </div>
+        {accountMsg && (
+          <p
+            className={cn(
+              "flex items-center gap-1.5 text-sm",
+              accountMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+            )}
+          >
+            {accountMsg.ok ? (
+              <CircleCheck className="size-4 shrink-0" />
+            ) : (
+              <CircleAlert className="size-4 shrink-0" />
+            )}
+            {accountMsg.text}
           </p>
         )}
       </Card>

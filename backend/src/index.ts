@@ -7,6 +7,16 @@ import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { clusterNote, refreshThreads, rebuildThreads } from "./threads";
 import { chatComplete } from "./ai";
+import {
+  hashPassword,
+  verifyPassword,
+  generateToken,
+  validateName,
+  validatePassword,
+  registrationEnabled,
+  checkRateLimit,
+  clientIp,
+} from "./auth";
 import { generateWeeklyReport, generateAllWeeklyReports } from "./reports";
 import {
   parseMediaRequest,
@@ -44,6 +54,51 @@ function contentTooLong(c: { json: (o: object, s: 413) => Response }, content: s
 app.get("/", (c) => c.json({ name: "suinian-api", status: "ok" }));
 app.get("/health", (c) => c.json({ ok: true }));
 
+// ---- public auth: register / login (mounted before the bearer middleware) ----
+app.post("/api/auth/register", async (c) => {
+  if (!registrationEnabled(c.env.REGISTRATION_ENABLED)) {
+    return c.json({ error: "注册已关闭" }, 403);
+  }
+  if (!(await checkRateLimit(c.env.DB, "register", clientIp(c.req.raw)))) {
+    return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
+  }
+  const body = await c.req.json<{ name?: unknown; password?: unknown }>().catch(() => null);
+  const name = validateName(body?.name);
+  if (!name) return c.json({ error: "用户名需 2-32 个字符（中英文、数字、._-）" }, 400);
+  const password = validatePassword(body?.password);
+  if (!password) return c.json({ error: "密码需 8-128 个字符" }, 400);
+  const existing = await c.env.DB.prepare("SELECT id FROM users WHERE name = ?").bind(name).first<{ id: string }>();
+  if (existing) return c.json({ error: "用户名已存在" }, 409);
+  const id = `u_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  const token = generateToken();
+  const passwordHash = await hashPassword(password);
+  await c.env.DB.prepare("INSERT INTO users (id, name, api_token, password_hash) VALUES (?, ?, ?, ?)")
+    .bind(id, name, token, passwordHash)
+    .run();
+  return c.json({ user: { id, name }, api_token: token }, 201);
+});
+
+app.post("/api/auth/login", async (c) => {
+  if (!(await checkRateLimit(c.env.DB, "login", clientIp(c.req.raw)))) {
+    return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
+  }
+  const body = await c.req.json<{ name?: unknown; password?: unknown }>().catch(() => null);
+  const name = validateName(body?.name);
+  const password = typeof body?.password === "string" ? body.password : "";
+  if (!name || !password) return c.json({ error: "用户名或密码错误" }, 401);
+  const user = await c.env.DB.prepare("SELECT id, name, api_token, password_hash FROM users WHERE name = ?")
+    .bind(name)
+    .first<{ id: string; name: string; api_token: string; password_hash: string | null }>();
+  if (!user) return c.json({ error: "用户名或密码错误" }, 401);
+  if (!user.password_hash) {
+    return c.json({ error: "该账号未设置密码，请使用 API token 登录" }, 401);
+  }
+  if (!(await verifyPassword(password, user.password_hash))) {
+    return c.json({ error: "用户名或密码错误" }, 401);
+  }
+  return c.json({ user: { id: user.id, name: user.name }, api_token: user.api_token });
+});
+
 // ---- auth ----
 app.use("/api/*", async (c, next) => {
   const auth = c.req.header("authorization") || "";
@@ -55,6 +110,43 @@ app.use("/api/*", async (c, next) => {
   if (!row) return c.json({ error: "unauthorized" }, 401);
   c.set("userId", row.id);
   await next();
+});
+
+// ---- authenticated auth endpoints ----
+app.get("/api/auth/me", async (c) => {
+  const user = await c.env.DB.prepare("SELECT id, name, created_at, password_hash FROM users WHERE id = ?")
+    .bind(c.get("userId"))
+    .first<{ id: string; name: string; created_at: string; password_hash: string | null }>();
+  if (!user) return c.json({ error: "not found" }, 404);
+  return c.json({ user: { id: user.id, name: user.name, created_at: user.created_at, has_password: !!user.password_hash } });
+});
+
+app.post("/api/auth/rotate-token", async (c) => {
+  const token = generateToken();
+  await c.env.DB.prepare("UPDATE users SET api_token = ? WHERE id = ?").bind(token, c.get("userId")).run();
+  return c.json({ api_token: token });
+});
+
+// self-serve account deletion: cascades all user data (notes/threads/reports/media)
+app.delete("/api/auth/me", async (c) => {
+  const userId = c.get("userId");
+  const atts = await c.env.DB.prepare(
+    "SELECT a.r2_key FROM attachments a JOIN notes n ON a.note_id = n.id WHERE n.user_id = ?"
+  )
+    .bind(userId)
+    .all<{ r2_key: string }>();
+  if (c.env.MEDIA && (atts.results ?? []).length > 0) {
+    c.executionCtx.waitUntil(
+      c.env.MEDIA.delete((atts.results ?? []).map((a) => a.r2_key)).catch((e) => console.error("r2 delete failed", e))
+    );
+  }
+  await c.env.DB.prepare("DELETE FROM attachments WHERE note_id IN (SELECT id FROM notes WHERE user_id = ?)").bind(userId).run();
+  await c.env.DB.prepare("DELETE FROM note_embeddings WHERE note_id IN (SELECT id FROM notes WHERE user_id = ?)").bind(userId).run();
+  await c.env.DB.prepare("DELETE FROM notes WHERE user_id = ?").bind(userId).run();
+  await c.env.DB.prepare("DELETE FROM threads WHERE user_id = ?").bind(userId).run();
+  await c.env.DB.prepare("DELETE FROM weekly_reports WHERE user_id = ?").bind(userId).run();
+  await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(userId).run();
+  return c.json({ ok: true });
 });
 
 // Legacy rows stored todo_due without a UTC offset; those values are Asia/Shanghai local times.

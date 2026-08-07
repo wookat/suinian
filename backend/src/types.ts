@@ -7,6 +7,8 @@ export type Env = {
   AI_MODEL?: string;
   AI_BASE_URL?: string;
   SUINIAN_ENC_KEY?: string;
+  /** "false"/"0"/"off" disables /api/auth/register (default: enabled). */
+  REGISTRATION_ENABLED?: string;
 };
 
 export interface ThreadRow {
