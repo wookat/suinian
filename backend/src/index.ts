@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import type { Env, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
+import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
 import { triageNote, loadTopTags, normalizeTodoDue, FALLBACK_TRIAGE } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
@@ -11,6 +11,7 @@ import { generateWeeklyReport, generateAllWeeklyReports } from "./reports";
 import {
   parseMediaRequest,
   transcribeAudio,
+  correctTranscript,
   describeImage,
   storeOriginal,
   buildMediaReply,
@@ -63,11 +64,22 @@ export function normalizeStoredTodoDue(v: string | null): string | null {
   return m ? `${m[1]}T${m[2]}:00+08:00` : v;
 }
 
+function parseNoteMeta(raw: string | null): NoteMeta | null {
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw) as NoteMeta;
+    return typeof obj === "object" && obj !== null ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
 function noteToJson(n: NoteRow) {
   return {
     ...n,
     todo_due: normalizeStoredTodoDue(n.todo_due),
     tags: JSON.parse(n.tags || "[]") as string[],
+    meta: parseNoteMeta(n.meta),
     url_titles: n.url_titles ? (JSON.parse(n.url_titles) as { url: string; title: string | null }[]) : null,
     is_sensitive: !!n.is_sensitive,
     todo_done: !!n.todo_done,
@@ -132,7 +144,7 @@ async function fetchLinkMetaInto(env: Env, noteId: string, urls: string[]): Prom
 async function createNote(
   c: { env: Env },
   userId: string,
-  body: { source?: string; raw_type?: string; content?: string; url?: string },
+  body: { source?: string; raw_type?: string; content?: string; url?: string; meta?: NoteMeta | null },
   waitUntil: (p: Promise<unknown>) => void,
   opts: { syncTriage: boolean }
 ): Promise<{ note: NoteRow; triage: TriageResult | null }> {
@@ -145,10 +157,10 @@ async function createNote(
 
   // insert immediately (category resolved by triage, sync or async)
   await c.env.DB.prepare(
-    `INSERT INTO notes (id, user_id, source, raw_type, content, url, category, tags)
-     VALUES (?, ?, ?, ?, ?, ?, NULL, '[]')`
+    `INSERT INTO notes (id, user_id, source, raw_type, content, url, category, tags, meta)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, '[]', ?)`
   )
-    .bind(id, userId, source, rawType, content, url ?? null)
+    .bind(id, userId, source, rawType, content, url ?? null, body.meta ? JSON.stringify(body.meta) : null)
     .run();
 
   const runTriage = async (): Promise<TriageResult | null> => {
@@ -350,12 +362,28 @@ app.post("/api/ingest/media", async (c) => {
   const parsed = await parseMediaRequest(c.req.raw);
   if ("error" in parsed) return c.json({ error: parsed.error }, parsed.status);
 
-  const extracted =
-    parsed.type === "audio" ? await transcribeAudio(c.env, parsed.bytes) : await describeImage(c.env, parsed.bytes);
-  const ok = extracted !== null;
-  const content = ok
-    ? extracted
-    : `${parsed.type === "audio" ? AUDIO_FAILED_PLACEHOLDER : IMAGE_FAILED_PLACEHOLDER}${parsed.fileName ? `（${parsed.fileName}）` : ""}`;
+  let content: string | null = null;
+  let meta: NoteMeta | null = null;
+  if (parsed.type === "audio") {
+    const raw = await transcribeAudio(c.env, parsed.bytes);
+    if (raw !== null) {
+      const corrected = await correctTranscript(c.env, raw);
+      content = corrected;
+      if (corrected !== raw) meta = { raw_transcript: raw };
+    }
+  } else {
+    const extraction = await describeImage(c.env, parsed.bytes);
+    if (extraction !== null) {
+      content = extraction.content;
+      if (extraction.description && extraction.description !== extraction.content) {
+        meta = { image_description: extraction.description };
+      }
+    }
+  }
+  const ok = content !== null;
+  if (content === null) {
+    content = `${parsed.type === "audio" ? AUDIO_FAILED_PLACEHOLDER : IMAGE_FAILED_PLACEHOLDER}${parsed.fileName ? `（${parsed.fileName}）` : ""}`;
+  }
 
   const tooLong = contentTooLong(c, content);
   if (tooLong) return tooLong;
@@ -363,7 +391,7 @@ app.post("/api/ingest/media", async (c) => {
   const { note } = await createNote(
     c,
     c.get("userId"),
-    { source: parsed.source || "api", raw_type: parsed.type === "audio" ? "voice" : "image", content },
+    { source: parsed.source || "api", raw_type: parsed.type === "audio" ? "voice" : "image", content, meta },
     (p) => c.executionCtx.waitUntil(p),
     { syncTriage: false }
   );

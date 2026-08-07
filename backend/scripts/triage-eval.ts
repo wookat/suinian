@@ -56,7 +56,8 @@ const CASES: EvalCase[] = [
   { content: `${PREFIX} 周五下午3点交季度报告给老板`, category: "todo", due: nearestFridayIso() },
   { content: `${PREFIX} 回头把冰箱滤芯换了`, category: "todo", due: null },
   { content: `${PREFIX} 公司报销流程：先在 OA 提单，再贴发票给财务`, category: "data" },
-  { content: `${PREFIX} 9月1号起各部门预算表改用新模板，找行政领新版`, category: "data" },
+  // 制度/流程变更但含个人动作（找行政领新版）→ todo（R12 判例）
+  { content: `${PREFIX} 9月1号起各部门预算表改用新模板，找行政领新版`, category: "todo" },
   { content: `${PREFIX} https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API 讲 Service Worker 的文档`, category: "collect" },
   { content: `${PREFIX} 突然想到：碎念的周报可以做成邮件推送，让用户被动回顾`, category: "idea" },
   { content: `${PREFIX} 【灵感】给时间流加一个按月折叠的视图`, category: "idea", forbiddenTagParts: ["灵感】", "【"] },

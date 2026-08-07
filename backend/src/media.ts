@@ -1,4 +1,5 @@
 import type { Env } from "./types";
+import { chatComplete } from "./ai";
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
 
@@ -87,13 +88,28 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+const AI_RUN_TIMEOUT_MS = 25_000;
+const CORRECT_TIMEOUT_MS = 10_000;
+
+/** Race a promise against a timeout; rejects with an Error on expiry. */
+export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ]);
+}
+
 /** Whisper transcription via Workers AI; returns null on any failure. */
 export async function transcribeAudio(env: Pick<Env, "AI">, bytes: Uint8Array): Promise<string | null> {
   if (!env.AI) return null;
   try {
-    const out = (await env.AI.run(WHISPER_MODEL as Parameters<Ai["run"]>[0], {
-      audio: bytesToBase64(bytes),
-    })) as { text?: string };
+    const out = (await withTimeout(
+      env.AI.run(WHISPER_MODEL as Parameters<Ai["run"]>[0], {
+        audio: bytesToBase64(bytes),
+      }) as Promise<{ text?: string }>,
+      AI_RUN_TIMEOUT_MS,
+      "whisper"
+    )) as { text?: string };
     const text = (out.text ?? "").trim();
     return text || null;
   } catch (err) {
@@ -102,20 +118,90 @@ export async function transcribeAudio(env: Pick<Env, "AI">, bytes: Uint8Array): 
   }
 }
 
-const IMAGE_PROMPT =
-  "请提取图片中的所有文字（保持原文，不要翻译），然后另起一行用一句话描述图片内容。直接输出，不要客套话。用中文回答。";
+const CORRECT_SYSTEM_PROMPT =
+  "你是语音转写纠错助手。修正下面转写文本中的同音错别字与明显断句错误，不改变原意，不增删信息，输出纯文本（不要解释，不要 markdown）。";
 
-/** Vision model text extraction + one-line description; returns null on any failure. */
-export async function describeImage(env: Pick<Env, "AI">, bytes: Uint8Array): Promise<string | null> {
+/**
+ * LLM post-correction of a Whisper transcript (homophone typos, obvious
+ * segmentation errors). Returns the corrected text, or the original
+ * transcript on any failure so the pipeline never regresses.
+ */
+export async function correctTranscript(
+  env: Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL">,
+  raw: string
+): Promise<string> {
+  try {
+    const out = await withTimeout(
+      chatComplete(env, {
+        temperature: 0.1,
+        max_tokens: 1024,
+        timeout_ms: CORRECT_TIMEOUT_MS,
+        messages: [
+          { role: "system", content: CORRECT_SYSTEM_PROMPT },
+          { role: "user", content: raw.slice(0, 4000) },
+        ],
+      }),
+      CORRECT_TIMEOUT_MS + 2_000,
+      "transcript correction"
+    );
+    const text = (out ?? "").trim();
+    return text || raw;
+  } catch (err) {
+    console.error("correctTranscript: failed", err);
+    return raw;
+  }
+}
+
+const IMAGE_PROMPT =
+  "你会看到一张图片。请按下面格式输出两部分，用中文回答，不要客套话，不要 markdown 格式（不要星号、井号）：\n" +
+  "文字：<图片中的所有文字，保持原文不要翻译；若图中没有文字则输出「无」>\n" +
+  "描述：<对图片内容的完整描述>";
+
+/** Remove markdown emphasis/heading noise the vision model tends to emit. */
+export function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*+/g, "")
+    .replace(/^#{1,6}\s+/gm, "")
+    .trim();
+}
+
+export interface ImageExtraction {
+  /** Note content: extracted text, or a short description when the image has no text. */
+  content: string;
+  /** Full vision description for metadata. */
+  description: string;
+}
+
+/** Parse the two-section vision output into content (text-first) + description. */
+export function parseImageExtraction(raw: string): ImageExtraction {
+  const cleaned = stripMarkdown(raw);
+  const textMatch = cleaned.match(/(?:^|\n)\s*文字[:：]\s*([\s\S]*?)(?=\n\s*描述[:：]|$)/);
+  const descMatch = cleaned.match(/(?:^|\n)\s*描述[:：]\s*([\s\S]*)/);
+  const text = (textMatch?.[1] ?? "").trim();
+  const desc = (descMatch?.[1] ?? "").trim();
+  const hasText = text.length > 0 && !/^(无|没有|无文字|N\/A|none)。?$/i.test(text);
+  if (hasText) return { content: text, description: desc || cleaned };
+  // no text in image: fall back to the first sentence of the description
+  const fallback = desc || cleaned;
+  const firstSentence = fallback.split(/(?<=[。！？!?])/)[0]?.trim() || fallback;
+  return { content: firstSentence, description: fallback };
+}
+
+/** Vision model: text extraction (primary) + full description; returns null on any failure. */
+export async function describeImage(env: Pick<Env, "AI">, bytes: Uint8Array): Promise<ImageExtraction | null> {
   if (!env.AI) return null;
   try {
-    const out = (await env.AI.run(VISION_MODEL as Parameters<Ai["run"]>[0], {
-      prompt: IMAGE_PROMPT,
-      image: Array.from(bytes),
-      max_tokens: 512,
-    })) as { response?: string };
+    const out = (await withTimeout(
+      env.AI.run(VISION_MODEL as Parameters<Ai["run"]>[0], {
+        prompt: IMAGE_PROMPT,
+        image: Array.from(bytes),
+        max_tokens: 512,
+      }) as Promise<{ response?: string }>,
+      AI_RUN_TIMEOUT_MS,
+      "vision"
+    )) as { response?: string };
     const text = (out.response ?? "").trim();
-    return text || null;
+    return text ? parseImageExtraction(text) : null;
   } catch (err) {
     console.error("describeImage: failed", err);
     return null;

@@ -48,6 +48,7 @@ export function buildTriagePrompt(now: Date = new Date(), existingTags: string[]
   判例：
   - 「公司报销流程：先在 OA 提单，再贴发票给财务」→ data（流程性参考，无待办动作）
   - 「9月1号起各部门预算表改用新模板」→ data（带日期的说明仍是资料，不是待办）
+  - 「9月1号起预算表改用新模板，找行政领新版」→ todo（制度/流程变更但含需要本人去做的动作，如“找…领”“去…办”，以动作为准归 todo）
   - 「回头把冰箱滤芯换了」→ todo（无时间也是待办，todo_due=null）
   - 「https://example.com/abc 一篇讲向量检索的文章」→ collect（纯链接即收藏）
   - 「明天下午3点和设计师对稿」→ todo，todo_due=${tomorrow.iso}T15:00:00+08:00
