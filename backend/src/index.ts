@@ -298,6 +298,17 @@ app.delete("/api/notes/:id", async (c) => {
     .bind(id, c.get("userId"))
     .first<{ thread_id: string | null }>();
   if (!note) return c.json({ error: "not found" }, 404);
+  const atts = await c.env.DB.prepare("SELECT r2_key FROM attachments WHERE note_id = ?")
+    .bind(id)
+    .all<{ r2_key: string }>();
+  await c.env.DB.prepare("DELETE FROM attachments WHERE note_id = ?").bind(id).run();
+  if (c.env.MEDIA && atts.results.length > 0) {
+    c.executionCtx.waitUntil(
+      c.env.MEDIA.delete(atts.results.map((a) => a.r2_key)).catch((e) =>
+        console.error("r2 delete failed", e)
+      )
+    );
+  }
   await c.env.DB.prepare("DELETE FROM note_embeddings WHERE note_id = ?").bind(id).run();
   await c.env.DB.prepare("DELETE FROM notes WHERE id = ?").bind(id).run();
   if (note.thread_id) {
