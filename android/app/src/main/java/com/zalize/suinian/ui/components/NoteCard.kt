@@ -1,7 +1,9 @@
 package com.zalize.suinian.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Link
@@ -174,6 +177,7 @@ private fun linkCards(note: Note): List<UrlTitle> {
     return listOf(UrlTitle(url = url, title = note.urlTitle))
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun NoteCard(
     note: Note,
@@ -184,6 +188,11 @@ fun NoteCard(
     onRetryLink: ((Note) -> Unit)? = null,
     retryingLink: Boolean = false,
     onDownloadFile: ((Note) -> Unit)? = null,
+    onEdit: ((Note) -> Unit)? = null,
+    selectable: Boolean = false,
+    selected: Boolean = false,
+    onSelectToggle: ((Note) -> Unit)? = null,
+    onLongPress: ((Note) -> Unit)? = null,
 ) {
     var confirmDelete by rememberSaveable(note.id) { mutableStateOf(false) }
     if (confirmDelete && onDelete != null) {
@@ -203,13 +212,34 @@ fun NoteCard(
         )
     }
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (selectable || onLongPress != null) {
+                    Modifier.combinedClickable(
+                        onClick = { if (selectable) onSelectToggle?.invoke(note) },
+                        onLongClick = { if (!selectable) onLongPress?.invoke(note) },
+                    )
+                } else Modifier
+            ),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                if (selectable) {
+                    Checkbox(
+                        checked = selected,
+                        onCheckedChange = { onSelectToggle?.invoke(note) },
+                        modifier = Modifier.size(28.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
                 CategoryBadge(note.category)
                 SourceBadge(note.rawType)
                 Spacer(Modifier.width(8.dp))
@@ -219,7 +249,7 @@ fun NoteCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
-                if (onToggleSensitive != null) {
+                if (!selectable && onToggleSensitive != null) {
                     var menuOpen by rememberSaveable(note.id) { mutableStateOf(false) }
                     IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(28.dp)) {
                         Icon(
@@ -228,6 +258,16 @@ fun NoteCard(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            if (onEdit != null) {
+                                DropdownMenuItem(
+                                    text = { Text("编辑") },
+                                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                                    onClick = {
+                                        menuOpen = false
+                                        onEdit(note)
+                                    },
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text(if (note.isSensitive) "取消敏感" else "标记敏感") },
                                 leadingIcon = {
@@ -365,7 +405,10 @@ fun NoteCard(
                             )
                         }
                         val isFirst = i == 0 && card.url == note.url
-                        if (isFirst && note.meta?.linkSite != null) {
+                        // R34：回退标题已含域名时不重复显示站点（对齐 Web）
+                        val showSite = isFirst && note.meta?.linkSite != null &&
+                            card.title?.startsWith(note.meta.linkSite) != true
+                        if (showSite && note.meta?.linkSite != null) {
                             Spacer(Modifier.height(4.dp))
                             Text(
                                 note.meta.linkSite,

@@ -206,6 +206,9 @@ fun SuinianNavHost(focusQuickNoteSignal: Int) {
                 val id = entry.arguments?.getString("id") ?: return@composable
                 ThreadDetailScreen(threadId = id, onBack = { navController.popBackStack() })
             }
+            composable("tags") {
+                TagsScreen(onBack = { navController.popBackStack() })
+            }
             composable("reports") {
                 ReportsScreen(onOpenReport = { id -> navController.navigate("reports/$id") })
             }
@@ -217,6 +220,7 @@ fun SuinianNavHost(focusQuickNoteSignal: Int) {
                 SettingsScreen(
                     vm = vm,
                     onBack = { navController.popBackStack() },
+                    onOpenTags = { navController.navigate("tags") },
                     onLogout = {
                         navController.navigate("home") {
                             popUpTo(navController.graph.findStartDestination().id) { inclusive = true }

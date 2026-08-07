@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.zalize.suinian.SuinianApp
 import com.zalize.suinian.data.AppSettings
 import com.zalize.suinian.data.CreateNoteRequest
+import com.zalize.suinian.data.DailyReviewItem
 import com.zalize.suinian.data.Note
 import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.SendResult
@@ -30,6 +31,12 @@ data class NotesUiState(
     val cursor: String? = null,
     val loadingMore: Boolean = false,
     val retryingLinkIds: Set<String> = emptySet(),
+    val reviewItems: List<DailyReviewItem> = emptyList(),
+    val selectionMode: Boolean = false,
+    val selectedIds: Set<String> = emptySet(),
+    val batchBusy: Boolean = false,
+    val editingNote: Note? = null,
+    val savingEdit: Boolean = false,
 )
 
 class NotesViewModel(app: Application) : AndroidViewModel(app) {
@@ -49,6 +56,17 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         refresh()
+        loadReview()
+    }
+
+    /** 今日回顾：锦上添花，失败静默隐藏 */
+    fun loadReview() {
+        viewModelScope.launch {
+            try {
+                _ui.value = _ui.value.copy(reviewItems = repo.getTodayReview().items)
+            } catch (_: Exception) {
+            }
+        }
     }
 
     fun refresh() {
@@ -100,6 +118,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 设置页轮换 API token（成功后新 token 已保存到本机） */
     suspend fun rotateApiToken(): String = repo.rotateToken()
+
+    /** 永久注销账号：删除云端全部数据并清本机登录状态 */
+    suspend fun deleteAccount() = repo.deleteAccount()
 
     fun toggleTodo(note: Note) {
         val target = !(note.todoDone ?: false)
@@ -259,5 +280,127 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun consumeToast() {
         _ui.value = _ui.value.copy(toast = null)
+    }
+
+    // ---- 多选批量操作 ----
+
+    fun enterSelection(note: Note) {
+        _ui.value = _ui.value.copy(selectionMode = true, selectedIds = setOf(note.id))
+    }
+
+    fun toggleSelect(note: Note) {
+        val cur = _ui.value.selectedIds
+        val next = if (note.id in cur) cur - note.id else cur + note.id
+        _ui.value = _ui.value.copy(selectedIds = next)
+    }
+
+    fun exitSelection() {
+        _ui.value = _ui.value.copy(selectionMode = false, selectedIds = emptySet())
+    }
+
+    fun batchDelete() {
+        val ids = _ui.value.selectedIds.toList()
+        if (ids.isEmpty()) return
+        _ui.value = _ui.value.copy(batchBusy = true)
+        viewModelScope.launch {
+            try {
+                val res = repo.batchNotes("delete", ids)
+                _ui.value = _ui.value.copy(
+                    batchBusy = false,
+                    selectionMode = false,
+                    selectedIds = emptySet(),
+                    notes = _ui.value.notes.filter { it.id !in ids },
+                    toast = "已删除 ${res.affected} 条",
+                )
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(batchBusy = false, toast = e.message ?: "批量删除失败")
+            }
+        }
+    }
+
+    fun batchAddTag(tag: String) {
+        val ids = _ui.value.selectedIds.toList()
+        val t = tag.trim().removePrefix("#")
+        if (ids.isEmpty() || t.isEmpty()) return
+        _ui.value = _ui.value.copy(batchBusy = true)
+        viewModelScope.launch {
+            try {
+                val res = repo.batchNotes("add_tags", ids, tags = listOf(t))
+                _ui.value = _ui.value.copy(
+                    batchBusy = false,
+                    selectionMode = false,
+                    selectedIds = emptySet(),
+                    toast = "已给 ${res.affected} 条加标签 #$t",
+                )
+                refresh()
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(batchBusy = false, toast = e.message ?: "批量打标失败")
+            }
+        }
+    }
+
+    fun batchSetCategory(category: String) {
+        val ids = _ui.value.selectedIds.toList()
+        if (ids.isEmpty()) return
+        _ui.value = _ui.value.copy(batchBusy = true)
+        viewModelScope.launch {
+            try {
+                val res = repo.batchNotes("set_category", ids, category = category)
+                _ui.value = _ui.value.copy(
+                    batchBusy = false,
+                    selectionMode = false,
+                    selectedIds = emptySet(),
+                    toast = "已改分类 ${res.affected} 条",
+                )
+                refresh()
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(batchBusy = false, toast = e.message ?: "批量改分类失败")
+            }
+        }
+    }
+
+    // ---- 笔记编辑 ----
+
+    fun openEditor(note: Note) {
+        _ui.value = _ui.value.copy(editingNote = note)
+    }
+
+    fun closeEditor() {
+        _ui.value = _ui.value.copy(editingNote = null)
+    }
+
+    fun saveEdit(
+        note: Note,
+        content: String,
+        title: String,
+        category: String?,
+        tags: List<String>,
+        todoDue: String?,
+    ) {
+        _ui.value = _ui.value.copy(savingEdit = true)
+        viewModelScope.launch {
+            try {
+                val updated = repo.updateNote(
+                    id = note.id,
+                    content = content.takeIf { it != note.content },
+                    title = title.takeIf { it != (note.title ?: "") },
+                    category = category.takeIf { it != null && it != note.category },
+                    tags = tags.takeIf { it != note.tags },
+                    todoDue = todoDue.takeIf { !it.isNullOrBlank() && it != note.todoDue },
+                    clearTodoDue = todoDue.isNullOrBlank() && !note.todoDue.isNullOrBlank(),
+                )
+                _ui.value = _ui.value.copy(
+                    savingEdit = false,
+                    editingNote = null,
+                    notes = if (updated != null) {
+                        _ui.value.notes.map { if (it.id == note.id) updated else it }
+                    } else _ui.value.notes,
+                    toast = "已保存",
+                )
+                if (updated == null) refresh()
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(savingEdit = false, toast = e.message ?: "保存失败")
+            }
+        }
     }
 }

@@ -209,6 +209,39 @@ data class RotateTokenResponse(
     @SerialName("api_token") val apiToken: String = "",
 )
 
+/** GET /api/review/today：那年今日 / 上月今日 / 久未回看 */
+@Serializable
+data class DailyReviewItem(
+    val id: String,
+    val kind: String = "",
+    @SerialName("kind_label") val kindLabel: String = "",
+    val comment: String? = null,
+    val note: Note,
+)
+
+@Serializable
+data class DailyReviewResponse(
+    val date: String = "",
+    val items: List<DailyReviewItem> = emptyList(),
+)
+
+/** GET /api/tags 元素：标签及使用次数 */
+@Serializable
+data class TagCount(
+    val tag: String,
+    val count: Int = 0,
+)
+
+@Serializable
+data class TagsPage(val tags: List<TagCount> = emptyList())
+
+/** POST /api/notes/batch 响应 */
+@Serializable
+data class BatchResponse(
+    val ok: Boolean = false,
+    val affected: Int = 0,
+)
+
 /** POST /api/ingest/media 响应（只取 note 与 text） */
 @Serializable
 data class MediaIngestResponse(

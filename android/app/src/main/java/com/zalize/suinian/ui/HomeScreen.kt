@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -38,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -55,7 +57,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import com.zalize.suinian.data.NotesViewLimits
+import com.zalize.suinian.ui.components.DailyReviewCard
 import com.zalize.suinian.ui.components.NoteCard
+import com.zalize.suinian.ui.components.NoteEditSheet
 
 private val categories = listOf(
     null to "全部",
@@ -71,6 +75,10 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
     val ui by vm.ui.collectAsState()
     val pending by vm.pendingCount.collectAsState()
     var draft by rememberSaveable { mutableStateOf("") }
+    var confirmBatchDelete by rememberSaveable { mutableStateOf(false) }
+    var batchTagDialog by rememberSaveable { mutableStateOf(false) }
+    var batchTagInput by rememberSaveable { mutableStateOf("") }
+    var batchCategoryDialog by rememberSaveable { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
@@ -104,7 +112,123 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
         }
     }
 
+    // 编辑底部弹层
+    ui.editingNote?.let { editing ->
+        NoteEditSheet(
+            note = editing,
+            saving = ui.savingEdit,
+            onDismiss = { vm.closeEditor() },
+            onSave = { content, title, category, tags, todoDue ->
+                vm.saveEdit(editing, content, title, category, tags, todoDue)
+            },
+        )
+    }
+
+    if (confirmBatchDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmBatchDelete = false },
+            title = { Text("删除选中的 ${ui.selectedIds.size} 条笔记？") },
+            text = { Text("删除后不可恢复") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmBatchDelete = false
+                    vm.batchDelete()
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmBatchDelete = false }) { Text("取消") } },
+        )
+    }
+
+    if (batchTagDialog) {
+        AlertDialog(
+            onDismissRequest = { batchTagDialog = false },
+            title = { Text("给 ${ui.selectedIds.size} 条笔记加标签") },
+            text = {
+                OutlinedTextField(
+                    value = batchTagInput,
+                    onValueChange = { batchTagInput = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("标签名") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        batchTagDialog = false
+                        vm.batchAddTag(batchTagInput)
+                        batchTagInput = ""
+                    },
+                    enabled = batchTagInput.trim().removePrefix("#").isNotEmpty(),
+                ) { Text("确定") }
+            },
+            dismissButton = { TextButton(onClick = { batchTagDialog = false }) { Text("取消") } },
+        )
+    }
+
+    if (batchCategoryDialog) {
+        AlertDialog(
+            onDismissRequest = { batchCategoryDialog = false },
+            title = { Text("把 ${ui.selectedIds.size} 条笔记改分类为") },
+            text = {
+                Column {
+                    categories.filter { it.first != null }.forEach { (value, label) ->
+                        TextButton(
+                            onClick = {
+                                batchCategoryDialog = false
+                                vm.batchSetCategory(value!!)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(label) }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { batchCategoryDialog = false }) { Text("取消") } },
+        )
+    }
+
     Column(modifier = modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        // 多选模式：顶部操作栏替代速记/搜索
+        if (ui.selectionMode) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            ) {
+                IconButton(onClick = { vm.exitSelection() }) {
+                    Icon(Icons.Outlined.Close, contentDescription = "退出多选")
+                }
+                Text(
+                    "已选 ${ui.selectedIds.size} 条",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val hasSelection = ui.selectedIds.isNotEmpty() && !ui.batchBusy
+                AssistChip(
+                    onClick = { batchTagDialog = true },
+                    label = { Text("加标签") },
+                    enabled = hasSelection,
+                )
+                AssistChip(
+                    onClick = { batchCategoryDialog = true },
+                    label = { Text("改分类") },
+                    enabled = hasSelection,
+                )
+                AssistChip(
+                    onClick = { confirmBatchDelete = true },
+                    label = { Text(if (ui.batchBusy) "处理中…" else "删除", color = MaterialTheme.colorScheme.error) },
+                    enabled = hasSelection,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        if (!ui.selectionMode) {
         // 速记框
         val overLimit = draft.length > NotesViewLimits.MAX_CONTENT_CHARS
         OutlinedTextField(
@@ -169,6 +293,7 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
         )
 
         Spacer(Modifier.height(8.dp))
+        }
 
         // 分类筛选
         Row(
@@ -262,6 +387,11 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
+                        if (!ui.selectionMode && ui.reviewItems.isNotEmpty()) {
+                            item(key = "daily-review") {
+                                DailyReviewCard(ui.reviewItems)
+                            }
+                        }
                         items(ui.notes, key = { it.id }) { note ->
                             NoteCard(
                                 note,
@@ -271,6 +401,11 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
                                 onRetryLink = { vm.retryLink(it) },
                                 retryingLink = note.id in ui.retryingLinkIds,
                                 onDownloadFile = { vm.downloadFile(it) },
+                                onEdit = { vm.openEditor(it) },
+                                selectable = ui.selectionMode,
+                                selected = note.id in ui.selectedIds,
+                                onSelectToggle = { vm.toggleSelect(it) },
+                                onLongPress = { vm.enterSelection(it) },
                             )
                         }
                         if (ui.loadingMore) {
