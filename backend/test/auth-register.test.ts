@@ -196,6 +196,51 @@ describe("POST /api/auth/register", () => {
     const res2 = await app.request(post("/api/auth/register", { name: "user9", password: "password123" }, "9.9.9.9"), undefined, env);
     expect(res2.status).toBe(201);
   });
+
+  it("is idempotent: retrying with the same name+password returns the existing account", async () => {
+    const { env } = makeEnv(users);
+    const first = await app.request(post("/api/auth/register", { name: "alice", password: "password123" }), undefined, env);
+    expect(first.status).toBe(201);
+    const body1 = (await first.json()) as { user: { id: string }; api_token: string };
+    const retry = await app.request(post("/api/auth/register", { name: "alice", password: "password123" }, "9.9.9.9"), undefined, env);
+    expect(retry.status).toBe(200);
+    const body2 = (await retry.json()) as { user: { id: string }; api_token: string };
+    expect(body2.user.id).toBe(body1.user.id);
+    expect(body2.api_token).toBe(body1.api_token);
+    expect(users.length).toBe(1);
+  });
+
+  it("returns NAME_TAKEN when the name exists with a different password", async () => {
+    const { env } = makeEnv(users);
+    await app.request(post("/api/auth/register", { name: "alice", password: "password123" }), undefined, env);
+    const res = await app.request(post("/api/auth/register", { name: "alice", password: "different456" }, "9.9.9.9"), undefined, env);
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { code?: string };
+    expect(body.code).toBe("NAME_TAKEN");
+  });
+
+  it("returns an explicit 500 when the user insert fails (no silent failure)", async () => {
+    const { env, DB } = makeEnv(users);
+    const origPrepare = DB.prepare.bind(DB);
+    (DB as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+      if (sql.startsWith("INSERT INTO users")) {
+        return {
+          bind() {
+            return this;
+          },
+          async run() {
+            throw new Error("D1_ERROR: write timeout");
+          },
+        };
+      }
+      return origPrepare(sql);
+    };
+    const res = await app.request(post("/api/auth/register", { name: "alice", password: "password123" }), undefined, env);
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error: string; code?: string };
+    expect(body.code).toBe("DB_WRITE_FAILED");
+    expect(body.error).toContain("重试");
+  });
 });
 
 describe("POST /api/auth/login", () => {

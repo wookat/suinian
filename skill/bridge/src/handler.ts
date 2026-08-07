@@ -1,6 +1,10 @@
 import { FatalApiError, type SuinianClient } from './client.js'
 import {
+  extractInlineTags,
+  isForceSave,
+  isHelpCommand,
   isQuestion,
+  stripForceSavePrefix,
   stripQuestionPrefix,
   toIngestPayload,
   toMediaIngestPayload,
@@ -23,6 +27,17 @@ export function fileFallbackText(msg: NormalizedMessage): string {
 }
 const ERR_ASK = '检索出错了，请稍后再问一次。'
 const EMPTY_QUESTION = '想问什么？在 ? 后面写上问题，例如「?上周我在想什么」。'
+const EMPTY_FORCE_SAVE = '想存什么？在 ! 后面写上内容，例如「!会议纪要：…」。'
+
+export const HELP_TEXT = [
+  '我是「碎念」，想到什么直接丢给我：',
+  '• 直接发文字/链接/语音/图片/文件 → 自动分拣为想法/待办/收藏/资料',
+  '• ?问题 → 基于你的笔记问答，如「?上周我在想什么」（支持多轮追问）',
+  '• !内容 → 强制原样保存，不走 AI 分拣',
+  '• #标签 内容 → 手动打标签，如「#灵感 做个周报邮件推送」',
+  '• 待办会识别截止时间；每天推送回顾；每周一生成周报',
+  '• 网页版 https://suinian.zalize.com 可搜索/编辑/导出全部笔记',
+].join('\n')
 
 const ASK_CONTEXT_ROUNDS = 3
 const ASK_CONTEXT_TTL_MS = 30 * 60 * 1000
@@ -79,6 +94,25 @@ export async function handleMessage(
   askContexts: AskContextStore = defaultAskContexts,
 ): Promise<string> {
   const text = (msg.text ?? '').trim()
+  if (msg.type === 'text' && isHelpCommand(text)) {
+    return HELP_TEXT
+  }
+  if (msg.type === 'text' && isForceSave(text)) {
+    const rest = stripForceSavePrefix(text)
+    if (!rest) return EMPTY_FORCE_SAVE
+    const { content, tags } = extractInlineTags(rest)
+    const payload = toIngestPayload({ ...msg, text: content })
+    payload.skip_triage = true
+    if (tags.length > 0) payload.tags = tags
+    try {
+      const res = await client.ingest(payload)
+      if (res.ok) return res.reply ?? FALLBACK_SAVED
+      return res.error ? `保存失败：${res.error}` : ERR_SAVE
+    } catch (err) {
+      if (err instanceof FatalApiError) throw err
+      return ERR_SAVE
+    }
+  }
   if (msg.type === 'text' && isQuestion(text)) {
     const question = stripQuestionPrefix(text)
     if (!question) return EMPTY_QUESTION
@@ -133,7 +167,11 @@ export async function handleMessage(
     msg = { ...msg, text: fileFallbackText(msg) }
   }
 
-  const payload = toIngestPayload(msg)
+  // 普通消息：`#标签` 手动打标（仍走 AI 分拣，但标签以手动为准）
+  const inline = msg.type === 'text' ? extractInlineTags(msg.text ?? '') : null
+  const payload =
+    inline && inline.tags.length > 0 ? toIngestPayload({ ...msg, text: inline.content }) : toIngestPayload(msg)
+  if (inline && inline.tags.length > 0) payload.tags = inline.tags
   try {
     const res = await client.ingest(payload)
     if (res.ok) return res.reply ?? FALLBACK_SAVED

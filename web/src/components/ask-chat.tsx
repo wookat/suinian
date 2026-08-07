@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Loader2, SendHorizontal, Sparkles, Trash2 } from "lucide-react"
+import { CircleHelp, Loader2, SendHorizontal, Sparkles, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { NoteCard } from "@/components/note-card"
@@ -9,6 +9,15 @@ import type { AskHistoryMessage, Note } from "@/lib/types"
 
 const STORAGE_KEY = "suinian-ask-chat-v1"
 const HISTORY_MAX_MESSAGES = 6 // 最近 3 轮
+
+export const HELP_TEXT = [
+  "碎念能帮你：",
+  "• 随手记：首页输入框/微信 bot 丢文字、链接、语音、图片、文件，AI 自动分拣为想法/待办/收藏/资料",
+  "• 问答：在这里直接提问，如「我最近在想什么」，支持多轮追问，回答中 [n] 可点击查看引用笔记",
+  "• 微信指令：?问题 提问；!内容 强制原样保存不分拣；#标签 内容 手动打标",
+  "• 回顾：每天推送往日笔记回顾；每周一生成周报；同主题想法自动串成线索",
+  "• 数据：设置页可导入 flomo/Cubox、导出 JSON/Markdown，也可用 API 直接写入",
+].join("\n")
 
 export interface AskChatMessage {
   id: string
@@ -93,6 +102,13 @@ export function AskChat({ onTagClick }: { onTagClick?: (tag: string) => void }) 
     [messages],
   )
 
+  function showHelp() {
+    setMessages((ms) => [
+      ...ms,
+      { id: crypto.randomUUID(), role: "assistant", content: HELP_TEXT },
+    ])
+  }
+
   async function send() {
     const q = input.trim()
     if (!q || asking) return
@@ -131,25 +147,42 @@ export function AskChat({ onTagClick }: { onTagClick?: (tag: string) => void }) 
         <div className="flex items-center gap-1.5 text-sm font-medium">
           <Sparkles className="size-4 text-primary" /> 和笔记对话
         </div>
-        {messages.length > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 text-xs text-muted-foreground"
-            onClick={() => setMessages([])}
-          >
-            <Trash2 className="size-3.5" /> 清空对话
-          </Button>
-        )}
+        <div className="flex items-center gap-1">
+          {messages.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs text-muted-foreground"
+              onClick={showHelp}
+            >
+              <CircleHelp className="size-3.5" /> 帮助
+            </Button>
+          )}
+          {messages.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs text-muted-foreground"
+              onClick={() => setMessages([])}
+            >
+              <Trash2 className="size-3.5" /> 清空对话
+            </Button>
+          )}
+        </div>
       </div>
 
       <div ref={listRef} className="max-h-[55vh] space-y-3 overflow-y-auto px-3 py-3 md:max-h-[420px]">
         {messages.length === 0 && !asking && (
-          <p className="px-1 py-6 text-center text-sm text-muted-foreground">
-            问问你的笔记，例如「我最近在想什么」「上次记的那个点子是什么」。
-            <br />
-            支持多轮追问，回答中的 [n] 可点击查看引用笔记。
-          </p>
+          <div className="space-y-3 px-1 py-6 text-center">
+            <p className="text-sm text-muted-foreground">
+              问问你的笔记，例如「我最近在想什么」「上次记的那个点子是什么」。
+              <br />
+              支持多轮追问，回答中的 [n] 可点击查看引用笔记。
+            </p>
+            <Button variant="outline" size="sm" onClick={showHelp}>
+              <CircleHelp className="size-3.5" /> 你能做什么？
+            </Button>
+          </div>
         )}
         {messages.map((m) =>
           m.role === "user" ? (

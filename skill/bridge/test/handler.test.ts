@@ -37,6 +37,39 @@ describe('handleMessage', () => {
     expect(client.ask).not.toHaveBeenCalled()
   })
 
+  it('! 开头 → skip_triage 强制保存', async () => {
+    const client = fakeClient()
+    await handleMessage(client, { userId: 'u1', text: '!原样保存这段', type: 'text' })
+    expect((client.ingest as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      content: '原样保存这段', skip_triage: true,
+    })
+  })
+
+  it('#标签 内容 → 携带 tags 且正文去掉标签', async () => {
+    const client = fakeClient()
+    await handleMessage(client, { userId: 'u1', text: '#灵感 做个周报邮件推送', type: 'text' })
+    expect((client.ingest as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      content: '做个周报邮件推送', tags: ['灵感'],
+    })
+  })
+
+  it('! + #标签 组合', async () => {
+    const client = fakeClient()
+    await handleMessage(client, { userId: 'u1', text: '!#原始 这段不要分拣', type: 'text' })
+    expect((client.ingest as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      content: '这段不要分拣', skip_triage: true, tags: ['原始'],
+    })
+  })
+
+  it('帮助 → 返回玩法清单不打后端', async () => {
+    const client = fakeClient()
+    const reply = await handleMessage(client, { userId: 'u1', text: '你能做什么', type: 'text' })
+    expect(reply).toContain('碎念')
+    expect(reply).toContain('!')
+    expect(client.ingest).not.toHaveBeenCalled()
+    expect(client.ask).not.toHaveBeenCalled()
+  })
+
   it('ingest 网络失败 → 友好错误文案', async () => {
     const client = fakeClient({ ingest: vi.fn(async () => { throw new Error('boom') }) })
     const reply = await handleMessage(client, { userId: 'u1', text: 'x', type: 'text' })

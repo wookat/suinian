@@ -22,6 +22,10 @@ export interface IngestPayload {
   wechat_message_id?: string
   created_at?: string
   attachments?: IngestAttachment[]
+  /** `!` 强制保存：后端跳过 AI 分拣 */
+  skip_triage?: boolean
+  /** `#标签` 手动打标 */
+  tags?: string[]
 }
 
 export interface MediaIngestPayload {
@@ -88,6 +92,42 @@ export function isQuestion(text: string): boolean {
 /** 去掉问答前缀，得到问题正文 */
 export function stripQuestionPrefix(text: string): string {
   return text.replace(/^\s*[?？]\s*/, '').trim()
+}
+
+/** `!`/`！` 开头：强制保存不分拣 */
+export function isForceSave(text: string): boolean {
+  return /^\s*[!！]/.test(text)
+}
+
+/** 去掉强制保存前缀 */
+export function stripForceSavePrefix(text: string): string {
+  return text.replace(/^\s*[!！]\s*/, '').trim()
+}
+
+/** “帮助 / 你能做什么 / help”之类的帮助指令 */
+export function isHelpCommand(text: string): boolean {
+  return /^\s*(帮助|你能做什么|使用说明|help)\s*[?？!！。]?\s*$/i.test(text)
+}
+
+const INLINE_TAG_RE = /#([^\s#!！?？,，。;；]{1,32})/g
+
+/**
+ * 提取文本中的 `#标签` 手动打标，返回去掉标签后的正文与标签列表。
+ * 只有当标签位于开头或结尾时才从正文移除（避免拆坏句中话题词）。
+ */
+export function extractInlineTags(text: string): { content: string; tags: string[] } {
+  const tags: string[] = []
+  for (const m of text.matchAll(INLINE_TAG_RE)) {
+    if (!tags.includes(m[1])) tags.push(m[1])
+  }
+  if (tags.length === 0) return { content: text.trim(), tags }
+  // 仅剥离首尾的标签串，句中的 #词 保留在正文里
+  let content = text.trim()
+  const edge = /^(\s*#[^\s#!！?？,，。;；]{1,32})+\s*/
+  const tail = /(\s*#[^\s#!！?？,，。;；]{1,32})+\s*$/
+  content = content.replace(edge, '').replace(tail, '').trim()
+  if (!content) content = text.trim()
+  return { content, tags: tags.slice(0, 6) }
 }
 
 export interface NormalizedMessage {

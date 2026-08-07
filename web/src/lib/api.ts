@@ -238,6 +238,26 @@ export async function batchNotes(
   return res.affected
 }
 
+export interface BatchFilter {
+  category?: string
+  tag?: string
+  q?: string
+}
+
+/** 按筛选条件批量操作全部匹配笔记（服务端执行，不限已加载项） */
+export async function batchNotesByFilter(
+  action: BatchAction,
+  filter: BatchFilter,
+  opts?: { tags?: string[]; category?: string },
+): Promise<number> {
+  if (loadSettings().useMock) throw new Error("演示模式不支持批量操作，请先配置真实 API")
+  const res = await realFetch<{ ok: boolean; affected: number }>("/api/notes/batch", {
+    method: "POST",
+    body: JSON.stringify({ action, filter, ...opts }),
+  })
+  return res.affected
+}
+
 /** 全部标签 + 使用次数（按次数降序） */
 export async function getTags(): Promise<TagCount[]> {
   if (loadSettings().useMock) throw new Error("演示模式不支持标签管理，请先配置真实 API")
@@ -406,6 +426,8 @@ export interface AuthResult {
   api_token: string
 }
 
+const AUTH_TIMEOUT_MS = 30_000
+
 async function authPost(baseUrl: string, path: string, body: unknown): Promise<AuthResult> {
   let res: Response
   try {
@@ -413,8 +435,11 @@ async function authPost(baseUrl: string, path: string, body: unknown): Promise<A
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(AUTH_TIMEOUT_MS),
     })
-  } catch {
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "TimeoutError")
+      throw new NetworkError("请求超时，请用相同用户名密码重试一次（不会重复创建账号）")
     throw new NetworkError("网络连接失败，请检查网络或 API 地址")
   }
   if (!res.ok) {
