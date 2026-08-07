@@ -52,11 +52,7 @@ fun OnboardingScreen(
 
     fun finish(savedToken: String, savedName: String?) {
         scope.launch {
-            settingsRepo.setBaseUrl(baseUrl)
-            settingsRepo.setToken(savedToken)
-            if (savedName != null) settingsRepo.setUserName(savedName)
-            settingsRepo.setMockMode(false)
-            settingsRepo.setOnboardingDone(true)
+            settingsRepo.completeOnboarding(baseUrl, savedToken, savedName)
             onDone()
         }
     }

@@ -57,4 +57,14 @@ class SettingsRepository(private val context: Context) {
     suspend fun setOnboardingDone(v: Boolean) = context.dataStore.edit { it[Keys.ONBOARDING_DONE] = v }
     suspend fun setUserName(v: String) = context.dataStore.edit { it[Keys.USER_NAME] = v.trim() }
     suspend fun setAskChatJson(v: String) = context.dataStore.edit { it[Keys.ASK_CHAT] = v }
+
+    /** 首启引导完成：单事务写入，避免分步写时 token 先落库触发重组、后续写入被取消 */
+    suspend fun completeOnboarding(baseUrl: String, token: String, userName: String?) =
+        context.dataStore.edit {
+            it[Keys.BASE_URL] = baseUrl.trim().trimEnd('/')
+            it[Keys.TOKEN] = token.trim()
+            if (userName != null) it[Keys.USER_NAME] = userName.trim()
+            it[Keys.MOCK_MODE] = false
+            it[Keys.ONBOARDING_DONE] = true
+        }
 }
