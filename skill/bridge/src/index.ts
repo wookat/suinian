@@ -61,7 +61,8 @@ async function normalize(msg: IncomingMessage): Promise<NormalizedMessage> {
       if (media) {
         out.media = [
           {
-            mime: guessMime(msg.type, media.fileName),
+            // 语音经 SDK 自动 silk→wav 转码（需安装 silk-wasm），format 标记实际格式
+            mime: media.format === 'wav' ? 'audio/wav' : guessMime(msg.type, media.fileName),
             size: media.data.length,
             fileName: media.fileName,
             data: media.data,

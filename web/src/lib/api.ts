@@ -121,6 +121,44 @@ export async function createNote(payload: CreateNotePayload): Promise<Note> {
   return normalizeNote(raw)
 }
 
+export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
+
+/** 图片上传：走 /api/ingest/media，后端提取文字/描述后入库 */
+export async function ingestImage(file: File): Promise<Note> {
+  if (loadSettings().useMock) {
+    return mockCreateNote({ source: "web", raw_type: "image", content: `【图片】${file.name}（演示模式不做识别）` })
+  }
+  const { apiBaseUrl, apiToken } = loadSettings()
+  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  const form = new FormData()
+  form.set("type", "image")
+  form.set("source", "web")
+  form.set("file", file)
+  let res: Response
+  try {
+    res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/ingest/media`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiToken}` },
+      body: form,
+    })
+  } catch {
+    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    let message = text || res.statusText
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown }
+      if (typeof parsed.error === "string" && parsed.error) message = parsed.error
+    } catch {
+      // not JSON, keep raw text
+    }
+    throw new ApiError(res.status, message)
+  }
+  const data = (await res.json()) as { note: Record<string, unknown> }
+  return normalizeNote(data.note)
+}
+
 export async function patchNote(
   id: string,
   patch: Partial<Pick<Note, "todo_done" | "category" | "tags" | "content">>,

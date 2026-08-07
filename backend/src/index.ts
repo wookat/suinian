@@ -8,6 +8,15 @@ import { encodeCursor, decodeCursor } from "./cursor";
 import { clusterNote, refreshThreads, rebuildThreads } from "./threads";
 import { chatComplete } from "./ai";
 import { generateWeeklyReport, generateAllWeeklyReports } from "./reports";
+import {
+  parseMediaRequest,
+  transcribeAudio,
+  describeImage,
+  storeOriginal,
+  buildMediaReply,
+  AUDIO_FAILED_PLACEHOLDER,
+  IMAGE_FAILED_PLACEHOLDER,
+} from "./media";
 
 type Vars = { userId: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -289,6 +298,17 @@ app.delete("/api/notes/:id", async (c) => {
     .bind(id, c.get("userId"))
     .first<{ thread_id: string | null }>();
   if (!note) return c.json({ error: "not found" }, 404);
+  const atts = await c.env.DB.prepare("SELECT r2_key FROM attachments WHERE note_id = ?")
+    .bind(id)
+    .all<{ r2_key: string }>();
+  await c.env.DB.prepare("DELETE FROM attachments WHERE note_id = ?").bind(id).run();
+  if (c.env.MEDIA && atts.results.length > 0) {
+    c.executionCtx.waitUntil(
+      c.env.MEDIA.delete(atts.results.map((a) => a.r2_key)).catch((e) =>
+        console.error("r2 delete failed", e)
+      )
+    );
+  }
   await c.env.DB.prepare("DELETE FROM note_embeddings WHERE note_id = ?").bind(id).run();
   await c.env.DB.prepare("DELETE FROM notes WHERE id = ?").bind(id).run();
   if (note.thread_id) {
@@ -321,6 +341,37 @@ app.post("/api/ingest/wechat", async (c) => {
   const tagStr = triage.tags.map((t) => `#${t}`).join(" ");
   const reply = `已存 · ${label}${tagStr ? " " + tagStr : ""}`;
   return c.json({ note: await noteToJsonDecrypted(c.env, note), reply }, 201);
+});
+
+// ---- POST /api/ingest/media ----
+// audio -> Whisper transcription, image -> vision text extraction; the extracted
+// text becomes the note content and flows through the normal async triage pipeline.
+app.post("/api/ingest/media", async (c) => {
+  const parsed = await parseMediaRequest(c.req.raw);
+  if ("error" in parsed) return c.json({ error: parsed.error }, parsed.status);
+
+  const extracted =
+    parsed.type === "audio" ? await transcribeAudio(c.env, parsed.bytes) : await describeImage(c.env, parsed.bytes);
+  const ok = extracted !== null;
+  const content = ok
+    ? extracted
+    : `${parsed.type === "audio" ? AUDIO_FAILED_PLACEHOLDER : IMAGE_FAILED_PLACEHOLDER}${parsed.fileName ? `（${parsed.fileName}）` : ""}`;
+
+  const tooLong = contentTooLong(c, content);
+  if (tooLong) return tooLong;
+
+  const { note } = await createNote(
+    c,
+    c.get("userId"),
+    { source: parsed.source || "api", raw_type: parsed.type === "audio" ? "voice" : "image", content },
+    (p) => c.executionCtx.waitUntil(p),
+    { syncTriage: false }
+  );
+  // keep the original in R2 (best-effort; extraction result is already saved)
+  c.executionCtx.waitUntil(storeOriginal(c.env, c.get("userId"), note.id, parsed));
+
+  const reply = buildMediaReply(parsed.type, content, ok);
+  return c.json({ note: noteToJson(note), text: content, transcribed: ok, reply }, 201);
 });
 
 /**

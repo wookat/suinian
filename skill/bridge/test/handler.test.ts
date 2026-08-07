@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { AskContextStore, handleMessage } from '../src/handler.js'
 import type { SuinianClient } from '../src/client.js'
 
-function fakeClient(overrides: Partial<Record<'ingest' | 'ask', unknown>> = {}) {
+function fakeClient(overrides: Partial<Record<'ingest' | 'ask' | 'ingestMedia', unknown>> = {}) {
   return {
     ingest: vi.fn(async () => ({ ok: true, note_id: 'n1', reply: '已存：想法 #a #b' })),
     ask: vi.fn(async () => ({ ok: true, answer: '这是答案' })),
+    ingestMedia: vi.fn(async () => ({ note: { id: 'n2' }, text: '转写文字', reply: '已记录（语音转写）：转写文字' })),
     ...overrides,
   } as unknown as SuinianClient
 }
@@ -112,5 +113,49 @@ describe('AskContextStore', () => {
       { role: 'user', content: 'q2' },
       { role: 'assistant', content: 'a2' },
     ])
+  })
+})
+
+describe('handleMessage 媒体消息（语音/图片）', () => {
+  const voiceMedia = { mime: 'audio/wav', size: 3, data: Buffer.from('abc') }
+
+  it('带媒体的语音 → ingestMedia 并回复转写确认', async () => {
+    const client = fakeClient()
+    const reply = await handleMessage(client, {
+      userId: 'u1', text: '', type: 'voice', media: [voiceMedia],
+    })
+    expect(reply).toBe('已记录（语音转写）：转写文字')
+    expect((client.ingestMedia as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      type: 'audio', mime: 'audio/wav', source: 'wechat',
+    })
+    expect(client.ingest).not.toHaveBeenCalled()
+  })
+
+  it('带媒体的图片 → ingestMedia type=image', async () => {
+    const client = fakeClient({
+      ingestMedia: vi.fn(async () => ({ note: { id: 'n3' }, reply: '已记录（图片识别）：会议纪要' })),
+    })
+    const reply = await handleMessage(client, {
+      userId: 'u1', text: '', type: 'image',
+      media: [{ mime: 'image/png', size: 3, data: Buffer.from('png') }],
+    })
+    expect(reply).toBe('已记录（图片识别）：会议纪要')
+  })
+
+  it('媒体下载失败（无 data）→ 占位文字走普通 ingest 并可提醒重发', async () => {
+    const client = fakeClient()
+    await handleMessage(client, { userId: 'u1', text: '', type: 'voice' })
+    expect(client.ingestMedia).not.toHaveBeenCalled()
+    expect((client.ingest as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      raw_type: 'voice', content: '【语音】下载失败，未能转写，请重发一次',
+    })
+  })
+
+  it('ingestMedia 网络失败 → 友好错误文案', async () => {
+    const client = fakeClient({ ingestMedia: vi.fn(async () => { throw new Error('boom') }) })
+    const reply = await handleMessage(client, {
+      userId: 'u1', text: '', type: 'voice', media: [voiceMedia],
+    })
+    expect(reply).toContain('保存失败')
   })
 })
