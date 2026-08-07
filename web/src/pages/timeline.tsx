@@ -23,7 +23,8 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import { AskChat } from "@/components/ask-chat"
-import { getNotes, getNote, patchNote, deleteNote, batchNotes, ApiError, NetworkError } from "@/lib/api"
+import { getNotes, getNote, patchNote, deleteNote, batchNotes, batchNotesByFilter, ApiError, NetworkError } from "@/lib/api"
+import type { BatchFilter } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
@@ -90,6 +91,8 @@ export function TimelinePage() {
   // 多选批量操作
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  // “选中全部匹配结果”：服务端按当前筛选条件执行，不限已加载项
+  const [allMatching, setAllMatching] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
   const [tagPanelOpen, setTagPanelOpen] = useState(false)
   const [catPanelOpen, setCatPanelOpen] = useState(false)
@@ -125,11 +128,21 @@ export function TimelinePage() {
   function exitSelectMode() {
     setSelectMode(false)
     setSelectedIds(new Set())
+    setAllMatching(false)
     setTagPanelOpen(false)
     setCatPanelOpen(false)
   }
 
+  const currentFilter = useCallback((): BatchFilter => {
+    const f: BatchFilter = {}
+    if (category) f.category = category
+    if (tag) f.tag = tag
+    if (search) f.q = search
+    return f
+  }, [category, tag, search])
+
   function toggleSelected(note: Note) {
+    setAllMatching(false)
     setSelectedIds((ids) => {
       const next = new Set(ids)
       if (next.has(note.id)) next.delete(note.id)
@@ -139,6 +152,22 @@ export function TimelinePage() {
   }
 
   function batchDelete() {
+    if (allMatching) {
+      if (!window.confirm("确定删除当前筛选条件下的全部匹配碎念吗？此操作不可撤销。")) return
+      flushPendingDelete()
+      setBatchBusy(true)
+      void batchNotesByFilter("delete", currentFilter())
+        .then((n) => {
+          exitSelectMode()
+          showToast(`已删除全部匹配的 ${n} 条`)
+        })
+        .catch((e) => showToast(e instanceof Error ? e.message : String(e)))
+        .finally(() => {
+          setBatchBusy(false)
+          void load()
+        })
+      return
+    }
     const ids = [...selectedIds]
     if (ids.length === 0) return
     if (!window.confirm(`确定删除选中的 ${ids.length} 条碎念吗？`)) return
@@ -169,8 +198,23 @@ export function TimelinePage() {
   async function batchAddTag() {
     const tag = batchTagInput.trim().replace(/^#/, "")
     const ids = [...selectedIds]
-    if (!tag || ids.length === 0) return
+    if (!tag || (!allMatching && ids.length === 0)) return
     setBatchBusy(true)
+    if (allMatching) {
+      try {
+        const n = await batchNotesByFilter("add_tags", currentFilter(), { tags: [tag] })
+        setBatchTagInput("")
+        setTagPanelOpen(false)
+        exitSelectMode()
+        showToast(`已为全部匹配的 ${n} 条加上 #${tag}`)
+        void load()
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : String(e))
+      } finally {
+        setBatchBusy(false)
+      }
+      return
+    }
     try {
       await batchNotes("add_tags", ids, { tags: [tag] })
       setNotes((ns) =>
@@ -192,8 +236,23 @@ export function TimelinePage() {
 
   async function batchSetCategory(cat: NoteCategory) {
     const ids = [...selectedIds]
-    if (ids.length === 0) return
+    if (!allMatching && ids.length === 0) return
     setBatchBusy(true)
+    if (allMatching) {
+      try {
+        const n = await batchNotesByFilter("set_category", currentFilter(), { category: cat })
+        setCatPanelOpen(false)
+        exitSelectMode()
+        const label = CATEGORY_OPTIONS.find((c) => c.value === cat)?.label ?? cat
+        showToast(`已将全部匹配的 ${n} 条改为「${label}」`)
+        void load()
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : String(e))
+      } finally {
+        setBatchBusy(false)
+      }
+      return
+    }
     const previous = notes
       .filter((n) => selectedIds.has(n.id))
       .map((n) => ({ id: n.id, category: n.category }))
@@ -628,24 +687,35 @@ export function TimelinePage() {
               </div>
             )}
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium">已选 {selectedIds.size} 条</span>
+              <span className="text-sm font-medium">
+                {allMatching ? "已选全部匹配结果" : `已选 ${selectedIds.size} 条`}
+              </span>
               <button
-                onClick={() =>
-                  setSelectedIds(
-                    selectedIds.size === notes.length
-                      ? new Set()
-                      : new Set(notes.map((n) => n.id)),
-                  )
-                }
+                onClick={() => {
+                  if (allMatching || selectedIds.size === notes.length) {
+                    setAllMatching(false)
+                    setSelectedIds(new Set())
+                  } else {
+                    setSelectedIds(new Set(notes.map((n) => n.id)))
+                  }
+                }}
                 className="text-xs font-medium text-muted-foreground hover:text-foreground"
               >
-                {selectedIds.size === notes.length ? "清空" : "全选"}
+                {allMatching || selectedIds.size === notes.length ? "清空" : "全选"}
               </button>
+              {!allMatching && selectedIds.size === notes.length && notes.length > 0 && (
+                <button
+                  onClick={() => setAllMatching(true)}
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  选中全部匹配结果
+                </button>
+              )}
               <div className="ml-auto flex items-center gap-1.5">
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={selectedIds.size === 0 || batchBusy}
+                  disabled={(!allMatching && selectedIds.size === 0) || batchBusy}
                   onClick={() => {
                     setTagPanelOpen((x) => !x)
                     setCatPanelOpen(false)
@@ -656,7 +726,7 @@ export function TimelinePage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={selectedIds.size === 0 || batchBusy}
+                  disabled={(!allMatching && selectedIds.size === 0) || batchBusy}
                   onClick={() => {
                     setCatPanelOpen((x) => !x)
                     setTagPanelOpen(false)
@@ -667,7 +737,7 @@ export function TimelinePage() {
                 <Button
                   size="sm"
                   variant="destructive"
-                  disabled={selectedIds.size === 0 || batchBusy}
+                  disabled={(!allMatching && selectedIds.size === 0) || batchBusy}
                   onClick={batchDelete}
                 >
                   <Trash2 /> 删除

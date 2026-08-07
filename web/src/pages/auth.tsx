@@ -18,17 +18,20 @@ export function AuthPage() {
   const [password, setPassword] = useState("")
   const [password2, setPassword2] = useState("")
   const [busy, setBusy] = useState(false)
+  const [slow, setSlow] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   async function submit() {
     if (busy) return
     setError(null)
+    setSlow(false)
     const base = apiBaseUrl.trim()
     if (!base) return setError("请填写 API 地址")
     if (name.trim().length < 2) return setError("用户名至少 2 个字符")
     if (password.length < 8) return setError("密码至少 8 个字符")
     if (mode === "register" && password !== password2) return setError("两次输入的密码不一致")
     setBusy(true)
+    const slowTimer = window.setTimeout(() => setSlow(true), 4000)
     try {
       const res =
         mode === "register"
@@ -43,8 +46,11 @@ export function AuthPage() {
       })
       window.location.hash = "#/"
     } catch (e) {
-      setError(e instanceof Error ? e.message : "请求失败，请稍后重试")
+      const msg = e instanceof Error ? e.message : "请求失败，请稍后重试"
+      setError(mode === "register" ? `${msg}。可直接用相同用户名密码重试，不会重复创建账号。` : msg)
     } finally {
+      window.clearTimeout(slowTimer)
+      setSlow(false)
       setBusy(false)
     }
   }
@@ -156,6 +162,12 @@ export function AuthPage() {
           <p className="flex items-center gap-1.5 text-sm text-destructive">
             <CircleAlert className="size-4 shrink-0" />
             {error}
+          </p>
+        )}
+
+        {busy && slow && (
+          <p className="text-xs text-muted-foreground">
+            {mode === "register" ? "正在创建账号（密码加密需几秒），请保持页面打开…" : "正在验证，请稍候…"}
           </p>
         )}
 

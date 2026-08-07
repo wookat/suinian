@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  extractInlineTags,
   extractUrl,
   isBareLink,
+  isForceSave,
+  isHelpCommand,
   isQuestion,
+  stripForceSavePrefix,
   stripQuestionPrefix,
   toIngestPayload,
 } from '../src/payload.js'
@@ -68,6 +72,52 @@ describe('toIngestPayload', () => {
   it('语音 → raw_type=voice', () => {
     const p = toIngestPayload({ userId: 'u1', text: '', type: 'voice' })
     expect(p.raw_type).toBe('voice')
+  })
+})
+
+describe('isForceSave / stripForceSavePrefix', () => {
+  it('半角/全角 ! 开头', () => {
+    expect(isForceSave('!原样保存这段')).toBe(true)
+    expect(isForceSave('  ！原样保存')).toBe(true)
+    expect(stripForceSavePrefix('!原样保存这段')).toBe('原样保存这段')
+    expect(stripForceSavePrefix('！ 原样保存')).toBe('原样保存')
+  })
+  it('非 ! 开头不算', () => {
+    expect(isForceSave('想法!')).toBe(false)
+    expect(isForceSave('')).toBe(false)
+  })
+})
+
+describe('isHelpCommand', () => {
+  it('帮助/你能做什么/help', () => {
+    expect(isHelpCommand('帮助')).toBe(true)
+    expect(isHelpCommand('你能做什么？')).toBe(true)
+    expect(isHelpCommand(' help ')).toBe(true)
+  })
+  it('带其它内容不算', () => {
+    expect(isHelpCommand('帮助我想想这个问题')).toBe(false)
+  })
+})
+
+describe('extractInlineTags', () => {
+  it('提取开头标签并去除', () => {
+    const r = extractInlineTags('#灵感 做个周报邮件推送')
+    expect(r.tags).toEqual(['灵感'])
+    expect(r.content).toBe('做个周报邮件推送')
+  })
+  it('多标签去重', () => {
+    const r = extractInlineTags('#a #b 内容 #a')
+    expect(r.tags).toEqual(['a', 'b'])
+  })
+  it('无标签原样返回', () => {
+    const r = extractInlineTags('普通内容')
+    expect(r.tags).toEqual([])
+    expect(r.content).toBe('普通内容')
+  })
+  it('只有标签时保留原文作内容', () => {
+    const r = extractInlineTags('#灵感')
+    expect(r.tags).toEqual(['灵感'])
+    expect(r.content).toBe('#灵感')
   })
 })
 

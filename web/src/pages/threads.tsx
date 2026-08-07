@@ -206,6 +206,9 @@ export function ThreadsPage() {
 
   return (
     <div className="space-y-3">
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        「线索」= AI 把你不同时间记下的同一主题碎念自动串成的合集，方便回看一个想法是如何演化的。
+      </p>
       {threads.map((t) => (
         <Card
           key={t.id}

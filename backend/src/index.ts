@@ -98,14 +98,41 @@ app.post("/api/auth/register", async (c) => {
   if (!name) return c.json({ error: "用户名需 2-32 个字符（中英文、数字、._-）" }, 400);
   const password = validatePassword(body?.password);
   if (!password) return c.json({ error: "密码需 8-128 个字符" }, 400);
-  const existing = await c.env.DB.prepare("SELECT id FROM users WHERE name = ?").bind(name).first<{ id: string }>();
-  if (existing) return c.json({ error: "用户名已存在" }, 409);
+  const started = Date.now();
+  const existing = await c.env.DB.prepare("SELECT id, name, api_token, password_hash FROM users WHERE name = ?")
+    .bind(name)
+    .first<{ id: string; name: string; api_token: string; password_hash: string | null }>();
+  if (existing) {
+    // idempotent retry: a previous attempt may have created the account but the
+    // response never reached the client — same name + same password returns the
+    // existing account instead of a dead-end 409
+    if (existing.password_hash && (await verifyPassword(password, existing.password_hash))) {
+      console.log(`register: idempotent retry for ${existing.id}`);
+      return c.json({ user: { id: existing.id, name: existing.name }, api_token: existing.api_token });
+    }
+    return c.json({ error: "用户名已存在", code: "NAME_TAKEN" }, 409);
+  }
   const id = `u_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
   const token = generateToken();
-  const passwordHash = await hashPassword(password);
-  await c.env.DB.prepare("INSERT INTO users (id, name, api_token, password_hash) VALUES (?, ?, ?, ?)")
-    .bind(id, name, token, passwordHash)
-    .run();
+  let passwordHash: string;
+  try {
+    passwordHash = await hashPassword(password);
+  } catch (e) {
+    console.error("register: hashPassword failed", e);
+    return c.json({ error: "注册失败（密码处理出错），请重试", code: "HASH_FAILED" }, 500);
+  }
+  try {
+    // single INSERT = atomic in D1; the account only exists once this succeeds
+    await c.env.DB.prepare("INSERT INTO users (id, name, api_token, password_hash) VALUES (?, ?, ?, ?)")
+      .bind(id, name, token, passwordHash)
+      .run();
+  } catch (e) {
+    console.error("register: insert failed", e);
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/UNIQUE/i.test(msg)) return c.json({ error: "用户名已存在", code: "NAME_TAKEN" }, 409);
+    return c.json({ error: "注册失败（数据库写入出错），请重试", code: "DB_WRITE_FAILED" }, 500);
+  }
+  console.log(`register: created ${id} in ${Date.now() - started}ms`);
   return c.json({ user: { id, name }, api_token: token }, 201);
 });
 
@@ -141,6 +168,18 @@ app.post("/api/admin/reconcile-threads", async (c) => {
   if (!m || m[1] !== adminToken) return c.json({ error: "unauthorized" }, 401);
   const result = await reconcileThreads(c.env);
   return c.json({ ok: true, ...result });
+});
+
+// Manual trigger + self-check for the daily review sweep: returns per-user
+// generation stats so "cron produced nothing" is diagnosable from outside.
+app.post("/api/admin/run-daily-reviews", async (c) => {
+  const adminToken = c.env.ADMIN_TOKEN;
+  if (!adminToken) return c.json({ error: "not found" }, 404);
+  const auth = c.req.header("authorization") || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m || m[1] !== adminToken) return c.json({ error: "unauthorized" }, 401);
+  const stats = await generateAllDailyReviews(c.env);
+  return c.json({ ok: true, ...stats });
 });
 
 // ---- auth ----
@@ -352,9 +391,9 @@ export function capped(p: Promise<unknown>, ms: number, label: string): Promise<
 async function createNote(
   c: { env: Env },
   userId: string,
-  body: { source?: string; raw_type?: string; content?: string; url?: string; meta?: NoteMeta | null },
+  body: { source?: string; raw_type?: string; content?: string; url?: string; meta?: NoteMeta | null; tags?: string[] },
   waitUntil: (p: Promise<unknown>) => void,
-  opts: { syncTriage: boolean }
+  opts: { syncTriage: boolean; skipTriage?: boolean }
 ): Promise<{ note: NoteRow; triage: TriageResult | null }> {
   const id = crypto.randomUUID();
   const content = (body.content ?? "").trim();
@@ -362,13 +401,33 @@ async function createNote(
   const urls = body.url && !content.includes(body.url) ? [body.url, ...extractUrls(content, 2)] : extractUrls(content, 3);
   const source = body.source || "api";
   const rawType = body.raw_type || (url && content === url ? "link" : "text");
+  const manualTags = (body.tags ?? []).filter((t) => typeof t === "string" && t.trim()).map((t) => t.trim().replace(/^#/, "")).slice(0, 6);
+  // skipTriage (`!` inline command): store as-is under 想法 and mark the fields
+  // manual so neither the sync triage nor the cron sweep re-sorts it
+  const meta: NoteMeta | null =
+    opts.skipTriage || manualTags.length > 0
+      ? {
+          ...(body.meta ?? {}),
+          manual_override: { ...(opts.skipTriage ? { category: true } : {}), ...(manualTags.length > 0 ? { tags: true } : {}) },
+        }
+      : (body.meta ?? null);
 
   // insert immediately (category resolved by triage, sync or async)
   await c.env.DB.prepare(
     `INSERT INTO notes (id, user_id, source, raw_type, content, url, category, tags, meta)
-     VALUES (?, ?, ?, ?, ?, ?, NULL, '[]', ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
-    .bind(id, userId, source, rawType, content, url ?? null, body.meta ? JSON.stringify(body.meta) : null)
+    .bind(
+      id,
+      userId,
+      source,
+      rawType,
+      content,
+      url ?? null,
+      opts.skipTriage ? "idea" : null,
+      JSON.stringify(manualTags),
+      meta ? JSON.stringify(meta) : null
+    )
     .run();
 
   const runTriage = async (): Promise<TriageResult | null> => {
@@ -395,7 +454,9 @@ async function createNote(
   };
 
   let triage: TriageResult | null = null;
-  if (opts.syncTriage) {
+  if (opts.skipTriage) {
+    waitUntil(capped(runPipeline(false), PIPELINE_TIMEOUT_MS, `pipeline note=${id}`));
+  } else if (opts.syncTriage) {
     triage = await runTriage();
     waitUntil(capped(runPipeline(false), PIPELINE_TIMEOUT_MS, `pipeline note=${id}`));
   } else {
@@ -506,6 +567,7 @@ app.patch("/api/notes/:id", async (c) => {
   const sets: string[] = [];
   const binds: unknown[] = [];
   if (typeof body.content === "string") {
+    if (!body.content.trim()) return c.json({ error: "内容不能为空，如需删除请用删除操作" }, 400);
     const tooLong = contentTooLong(c, body.content);
     if (tooLong) return tooLong;
     if (wantSensitive && c.env.SUINIAN_ENC_KEY) {
@@ -580,8 +642,19 @@ app.patch("/api/notes/:id", async (c) => {
   // extractGraph purges graph rows for sensitive notes and (re-)extracts otherwise
   if (typeof body.content === "string" || sensitivityChanged)
     c.executionCtx.waitUntil(capped(extractGraph(c.env, note!), PIPELINE_TIMEOUT_MS, `patch-graph note=${id}`));
+  // content changed without an explicit title: recompute the AI title so
+  // search/export never keep showing the stale pre-edit title
+  if (typeof body.content === "string" && body.content !== existing.content && typeof body.title !== "string")
+    c.executionCtx.waitUntil(capped(recomputeTitle(c.env, id, body.content), PIPELINE_TIMEOUT_MS, `patch-title note=${id}`));
   return c.json({ note: await noteToJsonDecrypted(c.env, note!) });
 });
+
+/** Regenerate only the AI title after a content edit (never touches category/tags/due). */
+export async function recomputeTitle(env: Env, noteId: string, content: string): Promise<void> {
+  const triage = await triageNote(content, env);
+  if (!triage || !triage.title) return;
+  await env.DB.prepare("UPDATE notes SET title = ? WHERE id = ?").bind(triage.title, noteId).run();
+}
 
 /** Delete one owned note and its attachments/embedding/graph rows; caller reconciles threads. */
 async function deleteNoteRecord(
@@ -624,17 +697,56 @@ app.delete("/api/notes/:id", async (c) => {
 
 // ---- POST /api/notes/batch ----
 // Bulk operations over owned notes: delete / add_tags / remove_tags / set_category.
+// Targets are either explicit `ids` or a server-side `filter` ({category, tag, q})
+// that matches ALL notes satisfying the current list filters, not only loaded ones.
 const BATCH_MAX_IDS = 100;
+const BATCH_FILTER_MAX = 1000;
+
+/** Resolve a batch `filter` into the matching note ids (same semantics as GET /api/notes). */
+export async function resolveBatchFilter(
+  env: Env,
+  userId: string,
+  filter: { category?: unknown; tag?: unknown; q?: unknown }
+): Promise<string[]> {
+  const conds: string[] = ["user_id = ?"];
+  const binds: unknown[] = [userId];
+  if (typeof filter.category === "string" && filter.category) {
+    conds.push("category = ?");
+    binds.push(filter.category);
+  }
+  if (typeof filter.tag === "string" && filter.tag) {
+    conds.push("tags LIKE ?");
+    binds.push(`%"${filter.tag}"%`);
+  }
+  if (typeof filter.q === "string" && filter.q) {
+    conds.push("(content LIKE ? OR title LIKE ? OR url_title LIKE ? OR url_summary LIKE ?)");
+    const like = `%${filter.q}%`;
+    binds.push(like, like, like, like);
+  }
+  const { results } = await env.DB.prepare(
+    `SELECT id FROM notes WHERE ${conds.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT ${BATCH_FILTER_MAX}`
+  )
+    .bind(...binds)
+    .all<{ id: string }>();
+  return (results ?? []).map((r) => r.id);
+}
+
 app.post("/api/notes/batch", async (c) => {
   const userId = c.get("userId");
   const body = await c.req
-    .json<{ action?: unknown; ids?: unknown; tags?: unknown; category?: unknown }>()
+    .json<{ action?: unknown; ids?: unknown; tags?: unknown; category?: unknown; filter?: unknown }>()
     .catch(() => null);
   if (!body) return c.json({ error: "invalid body" }, 400);
   const action = body.action;
-  const ids = Array.isArray(body.ids) ? body.ids.filter((v): v is string => typeof v === "string") : [];
-  if (ids.length === 0) return c.json({ error: "ids required" }, 400);
-  if (ids.length > BATCH_MAX_IDS) return c.json({ error: `一次最多操作 ${BATCH_MAX_IDS} 条` }, 400);
+  let ids = Array.isArray(body.ids) ? body.ids.filter((v): v is string => typeof v === "string") : [];
+  const filter = body.filter && typeof body.filter === "object" ? (body.filter as Record<string, unknown>) : null;
+  if (ids.length === 0 && filter) {
+    ids = await resolveBatchFilter(c.env, userId, filter);
+    if (ids.length === 0) return c.json({ ok: true, affected: 0 });
+  } else {
+    if (ids.length === 0) return c.json({ error: "ids or filter required" }, 400);
+    if (ids.length > BATCH_MAX_IDS) return c.json({ error: `一次最多操作 ${BATCH_MAX_IDS} 条` }, 400);
+  }
 
   if (action === "delete") {
     let affected = 0;
@@ -645,17 +757,26 @@ app.post("/api/notes/batch", async (c) => {
     return c.json({ ok: true, affected });
   }
 
+  // D1 caps bound parameters per statement: filter-resolved id lists are chunked
+  const chunks = <T,>(arr: T[], size = 80): T[][] => {
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  };
+
   if (action === "add_tags" || action === "remove_tags") {
     const tags = Array.isArray(body.tags)
       ? body.tags.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((t) => t.trim())
       : [];
     if (tags.length === 0) return c.json({ error: "tags required" }, 400);
-    const ph = ids.map(() => "?").join(",");
-    const { results } = await c.env.DB.prepare(
-      `SELECT id, tags, meta FROM notes WHERE user_id = ? AND id IN (${ph})`
-    )
-      .bind(userId, ...ids)
-      .all<{ id: string; tags: string; meta: string | null }>();
+    const results: { id: string; tags: string; meta: string | null }[] = [];
+    for (const chunk of chunks(ids)) {
+      const ph = chunk.map(() => "?").join(",");
+      const r = await c.env.DB.prepare(`SELECT id, tags, meta FROM notes WHERE user_id = ? AND id IN (${ph})`)
+        .bind(userId, ...chunk)
+        .all<{ id: string; tags: string; meta: string | null }>();
+      results.push(...(r.results ?? []));
+    }
     let affected = 0;
     for (const row of results ?? []) {
       let current: string[] = [];
@@ -685,12 +806,14 @@ app.post("/api/notes/batch", async (c) => {
     const category = body.category;
     if (typeof category !== "string" || !["idea", "todo", "collect", "data"].includes(category))
       return c.json({ error: "invalid category" }, 400);
-    const ph = ids.map(() => "?").join(",");
-    const { results } = await c.env.DB.prepare(
-      `SELECT id, meta FROM notes WHERE user_id = ? AND id IN (${ph})`
-    )
-      .bind(userId, ...ids)
-      .all<{ id: string; meta: string | null }>();
+    const results: { id: string; meta: string | null }[] = [];
+    for (const chunk of chunks(ids)) {
+      const ph = chunk.map(() => "?").join(",");
+      const r = await c.env.DB.prepare(`SELECT id, meta FROM notes WHERE user_id = ? AND id IN (${ph})`)
+        .bind(userId, ...chunk)
+        .all<{ id: string; meta: string | null }>();
+      results.push(...(r.results ?? []));
+    }
     let affected = 0;
     for (const row of results ?? []) {
       const meta = parseNoteMeta(row.meta) ?? {};
@@ -825,22 +948,32 @@ app.get("/api/notes/:id/file", async (c) => {
 
 // ---- POST /api/ingest/wechat ----
 app.post("/api/ingest/wechat", async (c) => {
-  const body = await c.req.json<{ content?: string; url?: string; raw_type?: string }>().catch(() => null);
+  const body = await c.req
+    .json<{ content?: string; url?: string; raw_type?: string; skip_triage?: boolean; tags?: string[] }>()
+    .catch(() => null);
   if (!body || !(body.content ?? "").trim()) return c.json({ error: "content required" }, 400);
   const tooLong = contentTooLong(c, body.content ?? "");
   if (tooLong) return tooLong;
+  const skipTriage = body.skip_triage === true;
   // wechat needs the category/tags in its confirmation text -> triage stays synchronous
   const { note, triage: triageResult } = await createNote(
     c,
     c.get("userId"),
     { ...body, source: "wechat" },
     (p) => c.executionCtx.waitUntil(p),
-    { syncTriage: true }
+    { syncTriage: true, skipTriage }
   );
-  const triage = triageResult ?? FALLBACK_TRIAGE;
-  const label = CATEGORY_LABEL[triage.category] ?? triage.category;
-  const tagStr = triage.tags.map((t) => `#${t}`).join(" ");
-  const reply = `已存 · ${label}${tagStr ? " " + tagStr : ""}`;
+  const noteTags = JSON.parse(note.tags || "[]") as string[];
+  let reply: string;
+  if (skipTriage) {
+    const tagStr = noteTags.map((t) => `#${t}`).join(" ");
+    reply = `已存（未分拣）${tagStr ? " " + tagStr : ""}`;
+  } else {
+    const triage = triageResult ?? FALLBACK_TRIAGE;
+    const label = CATEGORY_LABEL[triage.category] ?? triage.category;
+    const tagStr = (noteTags.length > 0 ? noteTags : triage.tags).map((t) => `#${t}`).join(" ");
+    reply = `已存 · ${label}${tagStr ? " " + tagStr : ""}`;
+  }
   return c.json({ note: await noteToJsonDecrypted(c.env, note), reply }, 201);
 });
 

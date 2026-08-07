@@ -234,6 +234,7 @@ export function NoteCard({
   const [menuOpen, setMenuOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(note.content)
+  const [editError, setEditError] = useState<string | null>(null)
   const [editCategory, setEditCategory] = useState<NoteCategory | "">(note.category ?? "")
   const [editTags, setEditTags] = useState<string[]>(note.tags)
   const [editTagInput, setEditTagInput] = useState("")
@@ -455,10 +456,14 @@ export function NoteCard({
           <div className="min-w-0 flex-1 space-y-3">
             <Textarea
               value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
+              onChange={(e) => {
+                setEditValue(e.target.value)
+                if (editError && e.target.value.trim()) setEditError(null)
+              }}
               className="min-h-[80px] text-sm"
               autoFocus
             />
+            {editError && <p className="text-xs text-destructive">{editError}</p>}
             <div className="flex flex-wrap items-center gap-2">
               <label className="text-xs text-muted-foreground" htmlFor={`cat-${note.id}`}>
                 分类
@@ -534,8 +539,12 @@ export function NoteCard({
                 size="sm"
                 onClick={() => {
                   const v = editValue.trim()
+                  if (!v) {
+                    setEditError("内容不能为空，如需删除请用删除操作")
+                    return
+                  }
                   const patch: NotePatch = {}
-                  if (v && v !== note.content) patch.content = v
+                  if (v !== note.content) patch.content = v
                   if (editCategory && editCategory !== note.category) patch.category = editCategory
                   const tagsChanged =
                     editTags.length !== note.tags.length || editTags.some((t, i) => t !== note.tags[i])
@@ -544,12 +553,20 @@ export function NoteCard({
                   if ((editCategory || note.category) === "todo" && editDue !== dueToInput(note.todo_due))
                     patch.todo_due = due
                   if (Object.keys(patch).length > 0) onEdit?.(note, patch)
+                  setEditError(null)
                   setEditing(false)
                 }}
               >
                 保存
               </Button>
-              <Button size="sm" variant="outline" onClick={() => setEditing(false)}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setEditError(null)
+                  setEditing(false)
+                }}
+              >
                 取消
               </Button>
             </div>

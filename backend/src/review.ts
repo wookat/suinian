@@ -76,6 +76,19 @@ async function revisitCandidates(env: Env, userId: string, exclude: string[], li
   return results ?? [];
 }
 
+/** 降级候选：任意 3 天前创建、有实质内容的非敏感笔记（不限分类） */
+async function relaxedCandidates(env: Env, userId: string, limit: number): Promise<NoteRow[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0
+       AND length(content) >= 10
+       AND created_at < datetime('now', '-3 days')
+     ORDER BY RANDOM() LIMIT ?`
+  )
+    .bind(userId, limit)
+    .all<NoteRow>();
+  return results ?? [];
+}
+
 async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind): Promise<string> {
   const text = (
     await chatComplete(env, {
@@ -128,7 +141,16 @@ export async function generateDailyReview(env: Env, userId: string, now: Date = 
   if (picks.length < MAX_REVIEW_ITEMS) {
     push(await revisitCandidates(env, userId, [...seen], MAX_REVIEW_ITEMS - picks.length), "revisit", MAX_REVIEW_ITEMS);
   }
-  if (picks.length === 0) return 0;
+  if (picks.length === 0) {
+    // 降级选材：小数据量用户常常凑不齐严格条件（周年/月年无记录、
+    // 想法/收藏不足 14 天），退而求其次取任意 3 天前的非敏感笔记
+    push(await relaxedCandidates(env, userId, 1), "revisit", MAX_REVIEW_ITEMS);
+  }
+  if (picks.length === 0) {
+    // 真正无可选素材（新用户/空账号）：明确不落库，仅记日志
+    console.log(`daily-review: no material for user=${userId} date=${today}`);
+    return 0;
+  }
 
   for (let i = 0; i < picks.length; i++) {
     const { note, kind } = picks[i];
@@ -185,14 +207,30 @@ export async function getTodayReview(env: Env, userId: string, now: Date = new D
   return { date: today, items };
 }
 
-/** Daily cron: generate review items for all users. */
-export async function generateAllDailyReviews(env: Env): Promise<void> {
+export interface DailyReviewSweepStats {
+  users: number;
+  generated: number;
+  empty: number;
+  failed: number;
+}
+
+/** Daily cron: generate review items for all users; logs a per-run summary. */
+export async function generateAllDailyReviews(env: Env): Promise<DailyReviewSweepStats> {
   const { results } = await env.DB.prepare("SELECT id FROM users").all<{ id: string }>();
+  const stats: DailyReviewSweepStats = { users: (results ?? []).length, generated: 0, empty: 0, failed: 0 };
   for (const u of results ?? []) {
     try {
-      await generateDailyReview(env, u.id);
-    } catch {
-      /* per-user failures shouldn't stop the sweep */
+      const n = await generateDailyReview(env, u.id);
+      if (n > 0) stats.generated++;
+      else stats.empty++;
+    } catch (e) {
+      // per-user failures shouldn't stop the sweep, but must be visible
+      stats.failed++;
+      console.error(`daily-review: generate failed for user=${u.id}`, e);
     }
   }
+  console.log(
+    `daily-review sweep: users=${stats.users} generated=${stats.generated} empty=${stats.empty} failed=${stats.failed}`
+  );
+  return stats;
 }

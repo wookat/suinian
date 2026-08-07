@@ -46,6 +46,18 @@ const IMPORT_SOURCES: { value: ImportSource; label: string; hint: string; accept
   { value: "text", label: "纯文本", hint: "按空行拆条，每段一条笔记", accept: ".txt,.md" },
 ]
 
+/** memos 式可复制 curl 示例；withToken=true 时把真实 token 写进剪贴板文本（不在页面展示） */
+function buildCurlExample(apiBaseUrl: string, withToken: boolean): string {
+  const base = (apiBaseUrl || "https://suinian-api.example.workers.dev").trim().replace(/\/$/, "")
+  const token = withToken ? loadSettings().apiToken || "YOUR_API_TOKEN" : "YOUR_API_TOKEN"
+  return [
+    `curl -X POST '${base}/api/notes' \\`,
+    `  -H 'Authorization: Bearer ${token}' \\`,
+    `  -H 'Content-Type: application/json' \\`,
+    `  -d '{"content": "从 API 记一条碎念"}'`,
+  ].join("\n")
+}
+
 const THEME_OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: "light", label: "浅色", icon: Sun },
   { value: "dark", label: "深色", icon: Moon },
@@ -295,6 +307,7 @@ export function SettingsPage() {
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null)
   const [theme, setThemeState] = useState<ThemeMode>(loadTheme)
   const [copied, setCopied] = useState(false)
+  const [curlCopied, setCurlCopied] = useState(false)
   const [rotating, setRotating] = useState(false)
   const [accountMsg, setAccountMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -355,6 +368,16 @@ export function SettingsPage() {
       setExportMsg({ ok: false, text: e instanceof Error ? e.message : "导出失败，请稍后重试" })
     } finally {
       setExporting(null)
+    }
+  }
+
+  async function copyCurl() {
+    try {
+      await navigator.clipboard.writeText(buildCurlExample(loadSettings().apiBaseUrl, true))
+      setCurlCopied(true)
+      setTimeout(() => setCurlCopied(false), 2000)
+    } catch {
+      setAccountMsg({ ok: false, text: "复制失败，请手动选中复制" })
     }
   }
 
@@ -508,6 +531,20 @@ export function SettingsPage() {
             onChange={(e) => setSettings((s) => ({ ...s, apiToken: e.target.value }))}
           />
           <p className="text-xs text-muted-foreground">仅保存在本机浏览器 localStorage</p>
+          <div className="space-y-1 rounded-md bg-muted/60 p-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-muted-foreground">用 API 直接记一条（curl 示例）</span>
+              <button
+                onClick={() => void copyCurl()}
+                className="text-xs font-medium text-primary hover:underline"
+              >
+                {curlCopied ? "已复制" : "复制"}
+              </button>
+            </div>
+            <pre className="overflow-x-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-muted-foreground">
+              {buildCurlExample(settings.apiBaseUrl, false)}
+            </pre>
+          </div>
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
