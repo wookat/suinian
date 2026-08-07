@@ -14,6 +14,16 @@ database_id = "8a0a1fc0-c714-4822-a915-b1791f1599a1"
 [ai]
 binding = "AI"
 
+# Optional: Cloudflare Vectorize for semantic search. Without this binding the
+# worker falls back to D1-stored vectors (note_embeddings) with brute-force
+# cosine, which is fine for personal-scale data. To enable Vectorize:
+#   npx wrangler vectorize create suinian-notes --dimensions=1024 --metric=cosine
+#   npx wrangler vectorize create-metadata-index suinian-notes --property-name=user_id --type=string
+# then uncomment:
+# [[vectorize]]
+# binding = "VECTORIZE"
+# index_name = "suinian-notes"
+
 [[r2_buckets]]
 binding = "MEDIA"
 bucket_name = "suinian-media"

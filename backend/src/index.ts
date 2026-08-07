@@ -19,6 +19,7 @@ import {
   clientIp,
 } from "./auth";
 import { generateWeeklyReport, generateAllWeeklyReports } from "./reports";
+import { upsertNoteEmbedding, deleteNoteEmbedding, semanticRecall, backfillEmbeddings } from "./semantic";
 import {
   parseMediaRequest,
   transcribeAudio,
@@ -142,6 +143,13 @@ app.delete("/api/auth/me", async (c) => {
     );
   }
   await c.env.DB.prepare("DELETE FROM attachments WHERE note_id IN (SELECT id FROM notes WHERE user_id = ?)").bind(userId).run();
+  if (c.env.VECTORIZE) {
+    const ids = await c.env.DB.prepare("SELECT id FROM notes WHERE user_id = ?").bind(userId).all<{ id: string }>();
+    const vec = c.env.VECTORIZE;
+    c.executionCtx.waitUntil(
+      vec.deleteByIds((ids.results ?? []).map((r) => r.id)).catch((e) => console.error("vectorize delete failed", e))
+    );
+  }
   await c.env.DB.prepare("DELETE FROM note_embeddings WHERE note_id IN (SELECT id FROM notes WHERE user_id = ?)").bind(userId).run();
   await c.env.DB.prepare("DELETE FROM notes WHERE user_id = ?").bind(userId).run();
   await c.env.DB.prepare("DELETE FROM threads WHERE user_id = ?").bind(userId).run();
@@ -274,7 +282,10 @@ async function createNote(
     waitUntil(
       (async () => {
         const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
-        if (n) await clusterNote(c.env, n);
+        if (n) {
+          await clusterNote(c.env, n);
+          await upsertNoteEmbedding(c.env, n);
+        }
         if (url) await enrichLinkInto(c.env, id);
       })()
     );
@@ -283,7 +294,10 @@ async function createNote(
       (async () => {
         await runTriage();
         const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
-        if (n) await clusterNote(c.env, n);
+        if (n) {
+          await clusterNote(c.env, n);
+          await upsertNoteEmbedding(c.env, n);
+        }
         if (url) await enrichLinkInto(c.env, id);
       })()
     );
@@ -339,6 +353,35 @@ app.get("/api/notes", async (c) => {
   const hasMore = rows.length > limit;
   const page = rows.slice(0, limit);
   const next = hasMore && page.length > 0 ? encodeCursor(page[page.length - 1].created_at, page[page.length - 1].id) : null;
+
+  // hybrid recall on the first page of a text search: keyword hits + semantic
+  // hits (Vectorize/D1 vectors), deduped and ranked by relevance; any semantic
+  // failure leaves the pure keyword results untouched
+  if (q && !cursor && !category && !tag) {
+    const hits = await semanticRecall(c.env, userId, q, 10);
+    const kwIds = new Set(page.map((n) => n.id));
+    const semScore = new Map(hits.map((h) => [h.note_id, h.score]));
+    const extraIds = hits.filter((h) => !kwIds.has(h.note_id)).map((h) => h.note_id);
+    let extra: NoteRow[] = [];
+    if (extraIds.length > 0) {
+      const ph = extraIds.map(() => "?").join(",");
+      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${ph})`)
+        .bind(userId, ...extraIds)
+        .all<NoteRow>();
+      extra = r.results ?? [];
+    }
+    const merged = [...page, ...extra];
+    const relevance = (n: NoteRow) => (semScore.get(n.id) ?? 0) + (kwIds.has(n.id) ? 0.75 : 0);
+    merged.sort((a, b) => relevance(b) - relevance(a));
+    const notes = await Promise.all(
+      merged.map(async (n) => ({
+        ...(await noteToJsonDecrypted(c.env, n)),
+        match: kwIds.has(n.id) ? (semScore.has(n.id) ? "both" : "keyword") : "semantic",
+      }))
+    );
+    return c.json({ notes, next_cursor: next });
+  }
+
   const notes = await Promise.all(page.map((n) => noteToJsonDecrypted(c.env, n)));
   return c.json({ notes, next_cursor: next });
 });
@@ -396,6 +439,7 @@ app.patch("/api/notes/:id", async (c) => {
     .run();
   if (!res.meta.changes) return c.json({ error: "not found" }, 404);
   const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
+  c.executionCtx.waitUntil(upsertNoteEmbedding(c.env, note!));
   return c.json({ note: await noteToJsonDecrypted(c.env, note!) });
 });
 
@@ -417,7 +461,7 @@ app.delete("/api/notes/:id", async (c) => {
       )
     );
   }
-  await c.env.DB.prepare("DELETE FROM note_embeddings WHERE note_id = ?").bind(id).run();
+  await deleteNoteEmbedding(c.env, id);
   await c.env.DB.prepare("DELETE FROM notes WHERE id = ?").bind(id).run();
   if (note.thread_id) {
     await c.env.DB.prepare(
@@ -617,6 +661,21 @@ app.post("/api/ask", async (c) => {
     .bind(...binds)
     .all<NoteRow>();
   let notes = results ?? [];
+
+  // hybrid recall: add semantic hits (same query-rewritten question) that the
+  // keyword LIKE recall missed; failures silently degrade to keyword-only
+  const semHits = await semanticRecall(c.env, userId, recallQuestion, 10);
+  const have = new Set(notes.map((n) => n.id));
+  const extraIds = semHits.filter((h) => !have.has(h.note_id)).map((h) => h.note_id);
+  if (extraIds.length > 0) {
+    const ph = extraIds.map(() => "?").join(",");
+    const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${ph})`)
+      .bind(userId, ...extraIds)
+      .all<NoteRow>();
+    const byId = new Map((r.results ?? []).map((n) => [n.id, n]));
+    // semantic hits go first in score order so they survive the 20-note cap
+    notes = [...extraIds.map((id) => byId.get(id)).filter((n): n is NoteRow => !!n), ...notes].slice(0, 20);
+  }
   if (notes.length === 0) {
     // keyword recall missed (common for CJK questions): fall back to recent notes
     const recent = await c.env.DB.prepare(
@@ -796,7 +855,10 @@ export async function retriageUnsorted(env: Env, limit = 10): Promise<void> {
     if (!triage) continue;
     await applyTriage(env, row.id, triage, row.content);
     const n = await env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(row.id).first<NoteRow>();
-    if (n) await clusterNote(env, n).catch((err) => console.error("retriage: cluster failed", err));
+    if (n) {
+      await clusterNote(env, n).catch((err) => console.error("retriage: cluster failed", err));
+      await upsertNoteEmbedding(env, n);
+    }
   }
 }
 
@@ -811,6 +873,8 @@ export default {
       ctx.waitUntil(retriageUnsorted(env));
       // backfill article extraction for link notes (a few per run, rate-limited)
       ctx.waitUntil(backfillLinkExtracts(env));
+      // backfill embeddings for notes that predate semantic search (rate-limited)
+      ctx.waitUntil(backfillEmbeddings(env));
     } else {
       // daily thread title/summary refresh
       ctx.waitUntil(refreshThreads(env));

@@ -29,6 +29,8 @@ export interface Note {
   todo_due: string | null
   todo_done: number | null
   meta?: NoteMeta | null
+  /** Search recall type when returned from a text search (semantic = no keyword hit). */
+  match?: "keyword" | "semantic" | "both"
   created_at: string
   updated_at: string
 }

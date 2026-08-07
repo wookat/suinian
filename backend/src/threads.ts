@@ -183,7 +183,8 @@ async function deepseekConfirmPair(env: Env, a: string, b: string): Promise<bool
 export async function clusterNote(env: Env, note: NoteRow): Promise<void> {
   try {
     if (note.category !== "idea") return;
-    const vector = await embed(env, `${note.title ?? ""}\n${note.content}`);
+    // sensitive notes never enter the vector store (content is encrypted at rest)
+    const vector = note.is_sensitive ? null : await embed(env, `${note.title ?? ""}\n${note.content}`);
     if (vector) {
       await saveEmbedding(env, note.id, vector);
       const { results } = await env.DB.prepare(

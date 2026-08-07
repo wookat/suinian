@@ -20,6 +20,7 @@ import {
   Loader2,
   Mic,
   Image as ImageIcon,
+  Sparkles,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -232,6 +233,12 @@ export function NoteCard({
           )}
           {note.category === "todo" && <DueChip due={note.todo_due} />}
           <RawTypeBadge rawType={note.raw_type} />
+          {note.match === "semantic" && (
+            <Badge variant="secondary" className="gap-1 text-xs text-muted-foreground" title="按语义相关召回，原文可能不含搜索词">
+              <Sparkles className="size-3" />
+              语义匹配
+            </Badge>
+          )}
           {note.tags.slice(0, MAX_TAGS).map((tag) => (
             <Badge
               key={tag}
