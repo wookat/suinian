@@ -266,6 +266,35 @@ async function fetchLinkMetaInto(env: Env, noteId: string, urls: string[]): Prom
   }
 }
 
+/**
+ * Upper bound for a note's background pipeline (triage + graph + cluster +
+ * embedding + link enrichment). Every network call inside already has its own
+ * 8-40s timeout; this cap is a second line of defense so a waitUntil task can
+ * never run unbounded (anything unfinished is picked up by the cron sweep).
+ */
+export const PIPELINE_TIMEOUT_MS = 60_000;
+
+/** Resolve when `p` settles or after `ms`, whichever comes first; never rejects. */
+export function capped(p: Promise<unknown>, ms: number, label: string): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.error(`background task timed out after ${ms}ms: ${label}`);
+      resolve();
+    }, ms);
+    p.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      (err) => {
+        clearTimeout(timer);
+        console.error(`background task failed: ${label}`, err);
+        resolve();
+      }
+    );
+  });
+}
+
 async function createNote(
   c: { env: Env },
   userId: string,
@@ -298,35 +327,25 @@ async function createNote(
 
   // link metadata always in background; full article extraction + AI summary
   // runs after triage so the tag merge never races with applyTriage
-  if (urls.length > 0) waitUntil(fetchLinkMetaInto(c.env, id, urls));
+  if (urls.length > 0) waitUntil(capped(fetchLinkMetaInto(c.env, id, urls), PIPELINE_TIMEOUT_MS, `linkmeta note=${id}`));
+
+  const runPipeline = async (withTriage: boolean) => {
+    if (withTriage) await runTriage();
+    const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
+    if (n) {
+      await extractGraph(c.env, n);
+      await clusterNote(c.env, n);
+      await upsertNoteEmbedding(c.env, n);
+    }
+    if (url) await enrichLinkInto(c.env, id);
+  };
 
   let triage: TriageResult | null = null;
   if (opts.syncTriage) {
     triage = await runTriage();
-    waitUntil(
-      (async () => {
-        const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
-        if (n) {
-          await extractGraph(c.env, n);
-          await clusterNote(c.env, n);
-          await upsertNoteEmbedding(c.env, n);
-        }
-        if (url) await enrichLinkInto(c.env, id);
-      })()
-    );
+    waitUntil(capped(runPipeline(false), PIPELINE_TIMEOUT_MS, `pipeline note=${id}`));
   } else {
-    waitUntil(
-      (async () => {
-        await runTriage();
-        const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
-        if (n) {
-          await extractGraph(c.env, n);
-          await clusterNote(c.env, n);
-          await upsertNoteEmbedding(c.env, n);
-        }
-        if (url) await enrichLinkInto(c.env, id);
-      })()
-    );
+    waitUntil(capped(runPipeline(true), PIPELINE_TIMEOUT_MS, `pipeline note=${id}`));
   }
 
   const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
