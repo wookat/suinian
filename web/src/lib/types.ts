@@ -2,6 +2,11 @@ export type NoteSource = "wechat" | "android" | "web" | "api"
 export type NoteRawType = "text" | "link" | "image" | "voice" | "file"
 export type NoteCategory = "idea" | "todo" | "collect" | "data"
 
+export interface NoteMeta {
+  raw_transcript?: string
+  image_description?: string
+}
+
 export interface Note {
   id: string
   user_id: string
@@ -19,6 +24,7 @@ export interface Note {
   is_sensitive: number
   todo_due: string | null
   todo_done: number | null
+  meta?: NoteMeta | null
   created_at: string
   updated_at: string
 }

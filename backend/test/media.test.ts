@@ -1,5 +1,26 @@
 import { describe, it, expect } from "vitest";
-import { parseMediaRequest, buildMediaReply, mediaTooLargeMessage, MAX_MEDIA_BYTES } from "../src/media";
+import {
+  parseMediaRequest,
+  buildMediaReply,
+  mediaTooLargeMessage,
+  MAX_MEDIA_BYTES,
+  correctTranscript,
+  stripMarkdown,
+  parseImageExtraction,
+  describeImage,
+  withTimeout,
+} from "../src/media";
+
+/** Minimal Workers-AI-style env whose chat model returns `response`. */
+function aiEnv(response: string | (() => Promise<{ response?: string }>)) {
+  const run = typeof response === "function" ? response : async () => ({ response });
+  return {
+    AI: { run } as unknown as Ai,
+    AI_MODEL: "workers-ai:test-model",
+    DEEPSEEK_API_KEY: "",
+    DEEPSEEK_BASE_URL: "",
+  };
+}
 
 function jsonRequest(body: unknown): Request {
   return new Request("http://local/api/ingest/media", {
@@ -77,5 +98,81 @@ describe("buildMediaReply", () => {
 describe("mediaTooLargeMessage", () => {
   it("mentions the 10MB limit", () => {
     expect(mediaTooLargeMessage(12 * 1024 * 1024)).toContain("10MB");
+  });
+});
+
+describe("correctTranscript", () => {
+  it("returns the corrected text from the LLM", async () => {
+    const env = aiEnv("明天去牙医那里复诊");
+    expect(await correctTranscript(env, "明天去牙医那里复枕")).toBe("明天去牙医那里复诊");
+  });
+
+  it("falls back to the raw transcript when the LLM fails", async () => {
+    const env = aiEnv(async () => {
+      throw new Error("provider down");
+    });
+    expect(await correctTranscript(env, "原始转写")).toBe("原始转写");
+  });
+
+  it("falls back to the raw transcript when the LLM returns empty", async () => {
+    expect(await correctTranscript(aiEnv(""), "原始转写")).toBe("原始转写");
+  });
+});
+
+describe("stripMarkdown", () => {
+  it("removes asterisks and heading markers", () => {
+    expect(stripMarkdown("**加粗** 和 *斜体*\n## 标题")).toBe("加粗 和 斜体\n标题");
+  });
+});
+
+describe("parseImageExtraction", () => {
+  it("uses extracted text as content and keeps the description", () => {
+    const r = parseImageExtraction("文字：会议纪要 8月7日\n描述：一张白板照片，上面写着会议纪要。");
+    expect(r.content).toBe("会议纪要 8月7日");
+    expect(r.description).toBe("一张白板照片，上面写着会议纪要。");
+  });
+
+  it("falls back to a one-sentence description when the image has no text", () => {
+    const r = parseImageExtraction("文字：无\n描述：一只橘猫趴在沙发上晒太阳。旁边有一个抱枕。");
+    expect(r.content).toBe("一只橘猫趴在沙发上晒太阳。");
+    expect(r.description).toBe("一只橘猫趴在沙发上晒太阳。旁边有一个抱枕。");
+  });
+
+  it("strips markdown stars from the output", () => {
+    const r = parseImageExtraction("文字：**重要通知**\n描述：*一张公告截图*");
+    expect(r.content).toBe("重要通知");
+    expect(r.description).toBe("一张公告截图");
+  });
+
+  it("handles unstructured output by treating it all as description", () => {
+    const r = parseImageExtraction("一张风景照，远处有山。");
+    expect(r.content).toBe("一张风景照，远处有山。");
+    expect(r.description).toBe("一张风景照，远处有山。");
+  });
+});
+
+describe("describeImage", () => {
+  it("returns parsed extraction from the vision model", async () => {
+    const env = aiEnv("文字：Wi-Fi: guest2024\n描述：前台密码提示牌。");
+    const r = await describeImage(env, new Uint8Array([1]));
+    expect(r?.content).toBe("Wi-Fi: guest2024");
+    expect(r?.description).toBe("前台密码提示牌。");
+  });
+
+  it("returns null when the model fails", async () => {
+    const env = aiEnv(async () => {
+      throw new Error("vision down");
+    });
+    expect(await describeImage(env, new Uint8Array([1]))).toBeNull();
+  });
+});
+
+describe("withTimeout", () => {
+  it("rejects when the promise outlives the timeout", async () => {
+    await expect(withTimeout(new Promise(() => {}), 20, "test")).rejects.toThrow("timed out");
+  });
+
+  it("resolves normally when fast enough", async () => {
+    await expect(withTimeout(Promise.resolve(42), 100, "test")).resolves.toBe(42);
   });
 });

@@ -179,7 +179,13 @@ export function NoteCard({
   const [copied, setCopied] = useState(false)
   const [revealed, setRevealed] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [metaOpen, setMetaOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+
+  const imageDescription =
+    note.raw_type === "image" && note.meta?.image_description && note.meta.image_description !== note.content
+      ? note.meta.image_description
+      : null
 
   useEffect(() => {
     if (!menuOpen) return
@@ -392,6 +398,21 @@ export function NoteCard({
               >
                 {expanded ? "收起" : "展开全文"}
               </button>
+            )}
+            {imageDescription && (
+              <div className="mt-2">
+                <button
+                  onClick={() => setMetaOpen((x) => !x)}
+                  className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+                >
+                  {metaOpen ? "收起图片描述" : "查看图片描述"}
+                </button>
+                {metaOpen && (
+                  <p className="mt-1 whitespace-pre-wrap rounded-lg bg-muted/50 p-2.5 text-xs leading-relaxed text-muted-foreground">
+                    {imageDescription}
+                  </p>
+                )}
+              </div>
             )}
             {sensitive && revealed && (
               <button

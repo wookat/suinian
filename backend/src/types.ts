@@ -36,6 +36,14 @@ export interface TriageResult {
   todo_due?: string | null;
 }
 
+/** Optional per-note metadata stored as JSON in notes.meta. */
+export interface NoteMeta {
+  /** Original Whisper transcript before LLM correction (audio notes). */
+  raw_transcript?: string;
+  /** Full vision-model description (image notes). */
+  image_description?: string;
+}
+
 export interface NoteRow {
   id: string;
   user_id: string;
@@ -54,6 +62,7 @@ export interface NoteRow {
   content_enc: string | null;
   todo_due: string | null;
   todo_done: number;
+  meta: string | null;
   created_at: string;
   updated_at: string;
 }
