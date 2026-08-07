@@ -4,6 +4,7 @@ import { loadConfig } from './config.js'
 import { SuinianClient, FatalApiError } from './client.js'
 import { handleMessage } from './handler.js'
 import { ReplyQueue } from './queue.js'
+import { DailyReviewPusher } from './review-push.js'
 import type { NormalizedMessage } from './payload.js'
 
 const cfg = loadConfig()
@@ -14,6 +15,13 @@ const bot = new WeChatBot({
   storageDir: cfg.storageDir,
   logLevel: cfg.logLevel,
 })
+
+// 每日「今日回顾」推送：上海时间 REVIEW_PUSH_HOUR 点（默认 8 点）推给已绑定用户
+const reviewPusher = new DailyReviewPusher(
+  client,
+  (userId, text) => replyQueue.enqueue(() => bot.send(userId, text).then(() => undefined)),
+  { storageDir: cfg.storageDir, pushHour: Number(process.env.REVIEW_PUSH_HOUR ?? 8) },
+)
 
 const loginCallbacks = {
   onQrUrl: (url: string) => {
@@ -30,6 +38,7 @@ bot.on('error', (err: unknown) => console.error('[suinian] bot error:', err))
 
 bot.onMessage(async (msg: IncomingMessage) => {
   try {
+    reviewPusher.trackUser(msg.userId)
     await bot.sendTyping(msg.userId)
     const normalized = await normalize(msg)
     const reply = await handleMessage(client, normalized)
@@ -113,7 +122,8 @@ async function main() {
   console.log('[suinian] wechat bridge 启动，后端：' + cfg.apiUrl)
   await loginWithRetry()
   await bot.start()
-  console.log('[suinian] 已上线，等待微信消息…（? 开头问答，其余入库）')
+  reviewPusher.start()
+  console.log('[suinian] 已上线，等待微信消息…（? 开头问答，其余入库；每日 ' + reviewPusher.pushHour + ' 点推送今日回顾）')
 }
 
 main().catch((err) => {

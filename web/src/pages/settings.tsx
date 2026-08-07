@@ -466,6 +466,18 @@ export function SettingsPage() {
             if (f) void handleImportFile(f)
           }}
         />
+        <p className="text-xs text-muted-foreground">
+          正在从 Cubox / flomo 搬家？
+          <a
+            href="https://github.com/wookat/suinian/blob/main/docs/migrate-from-cubox.md"
+            target="_blank"
+            rel="noreferrer"
+            className="ml-1 font-medium text-primary underline underline-offset-2"
+          >
+            查看迁移指南
+          </a>
+          ，三步完成导出、导入与验收。
+        </p>
         <Button
           variant="outline"
           onClick={() => importInputRef.current?.click()}
