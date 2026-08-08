@@ -5,6 +5,7 @@ import { SuinianClient, FatalApiError } from './client.js'
 import { handleMessage } from './handler.js'
 import { ReplyQueue } from './queue.js'
 import { DailyReviewPusher } from './review-push.js'
+import { TodoReminderPusher } from './todo-push.js'
 import type { NormalizedMessage } from './payload.js'
 
 const cfg = loadConfig()
@@ -23,6 +24,13 @@ const reviewPusher = new DailyReviewPusher(
   { storageDir: cfg.storageDir, pushHour: Number(process.env.REVIEW_PUSH_HOUR ?? 8) },
 )
 
+// 每日待办提醒推送：上海时间 TODO_PUSH_HOUR 点（默认 9 点）推当天到期/过期未完成待办
+const todoPusher = new TodoReminderPusher(
+  client,
+  (userId, text) => replyQueue.enqueue(() => bot.send(userId, text).then(() => undefined)),
+  { storageDir: cfg.storageDir, pushHour: Number(process.env.TODO_PUSH_HOUR ?? 9) },
+)
+
 const loginCallbacks = {
   onQrUrl: (url: string) => {
     console.log('\n请用微信扫码绑定（或在手机上打开链接）：\n' + url + '\n')
@@ -39,6 +47,7 @@ bot.on('error', (err: unknown) => console.error('[suinian] bot error:', err))
 bot.onMessage(async (msg: IncomingMessage) => {
   try {
     reviewPusher.trackUser(msg.userId)
+    todoPusher.trackUser(msg.userId)
     await bot.sendTyping(msg.userId)
     const normalized = await normalize(msg)
     const reply = await handleMessage(client, normalized)
@@ -123,7 +132,8 @@ async function main() {
   await loginWithRetry()
   await bot.start()
   reviewPusher.start()
-  console.log('[suinian] 已上线，等待微信消息…（? 开头问答，其余入库；每日 ' + reviewPusher.pushHour + ' 点推送今日回顾）')
+  todoPusher.start()
+  console.log('[suinian] 已上线，等待微信消息…（? 开头问答，其余入库；每日 ' + reviewPusher.pushHour + ' 点推今日回顾、' + todoPusher.pushHour + ' 点推待办提醒）')
 }
 
 main().catch((err) => {

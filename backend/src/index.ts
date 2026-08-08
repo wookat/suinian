@@ -19,7 +19,7 @@ import {
   clientIp,
 } from "./auth";
 import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports } from "./reports";
-import { getTodayReview, generateAllDailyReviews, readCronHeartbeats } from "./review";
+import { getTodayReview, generateAllDailyReviews, readCronHeartbeats, shanghaiDate } from "./review";
 import { upsertNoteEmbedding, deleteNoteEmbedding, semanticRecall, backfillEmbeddings } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteUserGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
 import {
@@ -492,7 +492,7 @@ async function createNote(
 // ---- POST /api/notes ----
 app.post("/api/notes", async (c) => {
   const body = await c.req
-    .json<{ source?: string; raw_type?: string; content?: string; url?: string; tags?: string[]; skip_triage?: boolean }>()
+    .json<{ source?: string; raw_type?: string; content?: string; url?: string; tags?: string[]; skip_triage?: boolean; meta?: NoteMeta | null }>()
     .catch(() => null);
   if (!body || !(body.content ?? "").trim()) return c.json({ error: "content required" }, 400);
   const tooLong = contentTooLong(c, body.content ?? "");
@@ -1354,6 +1354,58 @@ app.get("/api/review/today", async (c) => {
       note: noteToJson(it.note),
     })),
   });
+});
+
+// ---- GET /api/preferences ----
+// 推送偏好（每日回顾 / 待办提醒），无记录时默认全开
+app.get("/api/preferences", async (c) => {
+  const row = await c.env.DB.prepare("SELECT daily_review_push, todo_reminder_push FROM user_preferences WHERE user_id = ?")
+    .bind(c.get("userId"))
+    .first<{ daily_review_push: number; todo_reminder_push: number }>();
+  return c.json({
+    daily_review_push: row ? row.daily_review_push === 1 : true,
+    todo_reminder_push: row ? row.todo_reminder_push === 1 : true,
+  });
+});
+
+// ---- PATCH /api/preferences ----
+app.patch("/api/preferences", async (c) => {
+  const body = await c.req.json<{ daily_review_push?: boolean; todo_reminder_push?: boolean }>().catch(() => null);
+  if (!body || (typeof body.daily_review_push !== "boolean" && typeof body.todo_reminder_push !== "boolean"))
+    return c.json({ error: "nothing to update" }, 400);
+  const userId = c.get("userId");
+  const cur = await c.env.DB.prepare("SELECT daily_review_push, todo_reminder_push FROM user_preferences WHERE user_id = ?")
+    .bind(userId)
+    .first<{ daily_review_push: number; todo_reminder_push: number }>();
+  const next = {
+    daily_review_push: body.daily_review_push ?? (cur ? cur.daily_review_push === 1 : true),
+    todo_reminder_push: body.todo_reminder_push ?? (cur ? cur.todo_reminder_push === 1 : true),
+  };
+  await c.env.DB.prepare(
+    `INSERT INTO user_preferences (user_id, daily_review_push, todo_reminder_push, updated_at)
+     VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT (user_id) DO UPDATE SET daily_review_push = excluded.daily_review_push,
+       todo_reminder_push = excluded.todo_reminder_push, updated_at = excluded.updated_at`
+  )
+    .bind(userId, next.daily_review_push ? 1 : 0, next.todo_reminder_push ? 1 : 0)
+    .run();
+  return c.json(next);
+});
+
+// ---- GET /api/todos/today ----
+// 当天（上海时区）到期 + 已过期的未完成待办，供 bridge 上午推送清单
+app.get("/api/todos/today", async (c) => {
+  const today = shanghaiDate();
+  const { results } = await c.env.DB.prepare(
+    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0
+       AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0)
+       AND todo_due IS NOT NULL AND date(todo_due) <= ?
+     ORDER BY datetime(todo_due) ASC LIMIT 50`
+  )
+    .bind(c.get("userId"), today)
+    .all<NoteRow>();
+  const items = (results ?? []).map((n) => ({ ...noteToJson(n), overdue: (n.todo_due ?? "").slice(0, 10) < today }));
+  return c.json({ date: today, items });
 });
 
 // ---- GET /api/reports ----

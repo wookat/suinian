@@ -424,6 +424,23 @@ export async function getReport(id: string): Promise<WeeklyReport> {
   return res.report ?? res
 }
 
+export interface PushPreferences {
+  daily_review_push: boolean
+  todo_reminder_push: boolean
+}
+
+/** 推送偏好（每日回顾 / 待办提醒开关，默认全开） */
+export async function getPreferences(): Promise<PushPreferences> {
+  return realFetch<PushPreferences>("/api/preferences")
+}
+
+export async function updatePreferences(patch: Partial<PushPreferences>): Promise<PushPreferences> {
+  return realFetch<PushPreferences>("/api/preferences", {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  })
+}
+
 export interface AuthResult {
   user: { id: string; name: string }
   api_token: string

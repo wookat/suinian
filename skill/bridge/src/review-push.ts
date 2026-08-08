@@ -42,7 +42,7 @@ export class DailyReviewPusher {
   private timer?: NodeJS.Timeout
 
   constructor(
-    private readonly client: Pick<SuinianClient, 'reviewToday'>,
+    private readonly client: Pick<SuinianClient, 'reviewToday' | 'preferences'>,
     private readonly send: (userId: string, text: string) => Promise<void>,
     opts: { storageDir: string; pushHour?: number },
   ) {
@@ -76,6 +76,13 @@ export class DailyReviewPusher {
     if (shanghaiHour(now) < this.pushHour) return false
     if (this.state.users.length === 0) return false
     try {
+      const prefs = await this.client.preferences().catch(() => null)
+      if (prefs && !prefs.daily_review_push) {
+        // 用户关掉了每日回顾推送：当天标记完成，不发消息
+        this.state.lastPushedDate = today
+        this.saveState()
+        return false
+      }
       const review = await this.client.reviewToday()
       const message = formatReviewMessage(review)
       if (message) {

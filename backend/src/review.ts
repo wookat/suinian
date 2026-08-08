@@ -1,7 +1,7 @@
 import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 
-export type ReviewKind = "year_ago" | "month_ago" | "revisit";
+export type ReviewKind = "year_ago" | "month_ago" | "revisit" | "recurring_theme" | "pending_todo";
 
 export interface DailyReviewRow {
   id: string;
@@ -21,12 +21,16 @@ export const KIND_LABEL: Record<ReviewKind, string> = {
   year_ago: "一年前的今天",
   month_ago: "一个月前的今天",
   revisit: "值得回看",
+  recurring_theme: "反复出现的主题",
+  pending_todo: "悬置的待办",
 };
 
 const FALLBACK_COMMENT: Record<ReviewKind, string> = {
   year_ago: "一年前的今天你记下了它，看看当时的想法现在应验了吗？",
   month_ago: "一个月前的今天记下的碎念，回头看看有什么新的想法。",
   revisit: "这条记了很久没再翻过，也许正是重新审视它的好时机。",
+  recurring_theme: "近两周你反复记到这个主题，也许它值得认真展开一次。",
+  pending_todo: "这条待办快到期了（或已过期），要不要现在处理掉它？",
 };
 
 /** Current date in Asia/Shanghai as YYYY-MM-DD. */
@@ -87,6 +91,42 @@ async function relaxedCandidates(env: Env, userId: string, limit: number): Promi
     .bind(userId, limit)
     .all<NoteRow>();
   return results ?? [];
+}
+
+/** 近两周同一主题（线索）碎片 ≥3 条时，取该主题最新一条作为「反复出现的主题」洞察。 */
+async function recurringThemeCandidate(env: Env, userId: string, exclude: string[]): Promise<NoteRow | null> {
+  const hot = await env.DB.prepare(
+    `SELECT thread_id, COUNT(*) AS n FROM notes
+      WHERE user_id = ? AND is_sensitive = 0 AND thread_id IS NOT NULL
+        AND created_at >= datetime('now', '-14 days')
+      GROUP BY thread_id HAVING n >= 3
+      ORDER BY n DESC LIMIT 1`
+  )
+    .bind(userId)
+    .first<{ thread_id: string; n: number }>();
+  if (!hot) return null;
+  const ph = exclude.map(() => "?").join(",");
+  return await env.DB.prepare(
+    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND thread_id = ?
+       ${exclude.length > 0 ? `AND id NOT IN (${ph})` : ""}
+     ORDER BY created_at DESC LIMIT 1`
+  )
+    .bind(userId, hot.thread_id, ...exclude)
+    .first<NoteRow>();
+}
+
+/** 临期（48h 内到期）或已过期、且未完成的待办，作为「悬置的待办」洞察。 */
+async function pendingTodoCandidate(env: Env, userId: string, exclude: string[]): Promise<NoteRow | null> {
+  const ph = exclude.map(() => "?").join(",");
+  return await env.DB.prepare(
+    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0
+       AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0)
+       AND todo_due IS NOT NULL AND datetime(todo_due) <= datetime('now', '+2 days')
+       ${exclude.length > 0 ? `AND id NOT IN (${ph})` : ""}
+     ORDER BY datetime(todo_due) ASC LIMIT 1`
+  )
+    .bind(userId, ...exclude)
+    .first<NoteRow>();
 }
 
 async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind): Promise<string> {
@@ -152,6 +192,21 @@ export async function generateDailyReviewDetailed(
   };
   push(await notesOnShanghaiDay(env, userId, shiftDate(today, { years: 1 }), 2), "year_ago", 2);
   push(await notesOnShanghaiDay(env, userId, shiftDate(today, { months: 1 }), 2), "month_ago", 2);
+  // 洞察轮换：按日期奇偶轮换「反复出现的主题」/「悬置的待办」优先级，每天至多 1 条
+  if (picks.length < MAX_REVIEW_ITEMS) {
+    const dayNum = parseInt(today.replace(/-/g, ""), 10);
+    const order: ReviewKind[] = dayNum % 2 === 0 ? ["recurring_theme", "pending_todo"] : ["pending_todo", "recurring_theme"];
+    for (const kind of order) {
+      const cand =
+        kind === "recurring_theme"
+          ? await recurringThemeCandidate(env, userId, [...seen])
+          : await pendingTodoCandidate(env, userId, [...seen]);
+      if (cand) {
+        push([cand], kind, 1);
+        break;
+      }
+    }
+  }
   if (picks.length < MAX_REVIEW_ITEMS) {
     push(await revisitCandidates(env, userId, [...seen], MAX_REVIEW_ITEMS - picks.length), "revisit", MAX_REVIEW_ITEMS);
   }
