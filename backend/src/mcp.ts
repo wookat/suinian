@@ -102,7 +102,7 @@ export function buildMcpServer(api: ApiCall): McpServer {
     {
       title: "问碎念",
       description:
-        "用自然语言向自己的笔记提问（AI 问答），回答带 [序号] 引用，references 列出引用到的笔记。适合「我上个月关于 X 想过什么」这类问题。",
+        "用自然语言向自己的笔记提问（AI 问答），回答带 [序号] 引用，references 列出引用到的笔记。适合「我上个月关于 X 想过什么」这类问题。得到有价值的结论后，可用 save_note 工具把结论存回碎念（写回闭环）。",
       inputSchema: {
         question: z.string().min(1).describe("要问的问题，自然语言"),
       },
@@ -119,7 +119,12 @@ export function buildMcpServer(api: ApiCall): McpServer {
         references: unknown;
         notes: { is_sensitive?: unknown; content?: unknown }[];
       };
-      return jsonResult({ answer: body.answer, references: body.references, notes: redactNotes(body.notes) });
+      return jsonResult({
+        answer: body.answer,
+        references: body.references,
+        notes: redactNotes(body.notes),
+        hint: "如需保存这次问答的结论，可调用 save_note 工具存为一条碎念。",
+      });
     }
   );
 

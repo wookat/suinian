@@ -31,10 +31,26 @@ export interface TodayReviewResponse {
   date: string
   items: {
     id: string
-    kind: 'year_ago' | 'month_ago' | 'revisit'
+    kind: 'year_ago' | 'month_ago' | 'revisit' | 'recurring_theme' | 'pending_todo'
     kind_label: string
     comment: string | null
     note: { id: string; title: string | null; content: string; created_at: string; tags?: string[] }
+  }[]
+}
+
+export interface PreferencesResponse {
+  daily_review_push: boolean
+  todo_reminder_push: boolean
+}
+
+export interface TodayTodosResponse {
+  date: string
+  items: {
+    id: string
+    title: string | null
+    content: string
+    todo_due: string | null
+    overdue: boolean
   }[]
 }
 
@@ -49,6 +65,16 @@ export class SuinianClient {
   /** 今日回顾（每日推送用） */
   reviewToday(): Promise<TodayReviewResponse> {
     return this.request<TodayReviewResponse>('GET', '/api/review/today')
+  }
+
+  /** 推送偏好（每日回顾 / 待办提醒开关） */
+  preferences(): Promise<PreferencesResponse> {
+    return this.request<PreferencesResponse>('GET', '/api/preferences')
+  }
+
+  /** 当天到期 + 已过期的未完成待办（上午推送用） */
+  todosToday(): Promise<TodayTodosResponse> {
+    return this.request<TodayTodosResponse>('GET', '/api/todos/today')
   }
 
   ask(payload: AskPayload): Promise<AskResponse> {

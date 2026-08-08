@@ -38,10 +38,13 @@ describe('shanghai time helpers', () => {
   })
 })
 
-function makePusher(sent: { userId: string; text: string }[], pushHour = 8) {
+function makePusher(sent: { userId: string; text: string }[], pushHour = 8, dailyReviewPush = true) {
   const dir = mkdtempSync(join(tmpdir(), 'review-push-'))
   return new DailyReviewPusher(
-    { reviewToday: async () => review },
+    {
+      reviewToday: async () => review,
+      preferences: async () => ({ daily_review_push: dailyReviewPush, todo_reminder_push: true }),
+    },
     async (userId, text) => {
       sent.push({ userId, text })
     },
@@ -74,5 +77,15 @@ describe('DailyReviewPusher.tick', () => {
     const noUsers = makePusher(sent)
     expect(await noUsers.tick(pushTime)).toBe(false)
     expect(sent).toHaveLength(0)
+  })
+
+  it('skips the day silently when the daily review push preference is off', async () => {
+    const sent: { userId: string; text: string }[] = []
+    const pusher = makePusher(sent, 8, false)
+    pusher.trackUser('wx-1')
+    expect(await pusher.tick(pushTime)).toBe(false)
+    expect(sent).toHaveLength(0)
+    // marked done for the day: no retry loop
+    expect(await pusher.tick(pushTime)).toBe(false)
   })
 })

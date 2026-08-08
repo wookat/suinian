@@ -102,6 +102,7 @@ const SOURCE_META = {
   web: { icon: Globe, label: "来自 Web 速记" },
   api: { icon: Webhook, label: "来自 API" },
   extension: { icon: Puzzle, label: "来自浏览器剪藏" },
+  "from-ask": { icon: Sparkles, label: "来自问答存档" },
 } as const
 
 export function CategoryBadge({
@@ -135,17 +136,25 @@ export function DueChip({ due }: { due: string | null }) {
   const overdue = dueHasTime(due)
     ? d.getTime() < now.getTime()
     : startOfDay(d).getTime() < startOfDay(now).getTime()
+  // 临期：24 小时内到期（无时刻的按当天算临期）
+  const dueSoon =
+    !overdue &&
+    (dueHasTime(due)
+      ? d.getTime() - now.getTime() <= 24 * 3600 * 1000
+      : startOfDay(d).getTime() === startOfDay(now).getTime())
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
         overdue
-          ? "bg-red-500/10 text-red-600 dark:text-red-400"
-          : "bg-muted text-muted-foreground",
+          ? "bg-red-500/15 text-red-600 ring-1 ring-red-500/40 dark:text-red-400"
+          : dueSoon
+            ? "bg-amber-500/15 text-amber-600 ring-1 ring-amber-500/40 dark:text-amber-400"
+            : "bg-muted text-muted-foreground",
       )}
     >
       <CalendarClock className="size-3" />
-      {overdue ? "已过期 " : ""}
+      {overdue ? "已过期 " : dueSoon ? "临期 " : ""}
       {formatDue(due)}
     </span>
   )

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { CircleHelp, Loader2, SendHorizontal, Sparkles, Trash2 } from "lucide-react"
+import { BookmarkPlus, Check, CircleHelp, Loader2, SendHorizontal, Sparkles, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { NoteCard } from "@/components/note-card"
-import { ask } from "@/lib/api"
+import { ask, createNote } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import type { AskHistoryMessage, Note } from "@/lib/types"
 
@@ -25,7 +25,23 @@ export interface AskChatMessage {
   content: string
   /** 引用笔记，index 与回答中的 [n] 对应 */
   refs?: { index: number; note: Note }[]
+  /** 本轮回答对应的问题（存为笔记用） */
+  question?: string
   error?: boolean
+}
+
+/** 把一轮问答（问题 + 回答 + 引用链接）拼成一条可保存的笔记正文 */
+export function buildAskNoteContent(question: string, answer: string, refs: { index: number; note: Note }[]): string {
+  const lines = [`问：${question}`, "", `答：${answer}`]
+  if (refs.length > 0) {
+    lines.push("", "引用：")
+    for (const r of refs) {
+      const label = (r.note.title || r.note.content).replace(/\s+/g, " ").slice(0, 60)
+      const link = r.note.url || (r.note.thread_id ? `${location.origin}${location.pathname}#/threads?id=${r.note.thread_id}` : "")
+      lines.push(`[${r.index}] ${label}${link ? ` ${link}` : ""}`)
+    }
+  }
+  return lines.join("\n")
 }
 
 function loadMessages(): AskChatMessage[] {
@@ -91,6 +107,7 @@ export function AskChat({
   const [messages, setMessages] = useState<AskChatMessage[]>(loadMessages)
   const [input, setInput] = useState("")
   const [asking, setAsking] = useState(false)
+  const [saveStates, setSaveStates] = useState<Record<string, "saving" | "saved" | "error">>({})
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -133,7 +150,7 @@ export function AskChat({
       })
       setMessages((ms) => [
         ...ms,
-        { id: crypto.randomUUID(), role: "assistant", content: res.answer, refs },
+        { id: crypto.randomUUID(), role: "assistant", content: res.answer, refs, question: q },
       ])
     } catch (e) {
       setMessages((ms) => [
@@ -147,6 +164,23 @@ export function AskChat({
       ])
     } finally {
       setAsking(false)
+    }
+  }
+
+  async function saveAsNote(m: AskChatMessage) {
+    if (saveStates[m.id] === "saving" || saveStates[m.id] === "saved") return
+    setSaveStates((s) => ({ ...s, [m.id]: "saving" }))
+    try {
+      await createNote({
+        source: "from-ask",
+        raw_type: "text",
+        content: buildAskNoteContent(m.question ?? "", m.content, m.refs ?? []),
+        skip_triage: true, // 存为「想法」且不被 AI 重新分拣
+        meta: { from_ask: true },
+      })
+      setSaveStates((s) => ({ ...s, [m.id]: "saved" }))
+    } catch {
+      setSaveStates((s) => ({ ...s, [m.id]: "error" }))
     }
   }
 
@@ -229,6 +263,29 @@ export function AskChat({
                     content={m.content}
                     refIndexes={new Set((m.refs ?? []).map((r) => r.index))}
                   />
+                )}
+                {!m.error && m.question && (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      disabled={saveStates[m.id] === "saving" || saveStates[m.id] === "saved"}
+                      onClick={() => void saveAsNote(m)}
+                    >
+                      {saveStates[m.id] === "saving" ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : saveStates[m.id] === "saved" ? (
+                        <Check className="size-3.5" />
+                      ) : (
+                        <BookmarkPlus className="size-3.5" />
+                      )}
+                      {saveStates[m.id] === "saved" ? "已存为笔记" : "存为笔记"}
+                    </Button>
+                    {saveStates[m.id] === "error" && (
+                      <span className="text-xs text-destructive">保存失败，点击重试</span>
+                    )}
+                  </div>
                 )}
                 {(m.refs?.length ?? 0) > 0 && (
                   <div className="space-y-2 border-t border-border/60 pt-2">

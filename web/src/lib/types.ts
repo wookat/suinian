@@ -1,4 +1,4 @@
-export type NoteSource = "wechat" | "android" | "web" | "api" | "extension"
+export type NoteSource = "wechat" | "android" | "web" | "api" | "extension" | "from-ask"
 export type NoteRawType = "text" | "link" | "image" | "voice" | "file"
 export type NoteCategory = "idea" | "todo" | "collect" | "data" | "expense" | "income"
 
@@ -17,6 +17,8 @@ export interface NoteMeta {
   file_status?: "ok" | "extract_failed"
   finance_merchant?: string
   manual_override?: { category?: boolean; tags?: boolean }
+  /** 问答写回：由「存为笔记」保存的问答结论 */
+  from_ask?: boolean
 }
 
 export interface Note {
@@ -60,6 +62,7 @@ export interface CreateNotePayload {
   tags?: string[]
   /** 原样保存（! 内联指令）：跳过 AI 分拣，存为「想法」 */
   skip_triage?: boolean
+  meta?: NoteMeta | null
 }
 
 export interface AskReference {

@@ -22,7 +22,7 @@ function noteDateLabel(iso: string): string {
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
 }
 
-/** 首页顶部「今日回顾」卡：那年今日 / 上月今日 / 久未回看，可折叠、可翻下一条 */
+/** 首页顶部「今日回顾」卡：那年今日 / 上月今日 / 久未回看 / 反复出现的主题 / 悬置的待办，可折叠、可翻下一条 */
 export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void }) {
   const [items, setItems] = useState<DailyReviewItem[]>([])
   const [index, setIndex] = useState(0)

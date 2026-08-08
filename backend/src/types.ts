@@ -89,6 +89,8 @@ export interface NoteMeta {
   finance_merchant?: string;
   /** Fields the user set by hand; AI triage / cron sweeps must not overwrite them. */
   manual_override?: { category?: boolean; tags?: boolean };
+  /** Note saved from an AI Q&A round (问答写回闭环). */
+  from_ask?: boolean;
 }
 
 export interface NoteRow {

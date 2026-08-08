@@ -21,6 +21,8 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   deleteAccount,
+  getPreferences,
+  updatePreferences,
   deleteTag,
   exportData,
   getMe,
@@ -32,6 +34,7 @@ import {
   MAX_IMPORT_BYTES,
   type ImportSource,
   type ImportStats,
+  type PushPreferences,
   type TestConnectionResult,
 } from "@/lib/api"
 import type { TagCount } from "@/lib/types"
@@ -288,6 +291,84 @@ function TagManagerCard() {
           {msg.text}
         </p>
       )}
+    </Card>
+  )
+}
+
+/** 推送偏好：每日回顾 / 待办提醒各自可开关（默认开，存服务端 user preferences） */
+function PushPreferencesCard() {
+  const [prefs, setPrefs] = useState<PushPreferences | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const settingsVersion = useSettingsVersion()
+
+  useEffect(() => {
+    let cancelled = false
+    const s = loadSettings()
+    if (s.useMock || !s.apiBaseUrl || !s.apiToken) return
+    setError(null)
+    getPreferences()
+      .then((p) => {
+        if (!cancelled) setPrefs(p)
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [settingsVersion])
+
+  const s = loadSettings()
+  if (s.useMock || !s.apiBaseUrl || !s.apiToken) return null
+
+  async function toggle(key: keyof PushPreferences) {
+    if (!prefs || busy) return
+    const next = { ...prefs, [key]: !prefs[key] }
+    setPrefs(next)
+    setBusy(true)
+    setError(null)
+    try {
+      setPrefs(await updatePreferences({ [key]: next[key] }))
+    } catch (e) {
+      setPrefs(prefs)
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const OPTIONS: { key: keyof PushPreferences; label: string; hint: string }[] = [
+    { key: "daily_review_push", label: "每日回顾推送", hint: "每天早上把「今日回顾」推到微信" },
+    { key: "todo_reminder_push", label: "待办提醒推送", hint: "上午把当天到期/过期的待办清单推到微信" },
+  ]
+
+  return (
+    <Card className="space-y-3 p-4">
+      <div>
+        <h2 className="text-sm font-medium">推送偏好</h2>
+        <p className="mt-1 text-xs text-muted-foreground">控制微信 bot 的主动推送，默认全开；关闭后当天即生效</p>
+      </div>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {prefs === null && !error ? (
+        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" /> 加载中…
+        </p>
+      ) : prefs ? (
+        <div className="space-y-2">
+          {OPTIONS.map((opt) => (
+            <label key={opt.key} className="flex cursor-pointer items-center gap-2.5">
+              <Checkbox
+                checked={prefs[opt.key]}
+                disabled={busy}
+                onCheckedChange={() => void toggle(opt.key)}
+              />
+              <span className="text-sm">{opt.label}</span>
+              <span className="text-xs text-muted-foreground">{opt.hint}</span>
+            </label>
+          ))}
+        </div>
+      ) : null}
     </Card>
   )
 }
@@ -722,6 +803,8 @@ export function SettingsPage() {
           </p>
         )}
       </Card>
+
+      <PushPreferencesCard />
 
       <TagManagerCard />
 
