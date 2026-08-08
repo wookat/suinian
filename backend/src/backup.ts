@@ -363,6 +363,37 @@ export async function restoreBackup(
         .bind(userId, ...chunk.map((n) => n.content))
         .all<{ content: string; created_at: string }>();
       const seen = new Set((existing.results ?? []).map((r) => `${r.created_at}\u0000${r.content}`));
+      // sensitive notes are stored with a placeholder content + content_enc, so the
+      // plaintext-content match above never hits them: dedup those by created_at,
+      // comparing the decrypted content_enc when possible
+      const sensIncoming = chunk.filter((n) => n.is_sensitive === true);
+      const sensByTime = new Map<string, { content: string; content_enc: string | null }[]>();
+      if (sensIncoming.length > 0) {
+        const ph2 = sensIncoming.map(() => "?").join(",");
+        const sensExisting = await env.DB.prepare(
+          `SELECT content, content_enc, created_at FROM notes WHERE user_id = ? AND is_sensitive = 1 AND created_at IN (${ph2})`
+        )
+          .bind(userId, ...sensIncoming.map((n) => n.created_at))
+          .all<{ content: string; content_enc: string | null; created_at: string }>();
+        for (const r of sensExisting.results ?? []) {
+          const list = sensByTime.get(r.created_at) ?? [];
+          list.push(r);
+          sensByTime.set(r.created_at, list);
+        }
+      }
+      const isSensitiveDup = async (n: BackupNote): Promise<boolean> => {
+        for (const r of sensByTime.get(n.created_at) ?? []) {
+          if (r.content === n.content) return true; // redacted placeholder round-trip
+          if (r.content_enc && env.SUINIAN_ENC_KEY) {
+            const plain = await decryptContent(env.SUINIAN_ENC_KEY, r.content_enc);
+            if (plain === null || plain === n.content) return true;
+          } else if (r.content === ENC_PLACEHOLDER || r.content === SENSITIVE_EXPORT_PLACEHOLDER) {
+            // existing row's plaintext is unrecoverable: same second + sensitive = duplicate
+            return true;
+          }
+        }
+        return false;
+      };
       const insert = env.DB.prepare(
         `INSERT INTO notes (id, user_id, source, raw_type, content, url, url_title, url_summary, url_titles,
            category, tags, title, is_sensitive, content_enc, todo_due, todo_done, done_at, amount, currency,
@@ -372,12 +403,17 @@ export async function restoreBackup(
       const stmts: D1PreparedStatement[] = [];
       for (const n of chunk) {
         const key = `${n.created_at}\u0000${n.content}`;
-        if (seen.has(key)) {
+        if (seen.has(key) || (n.is_sensitive === true && (await isSensitiveDup(n)))) {
           stats.notes_skipped++;
           for (const _a of n.attachments ?? []) stats.media_skipped++;
           continue;
         }
         seen.add(key);
+        if (n.is_sensitive === true) {
+          const list = sensByTime.get(n.created_at) ?? [];
+          list.push({ content: n.content, content_enc: null });
+          sensByTime.set(n.created_at, list);
+        }
         const newId = crypto.randomUUID();
         if (typeof n.id === "string") idMap.set(n.id, newId);
         if (n.category === "idea") ideaIds.push(newId);

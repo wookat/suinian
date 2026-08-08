@@ -71,6 +71,7 @@ function fakeDb(opts: {
   threads?: Record<string, unknown>[];
   attachments?: Record<string, unknown>[];
   existing?: { content: string; created_at: string }[];
+  sensExisting?: { content: string; content_enc: string | null; created_at: string }[];
   inserted?: Recorded[];
 }) {
   const inserted = opts.inserted ?? [];
@@ -84,6 +85,7 @@ function fakeDb(opts: {
           return null;
         },
         async all() {
+          if (sql.includes("FROM notes") && sql.includes("is_sensitive = 1")) return { results: opts.sensExisting ?? [] };
           if (sql.includes("FROM notes") && sql.includes("SELECT content")) return { results: opts.existing ?? [] };
           if (sql.includes("FROM notes")) return { results: opts.notes ?? [] };
           if (sql.includes("FROM threads")) return { results: opts.threads ?? [] };
@@ -285,6 +287,53 @@ describe("restoreBackup", () => {
     expect(result).toMatchObject({ notes_total: 1, notes_imported: 0, notes_skipped: 1, media_imported: 0 });
     expect(inserted.filter((r) => r.sql.includes("INSERT INTO notes"))).toHaveLength(0);
     expect(store.size).toBe(0);
+  });
+
+  it("skips duplicate sensitive notes (placeholder-stored) on re-import", async () => {
+    const inserted: Recorded[] = [];
+    const env = {
+      DB: fakeDb({
+        inserted,
+        sensExisting: [{ content: "[加密内容]", content_enc: null, created_at: "2026-08-02 00:00:00" }],
+      }),
+      DEEPSEEK_API_KEY: "",
+      DEEPSEEK_BASE_URL: "https://api.deepseek.com",
+    } as unknown as Env;
+    const zip = makeBackupZip([
+      {
+        id: "old2",
+        content: "服务器密码 abc",
+        is_sensitive: true,
+        tags: [],
+        created_at: "2026-08-02 00:00:00",
+        updated_at: "2026-08-02 00:00:00",
+        attachments: [],
+      },
+    ]);
+    const result = await restoreBackup(env, "u9", streamOf(zip), () => undefined);
+    expect(result).toMatchObject({ notes_total: 1, notes_imported: 0, notes_skipped: 1 });
+    expect(inserted.filter((r) => r.sql.includes("INSERT INTO notes"))).toHaveLength(0);
+  });
+
+  it("dedups identical sensitive notes within one zip", async () => {
+    const inserted: Recorded[] = [];
+    const env = {
+      DB: fakeDb({ inserted }),
+      DEEPSEEK_API_KEY: "",
+      DEEPSEEK_BASE_URL: "https://api.deepseek.com",
+    } as unknown as Env;
+    const sens = {
+      id: "old2",
+      content: "服务器密码 abc",
+      is_sensitive: true,
+      tags: [],
+      created_at: "2026-08-02 00:00:00",
+      updated_at: "2026-08-02 00:00:00",
+      attachments: [],
+    };
+    const zip = makeBackupZip([sens, { ...sens, id: "old3" }]);
+    const result = await restoreBackup(env, "u9", streamOf(zip), () => undefined);
+    expect(result).toMatchObject({ notes_total: 2, notes_imported: 1, notes_skipped: 1 });
   });
 
   it("rejects a zip without notes.json", async () => {
