@@ -15,6 +15,11 @@ export type Env = {
   CORS_ALLOWED_ORIGINS?: string;
   /** Secret token guarding /api/admin/* maintenance endpoints; unset = endpoints disabled. */
   ADMIN_TOKEN?: string;
+  /** VAPID keypair for Web Push (base64url); unset = push endpoints disabled. */
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  /** VAPID subject (mailto: or https:), defaults to mailto:admin@zalize.com. */
+  VAPID_SUBJECT?: string;
 };
 
 export interface ThreadRow {

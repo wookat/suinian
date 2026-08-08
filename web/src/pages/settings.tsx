@@ -14,6 +14,8 @@ import {
   Download,
   LogOut,
   Upload,
+  Bell,
+  BellOff,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -39,9 +41,12 @@ import {
   type ImportResult,
   type ImportFailedItem,
   type RestoreStats,
+  getPushConfig,
+  sendTestPush,
   type PushPreferences,
   type TestConnectionResult,
 } from "@/lib/api"
+import { detectPushSupport, currentSubscription, enablePush, disablePush } from "@/lib/push"
 import type { TagCount } from "@/lib/types"
 import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
 import { loadTheme, setTheme, type ThemeMode } from "@/lib/theme"
@@ -303,6 +308,136 @@ function TagManagerCard() {
   )
 }
 
+/** 浏览器通知：Web Push 订阅开关 + 测试推送（待办到点提醒、每日回顾推送都走这个通道） */
+function BrowserNotificationsCard() {
+  const support = detectPushSupport()
+  const [state, setState] = useState<"loading" | "off" | "on" | "server-off">("loading")
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const settingsVersion = useSettingsVersion()
+
+  useEffect(() => {
+    let cancelled = false
+    const s = loadSettings()
+    if (s.useMock || !s.apiBaseUrl || !s.apiToken || support !== "ok") return
+    void (async () => {
+      try {
+        const [config, sub] = await Promise.all([getPushConfig(), currentSubscription()])
+        if (cancelled) return
+        if (!config.enabled) {
+          setState("server-off")
+          return
+        }
+        const subscribed = !!sub && config.subscriptions.some((x) => x.endpoint === sub.endpoint)
+        setState(subscribed && Notification.permission === "granted" ? "on" : "off")
+      } catch {
+        if (!cancelled) setState("off")
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [settingsVersion, support])
+
+  const s = loadSettings()
+  if (s.useMock || !s.apiBaseUrl || !s.apiToken) return null
+
+  async function run(fn: () => Promise<void>) {
+    setBusy(true)
+    setMsg(null)
+    try {
+      await fn()
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className="space-y-3 p-4">
+      <div>
+        <h2 className="text-sm font-medium">浏览器通知</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          开启后，待办到点提醒和每日回顾会直接推到这台设备的系统通知（支持多设备各自开启）
+        </p>
+      </div>
+      {support === "ios-needs-install" ? (
+        <p className="text-sm text-muted-foreground">
+          iOS Safari 需先把碎念「添加到主屏幕」安装为 App（需 iOS 16.4+），再从主屏幕打开后在此开启通知
+        </p>
+      ) : support === "unsupported" ? (
+        <p className="text-sm text-muted-foreground">当前浏览器不支持 Web Push 通知</p>
+      ) : state === "server-off" ? (
+        <p className="text-sm text-muted-foreground">服务端未配置推送（VAPID 密钥），自部署请参考 docs/push.md</p>
+      ) : state === "loading" ? (
+        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" /> 加载中…
+        </p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          {state === "on" ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  void run(async () => {
+                    await disablePush()
+                    setState("off")
+                    setMsg({ ok: true, text: "已关闭本设备的浏览器通知" })
+                  })
+                }
+              >
+                <BellOff /> 关闭通知
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  void run(async () => {
+                    await sendTestPush()
+                    setMsg({ ok: true, text: "测试推送已发出，稍等几秒应弹出系统通知" })
+                  })
+                }
+              >
+                {busy ? <Loader2 className="animate-spin" /> : <Bell />} 发送测试推送
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  await enablePush()
+                  setState("on")
+                  setMsg({ ok: true, text: "已开启！可点「发送测试推送」验证" })
+                })
+              }
+            >
+              {busy ? <Loader2 className="animate-spin" /> : <Bell />} 开启浏览器通知
+            </Button>
+          )}
+        </div>
+      )}
+      {msg && (
+        <p
+          className={cn(
+            "flex items-center gap-1.5 text-sm",
+            msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+          )}
+        >
+          {msg.ok ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
+          {msg.text}
+        </p>
+      )}
+    </Card>
+  )
+}
+
 /** 推送偏好：每日回顾 / 待办提醒各自可开关（默认开，存服务端 user preferences） */
 function PushPreferencesCard() {
   const [prefs, setPrefs] = useState<PushPreferences | null>(null)
@@ -347,15 +482,15 @@ function PushPreferencesCard() {
   }
 
   const OPTIONS: { key: keyof PushPreferences; label: string; hint: string }[] = [
-    { key: "daily_review_push", label: "每日回顾推送", hint: "每天早上把「今日回顾」推到微信" },
-    { key: "todo_reminder_push", label: "待办提醒推送", hint: "上午把当天到期/过期的待办清单推到微信" },
+    { key: "daily_review_push", label: "每日回顾推送", hint: "每天早上把「今日回顾」推到浏览器通知/微信" },
+    { key: "todo_reminder_push", label: "待办提醒推送", hint: "待办到点推浏览器通知；微信上午推当天清单" },
   ]
 
   return (
     <Card className="space-y-3 p-4">
       <div>
         <h2 className="text-sm font-medium">推送偏好</h2>
-        <p className="mt-1 text-xs text-muted-foreground">控制微信 bot 的主动推送，默认全开；关闭后当天即生效</p>
+        <p className="mt-1 text-xs text-muted-foreground">控制浏览器通知与微信 bot 的主动推送，默认全开；关闭后当天即生效</p>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
       {prefs === null && !error ? (
@@ -881,6 +1016,8 @@ export function SettingsPage() {
           </p>
         )}
       </Card>
+
+      <BrowserNotificationsCard />
 
       <PushPreferencesCard />
 

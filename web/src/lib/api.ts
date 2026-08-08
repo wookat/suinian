@@ -635,6 +635,41 @@ export async function updatePreferences(patch: Partial<PushPreferences>): Promis
   })
 }
 
+export interface PushConfig {
+  enabled: boolean
+  vapid_public_key: string | null
+  subscriptions: { endpoint: string; tz: string | null; ua: string | null; created_at: string }[]
+}
+
+/** Web Push：服务端 VAPID 公钥 + 当前账号的订阅列表 */
+export async function getPushConfig(): Promise<PushConfig> {
+  return realFetch<PushConfig>("/api/push/config")
+}
+
+export async function subscribePush(payload: {
+  endpoint: string
+  keys: { p256dh: string; auth: string }
+  tz: string | null
+  ua: string | null
+}): Promise<void> {
+  await realFetch<{ ok: boolean }>("/api/push/subscribe", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function unsubscribePush(endpoint: string): Promise<void> {
+  await realFetch<{ ok: boolean }>("/api/push/unsubscribe", {
+    method: "POST",
+    body: JSON.stringify({ endpoint }),
+  })
+}
+
+export async function sendTestPush(): Promise<number> {
+  const res = await realFetch<{ ok: boolean; delivered: number }>("/api/push/test", { method: "POST" })
+  return res.delivered
+}
+
 export interface AuthResult {
   user: { id: string; name: string }
   api_token: string

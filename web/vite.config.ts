@@ -12,6 +12,7 @@ export default defineConfig({
       registerType: 'prompt',
       includeAssets: ['favicon.svg'],
       workbox: {
+        importScripts: ['push-sw.js'],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         navigateFallbackDenylist: [/^\/api\//],
