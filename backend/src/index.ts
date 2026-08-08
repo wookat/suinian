@@ -39,6 +39,7 @@ import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
 import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse } from "./ask";
+import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import { PIPELINE_TIMEOUT_MS, SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 
 type Vars = { userId: string };
@@ -1695,6 +1696,64 @@ app.patch("/api/preferences", async (c) => {
   return c.json(next);
 });
 
+// ---- Web Push: subscribe / unsubscribe / test ----
+// GET /api/push/config — VAPID public key (empty = push not configured server-side)
+app.get("/api/push/config", async (c) => {
+  const subs = await userSubscriptions(c.env, c.get("userId"));
+  return c.json({
+    enabled: pushConfigured(c.env),
+    vapid_public_key: c.env.VAPID_PUBLIC_KEY ?? null,
+    subscriptions: subs.map((s) => ({ endpoint: s.endpoint, tz: s.tz, ua: s.ua, created_at: s.created_at })),
+  });
+});
+
+// POST /api/push/subscribe — store (or refresh) one browser subscription; multi-device OK
+app.post("/api/push/subscribe", async (c) => {
+  if (!pushConfigured(c.env)) return c.json({ error: "服务端未配置推送" }, 503);
+  const body = await c.req
+    .json<{ endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown }; tz?: unknown; ua?: unknown }>()
+    .catch(() => null);
+  const endpoint = typeof body?.endpoint === "string" ? body.endpoint : "";
+  const p256dh = typeof body?.keys?.p256dh === "string" ? body.keys.p256dh : "";
+  const auth = typeof body?.keys?.auth === "string" ? body.keys.auth : "";
+  if (!endpoint.startsWith("https://") || endpoint.length > 1024 || !p256dh || !auth)
+    return c.json({ error: "订阅数据不完整" }, 400);
+  const tz = typeof body?.tz === "string" && body.tz.length <= 64 ? body.tz : null;
+  const ua = typeof body?.ua === "string" ? body.ua.slice(0, 120) : null;
+  await c.env.DB.prepare(
+    `INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, tz, ua) VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh,
+       auth = excluded.auth, tz = excluded.tz, ua = excluded.ua`
+  )
+    .bind(crypto.randomUUID(), c.get("userId"), endpoint, p256dh, auth, tz, ua)
+    .run();
+  return c.json({ ok: true });
+});
+
+// POST /api/push/unsubscribe — remove this browser's subscription
+app.post("/api/push/unsubscribe", async (c) => {
+  const body = await c.req.json<{ endpoint?: unknown }>().catch(() => null);
+  const endpoint = typeof body?.endpoint === "string" ? body.endpoint : "";
+  if (!endpoint) return c.json({ error: "缺少 endpoint" }, 400);
+  await c.env.DB.prepare("DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?")
+    .bind(c.get("userId"), endpoint)
+    .run();
+  return c.json({ ok: true });
+});
+
+// POST /api/push/test — send a test notification to all of the caller's subscriptions
+app.post("/api/push/test", async (c) => {
+  if (!pushConfigured(c.env)) return c.json({ error: "服务端未配置推送" }, 503);
+  const delivered = await sendPushToUser(c.env, c.get("userId"), {
+    title: "🔔 碎念测试推送",
+    body: "看到这条说明浏览器通知已就绪",
+    url: "/#/settings",
+    tag: "test",
+  });
+  if (delivered === 0) return c.json({ error: "没有可用订阅或推送失败，请先在本设备开启通知" }, 400);
+  return c.json({ ok: true, delivered });
+});
+
 // ---- GET /api/todos/today ----
 // 当天（上海时区）到期 + 已过期的未完成待办，供 bridge 上午推送清单
 app.get("/api/todos/today", async (c) => {
@@ -1970,6 +2029,9 @@ export default {
       ctx.waitUntil(backfillGraphExtracts(env));
       // hard-delete soft-deleted notes past their undo window (attachments/vectors/graph too)
       ctx.waitUntil(purgeExpiredSoftDeletes(env, ctx));
+      // web push: todo due reminders (at most once per todo) + daily review push (once per user per local day)
+      ctx.waitUntil(sweepTodoReminders(env));
+      ctx.waitUntil(sweepDailyReviewPush(env));
     } else {
       // daily thread title/summary refresh + daily review generation
       ctx.waitUntil(refreshThreads(env));
