@@ -95,7 +95,8 @@ export type QuestionCategory =
   | "比较汇总"
   | "否定"
   | "无答案"
-  | "敏感隔离";
+  | "敏感隔离"
+  | "英文提问";
 
 export interface EvalQuestion {
   id: string;
@@ -171,4 +172,7 @@ export const QUESTIONS: EvalQuestion[] = [
   { id: "q26", category: "口语指代", question: "之前那个副业相关的节目构思是啥来着", expectAny: ["nz4"] },
   { id: "q27", category: "时间限定", question: "最近几天收藏的那个咖啡视频讲什么", expectAny: ["nz19"], holdout: true },
   { id: "q28", category: "比较汇总", question: "为了咖啡馆这事我都做了哪些准备", expectAny: ["nz12", "nz18", "cafe3", "img1"], expectAll: ["cafe3"], holdout: true },
+  // —— 英文提问（笔记是中文，需双语关键词抽取才能 LIKE 命中） ——
+  { id: "q29", category: "英文提问", question: "What is my latest plan for the coffee shop idea?", expectAny: ["cafe3", "nz18"] },
+  { id: "q30", category: "英文提问", question: "How is my running plan going?", expectAny: ["fit1", "fit2"] },
 ];

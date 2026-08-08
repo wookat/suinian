@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { unzipSync, strFromU8, zipSync, strToU8 } from "fflate";
 import { buildBackupZip, restoreBackup, BACKUP_FORMAT, type BackupNote, type BackupManifest } from "../src/backup";
 import { SENSITIVE_EXPORT_PLACEHOLDER } from "../src/constants";
+import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "../src/crypto";
 import type { Env } from "../src/types";
 
 const NOTE = {
@@ -350,6 +351,70 @@ describe("restoreBackup", () => {
     const zip = zipSync({ "readme.txt": strToU8("hi") });
     const result = await restoreBackup(env, "u9", streamOf(zip), () => undefined);
     expect(result).toMatchObject({ status: 400 });
+  });
+
+  it("sensitive roundtrip (include_sensitive=true): plaintext in zip, re-encrypted at rest on restore", async () => {
+    const key = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+    const contentEnc = await encryptContent(key, "服务器密码 abc");
+    const srcEnv = {
+      DB: fakeDb({ notes: [{ ...SENSITIVE_NOTE, content: ENC_PLACEHOLDER, content_enc: contentEnc }] }),
+      SUINIAN_ENC_KEY: key,
+      DEEPSEEK_API_KEY: "",
+      DEEPSEEK_BASE_URL: "https://api.deepseek.com",
+    } as unknown as Env;
+    const entries = await collectZip(srcEnv, true);
+    const notes = JSON.parse(strFromU8(entries.get("notes.json")!)) as BackupNote[];
+    expect(notes[0].content).toBe("服务器密码 abc");
+    expect(notes[0].is_sensitive).toBe(true);
+
+    const inserted: Recorded[] = [];
+    const dstEnv = {
+      DB: fakeDb({ inserted }),
+      SUINIAN_ENC_KEY: key,
+      DEEPSEEK_API_KEY: "",
+      DEEPSEEK_BASE_URL: "https://api.deepseek.com",
+    } as unknown as Env;
+    const zipBytes = zipSync(Object.fromEntries([...entries.entries()]));
+    const result = await restoreBackup(dstEnv, "u2", streamOf(zipBytes), () => undefined);
+    expect(result).toMatchObject({ notes_total: 1, notes_imported: 1 });
+    const ins = inserted.find((r) => r.sql.includes("INSERT INTO notes"))!;
+    expect(ins.binds[4]).toBe(ENC_PLACEHOLDER); // content never stored in plaintext
+    expect(ins.binds[12]).toBe(1); // is_sensitive kept
+    const enc = ins.binds[13] as string;
+    expect(enc).toBeTruthy();
+    expect(await decryptContent(key, enc)).toBe("服务器密码 abc"); // plaintext recoverable
+  });
+
+  it("sensitive roundtrip (default redacted): placeholder in zip, no plaintext anywhere", async () => {
+    const key = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+    const contentEnc = await encryptContent(key, "服务器密码 abc");
+    const srcEnv = {
+      DB: fakeDb({ notes: [{ ...SENSITIVE_NOTE, content: ENC_PLACEHOLDER, content_enc: contentEnc }] }),
+      SUINIAN_ENC_KEY: key,
+      DEEPSEEK_API_KEY: "",
+      DEEPSEEK_BASE_URL: "https://api.deepseek.com",
+    } as unknown as Env;
+    const entries = await collectZip(srcEnv, false);
+    for (const data of entries.values()) {
+      expect(strFromU8(data)).not.toContain("服务器密码 abc");
+    }
+    const notes = JSON.parse(strFromU8(entries.get("notes.json")!)) as BackupNote[];
+    expect(notes[0].content).toBe(SENSITIVE_EXPORT_PLACEHOLDER);
+
+    const inserted: Recorded[] = [];
+    const dstEnv = {
+      DB: fakeDb({ inserted }),
+      SUINIAN_ENC_KEY: key,
+      DEEPSEEK_API_KEY: "",
+      DEEPSEEK_BASE_URL: "https://api.deepseek.com",
+    } as unknown as Env;
+    const zipBytes = zipSync(Object.fromEntries([...entries.entries()]));
+    const result = await restoreBackup(dstEnv, "u2", streamOf(zipBytes), () => undefined);
+    expect(result).toMatchObject({ notes_total: 1, notes_imported: 1 });
+    const ins = inserted.find((r) => r.sql.includes("INSERT INTO notes"))!;
+    expect(ins.binds[4]).toBe(SENSITIVE_EXPORT_PLACEHOLDER); // redacted stays redacted
+    expect(ins.binds[12]).toBe(1); // still flagged sensitive + isolated
+    expect(ins.binds[13]).toBeNull(); // nothing fake-encrypted
   });
 
   it("full roundtrip: export zip restores losslessly on a fresh account", async () => {

@@ -118,7 +118,7 @@ export function AuthPage() {
             id="auth-name"
             type="text"
             autoComplete="username"
-            placeholder="2-32 个字符（中英文、数字、._-）"
+            placeholder="2-32 个字符（中英文、数字、._-[]）"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
