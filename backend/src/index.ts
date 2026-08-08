@@ -973,7 +973,11 @@ app.post("/api/notes/batch", async (c) => {
       }
     })();
     c.executionCtx.waitUntil(run);
-    return c.body(readable, 200, { "content-type": "application/x-ndjson; charset=utf-8" });
+    return c.body(readable, 200, {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-transform",
+      "content-encoding": "identity",
+    });
   }
 
   const affected = await runBatchAction(c.env, userId, action, ids, opts);
@@ -1756,7 +1760,13 @@ app.post("/api/import", async (c) => {
       }
     })();
     c.executionCtx.waitUntil(run);
-    return c.body(readable, 201, { "content-type": "application/x-ndjson; charset=utf-8" });
+    return c.body(readable, 201, {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      // no-transform keeps CDN compression from buffering the whole stream,
+      // which would deliver every progress line at once when the import ends
+      "cache-control": "no-transform",
+      "content-encoding": "identity",
+    });
   }
 
   const result = await runImport(c.env, userId, source as ImportSource, items);
