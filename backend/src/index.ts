@@ -1236,7 +1236,8 @@ app.post("/api/ask", async (c) => {
         .slice(0, 8);
     }
   }
-  const conds: string[] = ["user_id = ?"];
+  // sensitive (encrypted) notes never enter the ask context — not even their titles
+  const conds: string[] = ["user_id = ?", "is_sensitive = 0"];
   const binds: unknown[] = [userId];
   if (terms.length > 0) {
     const ors = terms.map(() => "(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)");
@@ -1271,7 +1272,7 @@ app.post("/api/ask", async (c) => {
   let outOfRange: NoteRow[] = [];
   if (extraIds.length > 0) {
     const ph = extraIds.map(() => "?").join(",");
-    const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${ph})`)
+    const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND id IN (${ph})`)
       .bind(userId, ...extraIds)
       .all<NoteRow>();
     const byId = new Map((r.results ?? []).map((n) => [n.id, n]));
@@ -1299,7 +1300,7 @@ app.post("/api/ask", async (c) => {
     const missing = expansion.note_ids.filter((nid) => !notes.some((n) => n.id === nid));
     if (missing.length > 0) {
       const ph = missing.map(() => "?").join(",");
-      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${ph})`)
+      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND id IN (${ph})`)
         .bind(userId, ...missing)
         .all<NoteRow>();
       for (const n of r.results ?? []) {
@@ -1316,7 +1317,7 @@ app.post("/api/ask", async (c) => {
     let suggestions: NoteRow[] = [];
     if (near.length > 0) {
       const ph = near.map(() => "?").join(",");
-      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${ph})`)
+      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND id IN (${ph})`)
         .bind(userId, ...near.map((h) => h.note_id))
         .all<NoteRow>();
       const byId = new Map((r.results ?? []).map((n) => [n.id, n]));
