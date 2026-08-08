@@ -52,7 +52,7 @@ private val tabs = listOf(
     Tab("todos", "待办", Icons.Outlined.CheckCircle),
     Tab("ask", "问答", Icons.Outlined.AutoAwesome),
     Tab("threads", "线索", Icons.Outlined.AccountTree),
-    Tab("reports", "周报", Icons.Outlined.Description),
+    Tab("reports", "报告", Icons.Outlined.Description),
 )
 
 class MainActivity : ComponentActivity() {
@@ -146,7 +146,7 @@ fun SuinianNavHost(focusQuickNoteSignal: Int) {
                                 "todos" -> "待办"
                                 "ask" -> "问答"
                                 "threads" -> "思考线索"
-                                "reports" -> "每周报告"
+                                "reports" -> "思考报告"
                                 else -> "碎念"
                             },
                             fontWeight = FontWeight.SemiBold,
@@ -191,6 +191,14 @@ fun SuinianNavHost(focusQuickNoteSignal: Int) {
                 HomeScreen(
                     vm = vm,
                     focusQuickNoteSignal = focusQuickNoteSignal,
+                    onAsk = { question ->
+                        askVm.ask(question)
+                        navController.navigate("ask") {
+                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
                 )
             }
             composable("todos") {

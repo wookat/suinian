@@ -177,6 +177,40 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         execute(request("/api/notes/batch").post(body).build(), BatchResponse.serializer())
     }
 
+    /** POST /api/notes/batch（filter 形态）：服务端按当前筛选条件对全部匹配笔记执行，不限已加载项 */
+    suspend fun batchNotesByFilter(
+        action: String,
+        category: String? = null,
+        q: String? = null,
+        tags: List<String>? = null,
+        setCategory: String? = null,
+    ): BatchResponse = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("action", action)
+            put("filter", buildJsonObject {
+                if (!category.isNullOrBlank()) put("category", category)
+                if (!q.isNullOrBlank()) put("q", q)
+            })
+            if (tags != null) putJsonArray("tags") { tags.forEach { add(JsonPrimitive(it)) } }
+            if (setCategory != null) put("category", setCategory)
+        }.toString().toRequestBody(jsonMedia)
+        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val resp = try {
+            client60.newCall(request("/api/notes/batch").post(body).build()).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use {
+            val text = it.body?.string().orEmpty()
+            if (!it.isSuccessful) throw httpError(it.code, text)
+            try {
+                json.decodeFromString(BatchResponse.serializer(), text)
+            } catch (e: Exception) {
+                throw ApiException("服务器返回了无法识别的数据", e)
+            }
+        }
+    }
+
     /** GET /api/tags：全部标签及使用次数 */
     suspend fun listTags(): List<TagCount> = withContext(Dispatchers.IO) {
         execute(request("/api/tags").get().build(), TagsPage.serializer()).tags
@@ -212,9 +246,13 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         execute(request("/api/review/today").get().build(), DailyReviewResponse.serializer())
     }
 
-    /** POST /api/reports/generate：手动生成周报（week=this|last） */
-    suspend fun generateReport(week: String = "this"): Report = withContext(Dispatchers.IO) {
-        val body = buildJsonObject { put("week", week) }.toString().toRequestBody(jsonMedia)
+    /** POST /api/reports/generate：手动生成周报/月报（which=this|last，period=week|month） */
+    suspend fun generateReport(which: String = "this", period: String = "week"): Report = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("week", which)
+            put("which", which)
+            put("period", period)
+        }.toString().toRequestBody(jsonMedia)
         val client90 = client.newBuilder().readTimeout(90, TimeUnit.SECONDS).build()
         val resp = try {
             client90.newCall(request("/api/reports/generate").post(body).build()).execute()

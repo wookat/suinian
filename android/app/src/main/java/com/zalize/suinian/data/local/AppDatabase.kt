@@ -10,6 +10,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /** 离线/失败待重试的 note */
@@ -20,6 +22,10 @@ data class PendingNote(
     val rawType: String,
     val content: String,
     val url: String? = null,
+    /** 内联指令 #标签：JSON 数组字符串，重试时原样携带 */
+    val tagsJson: String? = null,
+    /** 内联指令 !原样保存：重试时仍跳过 AI 分拣 */
+    val skipTriage: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
 )
 
@@ -38,17 +44,24 @@ interface PendingNoteDao {
     suspend fun delete(note: PendingNote)
 }
 
-@Database(entities = [PendingNote::class], version = 1, exportSchema = false)
+@Database(entities = [PendingNote::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun pendingNoteDao(): PendingNoteDao
 
     companion object {
         @Volatile private var instance: AppDatabase? = null
 
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE pending_notes ADD COLUMN tagsJson TEXT")
+                db.execSQL("ALTER TABLE pending_notes ADD COLUMN skipTriage INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, AppDatabase::class.java, "suinian.db"
-            ).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2).build().also { instance = it }
         }
     }
 }

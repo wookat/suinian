@@ -67,6 +67,8 @@ private val categories = listOf(
     "todo" to "待办",
     "collect" to "收藏",
     "data" to "资料",
+    "expense" to "支出",
+    "income" to "收入",
 )
 
 fun categoryLabel(category: String?): String {
@@ -143,6 +145,26 @@ fun formatDue(iso: String): String = try {
     else zoned.format(DateTimeFormatter.ofPattern("MM-dd"))
 } catch (_: Exception) {
     iso.take(16).replace("T", " ")
+}
+
+private val CURRENCY_SYMBOL = mapOf(
+    "CNY" to "¥",
+    "USD" to "$",
+    "EUR" to "€",
+    "GBP" to "£",
+    "JPY" to "JP¥",
+    "HKD" to "HK$",
+)
+
+/** 金额展示（对齐 Web formatAmount）：已知币种用符号，否则「数值 币种码」 */
+fun formatAmount(amount: Double, currency: String): String {
+    val sym = CURRENCY_SYMBOL[currency]
+    val num = if (amount == Math.floor(amount) && !amount.isInfinite()) {
+        amount.toLong().toString()
+    } else {
+        "%.2f".format(amount)
+    }
+    return if (sym != null) "$sym$num" else "$num $currency"
 }
 
 private const val MAX_LINK_CARDS = 3
@@ -357,6 +379,34 @@ fun NoteCard(
                 }
             } else {
                 Text(note.content, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            // 收支记账：金额/币种（支出负号、收入正号）+ 商户/用途
+            if ((note.category == "expense" || note.category == "income") && !note.isSensitive) {
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val income = note.category == "income"
+                    val amountText = note.amount?.let {
+                        (if (income) "+" else "-") + formatAmount(it, note.currency ?: "CNY")
+                    } ?: "金额待定"
+                    Text(
+                        amountText,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (income) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
+                    )
+                    val merchant = note.meta?.financeMerchant?.takeIf { it.isNotBlank() }
+                    if (merchant != null) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            merchant,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
 
             // 待办截止时间

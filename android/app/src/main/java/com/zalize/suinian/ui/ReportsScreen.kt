@@ -27,6 +27,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +63,8 @@ data class ReportsUiState(
     val detail: Report? = null,
     val generating: Boolean = false,
     val generateError: String? = null,
+    /** 周/月切换：week|month */
+    val periodTab: String = "week",
 )
 
 class ReportsViewModel(app: Application) : AndroidViewModel(app) {
@@ -86,13 +89,17 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 手动生成本周报告（POST /api/reports/generate week=this），成功后直接打开详情 */
+    fun setPeriodTab(period: String) {
+        _ui.value = _ui.value.copy(periodTab = period, generateError = null)
+    }
+
+    /** 手动生成本周/本月报告（POST /api/reports/generate period=week|month），成功后直接打开详情 */
     fun generate(onGenerated: (String) -> Unit) {
         if (_ui.value.generating) return
         _ui.value = _ui.value.copy(generating = true, generateError = null)
         viewModelScope.launch {
             try {
-                val report = repo.generateReport("this")
+                val report = repo.generateReport("this", _ui.value.periodTab)
                 _ui.value = _ui.value.copy(generating = false)
                 refresh()
                 onGenerated(report.id)
@@ -126,6 +133,18 @@ internal fun weekLabel(weekStart: String): String = try {
     weekStart
 }
 
+/** 报告标题：周报「x月x日那周」，月报「x年x月」 */
+internal fun reportLabel(period: String, weekStart: String): String = if (period == "month") {
+    try {
+        val d = LocalDate.parse(weekStart.take(10))
+        "${d.year} 年 ${d.monthValue} 月"
+    } catch (_: Exception) {
+        weekStart
+    }
+} else {
+    weekLabel(weekStart)
+}
+
 @Composable
 fun ReportsScreen(
     modifier: Modifier = Modifier,
@@ -133,13 +152,33 @@ fun ReportsScreen(
     onOpenReport: (String) -> Unit,
 ) {
     val ui by vm.ui.collectAsState()
+    val isMonth = ui.periodTab == "month"
+    val filtered = ui.reports.filter { it.period == ui.periodTab }
+
+    val periodTabs: @Composable () -> Unit = {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = !isMonth,
+                onClick = { vm.setPeriodTab("week") },
+                label = { Text("周报") },
+            )
+            FilterChip(
+                selected = isMonth,
+                onClick = { vm.setPeriodTab("month") },
+                label = { Text("月报") },
+            )
+        }
+    }
 
     val generateButton: @Composable () -> Unit = {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Button(onClick = { vm.generate(onOpenReport) }, enabled = !ui.generating) {
                 Icon(Icons.Outlined.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(if (ui.generating) "生成中，约需半分钟…" else "生成本周报告")
+                Text(
+                    if (ui.generating) "生成中，约需半分钟…"
+                    else if (isMonth) "生成本月报告" else "生成本周报告"
+                )
             }
             ui.generateError?.let {
                 Spacer(Modifier.height(4.dp))
@@ -163,13 +202,16 @@ fun ReportsScreen(
             Spacer(Modifier.height(8.dp))
             AssistChip(onClick = { vm.refresh() }, label = { Text("重试") })
         }
-        ui.reports.isEmpty() -> Column(
+        filtered.isEmpty() -> Column(
             modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
+            periodTabs()
+            Spacer(Modifier.height(12.dp))
             Text(
-                "还没有周报\n每周一自动生成本周思考报告\n也可以随时手动生成",
+                if (isMonth) "还没有月报\n每月 1 日自动生成上月思考报告\n也可以随时手动生成"
+                else "还没有周报\n每周一自动生成本周思考报告\n也可以随时手动生成",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(12.dp))
@@ -179,12 +221,17 @@ fun ReportsScreen(
             modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            item(key = "tabs") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    periodTabs()
+                }
+            }
             item(key = "generate") {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                     generateButton()
                 }
             }
-            items(ui.reports, key = { it.id }) { report ->
+            items(filtered, key = { it.id }) { report ->
                 Card(
                     modifier = Modifier.fillMaxWidth().clickable { onOpenReport(report.id) },
                     shape = RoundedCornerShape(16.dp),
@@ -205,12 +252,12 @@ fun ReportsScreen(
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text(
-                                weekLabel(report.weekStart),
+                                reportLabel(report.period, report.weekStart),
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.SemiBold,
                             )
                             Text(
-                                "周报 · ${report.weekStart.take(10)}",
+                                (if (report.period == "month") "月报" else "周报") + " · ${report.weekStart.take(10)}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -237,7 +284,7 @@ fun ReportDetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(ui.detail?.let { weekLabel(it.weekStart) } ?: "周报") },
+                title = { Text(ui.detail?.let { reportLabel(it.period, it.weekStart) } ?: "报告") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")

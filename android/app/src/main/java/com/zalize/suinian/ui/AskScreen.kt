@@ -104,6 +104,7 @@ fun AskScreen(vm: AskViewModel, modifier: Modifier = Modifier) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
+            TextButton(onClick = { vm.showHelp() }) { Text("你能做什么？") }
             if (ui.messages.isNotEmpty()) {
                 IconButton(onClick = { confirmClear = true }) {
                     Icon(
@@ -138,6 +139,8 @@ fun AskScreen(vm: AskViewModel, modifier: Modifier = Modifier) {
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        Spacer(Modifier.height(8.dp))
+                        TextButton(onClick = { vm.showHelp() }) { Text("你能做什么？") }
                     }
                 }
             }
