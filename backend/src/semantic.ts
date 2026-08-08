@@ -62,6 +62,18 @@ export async function deleteNoteEmbedding(env: Env, noteId: string): Promise<voi
   }
 }
 
+/** Remove many notes' vectors from D1 (and Vectorize when configured) in one go. Never throws. */
+export async function deleteNoteEmbeddings(env: Env, noteIds: string[]): Promise<void> {
+  if (noteIds.length === 0) return;
+  try {
+    const ph = noteIds.map(() => "?").join(",");
+    await env.DB.prepare(`DELETE FROM note_embeddings WHERE note_id IN (${ph})`).bind(...noteIds).run();
+    if (env.VECTORIZE) await env.VECTORIZE.deleteByIds(noteIds);
+  } catch (err) {
+    console.error(`semantic: batch delete embeddings failed (${noteIds.length} notes)`, err);
+  }
+}
+
 export type SemanticHit = { note_id: string; score: number };
 
 /**

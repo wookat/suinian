@@ -20,8 +20,8 @@ import {
 } from "./auth";
 import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports } from "./reports";
 import { getTodayReview, generateAllDailyReviews, readCronHeartbeats, shanghaiDate } from "./review";
-import { upsertNoteEmbedding, deleteNoteEmbedding, semanticRecall, backfillEmbeddings } from "./semantic";
-import { extractGraph, deleteNoteGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
+import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings } from "./semantic";
+import { extractGraph, deleteNoteGraph, deleteNotesGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
 import { deleteUserData } from "./account";
 import {
   parseMediaRequest,
@@ -761,23 +761,70 @@ async function deleteNoteRecord(
 
 /** Undo window before a soft-deleted note is hard-deleted by the cron sweep. */
 const SOFT_DELETE_RETENTION_MINUTES = 30;
-const PURGE_BATCH = 50;
+const PURGE_BATCH = 200;
+/** Wall-clock budget per cron run; keeps well under the 30s cron CPU/duration limits. */
+const PURGE_TIME_BUDGET_MS = 20_000;
 
-/** Hard-delete notes whose soft-delete window has expired, including derived data. */
-export async function purgeExpiredSoftDeletes(env: Env, ctx: ExecutionContext): Promise<number> {
-  const { results } = await env.DB.prepare(
-    `SELECT id, user_id FROM notes WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', ?) LIMIT ${PURGE_BATCH}`
-  )
-    .bind(`-${SOFT_DELETE_RETENTION_MINUTES} minutes`)
-    .all<{ id: string; user_id: string }>();
-  const rows = results ?? [];
+/** Bulk-delete a batch of notes and their derived data with chunked IN statements. */
+async function purgeNotesBatch(
+  env: Env,
+  ids: string[],
+  waitUntil: (p: Promise<unknown>) => void
+): Promise<void> {
+  for (const chunk of chunkIds(ids)) {
+    const ph = chunk.map(() => "?").join(",");
+    const atts = await env.DB.prepare(`SELECT r2_key FROM attachments WHERE note_id IN (${ph})`)
+      .bind(...chunk)
+      .all<{ r2_key: string }>();
+    if ((atts.results ?? []).length > 0) {
+      await env.DB.prepare(`DELETE FROM attachments WHERE note_id IN (${ph})`).bind(...chunk).run();
+      if (env.MEDIA) {
+        waitUntil(
+          env.MEDIA.delete(atts.results.map((a) => a.r2_key)).catch((e) =>
+            console.error("r2 delete failed", e)
+          )
+        );
+      }
+    }
+    await deleteNoteEmbeddings(env, chunk);
+    await deleteNotesGraph(env, chunk);
+    await env.DB.prepare(`DELETE FROM daily_reviews WHERE note_id IN (${ph})`).bind(...chunk).run();
+    await env.DB.prepare(`DELETE FROM notes WHERE id IN (${ph})`).bind(...chunk).run();
+  }
+}
+
+/**
+ * Hard-delete notes whose soft-delete window has expired, including derived
+ * data. Loops batches (oldest deletions first) until the backlog is drained or
+ * the time budget is spent, so mass soft-deletes clear within a few cron runs.
+ */
+export async function purgeExpiredSoftDeletes(
+  env: Env,
+  ctx: ExecutionContext,
+  timeBudgetMs = PURGE_TIME_BUDGET_MS
+): Promise<number> {
+  const started = Date.now();
+  let purged = 0;
   const users = new Set<string>();
-  for (const row of rows) {
-    await deleteNoteRecord(env, row.user_id, row.id, (p) => ctx.waitUntil(p));
-    users.add(row.user_id);
+  for (;;) {
+    const { results } = await env.DB.prepare(
+      `SELECT id, user_id FROM notes WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', ?) ORDER BY deleted_at ASC LIMIT ${PURGE_BATCH}`
+    )
+      .bind(`-${SOFT_DELETE_RETENTION_MINUTES} minutes`)
+      .all<{ id: string; user_id: string }>();
+    const rows = results ?? [];
+    if (rows.length === 0) break;
+    for (const row of rows) users.add(row.user_id);
+    await purgeNotesBatch(
+      env,
+      rows.map((r) => r.id),
+      (p) => ctx.waitUntil(p)
+    );
+    purged += rows.length;
+    if (rows.length < PURGE_BATCH || Date.now() - started >= timeBudgetMs) break;
   }
   for (const uid of users) await reconcileThreads(env, uid);
-  return rows.length;
+  return purged;
 }
 
 // ---- DELETE /api/notes/:id ----
@@ -829,21 +876,30 @@ function chunkIds<T>(arr: T[], size = 80): T[][] {
   return out;
 }
 
-/** Resolve a batch `filter` into the matching note ids (same semantics as GET /api/notes). */
+/**
+ * Resolve a batch `filter` into the matching note ids (same semantics as
+ * GET /api/notes), plus the total match count so callers can report how many
+ * matches remain beyond the BATCH_FILTER_MAX cap.
+ */
 export async function resolveBatchFilter(
   env: Env,
   userId: string,
   filter: { category?: unknown; tag?: unknown; q?: unknown; source?: unknown; from?: unknown; to?: unknown }
-): Promise<string[]> {
+): Promise<{ ids: string[]; total: number }> {
   const f = noteFilterConds(filter);
   const conds: string[] = ["user_id = ?", ...f.conds];
   const binds: unknown[] = [userId, ...f.binds];
+  const where = conds.join(" AND ");
+  const count = await env.DB.prepare(`SELECT COUNT(*) AS n FROM notes WHERE ${where}`)
+    .bind(...binds)
+    .first<{ n: number }>();
   const { results } = await env.DB.prepare(
-    `SELECT id FROM notes WHERE ${conds.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT ${BATCH_FILTER_MAX}`
+    `SELECT id FROM notes WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT ${BATCH_FILTER_MAX}`
   )
     .bind(...binds)
     .all<{ id: string }>();
-  return (results ?? []).map((r) => r.id);
+  const ids = (results ?? []).map((r) => r.id);
+  return { ids, total: count?.n ?? ids.length };
 }
 
 /** Run a batch action over id chunks, reporting progress after each chunk. Returns affected count. */
@@ -933,9 +989,13 @@ app.post("/api/notes/batch", async (c) => {
     return c.json({ error: "invalid action" }, 400);
   let ids = Array.isArray(body.ids) ? body.ids.filter((v): v is string => typeof v === "string") : [];
   const filter = body.filter && typeof body.filter === "object" ? (body.filter as Record<string, unknown>) : null;
+  // matches beyond the BATCH_FILTER_MAX cap; lets the UI say "N more remain"
+  let remaining = 0;
   if (ids.length === 0 && filter) {
-    ids = await resolveBatchFilter(c.env, userId, filter);
-    if (ids.length === 0) return c.json({ ok: true, affected: 0 });
+    const resolved = await resolveBatchFilter(c.env, userId, filter);
+    ids = resolved.ids;
+    remaining = Math.max(0, resolved.total - ids.length);
+    if (ids.length === 0) return c.json({ ok: true, affected: 0, remaining: 0 });
   } else {
     if (ids.length === 0) return c.json({ error: "ids or filter required" }, 400);
     if (ids.length > BATCH_MAX_IDS) return c.json({ error: `一次最多操作 ${BATCH_MAX_IDS} 条` }, 400);
@@ -964,7 +1024,7 @@ app.post("/api/notes/batch", async (c) => {
         const affected = await runBatchAction(c.env, userId, action, ids, opts, (done, total) =>
           void writeLine({ done, total })
         );
-        await writeLine({ ok: true, affected });
+        await writeLine(action === "delete" ? { ok: true, affected, remaining, ids } : { ok: true, affected, remaining });
       } catch (e) {
         console.error("batch stream failed", e);
         await writeLine({ error: e instanceof Error ? e.message : "批量操作失败" });
@@ -981,7 +1041,8 @@ app.post("/api/notes/batch", async (c) => {
   }
 
   const affected = await runBatchAction(c.env, userId, action, ids, opts);
-  return c.json({ ok: true, affected });
+  // delete responses echo the targeted ids so the client can offer undo (restore)
+  return c.json(action === "delete" ? { ok: true, affected, remaining, ids } : { ok: true, affected, remaining });
 });
 
 // ---- GET /api/tags ----

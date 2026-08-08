@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useState } from "react"
 import {
   Home,
   CheckSquare,
@@ -9,17 +9,19 @@ import {
   X,
 } from "lucide-react"
 import { TimelinePage } from "@/pages/timeline"
-import { TodosPage } from "@/pages/todos"
-import { ThreadsPage } from "@/pages/threads"
-import { ReportsPage } from "@/pages/reports"
-import { SettingsPage } from "@/pages/settings"
-import { AuthPage } from "@/pages/auth"
 import { Onboarding } from "@/components/onboarding"
 import { ReloadPrompt } from "@/components/reload-prompt"
 import { PageHeader } from "@/components/page-header"
 import { RightRail } from "@/components/right-rail"
 import { loadSettings, saveSettings, SETTINGS_CHANGED_EVENT } from "@/lib/settings"
 import { cn } from "@/lib/utils"
+
+// non-home pages are code-split: keeps the first-paint bundle to the timeline
+const TodosPage = lazy(() => import("@/pages/todos").then((m) => ({ default: m.TodosPage })))
+const ThreadsPage = lazy(() => import("@/pages/threads").then((m) => ({ default: m.ThreadsPage })))
+const ReportsPage = lazy(() => import("@/pages/reports").then((m) => ({ default: m.ReportsPage })))
+const SettingsPage = lazy(() => import("@/pages/settings").then((m) => ({ default: m.SettingsPage })))
+const AuthPage = lazy(() => import("@/pages/auth").then((m) => ({ default: m.AuthPage })))
 
 const ROUTES = [
   {
@@ -196,7 +198,9 @@ export default function App() {
             className="min-w-0 flex-1 space-y-5 animate-in fade-in duration-300 xl:max-w-3xl"
           >
             <PageHeader title={active.title} description={active.description} />
-            <Page />
+            <Suspense fallback={null}>
+              <Page />
+            </Suspense>
           </main>
           <aside className="hidden w-72 shrink-0 pt-1 xl:block">
             <div className="sticky top-6">

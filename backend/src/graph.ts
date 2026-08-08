@@ -307,6 +307,34 @@ export async function deleteNoteGraph(env: Env, noteId: string): Promise<void> {
   }
 }
 
+/**
+ * Batch variant of deleteNoteGraph: removes many notes' evidence with a single
+ * pass of chunk-wide statements plus one entity-count refresh per touched
+ * entity. Never throws.
+ */
+export async function deleteNotesGraph(env: Env, noteIds: string[]): Promise<void> {
+  if (noteIds.length === 0) return;
+  try {
+    const ph = noteIds.map(() => "?").join(",");
+    const { results } = await env.DB.prepare(
+      `SELECT DISTINCT dst_id AS id FROM edges WHERE note_id IN (${ph}) AND dst_type = 'entity'`
+    )
+      .bind(...noteIds)
+      .all<{ id: string }>();
+    await env.DB.prepare(`DELETE FROM edges WHERE note_id IN (${ph})`).bind(...noteIds).run();
+    for (const e of results ?? []) {
+      await refreshEntityNoteCount(env, e.id);
+    }
+    // drop orphan entities (no mentions left) and their remaining edges
+    await env.DB.prepare(
+      "DELETE FROM edges WHERE (src_type = 'entity' AND src_id IN (SELECT id FROM entities WHERE note_count = 0)) OR (dst_type = 'entity' AND dst_id IN (SELECT id FROM entities WHERE note_count = 0))"
+    ).run();
+    await env.DB.prepare("DELETE FROM entities WHERE note_count = 0").run();
+  } catch (err) {
+    console.error(`graph: batch delete failed (${noteIds.length} notes)`, err);
+  }
+}
+
 /** Delete all graph data for a user (account deletion). */
 export async function deleteUserGraph(env: Env, userId: string): Promise<void> {
   await env.DB.prepare("DELETE FROM edges WHERE user_id = ?").bind(userId).run();

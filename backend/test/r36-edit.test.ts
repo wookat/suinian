@@ -251,7 +251,7 @@ describe("POST /api/notes/batch", () => {
     expect(res.status).toBe(200);
     const lines = (await res.text()).trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
     expect(lines[0]).toEqual({ done: 0, total: 2 });
-    expect(lines[lines.length - 1]).toEqual({ ok: true, affected: 2 });
+    expect(lines[lines.length - 1]).toEqual({ ok: true, affected: 2, remaining: 0, ids: ["n1", "n2"] });
   });
 
   it("restore clears deleted_at for owned notes only", async () => {
