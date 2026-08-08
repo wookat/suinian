@@ -48,7 +48,7 @@ function fakeEnv(opts: { users: string[]; relaxedNotes: NoteRow[] }) {
           if (sql.startsWith("SELECT id FROM users")) {
             return { results: opts.users.map((id) => ({ id })) };
           }
-          if (sql.includes("created_at < datetime('now', '-3 days')")) {
+          if (sql.includes("created_at < datetime('now', '-1 day')")) {
             return { results: opts.relaxedNotes.slice(0, binds[binds.length - 1] as number) };
           }
           return { results: [] };

@@ -110,6 +110,8 @@ export interface Thread {
   summary: string | null
   note_count: number
   updated_at: string
+  /** 最新一条碎片的创建时间（列表接口返回） */
+  last_note_at?: string | null
 }
 
 export interface ThreadGraphEntity {

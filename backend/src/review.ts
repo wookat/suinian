@@ -76,12 +76,12 @@ async function revisitCandidates(env: Env, userId: string, exclude: string[], li
   return results ?? [];
 }
 
-/** 降级候选：任意 3 天前创建、有实质内容的非敏感笔记（不限分类） */
+/** 降级候选：任意 1 天前创建、有实质内容的非敏感笔记（不限分类），新账号也能尽快有回顾 */
 async function relaxedCandidates(env: Env, userId: string, limit: number): Promise<NoteRow[]> {
   const { results } = await env.DB.prepare(
     `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0
        AND length(content) >= 10
-       AND created_at < datetime('now', '-3 days')
+       AND created_at < datetime('now', '-1 day')
      ORDER BY RANDOM() LIMIT ?`
   )
     .bind(userId, limit)
