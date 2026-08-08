@@ -193,10 +193,11 @@ export function TimelinePage() {
 
   // 刷新后恢复未过期的撤销提示（删除→刷新→撤销仍可用）
   useEffect(() => {
-    let saved: { ids?: unknown; message?: unknown; expires?: unknown } | null = null
+    type PendingUndo = { ids?: unknown; message?: unknown; expires?: unknown }
+    let saved: PendingUndo | null = null
     try {
       const raw = localStorage.getItem(PENDING_UNDO_KEY)
-      if (raw) saved = JSON.parse(raw) as typeof saved
+      if (raw) saved = JSON.parse(raw) as PendingUndo
     } catch {
       saved = null
     }
