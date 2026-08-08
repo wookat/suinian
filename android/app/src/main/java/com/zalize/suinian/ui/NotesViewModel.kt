@@ -15,6 +15,7 @@ import com.zalize.suinian.data.InlineCommand
 import com.zalize.suinian.data.Note
 import com.zalize.suinian.data.parseInlineCommand
 import com.zalize.suinian.data.NotesViewLimits
+import com.zalize.suinian.data.RestoreStats
 import com.zalize.suinian.data.SendResult
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -41,6 +42,15 @@ data class NotesUiState(
     val batchBusy: Boolean = false,
     val editingNote: Note? = null,
     val savingEdit: Boolean = false,
+    val seedingSamples: Boolean = false,
+)
+
+/** 空态一键示例笔记（与 Web 同内容同标签） */
+const val SAMPLE_TAG = "示例"
+val SAMPLE_NOTES = listOf(
+    "周末想试试手冲咖啡，先从 V60 滤杯开始研究，豆子买浅烘的",
+    "明天下午三点前给牙医回电话，预约洗牙",
+    "https://github.com/wookat/suinian 碎念开源仓库，有空研究下自部署",
 )
 
 class NotesViewModel(app: Application) : AndroidViewModel(app) {
@@ -302,6 +312,63 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             _ui.value = _ui.value.copy(sending = false, toast = toast)
             refresh()
         }
+    }
+
+    /** 空态一键丢入示例笔记（打 #示例 标签，可随时一键清除） */
+    fun seedSamples() {
+        if (_ui.value.seedingSamples) return
+        _ui.value = _ui.value.copy(seedingSamples = true)
+        viewModelScope.launch {
+            try {
+                for (content in SAMPLE_NOTES) {
+                    val isLink = content.startsWith("http://") || content.startsWith("https://")
+                    repo.send(
+                        CreateNoteRequest(
+                            source = "android",
+                            rawType = if (isLink) "link" else "text",
+                            content = content,
+                            url = if (isLink) content else null,
+                            tags = listOf(SAMPLE_TAG),
+                        )
+                    )
+                }
+                _ui.value = _ui.value.copy(seedingSamples = false, toast = "已丢入 ${SAMPLE_NOTES.size} 条示例，AI 正在自动分拣…")
+                refresh()
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(seedingSamples = false, toast = e.message ?: "示例创建失败")
+            }
+        }
+    }
+
+    /** 一键清除带 #示例 标签的笔记 */
+    fun clearSamples() {
+        val ids = _ui.value.notes.filter { SAMPLE_TAG in it.tags }.map { it.id }
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val res = repo.batchNotes("delete", ids)
+                _ui.value = _ui.value.copy(
+                    notes = _ui.value.notes.filter { it.id !in ids },
+                    toast = "已清除 ${res.affected} 条示例笔记",
+                )
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(toast = e.message ?: "清除失败")
+            }
+        }
+    }
+
+    /** 下载全量备份 zip 到系统下载目录，返回文件名 */
+    suspend fun downloadBackupToDownloads(): String {
+        val (bytes, fileName) = repo.downloadBackup()
+        saveToDownloads(fileName, "application/zip", bytes)
+        return fileName
+    }
+
+    /** 从备份 zip 恢复，返回恢复统计 */
+    suspend fun restoreFromBackup(bytes: ByteArray, fileName: String): RestoreStats {
+        val stats = repo.restoreBackup(bytes, fileName)
+        refresh()
+        return stats
     }
 
     fun consumeToast() {

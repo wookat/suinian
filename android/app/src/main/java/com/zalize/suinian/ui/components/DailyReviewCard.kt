@@ -16,6 +16,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.EventRepeat
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -25,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -50,6 +53,8 @@ fun DailyReviewCard(items: List<DailyReviewItem>, modifier: Modifier = Modifier)
     if (items.isEmpty()) return
     var collapsed by rememberSaveable { mutableStateOf(false) }
     var index by rememberSaveable { mutableIntStateOf(0) }
+    // 敏感笔记：点击临时查看，可再隐藏（对齐 Web）
+    var revealedIds by remember { mutableStateOf(setOf<String>()) }
     val item = items[index.coerceIn(0, items.lastIndex)]
     val note = item.note
 
@@ -117,8 +122,10 @@ fun DailyReviewCard(items: List<DailyReviewItem>, modifier: Modifier = Modifier)
                         )
                         Spacer(Modifier.height(6.dp))
                     }
+                    val revealed = note.id in revealedIds
+                    val masked = note.isSensitive && !revealed
                     val title = note.title?.takeIf { it.isNotBlank() }
-                    if (title != null) {
+                    if (title != null && !masked) {
                         Text(
                             title,
                             style = MaterialTheme.typography.titleSmall,
@@ -128,12 +135,64 @@ fun DailyReviewCard(items: List<DailyReviewItem>, modifier: Modifier = Modifier)
                         )
                         Spacer(Modifier.height(2.dp))
                     }
-                    Text(
-                        if (note.isSensitive) "••••••••" else note.content,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 6,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    if (masked) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { revealedIds = revealedIds + note.id },
+                        ) {
+                            Text(
+                                "••••••••",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Icon(
+                                Icons.Outlined.Visibility,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Spacer(Modifier.width(3.dp))
+                            Text(
+                                "敏感内容，点击查看",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                            )
+                        }
+                    } else {
+                        Text(
+                            note.content,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 6,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (note.isSensitive) {
+                            Spacer(Modifier.height(4.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { revealedIds = revealedIds - note.id }
+                                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                            ) {
+                                Icon(
+                                    Icons.Outlined.VisibilityOff,
+                                    contentDescription = "隐藏敏感内容",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    "隐藏",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(6.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,

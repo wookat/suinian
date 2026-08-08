@@ -217,6 +217,9 @@ fun NoteCard(
     onLongPress: ((Note) -> Unit)? = null,
 ) {
     var confirmDelete by rememberSaveable(note.id) { mutableStateOf(false) }
+    // 敏感遮罩：点击临时查看，可再隐藏（对齐 Web）；遮罩时标题/链接卡/文件摘录/图片描述/金额一律不露出
+    var revealed by rememberSaveable(note.id) { mutableStateOf(false) }
+    val masked = note.isSensitive && !revealed
     if (confirmDelete && onDelete != null) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -263,6 +266,18 @@ fun NoteCard(
                     Spacer(Modifier.width(6.dp))
                 }
                 CategoryBadge(note.category)
+                if (note.isSensitive) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "敏感",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
                 SourceBadge(note.rawType)
                 Spacer(Modifier.width(8.dp))
                 Text(
@@ -328,7 +343,7 @@ fun NoteCard(
 
             // AI 标题（title 为空显正文首行）
             val title = note.title?.takeIf { it.isNotBlank() }
-            if (title != null && !note.isSensitive) {
+            if (title != null && !masked) {
                 Spacer(Modifier.height(6.dp))
                 Text(
                     title,
@@ -341,24 +356,31 @@ fun NoteCard(
 
             Spacer(Modifier.height(6.dp))
             val done = note.todoDone == true
-            if (note.isSensitive) {
-                var revealed by rememberSaveable(note.id) { mutableStateOf(false) }
+            if (masked) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
-                        .clickable { revealed = !revealed },
+                        .clickable { revealed = true },
                 ) {
-                    Icon(
-                        if (revealed) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
-                        contentDescription = if (revealed) "隐藏敏感内容" else "显示敏感内容",
-                        tint = MaterialTheme.colorScheme.secondary,
-                    )
-                    Spacer(Modifier.width(6.dp))
                     Text(
-                        if (revealed) note.content else "••••••••",
+                        "••••••••",
                         style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Icon(
+                        Icons.Outlined.Visibility,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        "敏感内容，点击查看",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary,
                     )
                 }
             } else if (note.category == "todo" && onToggleTodo != null) {
@@ -381,8 +403,33 @@ fun NoteCard(
                 Text(note.content, style = MaterialTheme.typography.bodyMedium)
             }
 
+            // 敏感已展示：提供「隐藏」收回
+            if (note.isSensitive && revealed) {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { revealed = false }
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.VisibilityOff,
+                        contentDescription = "隐藏敏感内容",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        "隐藏",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
             // 收支记账：金额/币种（支出负号、收入正号）+ 商户/用途
-            if ((note.category == "expense" || note.category == "income") && !note.isSensitive) {
+            if ((note.category == "expense" || note.category == "income") && !masked) {
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val income = note.category == "income"
@@ -430,7 +477,7 @@ fun NoteCard(
             // 链接卡片（多链接 ≤3）：首卡显站点 + AI 摘要（可展开）+ 正文摘录（可展开）
             var summaryOpen by rememberSaveable(note.id) { mutableStateOf(false) }
             var excerptOpen by rememberSaveable(note.id) { mutableStateOf(false) }
-            linkCards(note).forEachIndexed { i, card ->
+            (if (masked) emptyList() else linkCards(note)).forEachIndexed { i, card ->
                 Spacer(Modifier.height(8.dp))
                 Card(
                     shape = RoundedCornerShape(12.dp),
@@ -539,7 +586,7 @@ fun NoteCard(
 
             // 文件笔记卡：文件名/类型/大小 + 正文摘录（可展开）+ 下载原件
             val fileMeta = note.meta?.takeIf { note.rawType == "file" && it.fileName != null }
-            if (fileMeta != null) {
+            if (fileMeta != null && !masked) {
                 Spacer(Modifier.height(8.dp))
                 Card(
                     shape = RoundedCornerShape(12.dp),
@@ -589,7 +636,7 @@ fun NoteCard(
                             )
                         }
                         val excerpt = fileMeta.fileExcerpt?.takeIf { it.isNotBlank() }
-                        if (excerpt != null && !note.isSensitive) {
+                        if (excerpt != null) {
                             var fileExcerptOpen by rememberSaveable(note.id) { mutableStateOf(false) }
                             Spacer(Modifier.height(4.dp))
                             Text(
@@ -617,7 +664,7 @@ fun NoteCard(
             // 图片笔记：视觉模型完整描述可展开（文字优先，描述作补充）
             val imageDescription = note.meta?.imageDescription
                 ?.takeIf { note.rawType == "image" && it.isNotBlank() && it != note.content }
-            if (imageDescription != null && !note.isSensitive) {
+            if (imageDescription != null && !masked) {
                 var descOpen by rememberSaveable(note.id) { mutableStateOf(false) }
                 Spacer(Modifier.height(6.dp))
                 Text(
