@@ -102,6 +102,7 @@ function makeNote(id: string, content: string, extra: Partial<NoteRow> = {}): No
     meta: null,
     created_at: "2026-08-01 00:00:00",
     updated_at: "2026-08-01 00:00:00",
+    deleted_at: null,
     ...extra,
   };
 }

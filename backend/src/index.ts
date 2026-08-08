@@ -531,7 +531,7 @@ function noteFilterConds(filter: {
   from?: unknown;
   to?: unknown;
 }): { conds: string[]; binds: unknown[] } {
-  const conds: string[] = [];
+  const conds: string[] = ["deleted_at IS NULL"];
   const binds: unknown[] = [];
   if (typeof filter.category === "string" && filter.category) {
     conds.push("category = ?");
@@ -629,7 +629,7 @@ app.patch("/api/notes/:id", async (c) => {
   if (!body) return c.json({ error: "invalid body" }, 400);
 
   const existing = await c.env.DB.prepare(
-    "SELECT is_sensitive, content, content_enc, meta FROM notes WHERE id = ? AND user_id = ?"
+    "SELECT is_sensitive, content, content_enc, meta FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
   )
     .bind(id, userId)
     .first<{ is_sensitive: number; content: string; content_enc: string | null; meta: string | null }>();
@@ -759,22 +759,75 @@ async function deleteNoteRecord(
   return true;
 }
 
+/** Undo window before a soft-deleted note is hard-deleted by the cron sweep. */
+const SOFT_DELETE_RETENTION_MINUTES = 30;
+const PURGE_BATCH = 50;
+
+/** Hard-delete notes whose soft-delete window has expired, including derived data. */
+export async function purgeExpiredSoftDeletes(env: Env, ctx: ExecutionContext): Promise<number> {
+  const { results } = await env.DB.prepare(
+    `SELECT id, user_id FROM notes WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', ?) LIMIT ${PURGE_BATCH}`
+  )
+    .bind(`-${SOFT_DELETE_RETENTION_MINUTES} minutes`)
+    .all<{ id: string; user_id: string }>();
+  const rows = results ?? [];
+  const users = new Set<string>();
+  for (const row of rows) {
+    await deleteNoteRecord(env, row.user_id, row.id, (p) => ctx.waitUntil(p));
+    users.add(row.user_id);
+  }
+  for (const uid of users) await reconcileThreads(env, uid);
+  return rows.length;
+}
+
 // ---- DELETE /api/notes/:id ----
+// Soft delete: marks deleted_at so undo (restore) survives page reloads; the
+// cron sweep hard-deletes rows (and derived data) after the undo window.
 app.delete("/api/notes/:id", async (c) => {
   const id = c.req.param("id");
-  const deleted = await deleteNoteRecord(c.env, c.get("userId"), id, (p) => c.executionCtx.waitUntil(p));
-  if (!deleted) return c.json({ error: "not found" }, 404);
-  // recount/dissolve every thread of this user (also self-heals older orphans)
-  await reconcileThreads(c.env, c.get("userId"));
+  const res = await c.env.DB.prepare(
+    "UPDATE notes SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  )
+    .bind(id, c.get("userId"))
+    .run();
+  if (!res.meta.changes) return c.json({ error: "not found" }, 404);
   return c.json({ ok: true });
+});
+
+// ---- POST /api/notes/restore ----
+// Undo a (soft) delete: clears deleted_at for owned, still-unpurged notes.
+app.post("/api/notes/restore", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ ids?: unknown }>().catch(() => null);
+  const ids = Array.isArray(body?.ids) ? body.ids.filter((v): v is string => typeof v === "string") : [];
+  if (ids.length === 0) return c.json({ error: "ids required" }, 400);
+  if (ids.length > BATCH_MAX_IDS) return c.json({ error: `一次最多恢复 ${BATCH_MAX_IDS} 条` }, 400);
+  let restored = 0;
+  for (const chunk of chunkIds(ids)) {
+    const ph = chunk.map(() => "?").join(",");
+    const res = await c.env.DB.prepare(
+      `UPDATE notes SET deleted_at = NULL, updated_at = datetime('now') WHERE user_id = ? AND deleted_at IS NOT NULL AND id IN (${ph})`
+    )
+      .bind(userId, ...chunk)
+      .run();
+    restored += res.meta.changes ?? 0;
+  }
+  return c.json({ ok: true, restored });
 });
 
 // ---- POST /api/notes/batch ----
 // Bulk operations over owned notes: delete / add_tags / remove_tags / set_category.
 // Targets are either explicit `ids` or a server-side `filter` ({category, tag, q})
 // that matches ALL notes satisfying the current list filters, not only loaded ones.
-const BATCH_MAX_IDS = 100;
+const BATCH_MAX_IDS = 1000;
 const BATCH_FILTER_MAX = 1000;
+
+// D1 caps bound parameters per statement: id lists are chunked
+function chunkIds<T>(arr: T[], size = 80): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 
 /** Resolve a batch `filter` into the matching note ids (same semantics as GET /api/notes). */
 export async function resolveBatchFilter(
@@ -793,6 +846,82 @@ export async function resolveBatchFilter(
   return (results ?? []).map((r) => r.id);
 }
 
+/** Run a batch action over id chunks, reporting progress after each chunk. Returns affected count. */
+async function runBatchAction(
+  env: Env,
+  userId: string,
+  action: string,
+  ids: string[],
+  opts: { tags: string[]; category: string },
+  onProgress?: (done: number, total: number) => void
+): Promise<number> {
+  let affected = 0;
+  let done = 0;
+  for (const chunk of chunkIds(ids)) {
+    const ph = chunk.map(() => "?").join(",");
+    if (action === "delete") {
+      // soft delete: one UPDATE per chunk; the cron sweep hard-deletes (and
+      // cleans attachments/vectors/graph) after the undo window
+      const res = await env.DB.prepare(
+        `UPDATE notes SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE user_id = ? AND deleted_at IS NULL AND id IN (${ph})`
+      )
+        .bind(userId, ...chunk)
+        .run();
+      affected += res.meta.changes ?? 0;
+    } else if (action === "add_tags" || action === "remove_tags") {
+      const r = await env.DB.prepare(
+        `SELECT id, tags, meta FROM notes WHERE user_id = ? AND deleted_at IS NULL AND id IN (${ph})`
+      )
+        .bind(userId, ...chunk)
+        .all<{ id: string; tags: string; meta: string | null }>();
+      const stmts: D1PreparedStatement[] = [];
+      for (const row of r.results ?? []) {
+        let current: string[] = [];
+        try {
+          current = JSON.parse(row.tags || "[]") as string[];
+        } catch {
+          current = [];
+        }
+        const next =
+          action === "add_tags"
+            ? [...new Set([...current, ...opts.tags])]
+            : current.filter((t) => !opts.tags.includes(t));
+        if (next.length === current.length && next.every((t, i) => t === current[i])) continue;
+        const meta = parseNoteMeta(row.meta) ?? {};
+        meta.manual_override = { ...meta.manual_override, tags: true };
+        stmts.push(
+          env.DB.prepare(
+            "UPDATE notes SET tags = ?, meta = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?"
+          ).bind(JSON.stringify(next), JSON.stringify(meta), row.id, userId)
+        );
+      }
+      if (stmts.length > 0) await env.DB.batch(stmts);
+      affected += stmts.length;
+    } else if (action === "set_category") {
+      const r = await env.DB.prepare(
+        `SELECT id, meta FROM notes WHERE user_id = ? AND deleted_at IS NULL AND id IN (${ph})`
+      )
+        .bind(userId, ...chunk)
+        .all<{ id: string; meta: string | null }>();
+      const stmts: D1PreparedStatement[] = [];
+      for (const row of r.results ?? []) {
+        const meta = parseNoteMeta(row.meta) ?? {};
+        meta.manual_override = { ...meta.manual_override, category: true };
+        stmts.push(
+          env.DB.prepare(
+            "UPDATE notes SET category = ?, meta = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?"
+          ).bind(opts.category, JSON.stringify(meta), row.id, userId)
+        );
+      }
+      if (stmts.length > 0) await env.DB.batch(stmts);
+      affected += stmts.length;
+    }
+    done += chunk.length;
+    onProgress?.(done, ids.length);
+  }
+  return affected;
+}
+
 app.post("/api/notes/batch", async (c) => {
   const userId = c.get("userId");
   const body = await c.req
@@ -800,6 +929,8 @@ app.post("/api/notes/batch", async (c) => {
     .catch(() => null);
   if (!body) return c.json({ error: "invalid body" }, 400);
   const action = body.action;
+  if (action !== "delete" && action !== "add_tags" && action !== "remove_tags" && action !== "set_category")
+    return c.json({ error: "invalid action" }, 400);
   let ids = Array.isArray(body.ids) ? body.ids.filter((v): v is string => typeof v === "string") : [];
   const filter = body.filter && typeof body.filter === "object" ? (body.filter as Record<string, unknown>) : null;
   if (ids.length === 0 && filter) {
@@ -810,94 +941,50 @@ app.post("/api/notes/batch", async (c) => {
     if (ids.length > BATCH_MAX_IDS) return c.json({ error: `一次最多操作 ${BATCH_MAX_IDS} 条` }, 400);
   }
 
-  if (action === "delete") {
-    let affected = 0;
-    for (const id of ids) {
-      if (await deleteNoteRecord(c.env, userId, id, (p) => c.executionCtx.waitUntil(p))) affected++;
-    }
-    if (affected > 0) await reconcileThreads(c.env, userId);
-    return c.json({ ok: true, affected });
-  }
+  const tags = Array.isArray(body.tags)
+    ? body.tags.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((t) => t.trim())
+    : [];
+  if ((action === "add_tags" || action === "remove_tags") && tags.length === 0)
+    return c.json({ error: "tags required" }, 400);
+  const category = typeof body.category === "string" ? body.category : "";
+  if (action === "set_category" && !["idea", "todo", "collect", "data", "expense", "income"].includes(category))
+    return c.json({ error: "invalid category" }, 400);
+  const opts = { tags, category };
 
-  // D1 caps bound parameters per statement: filter-resolved id lists are chunked
-  const chunks = <T,>(arr: T[], size = 80): T[][] => {
-    const out: T[][] = [];
-    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-    return out;
-  };
-
-  if (action === "add_tags" || action === "remove_tags") {
-    const tags = Array.isArray(body.tags)
-      ? body.tags.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((t) => t.trim())
-      : [];
-    if (tags.length === 0) return c.json({ error: "tags required" }, 400);
-    const results: { id: string; tags: string; meta: string | null }[] = [];
-    for (const chunk of chunks(ids)) {
-      const ph = chunk.map(() => "?").join(",");
-      const r = await c.env.DB.prepare(`SELECT id, tags, meta FROM notes WHERE user_id = ? AND id IN (${ph})`)
-        .bind(userId, ...chunk)
-        .all<{ id: string; tags: string; meta: string | null }>();
-      results.push(...(r.results ?? []));
-    }
-    let affected = 0;
-    for (const row of results ?? []) {
-      let current: string[] = [];
+  // ?stream=1: NDJSON progress lines ({"done","total"}) followed by a final
+  // {ok, affected} line (or {error}); keeps big batches responsive in the UI.
+  if (c.req.query("stream") === "1") {
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = writable.getWriter();
+    const enc = new TextEncoder();
+    const writeLine = (obj: unknown) => writer.write(enc.encode(`${JSON.stringify(obj)}\n`)).catch(() => {});
+    const run = (async () => {
       try {
-        current = JSON.parse(row.tags || "[]") as string[];
-      } catch {
-        current = [];
+        await writeLine({ done: 0, total: ids.length });
+        const affected = await runBatchAction(c.env, userId, action, ids, opts, (done, total) =>
+          void writeLine({ done, total })
+        );
+        await writeLine({ ok: true, affected });
+      } catch (e) {
+        console.error("batch stream failed", e);
+        await writeLine({ error: e instanceof Error ? e.message : "批量操作失败" });
+      } finally {
+        await writer.close().catch(() => {});
       }
-      const next =
-        action === "add_tags"
-          ? [...new Set([...current, ...tags])]
-          : current.filter((t) => !tags.includes(t));
-      if (next.length === current.length && next.every((t, i) => t === current[i])) continue;
-      const meta = parseNoteMeta(row.meta) ?? {};
-      meta.manual_override = { ...meta.manual_override, tags: true };
-      await c.env.DB.prepare(
-        "UPDATE notes SET tags = ?, meta = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?"
-      )
-        .bind(JSON.stringify(next), JSON.stringify(meta), row.id, userId)
-        .run();
-      affected++;
-    }
-    return c.json({ ok: true, affected });
+    })();
+    c.executionCtx.waitUntil(run);
+    return c.body(readable, 200, { "content-type": "application/x-ndjson; charset=utf-8" });
   }
 
-  if (action === "set_category") {
-    const category = body.category;
-    if (typeof category !== "string" || !["idea", "todo", "collect", "data", "expense", "income"].includes(category))
-      return c.json({ error: "invalid category" }, 400);
-    const results: { id: string; meta: string | null }[] = [];
-    for (const chunk of chunks(ids)) {
-      const ph = chunk.map(() => "?").join(",");
-      const r = await c.env.DB.prepare(`SELECT id, meta FROM notes WHERE user_id = ? AND id IN (${ph})`)
-        .bind(userId, ...chunk)
-        .all<{ id: string; meta: string | null }>();
-      results.push(...(r.results ?? []));
-    }
-    let affected = 0;
-    for (const row of results ?? []) {
-      const meta = parseNoteMeta(row.meta) ?? {};
-      meta.manual_override = { ...meta.manual_override, category: true };
-      await c.env.DB.prepare(
-        "UPDATE notes SET category = ?, meta = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?"
-      )
-        .bind(category, JSON.stringify(meta), row.id, userId)
-        .run();
-      affected++;
-    }
-    return c.json({ ok: true, affected });
-  }
-
-  return c.json({ error: "invalid action" }, 400);
+  const affected = await runBatchAction(c.env, userId, action, ids, opts);
+  return c.json({ ok: true, affected });
 });
 
 // ---- GET /api/tags ----
 // All tags of the current user with usage counts, most used first.
 app.get("/api/tags", async (c) => {
   const userId = c.get("userId");
-  const { results } = await c.env.DB.prepare("SELECT tags FROM notes WHERE user_id = ?")
+  const { results } = await c.env.DB.prepare("SELECT tags FROM notes WHERE user_id = ? AND deleted_at IS NULL")
     .bind(userId)
     .all<{ tags: string }>();
   const counts = new Map<string, number>();
@@ -919,7 +1006,7 @@ app.get("/api/tags", async (c) => {
 /** Replace/remove a tag across all of a user's notes; `to = null` removes it. Returns affected note count. */
 async function retagUser(env: Env, userId: string, from: string, to: string | null): Promise<number> {
   const { results } = await env.DB.prepare(
-    "SELECT id, tags FROM notes WHERE user_id = ? AND tags LIKE ?"
+    "SELECT id, tags FROM notes WHERE user_id = ? AND deleted_at IS NULL AND tags LIKE ?"
   )
     .bind(userId, `%"${from}"%`)
     .all<{ id: string; tags: string }>();
@@ -1305,7 +1392,7 @@ app.post("/api/ask", async (c) => {
     binds.push(timeRange.end);
   }
   const { results } = await c.env.DB.prepare(
-    `SELECT * FROM notes WHERE ${conds.join(" AND ")} ORDER BY created_at DESC LIMIT 20`
+    `SELECT * FROM notes WHERE ${conds.join(" AND ")} AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 20`
   )
     .bind(...binds)
     .all<NoteRow>();
@@ -1321,7 +1408,9 @@ app.post("/api/ask", async (c) => {
   let outOfRange: NoteRow[] = [];
   if (extraIds.length > 0) {
     const ph = extraIds.map(() => "?").join(",");
-    const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND id IN (${ph})`)
+    const r = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL AND id IN (${ph})`
+    )
       .bind(userId, ...extraIds)
       .all<NoteRow>();
     const byId = new Map((r.results ?? []).map((n) => [n.id, n]));
@@ -1349,7 +1438,9 @@ app.post("/api/ask", async (c) => {
     const missing = expansion.note_ids.filter((nid) => !notes.some((n) => n.id === nid));
     if (missing.length > 0) {
       const ph = missing.map(() => "?").join(",");
-      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND id IN (${ph})`)
+      const r = await c.env.DB.prepare(
+        `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL AND id IN (${ph})`
+      )
         .bind(userId, ...missing)
         .all<NoteRow>();
       for (const n of r.results ?? []) {
@@ -1366,7 +1457,9 @@ app.post("/api/ask", async (c) => {
     let suggestions: NoteRow[] = [];
     if (near.length > 0) {
       const ph = near.map(() => "?").join(",");
-      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND id IN (${ph})`)
+      const r = await c.env.DB.prepare(
+        `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL AND id IN (${ph})`
+      )
         .bind(userId, ...near.map((h) => h.note_id))
         .all<NoteRow>();
       const byId = new Map((r.results ?? []).map((n) => [n.id, n]));
@@ -1445,7 +1538,7 @@ app.post("/api/ask", async (c) => {
 // daily summary refresh for every thread and doesn't reflect real activity).
 app.get("/api/threads", async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT t.*, (SELECT MAX(n.created_at) FROM notes n WHERE n.thread_id = t.id) AS last_note_at
+    `SELECT t.*, (SELECT MAX(n.created_at) FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL) AS last_note_at
        FROM threads t WHERE t.user_id = ? AND t.note_count > 0
       ORDER BY last_note_at DESC LIMIT 100`
   )
@@ -1475,7 +1568,7 @@ app.get("/api/threads/:id", async (c) => {
     .first<ThreadRow>();
   if (!thread) return c.json({ error: "not found" }, 404);
   const { results } = await c.env.DB.prepare(
-    "SELECT * FROM notes WHERE thread_id = ? AND user_id = ? ORDER BY created_at ASC LIMIT 200"
+    "SELECT * FROM notes WHERE thread_id = ? AND user_id = ? AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 200"
   )
     .bind(thread.id, userId)
     .all<NoteRow>();
@@ -1542,7 +1635,7 @@ app.patch("/api/preferences", async (c) => {
 app.get("/api/todos/today", async (c) => {
   const today = shanghaiDate();
   const { results } = await c.env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0
+    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL
        AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0)
        AND todo_due IS NOT NULL AND date(todo_due) <= ?
      ORDER BY datetime(todo_due) ASC LIMIT 50`
@@ -1676,7 +1769,7 @@ app.get("/api/export", async (c) => {
   // sensitive notes are redacted by default; ?include_sensitive=true exports plaintext
   const includeSensitive = c.req.query("include_sensitive") === "true";
   const [notesR, threadsR, reportsR] = await Promise.all([
-    c.env.DB.prepare("SELECT * FROM notes WHERE user_id = ? ORDER BY created_at ASC").bind(userId).all<NoteRow>(),
+    c.env.DB.prepare("SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at ASC").bind(userId).all<NoteRow>(),
     c.env.DB.prepare("SELECT * FROM threads WHERE user_id = ? ORDER BY updated_at DESC").bind(userId).all<ThreadRow>(),
     c.env.DB.prepare("SELECT * FROM weekly_reports WHERE user_id = ? ORDER BY week_start DESC").bind(userId).all<WeeklyReportRow>(),
   ]);
@@ -1762,7 +1855,7 @@ export { app };
 /** Re-triage notes the AI failed to sort (category still NULL), oldest first. */
 export async function retriageUnsorted(env: Env, limit = 10): Promise<void> {
   const { results } = await env.DB.prepare(
-    "SELECT id, user_id, content, content_enc FROM notes WHERE category IS NULL AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT ?"
+    "SELECT id, user_id, content, content_enc FROM notes WHERE category IS NULL AND deleted_at IS NULL AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT ?"
   )
     .bind(limit)
     .all<{ id: string; user_id: string; content: string; content_enc: string | null }>();
@@ -1804,6 +1897,8 @@ export default {
       ctx.waitUntil(backfillEmbeddings(env));
       // backfill graph extraction for notes that predate the knowledge graph (rate-limited)
       ctx.waitUntil(backfillGraphExtracts(env));
+      // hard-delete soft-deleted notes past their undo window (attachments/vectors/graph too)
+      ctx.waitUntil(purgeExpiredSoftDeletes(env, ctx));
     } else {
       // daily thread title/summary refresh + daily review generation
       ctx.waitUntil(refreshThreads(env));

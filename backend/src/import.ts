@@ -392,7 +392,7 @@ export async function runImport(
       // dedup: fetch existing notes matching any of the chunk's contents in one query
       const ph = chunk.map(() => "?").join(",");
       const existing = await db
-        .prepare(`SELECT content, created_at FROM notes WHERE user_id = ? AND content IN (${ph})`)
+        .prepare(`SELECT content, created_at FROM notes WHERE user_id = ? AND deleted_at IS NULL AND content IN (${ph})`)
         .bind(userId, ...chunk.map((it) => it.content))
         .all<{ content: string; created_at: string }>();
       const seen = new Set((existing.results ?? []).map((r) => `${r.created_at}\u0000${r.content}`));

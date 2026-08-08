@@ -28,6 +28,7 @@ function noteRow(over: Partial<NoteRow>): NoteRow {
     meta: null,
     created_at: "2026-08-07T00:00:00Z",
     updated_at: "2026-08-07T00:00:00Z",
+    deleted_at: null,
     ...over,
   };
 }

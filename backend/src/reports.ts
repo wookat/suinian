@@ -63,7 +63,7 @@ export async function todoStatsForWeek(
 ): Promise<TodoStats> {
   const todos = weekNotes.filter((n) => n.category === "todo");
   const doneRows = await env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND category = 'todo' AND todo_done = 1 AND done_at IS NOT NULL
+    `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND category = 'todo' AND todo_done = 1 AND done_at IS NOT NULL
        AND datetime(done_at, '+8 hours') >= datetime(? || ' 00:00:00')
        AND datetime(done_at, '+8 hours') <= datetime(? || ' 23:59:59')
      LIMIT 100`
@@ -202,7 +202,7 @@ export async function generatePeriodReport(
   }
   // notes created during [weekStart, weekEnd] in Shanghai time = UTC range shifted by -8h
   const { results } = await env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ?
+    `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL
        AND datetime(created_at, '+8 hours') >= datetime(? || ' 00:00:00')
        AND datetime(created_at, '+8 hours') <= datetime(? || ' 23:59:59')
      ORDER BY created_at ASC LIMIT ${period === "month" ? 1000 : 300}`

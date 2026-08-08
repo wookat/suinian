@@ -28,6 +28,7 @@ function baseNote(id: string, over: Row = {}): Row {
     content_enc: null,
     created_at: "2026-08-07 00:00:00",
     updated_at: "2026-08-07 00:00:00",
+    deleted_at: null,
     ...over,
   };
 }
@@ -35,19 +36,24 @@ function baseNote(id: string, over: Row = {}): Row {
 // Multi-note stateful fake D1: enough SQL coverage for PATCH / batch / tags routes.
 function fakeDb(notes: Row[]) {
   const matchNotes = (sql: string, binds: unknown[]): Row[] => {
+    const deletedFilter = (rows: Row[]): Row[] => {
+      if (sql.includes("deleted_at IS NULL")) return rows.filter((n) => !n.deleted_at);
+      if (sql.includes("deleted_at IS NOT NULL")) return rows.filter((n) => !!n.deleted_at);
+      return rows;
+    };
     if (sql.includes("id IN (")) {
       const ids = binds.slice(1) as string[];
-      return notes.filter((n) => n.user_id === binds[0] && ids.includes(n.id as string));
+      return deletedFilter(notes.filter((n) => n.user_id === binds[0] && ids.includes(n.id as string)));
     }
     if (sql.includes("tags LIKE")) {
       const like = String(binds[1]).replace(/%/g, "");
-      return notes.filter((n) => n.user_id === binds[0] && String(n.tags).includes(like));
+      return deletedFilter(notes.filter((n) => n.user_id === binds[0] && String(n.tags).includes(like)));
     }
     if (sql.includes("WHERE id = ? AND user_id = ?"))
-      return notes.filter((n) => n.id === binds[0] && n.user_id === binds[1]);
-    if (sql.includes("WHERE id = ?")) return notes.filter((n) => n.id === binds[0]);
-    if (sql.includes("WHERE user_id = ?")) return notes.filter((n) => n.user_id === binds[0]);
-    return notes;
+      return deletedFilter(notes.filter((n) => n.id === binds[0] && n.user_id === binds[1]));
+    if (sql.includes("WHERE id = ?")) return deletedFilter(notes.filter((n) => n.id === binds[0]));
+    if (sql.includes("WHERE user_id = ?")) return deletedFilter(notes.filter((n) => n.user_id === binds[0]));
+    return deletedFilter(notes);
   };
   return {
     prepare(sql: string) {
@@ -70,12 +76,27 @@ function fakeDb(notes: Row[]) {
           if (sql.startsWith("UPDATE notes SET")) {
             const whereIdx = sql.indexOf(" WHERE ");
             const setPart = sql.slice(0, whereIdx);
+            const wherePart = sql.slice(whereIdx);
             const cols = [...setPart.matchAll(/(\w+) = \?/g)].map((m) => m[1]);
-            const idBinds = binds.slice(cols.length) as string[];
-            const targets = notes.filter(
-              (n) => n.id === idBinds[0] && (idBinds.length < 2 || n.user_id === idBinds[1])
-            );
-            for (const note of targets) cols.forEach((col, i) => (note[col] = binds[i]));
+            const nowCols = [...setPart.matchAll(/(\w+) = datetime\('now'\)/g)].map((m) => m[1]);
+            const nullCols = [...setPart.matchAll(/(\w+) = NULL/g)].map((m) => m[1]);
+            const whereBinds = binds.slice(cols.length) as string[];
+            let targets: Row[];
+            if (wherePart.includes("id IN (")) {
+              const ids = whereBinds.slice(1);
+              targets = notes.filter((n) => n.user_id === whereBinds[0] && ids.includes(n.id as string));
+            } else {
+              targets = notes.filter(
+                (n) => n.id === whereBinds[0] && (whereBinds.length < 2 || n.user_id === whereBinds[1])
+              );
+            }
+            if (wherePart.includes("deleted_at IS NULL")) targets = targets.filter((n) => !n.deleted_at);
+            if (wherePart.includes("deleted_at IS NOT NULL")) targets = targets.filter((n) => !!n.deleted_at);
+            for (const note of targets) {
+              cols.forEach((col, i) => (note[col] = binds[i]));
+              nowCols.forEach((col) => (note[col] = "2026-08-07 00:00:01"));
+              nullCols.forEach((col) => (note[col] = null));
+            }
             return { meta: { changes: targets.length } };
           }
           if (sql.startsWith("DELETE FROM notes")) {
@@ -89,6 +110,11 @@ function fakeDb(notes: Row[]) {
         },
       };
       return stmt;
+    },
+    async batch(stmts: { run(): Promise<unknown> }[]) {
+      const out = [];
+      for (const s of stmts) out.push(await s.run());
+      return out;
     },
   } as unknown as D1Database;
 }
@@ -200,7 +226,7 @@ describe("POST /api/notes/batch", () => {
     expect(notes[1].category).toBe("data");
   });
 
-  it("delete removes only owned notes", async () => {
+  it("delete soft-deletes only owned notes", async () => {
     const notes = [baseNote("n1"), baseNote("n2", { user_id: "u2" })];
     const res = await app.request(
       req("POST", "/api/notes/batch", { action: "delete", ids: ["n1", "n2"] }),
@@ -210,7 +236,40 @@ describe("POST /api/notes/batch", () => {
     );
     const body = (await res.json()) as { affected: number };
     expect(body.affected).toBe(1);
-    expect(notes.map((n) => n.id)).toEqual(["n2"]);
+    expect(notes[0].deleted_at).toBeTruthy();
+    expect(notes[1].deleted_at).toBeNull();
+  });
+
+  it("delete with stream=1 emits NDJSON progress and final affected", async () => {
+    const notes = [baseNote("n1"), baseNote("n2")];
+    const res = await app.request(
+      req("POST", "/api/notes/batch?stream=1", { action: "delete", ids: ["n1", "n2"] }),
+      undefined,
+      makeEnv(notes),
+      ctx
+    );
+    expect(res.status).toBe(200);
+    const lines = (await res.text()).trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(lines[0]).toEqual({ done: 0, total: 2 });
+    expect(lines[lines.length - 1]).toEqual({ ok: true, affected: 2 });
+  });
+
+  it("restore clears deleted_at for owned notes only", async () => {
+    const notes = [
+      baseNote("n1", { deleted_at: "2026-08-07 00:00:00" }),
+      baseNote("n2", { user_id: "u2", deleted_at: "2026-08-07 00:00:00" }),
+    ];
+    const res = await app.request(
+      req("POST", "/api/notes/restore", { ids: ["n1", "n2"] }),
+      undefined,
+      makeEnv(notes),
+      ctx
+    );
+    const body = (await res.json()) as { restored: number };
+    expect(res.status).toBe(200);
+    expect(body.restored).toBe(1);
+    expect(notes[0].deleted_at).toBeNull();
+    expect(notes[1].deleted_at).toBeTruthy();
   });
 
   it("rejects invalid action and empty ids", async () => {

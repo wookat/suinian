@@ -126,7 +126,7 @@ export async function semanticRecall(
 export async function backfillEmbeddings(env: Env, limit = 20): Promise<number> {
   const { results } = await env.DB.prepare(
     `SELECT * FROM notes n
-     WHERE n.is_sensitive = 0
+     WHERE n.is_sensitive = 0 AND n.deleted_at IS NULL
        AND NOT EXISTS (SELECT 1 FROM note_embeddings e WHERE e.note_id = n.id)
      ORDER BY n.created_at ASC LIMIT ?`
   )

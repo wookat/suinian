@@ -488,7 +488,7 @@ export async function graphExpand(env: Env, userId: string, noteIds: string[], l
 export async function backfillGraphExtracts(env: Env, limit = 3): Promise<number> {
   const { results } = await env.DB.prepare(
     `SELECT * FROM notes
-     WHERE is_sensitive = 0 AND category IS NOT NULL
+     WHERE is_sensitive = 0 AND deleted_at IS NULL AND category IS NOT NULL
        AND (meta IS NULL OR meta NOT LIKE '%graph_extracted_at%')
      ORDER BY created_at DESC LIMIT ?`
   )

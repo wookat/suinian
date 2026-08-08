@@ -227,18 +227,85 @@ export async function deleteNote(id: string): Promise<void> {
   await realFetch<{ ok: boolean }>(`/api/notes/${id}`, { method: "DELETE" })
 }
 
-/** 批量操作：删除 / 加标签 / 去标签 / 改分类（单次最多 100 条） */
+/** 撤销删除：清除软删标记，恢复笔记 */
+export async function restoreNotes(ids: string[]): Promise<number> {
+  if (loadSettings().useMock) throw new Error("演示模式不支持恢复，请先配置真实 API")
+  const res = await realFetch<{ ok: boolean; restored: number }>("/api/notes/restore", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  })
+  return res.restored
+}
+
+/** NDJSON 批量流：{done,total} 进度行 + 最终 {ok,affected}（或 {error}） */
+async function batchStream(
+  body: Record<string, unknown>,
+  onProgress?: (done: number, total: number) => void,
+): Promise<number> {
+  const { apiBaseUrl, apiToken, useMock } = loadSettings()
+  if (useMock || !apiBaseUrl) throw new Error("演示模式不支持批量操作，请先配置真实 API")
+  let res: Response
+  try {
+    res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/notes/batch?stream=1`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiToken}` },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    let message = text || res.statusText
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown }
+      if (typeof parsed.error === "string" && parsed.error) message = parsed.error
+    } catch {
+      // not JSON, keep raw text
+    }
+    throw new ApiError(res.status, message)
+  }
+  const reader = res.body?.getReader()
+  if (!reader) {
+    const legacy = (await res.json()) as { affected?: number }
+    return legacy.affected ?? 0
+  }
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let affected: number | null = null
+  const handleLine = (line: string) => {
+    if (!line.trim()) return
+    let obj: { done?: number; total?: number; ok?: boolean; affected?: number; error?: string }
+    try {
+      obj = JSON.parse(line)
+    } catch {
+      return
+    }
+    if (typeof obj.error === "string") throw new ApiError(500, obj.error)
+    if (typeof obj.affected === "number") affected = obj.affected
+    else if (typeof obj.done === "number" && typeof obj.total === "number") onProgress?.(obj.done, obj.total)
+  }
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() ?? ""
+    for (const line of lines) handleLine(line)
+  }
+  handleLine(buffer)
+  if (affected === null) throw new Error("批量操作未返回结果，请刷新时间流确认后重试")
+  return affected
+}
+
+/** 批量操作：删除 / 加标签 / 去标签 / 改分类（进度经 onProgress 回调） */
 export async function batchNotes(
   action: BatchAction,
   ids: string[],
   opts?: { tags?: string[]; category?: string },
+  onProgress?: (done: number, total: number) => void,
 ): Promise<number> {
-  if (loadSettings().useMock) throw new Error("演示模式不支持批量操作，请先配置真实 API")
-  const res = await realFetch<{ ok: boolean; affected: number }>("/api/notes/batch", {
-    method: "POST",
-    body: JSON.stringify({ action, ids, ...opts }),
-  })
-  return res.affected
+  return batchStream({ action, ids, ...opts }, onProgress)
 }
 
 export interface BatchFilter {
@@ -250,18 +317,14 @@ export interface BatchFilter {
   to?: string
 }
 
-/** 按筛选条件批量操作全部匹配笔记（服务端执行，不限已加载项） */
+/** 按筛选条件批量操作全部匹配笔记（服务端执行，不限已加载项；进度经 onProgress 回调） */
 export async function batchNotesByFilter(
   action: BatchAction,
   filter: BatchFilter,
   opts?: { tags?: string[]; category?: string },
+  onProgress?: (done: number, total: number) => void,
 ): Promise<number> {
-  if (loadSettings().useMock) throw new Error("演示模式不支持批量操作，请先配置真实 API")
-  const res = await realFetch<{ ok: boolean; affected: number }>("/api/notes/batch", {
-    method: "POST",
-    body: JSON.stringify({ action, filter, ...opts }),
-  })
-  return res.affected
+  return batchStream({ action, filter, ...opts }, onProgress)
 }
 
 /** 全部标签 + 使用次数（按次数降序） */
