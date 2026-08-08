@@ -1,14 +1,15 @@
-# 数据导入（Cubox / flomo / Markdown / 纯文本）
+# 数据导入（Cubox / flomo / Notion / Obsidian / Apple 备忘录 / Markdown / 纯文本）
 
-> R25 起支持。背景：Cubox 官宣将于 2027-05 停止速记/文件功能，其用户正在寻找迁移出路；碎念的导入能力用于承接这波迁移，同时覆盖 flomo 等通用来源。
+> R25 起支持 Cubox / flomo / Markdown / 纯文本；R63 起新增 Notion / Obsidian / Apple 备忘录 zip 导入。背景：Cubox 官宣将于 2027-05 停止速记/文件功能，其用户正在寻找迁移出路；碎念的导入能力用于承接这波迁移，同时覆盖主流笔记工具。
 
 ## 使用方式
 
-- **Web**：设置页 →「导入数据」区块 → 选择来源 → 选择文件 → 上传后显示导入统计。
+- **Web**：设置页 →「导入数据」区块 → 选择来源 → 选择文件 → 上传后显示导入进度与统计；失败条目可下载清单。
 - **API**：`POST /api/import`（Bearer token 鉴权）
-  - multipart 表单：`source`（`cubox` / `flomo` / `markdown` / `text`）+ `file`（≤20MB）
-  - 或 JSON：`{ "source": "...", "content": "文件文本内容" }`
-  - 返回：`{ total, imported, skipped, failed }`（201）
+  - multipart 表单：`source`（`cubox` / `flomo` / `markdown` / `text` / `notion` / `obsidian` / `apple-notes`）+ `file`（≤20MB；Notion/Obsidian/Apple 备忘录为 zip）
+  - 或 JSON：`{ "source": "...", "content": "文件文本内容" }`（仅非 zip 来源）
+  - 返回：`{ total, imported, skipped, failed, failed_items: [{item, reason}] }`（201）
+  - 加 `?stream=1`：返回 NDJSON 流，逐批输出 `{done,total}` 进度行，最后一行为 `{stats, failed_items}`，大包导入不阻塞、不超时（Web 默认走此模式）
 
 ```bash
 curl -X POST https://suinian-api.zalize.com/api/import \
@@ -43,6 +44,33 @@ flomo 仅支持导出 **HTML**（设置 → 账号详情 → 导出，得到压�
 - `time` 为北京时间（无时区标注），格式 `YYYY-MM-DD HH:MM:SS`。
 - 标签为正文内联 `#tag`（支持中文、`/` 层级），解析时抽取为笔记标签（正文原样保留）。
 
+### Notion（R63）
+
+Notion 在页面菜单「导出 → Markdown & CSV（含子页面）」得到 zip，直接上传：
+
+- **页面**：每页一个 `标题 <32位hex页面id>.md`，子页面/资产在同名文件夹里（递归处理）。文件名里的页面 id 会去掉。
+- **数据库**：导出为 `<名称>.csv` + `<名称>_all.csv`，每行另有对应 `.md` 页。优先导入 `.md` 页（含属性块 `Created time` / `Tags` / `URL`），仅在 CSV 里的行再从 CSV 补导，不重复。
+- **时间/标签/链接**：属性块或 CSV 列里的 `Created time`（英文日期如 `June 1, 2023 8:30 AM`，按北京时间解释）、`Tags`（逗号分隔）、`URL` 分别写入原时间/标签/链接。
+- **图片**：`![](相对路径)` 引用的 zip 内图片存入 R2 并关联到笔记（attachments），正文中替换为 `【图片：xxx】`占位；外部 URL 图片保留原链接。页内 `[文本](xx.md)` 内链转为纯文本。
+
+### Obsidian（R63）
+
+把整个 vault 文件夹压缩为 zip 上传：
+
+- 全量导入 `.md`（跳过 `.obsidian/`、`.trash/` 配置目录），标题取文件名。
+- **frontmatter**：`tags`（支持 `[a, b]` 内联、逗号分隔、`- 列表` 三种写法）与 `created`/`date` 解析为原标签/原时间；无 frontmatter tags 时抽正文内联 `#tag`；无 created 时尝试文件名日期（如日记 `2023-06-01.md`）。
+- **内链**：`[[页面]]` / `[[页面|别名]]` 保留为纯文本；`![[图片]]` 嵌入若能在 vault 内找到对应图片则存入 R2。
+
+### Apple 备忘录（R63）
+
+Apple 备忘录无官方批量导出；社区主流迁移路径是 Mac App Store 免费工具 **Exporter**（也兼容其他导出 md/txt 的工具）：
+
+1. Mac 上安装 Exporter（App Store 搜 “Exporter”，免费），授权访问备忘录。
+2. 导出格式选 Markdown，得到按备忘录文件夹分目录的 `.md` 文件。
+3. 把导出文件夹整体压缩为 zip，在设置页选「Apple 备忘录」上传。
+
+解析行为：`.md` / `.txt` 全量导入；frontmatter 的 `created`/`title` 优先，其次文件名末尾日期（如 `购物清单 - 2023-06-02.md`）；顶层文件夹名（即备忘录文件夹）作为标签；同包内引用的图片存入 R2。
+
 ### 通用 Markdown / 纯文本
 
 - **Markdown**：优先按 `---` 分隔线拆条；无分隔线时按 `#`/`##`/`###` 标题拆条；都没有则按空行拆段。每条首行若为独立日期（`YYYY-MM-DD [HH:MM[:SS]]` 或 `date: ...`），作为该条的原创建时间。
@@ -63,3 +91,5 @@ flomo 仅支持导出 **HTML**（设置 → 账号详情 → 导出，得到压�
 - **去重**：同内容 + 同创建时间已存在则跳过（条目无时间时按同内容去重）。
 - **异步分拣**：导入行 `category` 置 NULL，由既有 cron 补处理机制逐步完成 AI 分拣（每轮 10 条）、嵌入、图谱、线索聚类，避免一次性打爆 AI 配额。20+ 条的导入通常在 1 小时内全部分拣完成。
 - **限制**：单文件 ≤20MB；单次最多解析 2000 条；单条内容截断至 2 万字符；`source` 字段记为 `import`。
+- **图片资产（zip 来源）**：每条笔记最多 3 张、单张 ≤5MB、单次导入最多 100 张；超出部分仅保留 `【图片：xxx】` 占位文本。图片入库失败不影响笔记本身，会出现在 `failed_items` 清单里。
+- **大包健壮性**：分批（每批 40 条）写入；`?stream=1` 时逐批回报进度；几百条的 zip 导入不超时不 OOM（zip 一次性解压在 20MB 上限内，内存可控）。

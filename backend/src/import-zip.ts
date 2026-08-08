@@ -1,0 +1,422 @@
+// Zip-based import parsers: Notion (Markdown & CSV export), Obsidian vault,
+// Apple Notes (Exporter-style md/txt zip). Each entry becomes a normalized
+// ImportItem; referenced local image assets are collected for R2 storage.
+
+import { unzipSync, strFromU8 } from "fflate";
+import {
+  type ImportItem,
+  type ImportAsset,
+  type ImportFailure,
+  normalizeImportDate,
+  extractHashTags,
+  parseCsv,
+  splitTags,
+  firstUrl,
+  clipContent,
+  MAX_IMPORT_ITEMS,
+} from "./import";
+
+export type ZipImportSource = "notion" | "obsidian" | "apple-notes";
+
+export interface ZipParseResult {
+  items: ImportItem[];
+  failures: ImportFailure[];
+}
+
+/** Per-note asset cap; keeps a single import from flooding R2. */
+const MAX_ASSETS_PER_NOTE = 3;
+const MAX_ASSET_BYTES = 5 * 1024 * 1024;
+const MAX_TOTAL_ASSETS = 100;
+
+const IMAGE_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  heic: "image/heic",
+  svg: "image/svg+xml",
+  bmp: "image/bmp",
+};
+
+function imageMime(name: string): string | null {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return IMAGE_MIME[ext] ?? null;
+}
+
+function baseName(path: string): string {
+  return path.split("/").pop() ?? path;
+}
+
+function dirName(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i >= 0 ? path.slice(0, i) : "";
+}
+
+/** Join a relative reference against a base directory, resolving ../ segments. */
+function resolvePath(baseDir: string, ref: string): string {
+  const parts = baseDir ? baseDir.split("/") : [];
+  for (const seg of ref.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") parts.pop();
+    else parts.push(seg);
+  }
+  return parts.join("/");
+}
+
+function safeDecodeURI(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+/** Unzip into path -> bytes, skipping macOS cruft and directory entries. */
+export function unzipEntries(bytes: Uint8Array): Record<string, Uint8Array> {
+  const raw = unzipSync(bytes);
+  const out: Record<string, Uint8Array> = {};
+  for (const [path, data] of Object.entries(raw)) {
+    if (path.endsWith("/")) continue;
+    const base = baseName(path);
+    if (path.startsWith("__MACOSX/") || base === ".DS_Store" || base.startsWith("._")) continue;
+    out[path] = data;
+  }
+  return out;
+}
+
+/** Notion filenames carry a 32-hex page id suffix: "Title 3fa85f64....md" */
+const NOTION_ID_RE = / [0-9a-f]{32}(?=(\.\w+)?$)/;
+
+function stripNotionId(name: string): string {
+  return name.replace(NOTION_ID_RE, "");
+}
+
+interface CollectedAssets {
+  assets: ImportAsset[];
+  markers: Map<string, string>;
+}
+
+/**
+ * Replace markdown image refs pointing at files inside the zip with a
+ * 【图片：name】 marker and collect their bytes (capped per note / total).
+ */
+function collectImageRefs(
+  body: string,
+  mdDir: string,
+  entries: Record<string, Uint8Array>,
+  totalSoFar: { count: number }
+): { body: string; assets: ImportAsset[] } {
+  const assets: ImportAsset[] = [];
+  const out = body.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (whole, _alt: string, rawRef: string) => {
+    const ref = safeDecodeURI(rawRef.trim());
+    if (/^[a-z]+:\/\//i.test(ref)) return whole; // external URL: keep as-is
+    const path = resolvePath(mdDir, ref);
+    const data = entries[path];
+    const mime = imageMime(path);
+    const name = baseName(path);
+    if (!data || !mime) return whole;
+    if (
+      assets.length < MAX_ASSETS_PER_NOTE &&
+      totalSoFar.count < MAX_TOTAL_ASSETS &&
+      data.length <= MAX_ASSET_BYTES &&
+      !assets.some((a) => a.name === name)
+    ) {
+      assets.push({ name, mime, bytes: data });
+      totalSoFar.count++;
+    }
+    return `【图片：${name}】`;
+  });
+  return { body: out, assets };
+}
+
+// ---- Notion ----
+
+const NOTION_CREATED_KEYS = ["created time", "created", "created at", "创建时间", "date"];
+const NOTION_TAG_KEYS = ["tags", "tag", "标签", "multi-select"];
+const NOTION_URL_KEYS = ["url", "link", "链接", "网址"];
+
+/**
+ * Notion "Markdown & CSV" export zip: one .md per page ("Title <32hex>.md"),
+ * sub-pages and assets in a same-named folder, databases as "<name>.csv" +
+ * "<name>_all.csv" with one .md per row. Property lines (Created time / Tags /
+ * URL / ...) follow the title in database-row pages.
+ */
+export function parseNotionZip(entries: Record<string, Uint8Array>): ZipParseResult {
+  const items: ImportItem[] = [];
+  const failures: ImportFailure[] = [];
+  const total = { count: 0 };
+
+  // titles of md pages, used to skip duplicate CSV rows
+  const mdTitles = new Set<string>();
+  const mdPaths = Object.keys(entries).filter((p) => p.toLowerCase().endsWith(".md"));
+  for (const p of mdPaths) mdTitles.add(stripNotionId(baseName(p)).replace(/\.md$/i, "").trim());
+
+  for (const path of mdPaths) {
+    if (items.length >= MAX_IMPORT_ITEMS) break;
+    try {
+      const md = strFromU8(entries[path]);
+      const lines = md.replace(/\r\n/g, "\n").split("\n");
+      let title = stripNotionId(baseName(path)).replace(/\.md$/i, "").trim();
+      let i = 0;
+      if (lines[0]?.startsWith("# ")) {
+        title = lines[0].slice(2).trim() || title;
+        i = 1;
+      }
+      while (i < lines.length && lines[i].trim() === "") i++;
+      // property block: consecutive "Key: Value" lines right after the title
+      let created: string | null = null;
+      let tags: string[] = [];
+      let url: string | null = null;
+      const propRe = /^([A-Za-z\u4e00-\u9fff][\w /\u4e00-\u9fff-]{0,30}):\s+(.+)$/;
+      while (i < lines.length) {
+        const m = lines[i].match(propRe);
+        if (!m) break;
+        const key = m[1].trim().toLowerCase();
+        const value = m[2].trim();
+        if (NOTION_CREATED_KEYS.includes(key)) created = normalizeImportDate(value) ?? created;
+        else if (NOTION_TAG_KEYS.includes(key)) tags = splitTags(value);
+        else if (NOTION_URL_KEYS.includes(key) && /^https?:\/\//.test(value)) url = value;
+        i++;
+      }
+      let body = lines.slice(i).join("\n").trim();
+      // internal page links -> plain text; image refs -> collected assets
+      body = body.replace(/(?<!!)\[([^\]]+)\]\(([^)]+\.md)\)/gi, (whole, text: string, ref: string) =>
+        /^[a-z]+:\/\//i.test(ref) ? whole : text
+      );
+      const collected = collectImageRefs(body, dirName(path), entries, total);
+      body = collected.body;
+      const content = clipContent([title, body].filter(Boolean).join("\n").trim());
+      if (!content) continue;
+      items.push({
+        content,
+        created_at: created,
+        tags,
+        url: url ?? firstUrl(content),
+        assets: collected.assets.length > 0 ? collected.assets : undefined,
+      });
+    } catch (e) {
+      failures.push({ item: baseName(path), reason: e instanceof Error ? e.message : "解析失败" });
+    }
+  }
+
+  // databases: prefer "<name>_all.csv" (full rows), skip rows already imported as .md pages
+  const csvPaths = Object.keys(entries).filter((p) => p.toLowerCase().endsWith(".csv"));
+  const preferred = csvPaths.filter((p) => {
+    if (/_all\.csv$/i.test(p)) return true;
+    return !csvPaths.includes(p.replace(/\.csv$/i, "_all.csv"));
+  });
+  for (const path of preferred) {
+    if (items.length >= MAX_IMPORT_ITEMS) break;
+    try {
+      const rows = parseCsv(strFromU8(entries[path]));
+      if (rows.length < 2) continue;
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const nameCol = header.findIndex((h) => ["name", "title", "名称", "标题"].includes(h));
+      const createdCol = header.findIndex((h) => NOTION_CREATED_KEYS.includes(h));
+      const tagCol = header.findIndex((h) => NOTION_TAG_KEYS.includes(h));
+      const urlCol = header.findIndex((h) => NOTION_URL_KEYS.includes(h));
+      for (const row of rows.slice(1)) {
+        if (items.length >= MAX_IMPORT_ITEMS) break;
+        const name = nameCol >= 0 ? row[nameCol]?.trim() ?? "" : "";
+        if (!name || mdTitles.has(name)) continue; // row exists as an .md page
+        const extras = row
+          .map((v, idx) => ({ v: (v ?? "").trim(), idx }))
+          .filter(({ v, idx }) => v && idx !== nameCol && idx !== createdCol && idx !== tagCol && idx !== urlCol)
+          .map(({ v, idx }) => `${rows[0][idx].trim()}: ${v}`);
+        const url = urlCol >= 0 && /^https?:\/\//.test(row[urlCol] ?? "") ? row[urlCol].trim() : null;
+        const content = clipContent([name, url ?? "", ...extras].filter(Boolean).join("\n"));
+        items.push({
+          content,
+          created_at: createdCol >= 0 ? normalizeImportDate(row[createdCol] ?? null) : null,
+          tags: tagCol >= 0 ? splitTags(row[tagCol] ?? "") : [],
+          url: url ?? firstUrl(content),
+        });
+      }
+    } catch (e) {
+      failures.push({ item: baseName(path), reason: e instanceof Error ? e.message : "解析失败" });
+    }
+  }
+
+  return { items, failures };
+}
+
+// ---- Obsidian ----
+
+interface Frontmatter {
+  created: string | null;
+  tags: string[];
+  title: string | null;
+  body: string;
+}
+
+/** Minimal YAML frontmatter parse: created/date + tags (inline list, comma, or dash list) + title. */
+export function parseFrontmatter(md: string): Frontmatter {
+  const src = md.replace(/\r\n/g, "\n");
+  const out: Frontmatter = { created: null, tags: [], title: null, body: src.trim() };
+  const m = src.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!m) return out;
+  out.body = src.slice(m[0].length).trim();
+  const lines = m[1].split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const kv = lines[i].match(/^([\w-]+):\s*(.*)$/);
+    if (!kv) continue;
+    const key = kv[1].toLowerCase();
+    let value = kv[2].trim().replace(/^["']|["']$/g, "");
+    if (["created", "created_at", "date", "ctime", "creation date"].includes(key)) {
+      out.created = normalizeImportDate(value) ?? out.created;
+    } else if (key === "title") {
+      out.title = value || null;
+    } else if (key === "tags" || key === "tag") {
+      if (value.startsWith("[")) {
+        out.tags = splitTags(value.replace(/^\[|\]$/g, ""));
+      } else if (value) {
+        out.tags = splitTags(value);
+      } else {
+        // block list:  tags:\n  - a\n  - b
+        const collected: string[] = [];
+        for (let j = i + 1; j < lines.length; j++) {
+          const item = lines[j].match(/^\s+-\s+(.+)$/);
+          if (!item) break;
+          collected.push(item[1].trim().replace(/^["']|["']$/g, ""));
+        }
+        out.tags = collected.slice(0, 5);
+      }
+    }
+  }
+  return out;
+}
+
+const FILENAME_DATE_RE = /(\d{4}-\d{2}-\d{2})/;
+
+/**
+ * Obsidian vault zip: every .md is a note (title = filename). Frontmatter
+ * tags/created are honored; [[wikilinks]] stay as plain text; ![[embeds]]
+ * that resolve to images inside the vault are stored as assets.
+ */
+export function parseObsidianZip(entries: Record<string, Uint8Array>): ZipParseResult {
+  const items: ImportItem[] = [];
+  const failures: ImportFailure[] = [];
+  const total = { count: 0 };
+  const paths = Object.keys(entries).filter((p) => {
+    if (!p.toLowerCase().endsWith(".md")) return false;
+    const parts = p.split("/");
+    return !parts.some((seg) => seg === ".obsidian" || seg === ".trash");
+  });
+  for (const path of paths) {
+    if (items.length >= MAX_IMPORT_ITEMS) break;
+    try {
+      const fm = parseFrontmatter(strFromU8(entries[path]));
+      const name = baseName(path).replace(/\.md$/i, "").trim();
+      let body = fm.body;
+      // image embeds ![[path]] -> assets; other embeds/wikilinks -> plain text
+      const assets: ImportAsset[] = [];
+      body = body.replace(/!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g, (whole, rawRef: string) => {
+        const ref = rawRef.trim();
+        const mime = imageMime(ref);
+        if (!mime) return whole;
+        // Obsidian resolves embeds vault-wide; try relative then any suffix match
+        const rel = resolvePath(dirName(path), ref);
+        const found =
+          entries[rel] !== undefined ? rel : Object.keys(entries).find((p) => p === ref || p.endsWith(`/${ref}`));
+        const assetName = baseName(ref);
+        if (found && entries[found].length <= MAX_ASSET_BYTES && assets.length < MAX_ASSETS_PER_NOTE && total.count < MAX_TOTAL_ASSETS && !assets.some((a) => a.name === assetName)) {
+          assets.push({ name: assetName, mime, bytes: entries[found] });
+          total.count++;
+        }
+        return `【图片：${assetName}】`;
+      });
+      body = body.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2").replace(/\[\[([^\]]+)\]\]/g, "$1");
+      const title = fm.title ?? name;
+      const content = clipContent(
+        body.startsWith(`# ${title}`) || body.split("\n")[0]?.trim() === title
+          ? body
+          : [title, body].filter(Boolean).join("\n").trim()
+      );
+      if (!content) continue;
+      const created = fm.created ?? normalizeImportDate(name.match(FILENAME_DATE_RE)?.[1] ?? null);
+      const tags = fm.tags.length > 0 ? fm.tags : extractHashTags(content);
+      items.push({
+        content,
+        created_at: created,
+        tags,
+        url: firstUrl(content),
+        assets: assets.length > 0 ? assets : undefined,
+      });
+    } catch (e) {
+      failures.push({ item: baseName(path), reason: e instanceof Error ? e.message : "解析失败" });
+    }
+  }
+  return { items, failures };
+}
+
+// ---- Apple Notes (Exporter-style md/txt zip) ----
+
+/**
+ * Apple Notes has no official bulk export; the common migration path is the
+ * free "Exporter" Mac app (or similar tools), which writes one .md/.txt per
+ * note into folders named after the Notes.app notebooks, optionally with a
+ * frontmatter header and/or the creation date appended to the filename.
+ * The notebook folder becomes a tag; images in the same folder are stored.
+ */
+export function parseAppleNotesZip(entries: Record<string, Uint8Array>): ZipParseResult {
+  const items: ImportItem[] = [];
+  const failures: ImportFailure[] = [];
+  const total = { count: 0 };
+  const paths = Object.keys(entries).filter((p) => /\.(md|markdown|txt)$/i.test(p));
+  for (const path of paths) {
+    if (items.length >= MAX_IMPORT_ITEMS) break;
+    try {
+      const fm = parseFrontmatter(strFromU8(entries[path]));
+      const rawName = baseName(path).replace(/\.(md|markdown|txt)$/i, "").trim();
+      // "Title - 2023-06-02" / "2023-06-02 Title" filename date conventions
+      const nameDate = rawName.match(FILENAME_DATE_RE)?.[1] ?? null;
+      const name = rawName
+        .replace(/\s*[-–—]\s*\d{4}-\d{2}-\d{2}( \d{2}[.:]\d{2}([.:]\d{2})?)?$/, "")
+        .replace(/^\d{4}-\d{2}-\d{2}( \d{2}[.:]\d{2}([.:]\d{2})?)?\s*[-–—]?\s*/, "")
+        .trim();
+      const collected = collectImageRefs(fm.body, dirName(path), entries, total);
+      const body = collected.body;
+      const title = fm.title ?? name;
+      const content = clipContent(
+        title && !(body.startsWith(`# ${title}`) || body.split("\n")[0]?.trim() === title)
+          ? [title, body].filter(Boolean).join("\n").trim()
+          : body
+      );
+      if (!content) continue;
+      // notebook folder -> tag (Exporter mirrors Notes.app folders)
+      const folder = path.includes("/") ? path.split("/")[0].trim() : "";
+      const tags = [...fm.tags];
+      if (folder && !tags.includes(folder) && tags.length < 5) tags.push(folder);
+      items.push({
+        content,
+        created_at: fm.created ?? normalizeImportDate(nameDate),
+        tags,
+        url: firstUrl(content),
+        assets: collected.assets.length > 0 ? collected.assets : undefined,
+      });
+    } catch (e) {
+      failures.push({ item: baseName(path), reason: e instanceof Error ? e.message : "解析失败" });
+    }
+  }
+  return { items, failures };
+}
+
+// ---- entry ----
+
+export function parseImportZip(source: ZipImportSource, bytes: Uint8Array): ZipParseResult {
+  let entries: Record<string, Uint8Array>;
+  try {
+    entries = unzipEntries(bytes);
+  } catch {
+    return { items: [], failures: [{ item: "zip", reason: "压缩包无法解压，请确认是有效的 zip 文件" }] };
+  }
+  switch (source) {
+    case "notion":
+      return parseNotionZip(entries);
+    case "obsidian":
+      return parseObsidianZip(entries);
+    case "apple-notes":
+      return parseAppleNotesZip(entries);
+  }
+}

@@ -97,6 +97,9 @@ export async function getNotes(
   if (query.category) params.set("category", query.category)
   if (query.tag) params.set("tag", query.tag)
   if (query.q) params.set("q", query.q)
+  if (query.source) params.set("source", query.source)
+  if (query.from) params.set("from", query.from)
+  if (query.to) params.set("to", query.to)
   if (query.cursor) params.set("cursor", query.cursor)
   if (query.limit) params.set("limit", String(query.limit))
   const qs = params.toString()
@@ -242,6 +245,9 @@ export interface BatchFilter {
   category?: string
   tag?: string
   q?: string
+  source?: string
+  from?: string
+  to?: string
 }
 
 /** 按筛选条件批量操作全部匹配笔记（服务端执行，不限已加载项） */
@@ -389,7 +395,7 @@ export async function restoreBackup(file: File): Promise<RestoreStats> {
   return res.json() as Promise<RestoreStats>
 }
 
-export type ImportSource = "cubox" | "flomo" | "markdown" | "text"
+export type ImportSource = "cubox" | "flomo" | "markdown" | "text" | "notion" | "obsidian" | "apple-notes"
 
 export interface ImportStats {
   total: number
@@ -398,10 +404,28 @@ export interface ImportStats {
   failed: number
 }
 
+export interface ImportFailedItem {
+  item: string
+  reason: string
+}
+
+export interface ImportResult {
+  stats: ImportStats
+  failed_items: ImportFailedItem[]
+}
+
 export const MAX_IMPORT_BYTES = 20 * 1024 * 1024
 
-/** 导入 Cubox / flomo / Markdown / 纯文本导出文件，批量入库 */
-export async function importData(file: File, source: ImportSource): Promise<ImportStats> {
+/**
+ * 导入导出文件（Cubox / flomo / Markdown / 纯文本 / Notion zip / Obsidian zip /
+ * Apple 备忘录 zip），批量入库。服务端以 NDJSON 流返回进度，大包导入时
+ * onProgress 会逐批回调；最后一行包含统计与失败条目清单。
+ */
+export async function importData(
+  file: File,
+  source: ImportSource,
+  onProgress?: (done: number, total: number) => void,
+): Promise<ImportResult> {
   const { apiBaseUrl, apiToken, useMock } = loadSettings()
   if (useMock || !apiBaseUrl) throw new Error("演示模式不支持导入，请先配置真实 API")
   if (file.size > MAX_IMPORT_BYTES) throw new Error("文件过大：最大支持 20MB")
@@ -410,7 +434,7 @@ export async function importData(file: File, source: ImportSource): Promise<Impo
   form.set("file", file)
   let res: Response
   try {
-    res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/import`, {
+    res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/import?stream=1`, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiToken}` },
       body: form,
@@ -429,7 +453,38 @@ export async function importData(file: File, source: ImportSource): Promise<Impo
     }
     throw new ApiError(res.status, message)
   }
-  return res.json() as Promise<ImportStats>
+  // NDJSON progress stream: {done,total} lines, then {stats,failed_items} (or {error})
+  const reader = res.body?.getReader()
+  if (!reader) {
+    const legacy = (await res.json()) as ImportStats & { failed_items?: ImportFailedItem[] }
+    return { stats: legacy, failed_items: legacy.failed_items ?? [] }
+  }
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let final: ImportResult | null = null
+  const handleLine = (line: string) => {
+    if (!line.trim()) return
+    let obj: { done?: number; total?: number; stats?: ImportStats; failed_items?: ImportFailedItem[]; error?: string }
+    try {
+      obj = JSON.parse(line)
+    } catch {
+      return
+    }
+    if (typeof obj.error === "string") throw new ApiError(500, obj.error)
+    if (obj.stats) final = { stats: obj.stats, failed_items: obj.failed_items ?? [] }
+    else if (typeof obj.done === "number" && typeof obj.total === "number") onProgress?.(obj.done, obj.total)
+  }
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() ?? ""
+    for (const line of lines) handleLine(line)
+  }
+  handleLine(buffer)
+  if (!final) throw new Error("导入未返回结果，请刷新时间流确认后重试")
+  return final
 }
 
 export async function getThreads(): Promise<ThreadsResponse> {

@@ -1,4 +1,4 @@
-export type NoteSource = "wechat" | "android" | "web" | "api" | "extension" | "from-ask"
+export type NoteSource = "wechat" | "android" | "web" | "api" | "extension" | "from-ask" | "import" | "mcp"
 export type NoteRawType = "text" | "link" | "image" | "voice" | "file"
 export type NoteCategory = "idea" | "todo" | "collect" | "data" | "expense" | "income"
 
@@ -102,6 +102,11 @@ export interface NotesQuery {
   category?: string
   tag?: string
   q?: string
+  /** 来源过滤（wechat / web / import / …） */
+  source?: string
+  /** 创建时间范围（UTC "YYYY-MM-DD HH:MM:SS"） */
+  from?: string
+  to?: string
   cursor?: string
   limit?: number
 }

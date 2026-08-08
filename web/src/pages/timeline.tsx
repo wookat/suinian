@@ -12,6 +12,7 @@ import {
   Trash2,
   Tag,
   FolderInput,
+  SlidersHorizontal,
 } from "lucide-react"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
@@ -57,6 +58,28 @@ const SAMPLE_NOTES = [
   "https://github.com/wookat/suinian 碎念开源仓库，有空研究下自部署",
 ]
 
+const SOURCE_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "全部来源" },
+  { value: "wechat", label: "微信" },
+  { value: "web", label: "Web 速记" },
+  { value: "android", label: "Android" },
+  { value: "extension", label: "浏览器剪藏" },
+  { value: "api", label: "API" },
+  { value: "import", label: "导入" },
+  { value: "from-ask", label: "问答存档" },
+]
+
+/** 本地日期（YYYY-MM-DD）转 UTC SQL 时间，与后端 created_at 存储格式对齐 */
+function localDateToUtcSql(date: string, endOfDay: boolean): string | undefined {
+  const m = date.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return undefined
+  const d = endOfDay
+    ? new Date(+m[1], +m[2] - 1, +m[3], 23, 59, 59)
+    : new Date(+m[1], +m[2] - 1, +m[3], 0, 0, 0)
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
+}
+
 const TOP_TAGS = 12
 const MOBILE_TOP_TAGS = 6
 const SEARCH_DEBOUNCE_MS = 300
@@ -90,6 +113,10 @@ export function TimelinePage() {
   const [tag, setTag] = useState("")
   const [searchInput, setSearchInput] = useState("")
   const [search, setSearch] = useState("")
+  const [sourceFilter, setSourceFilter] = useState("")
+  const [fromDate, setFromDate] = useState("")
+  const [toDate, setToDate] = useState("")
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [askMode, setAskMode] = useState(false)
   // ? 内联指令：速记框直接提问 → 打开问答面板并发送
   const [askPrefill, setAskPrefill] = useState<string | null>(null)
@@ -159,8 +186,11 @@ export function TimelinePage() {
     if (category) f.category = category
     if (tag) f.tag = tag
     if (search) f.q = search
+    if (sourceFilter) f.source = sourceFilter
+    if (fromDate) f.from = localDateToUtcSql(fromDate, false)
+    if (toDate) f.to = localDateToUtcSql(toDate, true)
     return f
-  }, [category, tag, search])
+  }, [category, tag, search, sourceFilter, fromDate, toDate])
 
   function toggleSelected(note: Note) {
     setAllMatching(false)
@@ -342,6 +372,9 @@ export function TimelinePage() {
           category: category || undefined,
           tag: tag || undefined,
           q: search || undefined,
+          source: sourceFilter || undefined,
+          from: fromDate ? localDateToUtcSql(fromDate, false) : undefined,
+          to: toDate ? localDateToUtcSql(toDate, true) : undefined,
         },
         controller.signal,
       )
@@ -357,7 +390,7 @@ export function TimelinePage() {
     } finally {
       if (!controller.signal.aborted) setLoading(false)
     }
-  }, [category, tag, search])
+  }, [category, tag, search, sourceFilter, fromDate, toDate])
 
   useEffect(() => {
     void load()
@@ -552,7 +585,65 @@ export function TimelinePage() {
           <CheckSquare />
           {selectMode ? "退出选择" : "选择"}
         </Button>
+        <Button
+          variant={filtersOpen || !!sourceFilter || !!fromDate || !!toDate ? "default" : "outline"}
+          size="sm"
+          className="h-9 px-2.5"
+          onClick={() => setFiltersOpen((v) => !v)}
+          aria-label="筛选"
+          title="按来源/时间筛选"
+        >
+          <SlidersHorizontal />
+        </Button>
       </div>
+
+      {filtersOpen && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value)}
+            className="h-9 rounded-md border bg-background px-2 text-sm"
+            aria-label="来源筛选"
+          >
+            {SOURCE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <div className="flex items-center gap-1">
+            <input
+              type="date"
+              value={fromDate}
+              max={toDate || undefined}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="h-9 rounded-md border bg-background px-2 text-sm"
+              aria-label="开始日期"
+            />
+            <span className="text-muted-foreground">→</span>
+            <input
+              type="date"
+              value={toDate}
+              min={fromDate || undefined}
+              onChange={(e) => setToDate(e.target.value)}
+              className="h-9 rounded-md border bg-background px-2 text-sm"
+              aria-label="结束日期"
+            />
+          </div>
+          {(sourceFilter || fromDate || toDate) && (
+            <button
+              onClick={() => {
+                setSourceFilter("")
+                setFromDate("")
+                setToDate("")
+              }}
+              className="inline-flex items-center gap-0.5 text-xs font-medium text-primary underline underline-offset-2"
+            >
+              <X className="size-3" /> 清除筛选
+            </button>
+          )}
+        </div>
+      )}
 
       {askMode && (
         <AskChat
