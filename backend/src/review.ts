@@ -53,7 +53,7 @@ export function shiftDate(dateYmd: string, opts: { years?: number; months?: numb
 
 async function notesOnShanghaiDay(env: Env, userId: string, dayYmd: string, limit: number): Promise<NoteRow[]> {
   const { results } = await env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0
+    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL
        AND datetime(created_at, '+8 hours') >= datetime(? || ' 00:00:00')
        AND datetime(created_at, '+8 hours') <= datetime(? || ' 23:59:59')
      ORDER BY length(content) DESC LIMIT ?`
@@ -67,7 +67,7 @@ async function notesOnShanghaiDay(env: Env, userId: string, dayYmd: string, limi
 async function revisitCandidates(env: Env, userId: string, exclude: string[], limit: number): Promise<NoteRow[]> {
   const ph = exclude.map(() => "?").join(",");
   const { results } = await env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0
+    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL
        AND category IN ('idea', 'collect')
        AND length(content) >= 20
        AND created_at < datetime('now', '-14 days')
@@ -83,7 +83,7 @@ async function revisitCandidates(env: Env, userId: string, exclude: string[], li
 /** 降级候选：任意 1 天前创建、有实质内容的非敏感笔记（不限分类），新账号也能尽快有回顾 */
 async function relaxedCandidates(env: Env, userId: string, limit: number): Promise<NoteRow[]> {
   const { results } = await env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0
+    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL
        AND length(content) >= 10
        AND created_at < datetime('now', '-1 day')
      ORDER BY RANDOM() LIMIT ?`
@@ -97,7 +97,7 @@ async function relaxedCandidates(env: Env, userId: string, limit: number): Promi
 async function recurringThemeCandidate(env: Env, userId: string, exclude: string[]): Promise<NoteRow | null> {
   const hot = await env.DB.prepare(
     `SELECT thread_id, COUNT(*) AS n FROM notes
-      WHERE user_id = ? AND is_sensitive = 0 AND thread_id IS NOT NULL
+      WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL AND thread_id IS NOT NULL
         AND created_at >= datetime('now', '-14 days')
       GROUP BY thread_id HAVING n >= 3
       ORDER BY n DESC LIMIT 1`
@@ -107,7 +107,7 @@ async function recurringThemeCandidate(env: Env, userId: string, exclude: string
   if (!hot) return null;
   const ph = exclude.map(() => "?").join(",");
   return await env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND thread_id = ?
+    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL AND thread_id = ?
        ${exclude.length > 0 ? `AND id NOT IN (${ph})` : ""}
      ORDER BY created_at DESC LIMIT 1`
   )
@@ -119,7 +119,7 @@ async function recurringThemeCandidate(env: Env, userId: string, exclude: string
 async function pendingTodoCandidate(env: Env, userId: string, exclude: string[]): Promise<NoteRow | null> {
   const ph = exclude.map(() => "?").join(",");
   return await env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0
+    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL
        AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0)
        AND todo_due IS NOT NULL AND datetime(todo_due) <= datetime('now', '+2 days')
        ${exclude.length > 0 ? `AND id NOT IN (${ph})` : ""}

@@ -275,7 +275,7 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
 export async function backfillLinkExtracts(env: Env, limit = 3): Promise<void> {
   const { results } = await env.DB.prepare(
     `SELECT id FROM notes
-     WHERE url IS NOT NULL
+     WHERE url IS NOT NULL AND deleted_at IS NULL
        AND (meta IS NULL OR meta NOT LIKE '%"link_fetched_at"%')
        AND created_at < datetime('now', '-2 minutes')
      ORDER BY created_at DESC LIMIT ?`

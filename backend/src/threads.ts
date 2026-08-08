@@ -223,7 +223,7 @@ export async function clusterNote(env: Env, note: NoteRow, opts?: { useGraph?: b
       const { results } = await env.DB.prepare(
         `SELECT n.id, n.thread_id, n.title, n.content, e.vector FROM notes n
          LEFT JOIN note_embeddings e ON e.note_id = n.id
-         WHERE n.user_id = ? AND n.category = 'idea' AND n.id != ?
+         WHERE n.user_id = ? AND n.category = 'idea' AND n.deleted_at IS NULL AND n.id != ?
            AND n.created_at >= datetime('now', '-90 days')
          ORDER BY n.created_at DESC LIMIT 200`
       )
@@ -293,7 +293,7 @@ export async function clusterNote(env: Env, note: NoteRow, opts?: { useGraph?: b
     // cold start: no thread matched (or none exist) — pair with a recent unthreaded idea
     const { results: loose } = await env.DB.prepare(
       `SELECT id, title, content FROM notes
-       WHERE user_id = ? AND category = 'idea' AND thread_id IS NULL AND id != ?
+       WHERE user_id = ? AND category = 'idea' AND deleted_at IS NULL AND thread_id IS NULL AND id != ?
          AND created_at >= datetime('now', '-90 days')
        ORDER BY created_at DESC LIMIT 30`
     )
@@ -334,7 +334,7 @@ export async function rebuildThreads(
   opts?: { useGraph?: boolean }
 ): Promise<{ ideas: number; threads: number }> {
   const { results: ideas } = await env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND category = 'idea'
+    `SELECT * FROM notes WHERE user_id = ? AND category = 'idea' AND deleted_at IS NULL
        AND created_at >= datetime('now', '-90 days')
      ORDER BY created_at ASC LIMIT 500`
   )
@@ -361,7 +361,7 @@ export async function rebuildThreads(
   // second pass: ideas that stayed unthreaded on the chronological pass (their
   // topic-mates came later) get one more match against the full thread set
   const { results: leftovers } = await env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND category = 'idea' AND thread_id IS NULL
+    `SELECT * FROM notes WHERE user_id = ? AND category = 'idea' AND deleted_at IS NULL AND thread_id IS NULL
        AND created_at >= datetime('now', '-90 days')
      ORDER BY created_at ASC LIMIT 100`
   )
@@ -396,7 +396,7 @@ export async function reconcileThread(
   threadId: string,
   knownCount?: number
 ): Promise<"deleted" | "dissolved" | "recounted" | "ok"> {
-  const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM notes WHERE thread_id = ?")
+  const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM notes WHERE thread_id = ? AND deleted_at IS NULL")
     .bind(threadId)
     .first<{ c: number }>();
   const c = cnt?.c ?? 0;
@@ -466,7 +466,7 @@ export async function refreshThreads(env: Env): Promise<void> {
   ).all<{ id: string; user_id: string; title: string }>();
   for (const t of threads ?? []) {
     try {
-      const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM notes WHERE thread_id = ?")
+      const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM notes WHERE thread_id = ? AND deleted_at IS NULL")
         .bind(t.id)
         .first<{ c: number }>();
       await env.DB.prepare(

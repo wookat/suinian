@@ -96,7 +96,7 @@ export async function buildBackupZip(
   waitUntil: (p: Promise<unknown>) => void
 ): Promise<Response> {
   const [notesR, threadsR, reportsR] = await Promise.all([
-    env.DB.prepare("SELECT * FROM notes WHERE user_id = ? ORDER BY created_at ASC").bind(userId).all<NoteRow>(),
+    env.DB.prepare("SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at ASC").bind(userId).all<NoteRow>(),
     env.DB.prepare("SELECT * FROM threads WHERE user_id = ? ORDER BY updated_at DESC").bind(userId).all<ThreadRow>(),
     env.DB.prepare("SELECT * FROM weekly_reports WHERE user_id = ? ORDER BY week_start DESC")
       .bind(userId)
@@ -372,7 +372,7 @@ export async function restoreBackup(
       const chunk = rawNotes.slice(i, i + CHUNK);
       const ph = chunk.map(() => "?").join(",");
       const existing = await env.DB.prepare(
-        `SELECT content, created_at FROM notes WHERE user_id = ? AND content IN (${ph})`
+        `SELECT content, created_at FROM notes WHERE user_id = ? AND deleted_at IS NULL AND content IN (${ph})`
       )
         .bind(userId, ...chunk.map((n) => n.content))
         .all<{ content: string; created_at: string }>();
@@ -385,7 +385,7 @@ export async function restoreBackup(
       if (sensIncoming.length > 0) {
         const ph2 = sensIncoming.map(() => "?").join(",");
         const sensExisting = await env.DB.prepare(
-          `SELECT content, content_enc, created_at FROM notes WHERE user_id = ? AND is_sensitive = 1 AND created_at IN (${ph2})`
+          `SELECT content, content_enc, created_at FROM notes WHERE user_id = ? AND deleted_at IS NULL AND is_sensitive = 1 AND created_at IN (${ph2})`
         )
           .bind(userId, ...sensIncoming.map((n) => n.created_at))
           .all<{ content: string; content_enc: string | null; created_at: string }>();

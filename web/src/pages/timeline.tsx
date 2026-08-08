@@ -24,7 +24,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import { AskChat } from "@/components/ask-chat"
-import { getNotes, getNote, createNote, patchNote, deleteNote, batchNotes, batchNotesByFilter, ApiError, NetworkError } from "@/lib/api"
+import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, ApiError, NetworkError } from "@/lib/api"
 import type { BatchFilter } from "@/lib/api"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
@@ -85,6 +85,9 @@ const MOBILE_TOP_TAGS = 6
 const SEARCH_DEBOUNCE_MS = 300
 const POLL_INTERVAL = 2000
 const POLL_MAX = 15
+// 删除撤销：待撤销 ids 存 localStorage，刷新后窗口内仍可撤销（服务端软删约 30 分钟后真删）
+const PENDING_UNDO_KEY = "suinian:pending-undo"
+const PENDING_UNDO_TTL_MS = 5 * 60 * 1000
 
 type LoadError =
   | { kind: "auth" }
@@ -145,9 +148,9 @@ export function TimelinePage() {
   const [tagPanelOpen, setTagPanelOpen] = useState(false)
   const [catPanelOpen, setCatPanelOpen] = useState(false)
   const [batchTagInput, setBatchTagInput] = useState("")
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
   const [toast, setToast] = useState<{ message: string; undo?: () => void } | null>(null)
   const toastTimerRef = useRef<number | null>(null)
-  const pendingDeleteRef = useRef<{ ids: string[]; timer: number } | null>(null)
 
   const showToast = useCallback((message: string, undo?: () => void, ms = 6000) => {
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
@@ -155,23 +158,69 @@ export function TimelinePage() {
     toastTimerRef.current = window.setTimeout(() => setToast(null), ms)
   }, [])
 
-  const flushPendingDelete = useCallback(() => {
-    const pending = pendingDeleteRef.current
-    if (!pending) return
-    window.clearTimeout(pending.timer)
-    pendingDeleteRef.current = null
-    void batchNotes("delete", pending.ids).catch(() => {})
+  // 删除已在服务端软删，撤销要在窗口内可用（含刷新后）：把待撤销 ids 存 localStorage
+  const showUndoDeleteToast = useCallback(
+    (ids: string[], message: string) => {
+      const expires = Date.now() + PENDING_UNDO_TTL_MS
+      try {
+        localStorage.setItem(PENDING_UNDO_KEY, JSON.stringify({ ids, message, expires }))
+      } catch {
+        // storage full/unavailable: undo still works until the toast times out
+      }
+      showToast(
+        message,
+        () => {
+          try {
+            localStorage.removeItem(PENDING_UNDO_KEY)
+          } catch {
+            // ignore
+          }
+          setToast(null)
+          void restoreNotes(ids)
+            .then((n) => {
+              showToast(`已恢复 ${n} 条`)
+              void load()
+              notifyReviewRefresh()
+            })
+            .catch((e) => showToast(e instanceof Error ? e.message : String(e)))
+        },
+        PENDING_UNDO_TTL_MS,
+      )
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [showToast],
+  )
+
+  // 刷新后恢复未过期的撤销提示（删除→刷新→撤销仍可用）
+  useEffect(() => {
+    type PendingUndo = { ids?: unknown; message?: unknown; expires?: unknown }
+    let saved: PendingUndo | null = null
+    try {
+      const raw = localStorage.getItem(PENDING_UNDO_KEY)
+      if (raw) saved = JSON.parse(raw) as PendingUndo
+    } catch {
+      saved = null
+    }
+    if (!saved) return
+    const ids = Array.isArray(saved.ids) ? saved.ids.filter((v): v is string => typeof v === "string") : []
+    const expires = typeof saved.expires === "number" ? saved.expires : 0
+    if (ids.length === 0 || expires <= Date.now()) {
+      try {
+        localStorage.removeItem(PENDING_UNDO_KEY)
+      } catch {
+        // ignore
+      }
+      return
+    }
+    showUndoDeleteToast(ids, typeof saved.message === "string" ? saved.message : `已删除 ${ids.length} 条`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
-    const flush = () => flushPendingDelete()
-    window.addEventListener("beforeunload", flush)
     return () => {
-      window.removeEventListener("beforeunload", flush)
-      flush()
       if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
     }
-  }, [flushPendingDelete])
+  }, [])
 
   function exitSelectMode() {
     setSelectMode(false)
@@ -203,11 +252,12 @@ export function TimelinePage() {
   }
 
   function batchDelete() {
+    const onProgress = (done: number, total: number) => setBatchProgress({ done, total })
     if (allMatching) {
-      if (!window.confirm("确定删除当前筛选条件下的全部匹配碎念吗？此操作不可撤销。")) return
-      flushPendingDelete()
+      if (!window.confirm("确定删除当前筛选条件下的全部匹配碎念吗？")) return
       setBatchBusy(true)
-      void batchNotesByFilter("delete", currentFilter())
+      setBatchProgress(null)
+      void batchNotesByFilter("delete", currentFilter(), undefined, onProgress)
         .then((n) => {
           exitSelectMode()
           showToast(`已删除全部匹配的 ${n} 条`)
@@ -215,6 +265,7 @@ export function TimelinePage() {
         .catch((e) => showToast(e instanceof Error ? e.message : String(e)))
         .finally(() => {
           setBatchBusy(false)
+          setBatchProgress(null)
           void load()
           notifyReviewRefresh()
         })
@@ -223,30 +274,23 @@ export function TimelinePage() {
     const ids = [...selectedIds]
     if (ids.length === 0) return
     if (!window.confirm(`确定删除选中的 ${ids.length} 条碎念吗？`)) return
-    flushPendingDelete()
-    const removed = notes.filter((n) => selectedIds.has(n.id))
-    setNotes((ns) => ns.filter((n) => !selectedIds.has(n.id)))
-    exitSelectMode()
-    const timer = window.setTimeout(() => {
-      pendingDeleteRef.current = null
-      void batchNotes("delete", ids).catch(() => void load())
-    }, 6000)
-    pendingDeleteRef.current = { ids, timer }
-    notifyNotesDeleted(ids)
-    showToast(`已删除 ${ids.length} 条`, () => {
-      const pending = pendingDeleteRef.current
-      if (pending) {
-        window.clearTimeout(pending.timer)
-        pendingDeleteRef.current = null
-      }
-      notifyReviewRefresh()
-      setNotes((ns) => {
-        const restored = [...ns, ...removed]
-        restored.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
-        return restored
+    setBatchBusy(true)
+    setBatchProgress(null)
+    void batchNotes("delete", ids, undefined, onProgress)
+      .then((n) => {
+        setNotes((ns) => ns.filter((n2) => !selectedIds.has(n2.id)))
+        exitSelectMode()
+        notifyNotesDeleted(ids)
+        showUndoDeleteToast(ids, `已删除 ${n} 条`)
       })
-      setToast(null)
-    })
+      .catch((e) => {
+        showToast(e instanceof Error ? e.message : String(e))
+        void load()
+      })
+      .finally(() => {
+        setBatchBusy(false)
+        setBatchProgress(null)
+      })
   }
 
   async function batchAddTag() {
@@ -256,7 +300,9 @@ export function TimelinePage() {
     setBatchBusy(true)
     if (allMatching) {
       try {
-        const n = await batchNotesByFilter("add_tags", currentFilter(), { tags: [tag] })
+        const n = await batchNotesByFilter("add_tags", currentFilter(), { tags: [tag] }, (done, total) =>
+          setBatchProgress({ done, total }),
+        )
         setBatchTagInput("")
         setTagPanelOpen(false)
         exitSelectMode()
@@ -266,11 +312,12 @@ export function TimelinePage() {
         showToast(e instanceof Error ? e.message : String(e))
       } finally {
         setBatchBusy(false)
+        setBatchProgress(null)
       }
       return
     }
     try {
-      await batchNotes("add_tags", ids, { tags: [tag] })
+      await batchNotes("add_tags", ids, { tags: [tag] }, (done, total) => setBatchProgress({ done, total }))
       setNotes((ns) =>
         ns.map((n) => (selectedIds.has(n.id) && !n.tags.includes(tag) ? { ...n, tags: [...n.tags, tag] } : n)),
       )
@@ -285,6 +332,7 @@ export function TimelinePage() {
       showToast(e instanceof Error ? e.message : String(e))
     } finally {
       setBatchBusy(false)
+      setBatchProgress(null)
     }
   }
 
@@ -294,7 +342,9 @@ export function TimelinePage() {
     setBatchBusy(true)
     if (allMatching) {
       try {
-        const n = await batchNotesByFilter("set_category", currentFilter(), { category: cat })
+        const n = await batchNotesByFilter("set_category", currentFilter(), { category: cat }, (done, total) =>
+          setBatchProgress({ done, total }),
+        )
         setCatPanelOpen(false)
         exitSelectMode()
         const label = CATEGORY_OPTIONS.find((c) => c.value === cat)?.label ?? cat
@@ -304,6 +354,7 @@ export function TimelinePage() {
         showToast(e instanceof Error ? e.message : String(e))
       } finally {
         setBatchBusy(false)
+        setBatchProgress(null)
       }
       return
     }
@@ -311,7 +362,7 @@ export function TimelinePage() {
       .filter((n) => selectedIds.has(n.id))
       .map((n) => ({ id: n.id, category: n.category }))
     try {
-      await batchNotes("set_category", ids, { category: cat })
+      await batchNotes("set_category", ids, { category: cat }, (done, total) => setBatchProgress({ done, total }))
       setNotes((ns) => ns.map((n) => (selectedIds.has(n.id) ? { ...n, category: cat } : n)))
       setCatPanelOpen(false)
       exitSelectMode()
@@ -326,6 +377,7 @@ export function TimelinePage() {
       showToast(e instanceof Error ? e.message : String(e))
     } finally {
       setBatchBusy(false)
+      setBatchProgress(null)
     }
   }
 
@@ -510,6 +562,7 @@ export function TimelinePage() {
     notifyNotesDeleted([note.id])
     try {
       await deleteNote(note.id)
+      showUndoDeleteToast([note.id], "已删除 1 条")
     } catch {
       setNotes(prev)
       notifyReviewRefresh()
@@ -872,7 +925,11 @@ export function TimelinePage() {
             )}
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium">
-                {allMatching ? "已选全部匹配结果" : `已选 ${selectedIds.size} 条`}
+                {batchBusy && batchProgress
+                  ? `已处理 ${batchProgress.done}/${batchProgress.total}`
+                  : allMatching
+                    ? "已选全部匹配结果"
+                    : `已选 ${selectedIds.size} 条`}
               </span>
               <button
                 onClick={() => {
