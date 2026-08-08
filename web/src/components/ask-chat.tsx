@@ -36,7 +36,10 @@ export function buildAskNoteContent(question: string, answer: string, refs: { in
   if (refs.length > 0) {
     lines.push("", "引用：")
     for (const r of refs) {
-      const label = (r.note.title || r.note.content).replace(/\s+/g, " ").slice(0, 60)
+      const label =
+        r.note.is_sensitive === 1
+          ? "敏感内容"
+          : (r.note.title || r.note.content).replace(/\s+/g, " ").slice(0, 60)
       const link = r.note.url || (r.note.thread_id ? `${location.origin}${location.pathname}#/threads?id=${r.note.thread_id}` : "")
       lines.push(`[${r.index}] ${label}${link ? ` ${link}` : ""}`)
     }

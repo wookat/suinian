@@ -57,6 +57,7 @@ interface ThreadGraphViewProps {
 }
 
 function noteLabel(n: Note): string {
+  if (n.is_sensitive === 1) return "敏感内容"
   const t = (n.title || n.content || "").replace(/\s+/g, " ").trim()
   return t.length > 14 ? `${t.slice(0, 14)}…` : t || "碎片"
 }
