@@ -34,7 +34,8 @@ import {
   IMAGE_FAILED_PLACEHOLDER,
 } from "./media";
 import { detectFileKind, buildFileNote, buildFileReply } from "./files";
-import { parseImportFile, runImport, IMPORT_SOURCES, type ImportSource } from "./import";
+import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type ImportSource, type ImportItem, type ImportFailure } from "./import";
+import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
 import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse } from "./ask";
@@ -518,28 +519,58 @@ app.post("/api/notes", async (c) => {
   return c.json({ note: await noteToJsonDecrypted(c.env, note) }, 201);
 });
 
+// Shared filter SQL for GET /api/notes and POST /api/notes/batch: category /
+// tag / keyword / source / created_at range, all combinable.
+const DATETIME_RE = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$/;
+
+function noteFilterConds(filter: {
+  category?: unknown;
+  tag?: unknown;
+  q?: unknown;
+  source?: unknown;
+  from?: unknown;
+  to?: unknown;
+}): { conds: string[]; binds: unknown[] } {
+  const conds: string[] = [];
+  const binds: unknown[] = [];
+  if (typeof filter.category === "string" && filter.category) {
+    conds.push("category = ?");
+    binds.push(filter.category);
+  }
+  if (typeof filter.tag === "string" && filter.tag) {
+    conds.push("tags LIKE ?");
+    binds.push(`%"${filter.tag}"%`);
+  }
+  if (typeof filter.q === "string" && filter.q) {
+    conds.push("(content LIKE ? OR title LIKE ? OR url_title LIKE ? OR url_summary LIKE ?)");
+    const like = `%${filter.q}%`;
+    binds.push(like, like, like, like);
+  }
+  if (typeof filter.source === "string" && filter.source) {
+    conds.push("source = ?");
+    binds.push(filter.source);
+  }
+  if (typeof filter.from === "string" && DATETIME_RE.test(filter.from)) {
+    conds.push("created_at >= ?");
+    binds.push(filter.from.length === 10 ? `${filter.from} 00:00:00` : filter.from);
+  }
+  if (typeof filter.to === "string" && DATETIME_RE.test(filter.to)) {
+    conds.push("created_at <= ?");
+    binds.push(filter.to.length === 10 ? `${filter.to} 23:59:59` : filter.to);
+  }
+  return { conds, binds };
+}
+
 // ---- GET /api/notes ----
 app.get("/api/notes", async (c) => {
   const userId = c.get("userId");
-  const { category, tag, q, cursor } = c.req.query();
+  const { category, tag, q, cursor, source, from, to } = c.req.query();
   const rawLimit = parseInt(c.req.query("limit") ?? "", 10);
   const limit = Number.isNaN(rawLimit) ? 20 : Math.max(1, Math.min(100, rawLimit));
 
-  const conds: string[] = ["user_id = ?"];
-  const binds: unknown[] = [userId];
-  if (category) {
-    conds.push("category = ?");
-    binds.push(category);
-  }
-  if (tag) {
-    conds.push("tags LIKE ?");
-    binds.push(`%"${tag}"%`);
-  }
-  if (q) {
-    conds.push("(content LIKE ? OR title LIKE ? OR url_title LIKE ? OR url_summary LIKE ?)");
-    const like = `%${q}%`;
-    binds.push(like, like, like, like);
-  }
+  const filter = noteFilterConds({ category, tag, q, source, from, to });
+  const conds: string[] = ["user_id = ?", ...filter.conds];
+  const binds: unknown[] = [userId, ...filter.binds];
   if (cursor) {
     const cur = decodeCursor(cursor);
     if (!cur) return c.json({ error: "invalid cursor" }, 400);
@@ -558,16 +589,19 @@ app.get("/api/notes", async (c) => {
   // hybrid recall on the first page of a text search: keyword hits + semantic
   // hits (Vectorize/D1 vectors), deduped and ranked by relevance; any semantic
   // failure leaves the pure keyword results untouched
-  if (q && !cursor && !category && !tag) {
+  if (q && !cursor) {
     const hits = await semanticRecall(c.env, userId, q, 10);
     const kwIds = new Set(page.map((n) => n.id));
     const semScore = new Map(hits.map((h) => [h.note_id, h.score]));
     const extraIds = hits.filter((h) => !kwIds.has(h.note_id)).map((h) => h.note_id);
     let extra: NoteRow[] = [];
     if (extraIds.length > 0) {
+      // semantic extras must satisfy the same structured filters (minus keyword)
+      const ef = noteFilterConds({ category, tag, source, from, to });
       const ph = extraIds.map(() => "?").join(",");
-      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${ph})`)
-        .bind(userId, ...extraIds)
+      const where = [`user_id = ?`, `id IN (${ph})`, ...ef.conds].join(" AND ");
+      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE ${where}`)
+        .bind(userId, ...extraIds, ...ef.binds)
         .all<NoteRow>();
       extra = r.results ?? [];
     }
@@ -746,23 +780,11 @@ const BATCH_FILTER_MAX = 1000;
 export async function resolveBatchFilter(
   env: Env,
   userId: string,
-  filter: { category?: unknown; tag?: unknown; q?: unknown }
+  filter: { category?: unknown; tag?: unknown; q?: unknown; source?: unknown; from?: unknown; to?: unknown }
 ): Promise<string[]> {
-  const conds: string[] = ["user_id = ?"];
-  const binds: unknown[] = [userId];
-  if (typeof filter.category === "string" && filter.category) {
-    conds.push("category = ?");
-    binds.push(filter.category);
-  }
-  if (typeof filter.tag === "string" && filter.tag) {
-    conds.push("tags LIKE ?");
-    binds.push(`%"${filter.tag}"%`);
-  }
-  if (typeof filter.q === "string" && filter.q) {
-    conds.push("(content LIKE ? OR title LIKE ? OR url_title LIKE ? OR url_summary LIKE ?)");
-    const like = `%${filter.q}%`;
-    binds.push(like, like, like, like);
-  }
+  const f = noteFilterConds(filter);
+  const conds: string[] = ["user_id = ?", ...f.conds];
+  const binds: unknown[] = [userId, ...f.binds];
   const { results } = await env.DB.prepare(
     `SELECT id FROM notes WHERE ${conds.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT ${BATCH_FILTER_MAX}`
   )
@@ -1573,8 +1595,10 @@ const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
 
 app.post("/api/import", async (c) => {
   const userId = c.get("userId");
+  const isZipSource = (s: string) => ZIP_IMPORT_SOURCES.includes(s as ImportSource);
   let source = "";
   let text = "";
+  let zipBytes: Uint8Array | null = null;
   const ct = c.req.header("content-type") || "";
   if (ct.includes("multipart/form-data")) {
     const form = await c.req.raw.formData().catch(() => null);
@@ -1583,23 +1607,60 @@ app.post("/api/import", async (c) => {
     const file = form.get("file");
     if (!(file instanceof File)) return c.json({ error: "file required" }, 400);
     if (file.size > MAX_IMPORT_BYTES) return c.json({ error: "文件过大：最大支持 20MB" }, 413);
-    text = await file.text();
+    if (isZipSource(source)) zipBytes = new Uint8Array(await file.arrayBuffer());
+    else text = await file.text();
   } else {
     const body = await c.req.json<{ source?: unknown; content?: unknown }>().catch(() => null);
     source = typeof body?.source === "string" ? body.source : "";
+    if (isZipSource(source)) return c.json({ error: "该来源需以 multipart 表单上传 zip 文件" }, 400);
     text = typeof body?.content === "string" ? body.content : "";
     if (text.length > MAX_IMPORT_BYTES) return c.json({ error: "内容过大：最大支持 20MB" }, 413);
   }
   if (!IMPORT_SOURCES.includes(source as ImportSource)) {
-    return c.json({ error: "source 需为 cubox / flomo / markdown / text 之一" }, 400);
+    return c.json({ error: "source 需为 cubox / flomo / markdown / text / notion / obsidian / apple-notes 之一" }, 400);
   }
-  if (!text.trim()) return c.json({ error: "文件内容为空" }, 400);
-  const items = parseImportFile(source as ImportSource, text);
+
+  let items: ImportItem[];
+  let parseFailures: ImportFailure[] = [];
+  if (zipBytes) {
+    const parsed = parseImportZip(source as ZipImportSource, zipBytes);
+    items = parsed.items;
+    parseFailures = parsed.failures;
+  } else {
+    if (!text.trim()) return c.json({ error: "文件内容为空" }, 400);
+    items = parseImportFile(source as ImportSource, text);
+  }
   if (items.length === 0) {
-    return c.json({ error: "未能从文件中解析出笔记，请确认选择的来源与导出格式是否匹配" }, 400);
+    const reason = parseFailures[0]?.reason;
+    return c.json({ error: reason ?? "未能从文件中解析出笔记，请确认选择的来源与导出格式是否匹配" }, 400);
   }
-  const stats = await runImport(c.env.DB, userId, source as ImportSource, items);
-  return c.json(stats, 201);
+
+  // ?stream=1: NDJSON progress lines ({"done","total"}) followed by a final
+  // line with {stats, failed_items}; keeps big zips responsive in the UI.
+  if (c.req.query("stream") === "1") {
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = writable.getWriter();
+    const enc = new TextEncoder();
+    const writeLine = (obj: unknown) => writer.write(enc.encode(`${JSON.stringify(obj)}\n`)).catch(() => {});
+    const run = (async () => {
+      try {
+        await writeLine({ done: 0, total: items.length });
+        const result = await runImport(c.env, userId, source as ImportSource, items, {
+          onProgress: (done, total) => void writeLine({ done, total }),
+        });
+        await writeLine({ stats: result.stats, failed_items: [...parseFailures, ...result.failures] });
+      } catch (e) {
+        await writeLine({ error: e instanceof Error ? e.message : "导入失败" });
+      } finally {
+        await writer.close().catch(() => {});
+      }
+    })();
+    c.executionCtx.waitUntil(run);
+    return c.body(readable, 201, { "content-type": "application/x-ndjson; charset=utf-8" });
+  }
+
+  const result = await runImport(c.env, userId, source as ImportSource, items);
+  return c.json({ ...result.stats, failed_items: [...parseFailures, ...result.failures] }, 201);
 });
 
 // ---- GET /api/export ----

@@ -31,6 +31,7 @@ import {
   Wallet,
   Coins,
   Puzzle,
+  FolderInput,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -103,6 +104,8 @@ const SOURCE_META = {
   api: { icon: Webhook, label: "来自 API" },
   extension: { icon: Puzzle, label: "来自浏览器剪藏" },
   "from-ask": { icon: Sparkles, label: "来自问答存档" },
+  import: { icon: FolderInput, label: "来自导入" },
+  mcp: { icon: Webhook, label: "来自 MCP" },
 } as const
 
 export function CategoryBadge({

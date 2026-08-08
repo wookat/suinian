@@ -36,7 +36,8 @@ import {
   testConnection,
   MAX_IMPORT_BYTES,
   type ImportSource,
-  type ImportStats,
+  type ImportResult,
+  type ImportFailedItem,
   type RestoreStats,
   type PushPreferences,
   type TestConnectionResult,
@@ -49,6 +50,9 @@ import { cn } from "@/lib/utils"
 const IMPORT_SOURCES: { value: ImportSource; label: string; hint: string; accept: string }[] = [
   { value: "cubox", label: "Cubox", hint: "支持 Cubox 导出的 CSV / 书签 HTML / txt 文件", accept: ".csv,.html,.htm,.txt" },
   { value: "flomo", label: "flomo", hint: "支持 flomo 导出压缩包里的 HTML 文件（如 index.html）", accept: ".html,.htm" },
+  { value: "notion", label: "Notion", hint: "支持 Notion「Markdown & CSV」导出的 zip（含嵌套页面 / 数据库 / 图片，图片自动入库）", accept: ".zip" },
+  { value: "obsidian", label: "Obsidian", hint: "把整个 vault 文件夹压缩为 zip 上传；frontmatter 的 tags/created 会保留，[[内链]] 转为文本", accept: ".zip" },
+  { value: "apple-notes", label: "Apple 备忘录", hint: "先用 Mac 免费工具 Exporter 导出 md，再把导出文件夹压缩为 zip 上传；文件夹名会变成标签", accept: ".zip" },
   { value: "markdown", label: "Markdown", hint: "按 --- 分隔线或标题拆条；段落首行为日期时作为原创建时间", accept: ".md,.markdown,.txt" },
   { value: "text", label: "纯文本", hint: "按空行拆条，每段一条笔记", accept: ".txt,.md" },
 ]
@@ -403,6 +407,8 @@ export function SettingsPage() {
   const [guideOpen, setGuideOpen] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null)
+  const [importFailed, setImportFailed] = useState<ImportFailedItem[]>([])
   const [restoring, setRestoring] = useState(false)
   const [restoreMsg, setRestoreMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [lastUsedAt, setLastUsedAt] = useState<string | null>(null)
@@ -425,8 +431,14 @@ export function SettingsPage() {
     }
     setImporting(true)
     setImportMsg(null)
+    setImportProgress(null)
+    setImportFailed([])
     try {
-      const stats: ImportStats = await importData(file, importSource)
+      const result: ImportResult = await importData(file, importSource, (done, total) =>
+        setImportProgress({ done, total }),
+      )
+      const { stats } = result
+      setImportFailed(result.failed_items)
       setImportMsg({
         ok: true,
         text: `导入完成：共解析 ${stats.total} 条，成功 ${stats.imported} 条，跳过重复 ${stats.skipped} 条${stats.failed > 0 ? `，失败 ${stats.failed} 条` : ""}。AI 分拣/线索/图谱会在后台陆续完成`,
@@ -435,8 +447,20 @@ export function SettingsPage() {
       setImportMsg({ ok: false, text: e instanceof Error ? e.message : "导入失败，请稍后重试" })
     } finally {
       setImporting(false)
+      setImportProgress(null)
       if (importInputRef.current) importInputRef.current.value = ""
     }
+  }
+
+  function downloadImportFailures() {
+    const lines = importFailed.map((f) => `${f.item}\t${f.reason}`)
+    const blob = new Blob([`条目\t原因\n${lines.join("\n")}\n`], { type: "text/plain;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `suinian-import-failed-${new Date().toISOString().slice(0, 10)}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   async function handleRestoreFile(file: File) {
@@ -866,16 +890,16 @@ export function SettingsPage() {
         <div>
           <h2 className="text-sm font-medium">导入数据</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            从 Cubox / flomo / Markdown / 纯文本导出文件批量导入笔记，保留原创建时间与标签，重复内容自动跳过（单文件最大 20MB）
+            从 Cubox / flomo / Notion / Obsidian / Apple 备忘录 / Markdown / 纯文本导出文件批量导入笔记，保留原创建时间与标签，重复内容自动跳过（单文件最大 20MB）
           </p>
         </div>
-        <div className="flex gap-1 rounded-lg bg-secondary p-1">
+        <div className="flex flex-wrap gap-1 rounded-lg bg-secondary p-1">
           {IMPORT_SOURCES.map((opt) => (
             <button
               key={opt.value}
               onClick={() => setImportSource(opt.value)}
               className={cn(
-                "flex-1 rounded-md px-2 py-1.5 text-sm font-medium transition-colors",
+                "flex-1 whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium transition-colors",
                 importSource === opt.value
                   ? "bg-card shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
@@ -914,7 +938,9 @@ export function SettingsPage() {
             <ol className="list-decimal space-y-1 pl-4">
               <li>
                 <span className="font-medium">导出</span>：Cubox 在「共享/导出」选 CSV（推荐，书签 HTML / txt 也支持）；flomo
-                在「设置 → 账号详情 → 导出所有数据（HTML）」，解压后取其中的 HTML 文件；其他工具导出 Markdown / 纯文本也可。
+                在「设置 → 账号详情 → 导出所有数据（HTML）」，解压后取其中的 HTML 文件；Notion 在页面菜单「导出 →
+                Markdown & CSV（含子页面）」拿到 zip 直接上传；Obsidian 把整个 vault 文件夹压缩为 zip；Apple 备忘录用 Mac App
+                Store 免费工具「Exporter」导出 Markdown 后压缩为 zip；其他工具导出 Markdown / 纯文本也可。
               </li>
               <li>
                 <span className="font-medium">导入</span>：在上方选择对应来源 →「选择文件导入」，完成后显示导入统计；重复导入同一文件会自动跳过已有条目，放心多试。
@@ -925,7 +951,7 @@ export function SettingsPage() {
               </li>
             </ol>
             <p className="text-muted-foreground">
-              提示：flomo 压缩包里的图片暂不导入（正文文字全部保留）；来源选错时会提示「未能解析出笔记」，不会写入脏数据。
+              提示：flomo 压缩包里的图片暂不导入（正文文字全部保留）；Notion / Obsidian / Apple 备忘录 zip 里引用的图片会自动存入图床；来源选错时会提示「未能解析出笔记」，不会写入脏数据。
             </p>
           </div>
         )}
@@ -937,7 +963,8 @@ export function SettingsPage() {
         >
           {importing ? (
             <>
-              <Loader2 className="animate-spin" /> 导入中，请勿关闭页面…
+              <Loader2 className="animate-spin" />
+              {importProgress ? `导入中 ${importProgress.done}/${importProgress.total}，请勿关闭页面…` : "导入中，请勿关闭页面…"}
             </>
           ) : (
             <>
@@ -959,6 +986,25 @@ export function SettingsPage() {
             )}
             {importMsg.text}
           </p>
+        )}
+        {importing && importProgress && importProgress.total > 0 && (
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+            <div
+              className="h-full rounded-full bg-primary transition-all"
+              style={{ width: `${Math.round((importProgress.done / importProgress.total) * 100)}%` }}
+            />
+          </div>
+        )}
+        {importFailed.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{importFailed.length} 个条目未完全导入（图片缺失或解析失败）</span>
+            <button
+              onClick={downloadImportFailures}
+              className="font-medium text-primary underline underline-offset-2"
+            >
+              下载失败清单
+            </button>
+          </div>
         )}
       </Card>
 

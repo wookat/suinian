@@ -1,19 +1,37 @@
 // Import pipeline: parse Cubox / flomo / Markdown / plain-text export files
 // into normalized note items (content + original created time + tags + url).
 
+export interface ImportAsset {
+  name: string;
+  mime: string;
+  bytes: Uint8Array;
+}
+
 export interface ImportItem {
   content: string;
   /** UTC "YYYY-MM-DD HH:MM:SS" (D1 datetime format); null = use now. */
   created_at: string | null;
   tags: string[];
   url: string | null;
+  /** Image assets referenced by this note (zip imports), stored in R2. */
+  assets?: ImportAsset[];
 }
 
-export type ImportSource = "cubox" | "flomo" | "markdown" | "text";
+export interface ImportFailure {
+  /** Short identifier for the failed entry (file name or content head). */
+  item: string;
+  reason: string;
+}
 
-export const IMPORT_SOURCES: ImportSource[] = ["cubox", "flomo", "markdown", "text"];
+export type ImportSource = "cubox" | "flomo" | "markdown" | "text" | "notion" | "obsidian" | "apple-notes";
 
-const MAX_ITEMS = 2000;
+export const IMPORT_SOURCES: ImportSource[] = ["cubox", "flomo", "markdown", "text", "notion", "obsidian", "apple-notes"];
+
+/** Zip-based sources parsed by import-zip.ts. */
+export const ZIP_IMPORT_SOURCES: ImportSource[] = ["notion", "obsidian", "apple-notes"];
+
+export const MAX_IMPORT_ITEMS = 2000;
+const MAX_ITEMS = MAX_IMPORT_ITEMS;
 const MAX_ITEM_CHARS = 20_000;
 
 // ---- shared helpers ----
@@ -67,6 +85,21 @@ export function normalizeImportDate(raw: string | number | null | undefined): st
   const s = raw.trim();
   if (!s) return null;
   if (/^\d{10}(\d{3})?$/.test(s)) return normalizeImportDate(parseInt(s, 10));
+  // English wall-clock dates (Notion properties): "June 1, 2023 8:30 AM"
+  const en = s.match(
+    /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),\s*(\d{4})(?:\s+(\d{1,2}):(\d{2})\s*(AM|PM)?)?$/i
+  );
+  if (en) {
+    const months = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+    const mo = months.indexOf(en[1].toLowerCase());
+    let h = en[4] ? parseInt(en[4], 10) : 0;
+    const ampm = en[6]?.toUpperCase();
+    if (ampm === "PM" && h < 12) h += 12;
+    if (ampm === "AM" && h === 12) h = 0;
+    // bare wall-clock time: interpret as Asia/Shanghai like other exports
+    const utcMs = Date.UTC(+en[3], mo, +en[2], h, en[5] ? +en[5] : 0, 0) - 8 * 3600_000;
+    return toUtcSql(new Date(utcMs));
+  }
   // has explicit zone info -> trust it
   if (/(?:Z|[+-]\d{2}:?\d{2})$/.test(s)) return toUtcSql(new Date(s));
   const m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T ](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
@@ -89,7 +122,7 @@ export function extractHashTags(content: string, max = 5): string[] {
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>"'）)\]】，,；;]+/;
 
-function firstUrl(text: string): string | null {
+export function firstUrl(text: string): string | null {
   const m = text.match(URL_IN_TEXT_RE);
   return m ? m[0] : null;
 }
@@ -97,6 +130,8 @@ function firstUrl(text: string): string | null {
 function clip(s: string): string {
   return s.length > MAX_ITEM_CHARS ? s.slice(0, MAX_ITEM_CHARS) : s;
 }
+
+export const clipContent = clip;
 
 // ---- CSV (RFC 4180-ish, tolerant) ----
 
@@ -161,7 +196,7 @@ function matchCol(header: string[], aliases: string[]): number {
   return -1;
 }
 
-function splitTags(raw: string): string[] {
+export function splitTags(raw: string): string[] {
   return raw
     .split(/[,，;；#|]/)
     .map((t) => t.trim().replace(/^#/, ""))
@@ -316,7 +351,21 @@ export interface ImportStats {
   failed: number;
 }
 
+export interface ImportRunResult {
+  stats: ImportStats;
+  failures: ImportFailure[];
+}
+
+export interface ImportRunOptions {
+  /** Called after each processed batch with running progress. */
+  onProgress?: (done: number, total: number) => void | Promise<void>;
+}
+
 const CHUNK = 40;
+
+function itemHead(item: ImportItem): string {
+  return item.content.replace(/\s+/g, " ").slice(0, 60);
+}
 
 /**
  * Insert parsed items as notes for `userId`, preserving the original created
@@ -324,15 +373,19 @@ const CHUNK = 40;
  * Notes are inserted with category NULL so the existing cron sweep
  * (retriage / embeddings / graph / link extraction) processes them gradually
  * without bursting the AI quota; original tags are kept in meta.import_tags
- * and merged back after AI triage.
+ * and merged back after AI triage. Image assets (zip imports) are stored in
+ * R2 and recorded in attachments.
  */
 export async function runImport(
-  db: D1Database,
+  env: { DB: D1Database; MEDIA?: R2Bucket },
   userId: string,
   source: ImportSource,
-  items: ImportItem[]
-): Promise<ImportStats> {
+  items: ImportItem[],
+  opts: ImportRunOptions = {}
+): Promise<ImportRunResult> {
+  const db = env.DB;
   const stats: ImportStats = { total: items.length, imported: 0, skipped: 0, failed: 0 };
+  const failures: ImportFailure[] = [];
   for (let i = 0; i < items.length; i += CHUNK) {
     const chunk = items.slice(i, i + CHUNK);
     try {
@@ -345,6 +398,7 @@ export async function runImport(
       const seen = new Set((existing.results ?? []).map((r) => `${r.created_at}\u0000${r.content}`));
       const noTime = new Set((existing.results ?? []).map((r) => r.content));
       const stmts: D1PreparedStatement[] = [];
+      const inserted: { id: string; item: ImportItem }[] = [];
       const insert = db.prepare(
         `INSERT INTO notes (id, user_id, source, raw_type, content, url, category, tags, meta, created_at, updated_at)
          VALUES (?, ?, 'import', ?, ?, ?, NULL, ?, ?, ?, ?)`
@@ -360,9 +414,11 @@ export async function runImport(
         noTime.add(item.content);
         const meta: Record<string, unknown> = { import_source: source };
         if (item.tags.length > 0) meta.import_tags = item.tags;
+        const id = crypto.randomUUID();
+        inserted.push({ id, item });
         stmts.push(
           insert.bind(
-            crypto.randomUUID(),
+            id,
             userId,
             item.url && item.content.startsWith(item.url) ? "link" : "text",
             item.content,
@@ -376,12 +432,38 @@ export async function runImport(
       }
       if (stmts.length > 0) await db.batch(stmts);
       stats.imported += stmts.length;
+      // store image assets (zip imports) in R2 + attachments; an asset failure
+      // never fails the note itself, it is only reported in the failure list
+      for (const { id, item } of inserted) {
+        for (const asset of item.assets ?? []) {
+          if (!env.MEDIA) {
+            failures.push({ item: itemHead(item), reason: `图片 ${asset.name} 未入库（未配置 R2）` });
+            continue;
+          }
+          try {
+            const safeName = asset.name.replace(/[^\w.\-\u4e00-\u9fff]/g, "_");
+            const key = `media/${userId}/${id}/${Date.now()}-${safeName}`;
+            await env.MEDIA.put(key, asset.bytes, { httpMetadata: { contentType: asset.mime } });
+            await db
+              .prepare("INSERT INTO attachments (id, note_id, r2_key, mime, size) VALUES (?, ?, ?, ?, ?)")
+              .bind(crypto.randomUUID(), id, key, asset.mime, asset.bytes.length)
+              .run();
+          } catch (e) {
+            console.error("import asset failed", e);
+            failures.push({ item: itemHead(item), reason: `图片 ${asset.name} 入库失败` });
+          }
+        }
+      }
     } catch (e) {
       console.error("import chunk failed", e);
       stats.failed += chunk.length;
+      for (const item of chunk) {
+        failures.push({ item: itemHead(item), reason: e instanceof Error ? e.message : "写入失败" });
+      }
     }
+    await opts.onProgress?.(Math.min(i + CHUNK, items.length), items.length);
   }
-  return stats;
+  return { stats, failures };
 }
 
 // ---- entry ----
@@ -396,5 +478,8 @@ export function parseImportFile(source: ImportSource, text: string): ImportItem[
       return parseMarkdown(text);
     case "text":
       return parsePlainText(text);
+    default:
+      // zip-based sources (notion / obsidian / apple-notes) are parsed by import-zip.ts
+      return [];
   }
 }
