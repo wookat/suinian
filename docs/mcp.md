@@ -31,6 +31,15 @@ claude mcp add --transport http suinian https://suinian-api.zalize.com/mcp \
   --header "Authorization: Bearer <你的token>"
 ```
 
+不支持远程 HTTP 或想用自部署 stdio 版时（先在仓库 `mcp/` 里 `npm install && npm run build`）：
+
+```bash
+claude mcp add suinian --env SUINIAN_API_TOKEN=<你的token> \
+  -- node /绝对路径/suinian/mcp/dist/index.js
+```
+
+`claude mcp list` 应显示 `suinian … ✔ Connected`；token 错误会报 `unauthorized: invalid token`（HTTP 401），去设置页重新复制即可。
+
 ## Claude Desktop
 
 `Settings → Developer → Edit Config`（`claude_desktop_config.json`）：
