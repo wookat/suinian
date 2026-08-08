@@ -36,6 +36,7 @@ import {
 import { detectFileKind, buildFileNote, buildFileReply } from "./files";
 import { parseImportFile, runImport, IMPORT_SOURCES, type ImportSource } from "./import";
 import { registerMcpRoute } from "./mcp";
+import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
 import { PIPELINE_TIMEOUT_MS, SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 
 type Vars = { userId: string };
@@ -1514,6 +1515,39 @@ app.get("/api/export", async (c) => {
     threads,
     reports,
   });
+});
+
+// ---- GET /api/backup ----
+// Full backup zip: manifest + notes.json (all fields) + threads/reports +
+// media/ originals streamed from R2. Sensitive notes redacted unless
+// ?include_sensitive=true (same policy as /api/export).
+app.get("/api/backup", async (c) => {
+  const includeSensitive = c.req.query("include_sensitive") === "true";
+  return buildBackupZip(c.env, c.get("userId"), includeSensitive, (p) => c.executionCtx.waitUntil(p));
+});
+
+// ---- POST /api/backup/restore ----
+// Restore a backup zip: notes keep original time/tags/category, media
+// re-uploaded to R2 under the new note ids, duplicates skipped.
+app.post("/api/backup/restore", async (c) => {
+  const ct = c.req.header("content-type") || "";
+  let stream: ReadableStream<Uint8Array> | null = null;
+  if (ct.includes("multipart/form-data")) {
+    const form = await c.req.raw.formData().catch(() => null);
+    if (!form) return c.json({ error: "invalid form data" }, 400);
+    const file = form.get("file");
+    if (!(file instanceof File)) return c.json({ error: "file required" }, 400);
+    if (file.size > MAX_RESTORE_BYTES) {
+      return c.json({ error: `备份文件过大：最大支持 ${MAX_RESTORE_BYTES / 1024 / 1024}MB` }, 413);
+    }
+    stream = file.stream() as ReadableStream<Uint8Array>;
+  } else {
+    stream = c.req.raw.body;
+  }
+  if (!stream) return c.json({ error: "file required" }, 400);
+  const result = await restoreBackup(c.env, c.get("userId"), stream, (p) => c.executionCtx.waitUntil(p));
+  if ("error" in result) return c.json({ error: result.error }, result.status);
+  return c.json(result, 201);
 });
 
 // ---- MCP (Model Context Protocol) endpoint: /mcp, Streamable HTTP ----

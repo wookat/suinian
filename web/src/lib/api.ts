@@ -325,6 +325,70 @@ export async function exportData(
   return { blob, filename: `suinian-export-${date}.${format === "markdown" ? "md" : "json"}` }
 }
 
+/** 下载完整备份 zip（notes.json 全字段 + media/ 原件 + manifest） */
+export async function downloadBackup(includeSensitive: boolean): Promise<{ blob: Blob; filename: string }> {
+  const { apiBaseUrl, apiToken, useMock } = loadSettings()
+  if (useMock || !apiBaseUrl) throw new Error("演示模式不支持备份，请先配置真实 API")
+  const qs = includeSensitive ? "?include_sensitive=true" : ""
+  let res: Response
+  try {
+    res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/backup${qs}`, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+    })
+  } catch {
+    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    throw new ApiError(res.status, text || res.statusText)
+  }
+  const blob = await res.blob()
+  const date = new Date().toISOString().slice(0, 10)
+  return { blob, filename: `suinian-backup-${date}.zip` }
+}
+
+export interface RestoreStats {
+  notes_total: number
+  notes_imported: number
+  notes_skipped: number
+  media_imported: number
+  media_skipped: number
+  media_failed: number
+}
+
+export const MAX_RESTORE_BYTES = 200 * 1024 * 1024
+
+/** 从完整备份 zip 恢复：笔记保原时间/标签/分类，媒体重新入库，重复自动跳过 */
+export async function restoreBackup(file: File): Promise<RestoreStats> {
+  const { apiBaseUrl, apiToken, useMock } = loadSettings()
+  if (useMock || !apiBaseUrl) throw new Error("演示模式不支持恢复，请先配置真实 API")
+  if (file.size > MAX_RESTORE_BYTES) throw new Error("备份文件过大：最大支持 200MB")
+  const form = new FormData()
+  form.set("file", file)
+  let res: Response
+  try {
+    res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/backup/restore`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiToken}` },
+      body: form,
+    })
+  } catch {
+    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    let message = text || res.statusText
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown }
+      if (typeof parsed.error === "string" && parsed.error) message = parsed.error
+    } catch {
+      // not JSON, keep raw text
+    }
+    throw new ApiError(res.status, message)
+  }
+  return res.json() as Promise<RestoreStats>
+}
+
 export type ImportSource = "cubox" | "flomo" | "markdown" | "text"
 
 export interface ImportStats {
