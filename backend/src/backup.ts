@@ -121,6 +121,8 @@ export async function buildBackupZip(
   const mediaEntries: { path: string; r2_key: string }[] = [];
   for (const n of notes) {
     let content = n.content;
+    let title = n.title;
+    let tags = safeParse<string[]>(n.tags) ?? [];
     if (n.is_sensitive) {
       if (includeSensitive) {
         if (n.content_enc && env.SUINIAN_ENC_KEY) {
@@ -129,6 +131,8 @@ export async function buildBackupZip(
         }
       } else {
         content = SENSITIVE_EXPORT_PLACEHOLDER;
+        title = SENSITIVE_EXPORT_PLACEHOLDER;
+        tags = [];
       }
     }
     const noteAtts = attsByNote.get(n.id) ?? [];
@@ -148,8 +152,8 @@ export async function buildBackupZip(
       url_summary: n.url_summary,
       url_titles: n.url_titles,
       category: n.category,
-      tags: safeParse<string[]>(n.tags) ?? [],
-      title: n.title,
+      tags,
+      title,
       is_sensitive: !!n.is_sensitive,
       todo_due: n.todo_due,
       todo_done: !!n.todo_done,

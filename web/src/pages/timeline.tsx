@@ -25,6 +25,7 @@ import { Card } from "@/components/ui/card"
 import { AskChat } from "@/components/ask-chat"
 import { getNotes, getNote, createNote, patchNote, deleteNote, batchNotes, batchNotesByFilter, ApiError, NetworkError } from "@/lib/api"
 import type { BatchFilter } from "@/lib/api"
+import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
 import { FirstRunTour } from "@/components/first-run-tour"
 import { cn } from "@/lib/utils"
@@ -185,6 +186,7 @@ export function TimelinePage() {
         .finally(() => {
           setBatchBusy(false)
           void load()
+          notifyReviewRefresh()
         })
       return
     }
@@ -200,12 +202,14 @@ export function TimelinePage() {
       void batchNotes("delete", ids).catch(() => void load())
     }, 6000)
     pendingDeleteRef.current = { ids, timer }
+    notifyNotesDeleted(ids)
     showToast(`已删除 ${ids.length} 条`, () => {
       const pending = pendingDeleteRef.current
       if (pending) {
         window.clearTimeout(pending.timer)
         pendingDeleteRef.current = null
       }
+      notifyReviewRefresh()
       setNotes((ns) => {
         const restored = [...ns, ...removed]
         restored.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
@@ -319,6 +323,7 @@ export function TimelinePage() {
     try {
       await batchNotes("delete", ids)
       setNotes((ns) => ns.filter((n) => !ids.includes(n.id)))
+      notifyNotesDeleted(ids)
       showToast(`已清除 ${ids.length} 条示例笔记`)
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e))
@@ -469,10 +474,12 @@ export function TimelinePage() {
   async function handleDelete(note: Note) {
     const prev = notes
     setNotes((ns) => ns.filter((n) => n.id !== note.id))
+    notifyNotesDeleted([note.id])
     try {
       await deleteNote(note.id)
     } catch {
       setNotes(prev)
+      notifyReviewRefresh()
     }
   }
 

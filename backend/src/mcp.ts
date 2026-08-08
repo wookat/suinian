@@ -10,13 +10,15 @@ type App = Hono<{ Bindings: Env; Variables: Vars }>;
 export const MCP_SENSITIVE_PLACEHOLDER = "[敏感内容已脱敏]";
 
 /** Strip decrypted sensitive content from any note-shaped object (defense in depth:
- * MCP responses flow into third-party AI clients, so sensitive notes stay redacted). */
-export function redactNote<T extends { is_sensitive?: unknown; content?: unknown }>(note: T): T {
-  if (note && note.is_sensitive) return { ...note, content: MCP_SENSITIVE_PLACEHOLDER };
+ * MCP responses flow into third-party AI clients, so sensitive notes stay redacted).
+ * Redaction covers content, title and tags — the same口径 as the default export. */
+export function redactNote<T extends { is_sensitive?: unknown; content?: unknown; title?: unknown; tags?: unknown }>(note: T): T {
+  if (note && note.is_sensitive)
+    return { ...note, content: MCP_SENSITIVE_PLACEHOLDER, title: MCP_SENSITIVE_PLACEHOLDER, tags: [] };
   return note;
 }
 
-function redactNotes<T extends { is_sensitive?: unknown; content?: unknown }>(notes: T[] | undefined | null): T[] {
+function redactNotes<T extends { is_sensitive?: unknown; content?: unknown; title?: unknown; tags?: unknown }>(notes: T[] | undefined | null): T[] {
   return (notes ?? []).map(redactNote);
 }
 

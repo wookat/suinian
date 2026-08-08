@@ -79,7 +79,14 @@ describe("GET /api/export format handling", () => {
 });
 
 describe("GET /api/export sensitive-note redaction", () => {
-  const sensitiveNote = { ...BASE_NOTE, is_sensitive: 1, content: "root 密码是 hunter2", category: "data" };
+  const sensitiveNote = {
+    ...BASE_NOTE,
+    is_sensitive: 1,
+    content: "root 密码是 hunter2",
+    title: "服务器 root 密码",
+    tags: '["密码"]',
+    category: "data",
+  };
   const plainNote = { ...BASE_NOTE, id: "n2", content: "普通想法" };
   const senv = { ...env, DB: fakeDb([sensitiveNote, plainNote]) };
 
@@ -91,6 +98,32 @@ describe("GET /api/export sensitive-note redaction", () => {
     expect(sens.is_sensitive).toBe(true);
     expect(body.notes.find((n) => n.id === "n2")!.content).toBe("普通想法");
     expect(JSON.stringify(body)).not.toContain("hunter2");
+  });
+
+  it("redacts sensitive note title and tags in JSON by default", async () => {
+    const res = await app.request("/api/export", { headers: auth }, senv);
+    const body = (await res.json()) as { notes: { id: string; title: string | null; tags: string[] }[] };
+    const sens = body.notes.find((n) => n.id === "n1")!;
+    expect(sens.title).toBe(SENSITIVE_EXPORT_PLACEHOLDER);
+    expect(sens.tags).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain("服务器 root 密码");
+    expect(JSON.stringify(body)).not.toContain("密码");
+  });
+
+  it("redacts sensitive note title and tags in Markdown by default", async () => {
+    const res = await app.request("/api/export?format=md", { headers: auth }, senv);
+    const md = await res.text();
+    expect(md).not.toContain("服务器 root 密码");
+    expect(md).not.toContain("#密码");
+    expect(md).not.toContain("标签：密码");
+  });
+
+  it("keeps sensitive title and tags when include_sensitive=true", async () => {
+    const res = await app.request("/api/export?include_sensitive=true", { headers: auth }, senv);
+    const body = (await res.json()) as { notes: { id: string; title: string | null; tags: string[] }[] };
+    const sens = body.notes.find((n) => n.id === "n1")!;
+    expect(sens.title).toBe("服务器 root 密码");
+    expect(sens.tags).toEqual(["密码"]);
   });
 
   it("redacts sensitive note content in Markdown by default", async () => {

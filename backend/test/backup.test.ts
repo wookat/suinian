@@ -35,8 +35,8 @@ const SENSITIVE_NOTE = {
   id: "n2",
   content: "服务器密码 abc",
   category: "data",
-  tags: "[]",
-  title: "密码",
+  tags: '["密码"]',
+  title: "服务器 root 密码",
   thread_id: null,
   is_sensitive: 1,
   meta: null,
@@ -168,9 +168,11 @@ describe("buildBackupZip", () => {
     expect(n1.thread_title).toBe("产品思考");
     expect(n1.created_at).toBe("2026-08-01 00:00:00");
 
-    // sensitive redacted by default
+    // sensitive redacted by default: content, title and tags
     const n2 = notes.find((n) => n.id === "n2")!;
     expect(n2.content).toBe(SENSITIVE_EXPORT_PLACEHOLDER);
+    expect(n2.title).toBe(SENSITIVE_EXPORT_PLACEHOLDER);
+    expect(n2.tags).toEqual([]);
     expect(n2.is_sensitive).toBe(true);
 
     // media original present, referenced from the note
@@ -184,7 +186,10 @@ describe("buildBackupZip", () => {
   it("includes sensitive plaintext only when asked", async () => {
     const entries = await collectZip(env, true);
     const notes = JSON.parse(strFromU8(entries.get("notes.json")!)) as BackupNote[];
-    expect(notes.find((n) => n.id === "n2")!.content).toBe("服务器密码 abc");
+    const n2 = notes.find((n) => n.id === "n2")!;
+    expect(n2.content).toBe("服务器密码 abc");
+    expect(n2.title).toBe("服务器 root 密码");
+    expect(n2.tags).toEqual(["密码"]);
   });
 });
 
