@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { CalendarClock, ChevronDown, ChevronRight, Sparkles } from "lucide-react"
+import { CalendarClock, ChevronDown, ChevronRight, Eye, EyeOff, Sparkles } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { getTodayReview } from "@/lib/api"
@@ -26,6 +26,7 @@ function noteDateLabel(iso: string): string {
 export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void }) {
   const [items, setItems] = useState<DailyReviewItem[]>([])
   const [index, setIndex] = useState(0)
+  const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set())
   const [collapsed, setCollapsed] = useState(loadCollapsed)
   const [loaded, setLoaded] = useState(false)
   const settingsVersion = useSettingsVersion()
@@ -63,6 +64,9 @@ export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void
 
   if (!loaded || items.length === 0) return null
   const item = items[index]
+  const sensitive = item.note.is_sensitive === 1
+  const revealed = revealedIds.has(item.note.id)
+  const masked = sensitive && !revealed
 
   return (
     <Card className="overflow-hidden border-primary/20 bg-gradient-to-br from-primary/[0.04] to-transparent p-0 dark:from-primary/[0.08]">
@@ -90,10 +94,41 @@ export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void
             </p>
           )}
           <div className="rounded-lg border bg-card/60 p-3">
-            {item.note.title && <p className="mb-1 text-sm font-medium">{item.note.title}</p>}
-            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:5] overflow-hidden">
-              {item.note.content}
-            </p>
+            {item.note.title && !masked && <p className="mb-1 text-sm font-medium">{item.note.title}</p>}
+            {masked ? (
+              <button
+                onClick={() =>
+                  setRevealedIds((s) => new Set(s).add(item.note.id))
+                }
+                aria-label="敏感内容，点击查看"
+                className="flex flex-wrap items-center gap-2 text-left"
+              >
+                <span className="select-none text-sm leading-7 tracking-widest text-muted-foreground">••••••••••••</span>
+                <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border bg-secondary px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+                  <Eye className="size-3" /> 敏感内容，点击查看
+                </span>
+              </button>
+            ) : (
+              <>
+                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:5] overflow-hidden">
+                  {item.note.content}
+                </p>
+                {sensitive && (
+                  <button
+                    onClick={() =>
+                      setRevealedIds((s) => {
+                        const next = new Set(s)
+                        next.delete(item.note.id)
+                        return next
+                      })
+                    }
+                    className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    <EyeOff className="size-3" /> 隐藏
+                  </button>
+                )}
+              </>
+            )}
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <span className="text-xs text-muted-foreground">
                 记于 {noteDateLabel(item.note.created_at)}

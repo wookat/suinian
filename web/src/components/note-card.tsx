@@ -396,6 +396,12 @@ export function NoteCard({
           ) : (
             <CategoryBadge category={note.category} active={categoryFilterActive} />
           )}
+          {sensitive && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-600 dark:text-orange-400">
+              <ShieldAlert className="size-3" />
+              敏感
+            </span>
+          )}
           {note.category === "todo" && <DueChip due={note.todo_due} />}
           {(note.category === "expense" || note.category === "income") && <AmountChip note={note} />}
           <RawTypeBadge rawType={note.raw_type} />
@@ -488,7 +494,7 @@ export function NoteCard({
         </div>
       </div>
 
-      {note.title && !editing && (
+      {note.title && !editing && !(sensitive && !revealed) && (
         <h3
           className={cn(
             "mt-2 text-[15px] font-medium leading-snug",
@@ -628,17 +634,21 @@ export function NoteCard({
             </div>
           </div>
         ) : sensitive && !revealed ? (
-          <div className="flex h-7 min-w-0 flex-1 items-center gap-2">
-            <p className="select-none text-sm leading-7 tracking-widest text-muted-foreground">
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              setRevealed(true)
+            }}
+            aria-label="敏感内容，点击查看"
+            className="flex min-h-7 min-w-0 flex-1 flex-wrap items-center gap-2 rounded-lg text-left"
+          >
+            <span className="select-none text-sm leading-7 tracking-widest text-muted-foreground">
               ••••••••••••
-            </p>
-            <button
-              onClick={() => setRevealed(true)}
-              className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border bg-secondary px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Eye className="size-3" /> 显示
-            </button>
-          </div>
+            </span>
+            <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border bg-secondary px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+              <Eye className="size-3" /> 敏感内容，点击查看
+            </span>
+          </button>
         ) : isLink ? (
           <div className="min-w-0 flex-1 space-y-2">
             {linkCards(note).map((card, i) => (
@@ -729,6 +739,14 @@ export function NoteCard({
               <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
                 {note.content}
               </p>
+            )}
+            {sensitive && revealed && (
+              <button
+                onClick={() => setRevealed(false)}
+                className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <EyeOff className="size-3" /> 隐藏
+              </button>
             )}
           </div>
         ) : (
