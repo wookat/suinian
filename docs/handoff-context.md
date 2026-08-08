@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-08-08（R51）
+> 最后更新：2026-08-08（R55）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -39,6 +39,9 @@
 - R49：注销级联修复（user_preferences/daily_reviews）、增量聚类移碎片后旧线索 reconcile
 - R50：全量备份导出（zip 含媒体）+ 备份恢复导入 + cron 心跳复查
 - R51：390px 图谱标签避让（fitView 计入标签宽度）、剪藏快捷键实测、Android 今日回顾有内容态实测、标签改名/删除后首页自动刷新、心跳闭环证据、本文档
+- R53：敏感笔记界面侧遮罩全覆盖、Chrome Issues 面板告警根因修复
+- R54：ask 评测集（backend/scripts/ask-eval.ts，golden+holdout）、时间范围召回过滤、诚实「没找到」带相近建议
+- R55：CJK 长问句 LLM 关键词抽取（extractAskKeywords，eval 28/28 全过）、ask 召回排除敏感笔记（含标题）、新手引导 4 步 tour（settings.tourSeen，仅新注册）、空态一键丢入 #示例 笔记+一键清除、周报提示词升级（主线/想法关联/悬而未决）
 
 ## 已知问题 / 观察项
 - GitHub Actions 不运行（账号付款问题）——所有验证本地做
@@ -52,6 +55,6 @@
 - 微信 bot 实例长期托管方式（当前 skill/bridge 自托管）
 
 ## 测试约定
-- 测试数据一律 `[QA-R51]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
+- 测试数据一律 `[QA-R55]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
 - 老板测试 token 由老板在会话中提供附件，勿写入仓库/日志
 - admin 端点：`POST /api/admin/run-daily-reviews`、`POST /api/admin/reconcile-threads`（Bearer `ADMIN_TOKEN`）
