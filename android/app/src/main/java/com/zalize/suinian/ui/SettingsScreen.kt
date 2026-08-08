@@ -26,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -69,6 +70,7 @@ fun SettingsScreen(
     var deletingAccount by remember { mutableStateOf(false) }
     var deleteAccountMessage by remember { mutableStateOf<String?>(null) }
     var backingUp by remember { mutableStateOf(false) }
+    var backupIncludeSensitive by remember { mutableStateOf(false) }
     var backupMessage by remember { mutableStateOf<String?>(null) }
     var restoring by remember { mutableStateOf(false) }
     var restoreMessage by remember { mutableStateOf<String?>(null) }
@@ -342,13 +344,29 @@ fun SettingsScreen(
             )
 
             Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = backupIncludeSensitive,
+                    onCheckedChange = { backupIncludeSensitive = it },
+                    enabled = !settings.mockMode && !backingUp && !restoring,
+                )
+                Text("包含敏感内容（明文导出密码等加密笔记）", style = MaterialTheme.typography.bodyMedium)
+            }
+            if (backupIncludeSensitive) {
+                Text(
+                    "注意：导出的 zip 将包含敏感笔记的明文（如密码），请妥善保管，不要上传到不可信的地方。恢复导入时会重新加密存储",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
             OutlinedButton(
                 onClick = {
                     backingUp = true
                     backupMessage = null
                     scope.launch {
                         try {
-                            val fileName = vm.downloadBackupToDownloads()
+                            val fileName = vm.downloadBackupToDownloads(backupIncludeSensitive)
                             backupMessage = "已保存到系统下载：$fileName"
                         } catch (e: Exception) {
                             backupMessage = e.message ?: "备份下载失败，请稍后重试"

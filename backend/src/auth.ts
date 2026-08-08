@@ -72,7 +72,7 @@ export function validateName(name: unknown): string | null {
   if (typeof name !== "string") return null;
   const n = name.trim();
   if (n.length < 2 || n.length > 32) return null;
-  if (!/^[\w\u4e00-\u9fff.-]+$/.test(n)) return null;
+  if (!/^[\w\u4e00-\u9fff.\-\[\]]+$/.test(n)) return null;
   return n;
 }
 

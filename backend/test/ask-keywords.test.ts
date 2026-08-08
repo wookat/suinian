@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { needsCjkKeywordExtraction, extractAskKeywords, extractAskTerms } from "../src/index";
+import { needsCjkKeywordExtraction, needsBilingualKeywordExtraction, extractAskKeywords, extractAskTerms } from "../src/index";
 
 type AiEnv = Parameters<typeof extractAskKeywords>[0];
 
@@ -31,6 +31,20 @@ describe("needsCjkKeywordExtraction", () => {
 
   it("does not trigger on long non-CJK terms (english words/urls)", () => {
     expect(needsCjkKeywordExtraction(["cloudflare", "workers-deployment"])).toBe(false);
+  });
+});
+
+describe("needsBilingualKeywordExtraction", () => {
+  it("triggers on pure-English questions", () => {
+    expect(needsBilingualKeywordExtraction("What is my latest plan for the coffee shop idea?")).toBe(true);
+  });
+
+  it("does not trigger when the question contains CJK", () => {
+    expect(needsBilingualKeywordExtraction("咖啡馆的 plan 是什么")).toBe(false);
+  });
+
+  it("does not trigger on non-letter questions (numbers/punctuation)", () => {
+    expect(needsBilingualKeywordExtraction("123 456?")).toBe(false);
   });
 });
 

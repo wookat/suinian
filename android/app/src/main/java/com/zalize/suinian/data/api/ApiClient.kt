@@ -409,11 +409,12 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
     }
 
-    /** GET /api/backup：全量备份 zip（笔记全字段 + 线索/周报 + 媒体原件），返回字节与文件名 */
-    suspend fun downloadBackup(): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
+    /** GET /api/backup：全量备份 zip（笔记全字段 + 线索/周报 + 媒体原件），返回字节与文件名。敏感笔记默认脱敏，includeSensitive=true 时含明文 */
+    suspend fun downloadBackup(includeSensitive: Boolean = false): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
         val client120 = client.newBuilder().readTimeout(120, TimeUnit.SECONDS).build()
+        val path = if (includeSensitive) "/api/backup?include_sensitive=true" else "/api/backup"
         val resp = try {
-            client120.newCall(request("/api/backup").get().build()).execute()
+            client120.newCall(request(path).get().build()).execute()
         } catch (e: IOException) {
             throw ApiException("网络连接失败，请检查网络后重试", e)
         }

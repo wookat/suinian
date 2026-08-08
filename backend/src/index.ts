@@ -114,7 +114,7 @@ app.post("/api/auth/register", async (c) => {
   if (!(await checkRateLimit(c.env.DB, "register", name ? [clientIp(c.req.raw), `acct:${name}`] : [clientIp(c.req.raw)]))) {
     return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
   }
-  if (!name) return c.json({ error: "用户名需 2-32 个字符（中英文、数字、._-）" }, 400);
+  if (!name) return c.json({ error: "用户名需 2-32 个字符（中英文、数字、._-[]）" }, 400);
   const password = validatePassword(body?.password);
   if (!password) return c.json({ error: "密码需 8-128 个字符" }, 400);
   const started = Date.now();
@@ -1157,8 +1157,17 @@ export function needsCjkKeywordExtraction(terms: string[]): boolean {
   return terms.length === 0 || terms.some((t) => CJK_RE.test(t) && !/\s/.test(t) && t.length >= 8);
 }
 
+/**
+ * Non-CJK (e.g. English) questions rarely LIKE-match mostly-Chinese notes:
+ * such questions go through LLM keyword extraction too, which emits both the
+ * original-language keywords and their Chinese equivalents.
+ */
+export function needsBilingualKeywordExtraction(question: string): boolean {
+  return !CJK_RE.test(question) && /[a-zA-Z]/.test(question);
+}
+
 const ASK_KEYWORDS_SYSTEM =
-  "你是中文检索关键词抽取器。从问题中抽取 2-6 个最能定位相关笔记的关键词（具体的名词、动词或专有名词，每个 2-6 个字），用空格分隔输出，不要任何标点、解释或前缀。忽略疑问词（什么/哪个/怎么/是啥）、时间词（今天/最近几天/上个月/去年）、代词和语气助词。例如「最近几天收藏的那个咖啡视频讲什么」输出「咖啡 视频 收藏」。";
+  "你是检索关键词抽取器。从问题中抽取 2-6 个最能定位相关笔记的关键词（具体的名词、动词或专有名词，每个 2-6 个字），用空格分隔输出，不要任何标点、解释或前缀。忽略疑问词（什么/哪个/怎么/是啥/what/which/how）、时间词（今天/最近几天/上个月/去年/recently/last week）、代词和语气助词。若问题含英文词，除英文关键词外还要同时输出其中文对应词（因为笔记多为中文）。例如「最近几天收藏的那个咖啡视频讲什么」输出「咖啡 视频 收藏」；「What did I note about the coffee shop idea」输出「coffee shop 咖啡馆 点子」。";
 
 /**
  * LLM keyword extraction for unsegmented CJK questions (query-rewrite stage):
@@ -1228,7 +1237,7 @@ app.post("/api/ask", async (c) => {
   let terms = extractAskTerms(recallQuestion, history);
   // unsegmented CJK clauses never LIKE-match: extract real keywords via LLM,
   // keeping any short naive terms; failures keep the naive terms untouched
-  if (needsCjkKeywordExtraction(terms)) {
+  if (needsCjkKeywordExtraction(terms) || needsBilingualKeywordExtraction(recallQuestion)) {
     const kw = await extractAskKeywords(c.env, recallQuestion);
     if (kw.length > 0) {
       terms = [...kw, ...terms.filter((t) => !(CJK_RE.test(t) && t.length >= 8))]

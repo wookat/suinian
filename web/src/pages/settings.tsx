@@ -783,6 +783,12 @@ export function SettingsPage() {
           />
           包含敏感内容（明文导出密码等加密笔记）
         </label>
+        {includeSensitive && (
+          <p className="flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400">
+            <CircleAlert className="size-4 shrink-0" />
+            注意：导出的文件将包含敏感笔记的明文（如密码），请妥善保管，不要上传到不可信的地方。恢复导入时会重新加密存储
+          </p>
+        )}
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <Button
             onClick={() => void handleExport("backup")}

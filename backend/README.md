@@ -42,7 +42,7 @@ npx wrangler d1 execute suinian --remote --command \
 
 ### 账号（R13）
 
-- `POST /api/auth/register` `{name, password}` → `201 {user:{id,name}, api_token}`。用户名 2-32 字符（中英文/数字/._-）且唯一；密码 8-128 字符。受 `REGISTRATION_ENABLED` 开关控制（关闭时 403）。
+- `POST /api/auth/register` `{name, password}` → `201 {user:{id,name}, api_token}`。用户名 2-32 字符（中英文/数字/._-[]）且唯一；密码 8-128 字符。受 `REGISTRATION_ENABLED` 开关控制（关闭时 403）。
 - `POST /api/auth/login` `{name, password}` → `{user, api_token}`。老用户（无 `password_hash`）不能密码登录，仍用 token。
 - `POST /api/auth/rotate-token`（Bearer 鉴权）→ `{api_token}`，旧 token 立即失效。
 - `GET /api/auth/me` → `{user:{id,name,created_at,has_password}}`。
