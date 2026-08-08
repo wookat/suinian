@@ -1,0 +1,528 @@
+// Full backup export/import: a zip containing manifest.json + notes.json
+// (all fields) + threads/reports + media/ (R2 originals), and the reverse
+// restore path (dedup, media re-upload, background pipeline backfill).
+import { Zip, ZipDeflate, ZipPassThrough, Unzip, UnzipInflate, strToU8, strFromU8 } from "fflate";
+import type { Env, NoteMeta, NoteRow, ThreadRow, WeeklyReportRow } from "./types";
+import { decryptContent, encryptContent, ENC_PLACEHOLDER } from "./crypto";
+import { backfillEmbeddings } from "./semantic";
+import { backfillGraphExtracts } from "./graph";
+import { clusterNote } from "./threads";
+import { SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
+
+export const BACKUP_FORMAT = "suinian-backup";
+export const BACKUP_VERSION = 1;
+
+/** Restore upload cap: streaming unzip keeps memory per-file, so this is generous. */
+export const MAX_RESTORE_BYTES = 200 * 1024 * 1024;
+/** Per-media-entry cap inside a backup zip (ingest caps uploads at 10MB). */
+const MAX_MEDIA_ENTRY_BYTES = 15 * 1024 * 1024;
+/** Cap for media entries that appear before notes.json in a foreign zip. */
+const MAX_PENDING_MEDIA_BYTES = 64 * 1024 * 1024;
+
+interface AttachmentRow {
+  id: string;
+  note_id: string;
+  r2_key: string;
+  mime: string | null;
+  size: number | null;
+}
+
+export interface BackupAttachment {
+  /** Entry path inside the zip, e.g. media/<note_id>/0-voice.ogg */
+  path: string;
+  name: string;
+  mime: string | null;
+  size: number | null;
+}
+
+export interface BackupNote {
+  id: string;
+  source: string;
+  raw_type: string;
+  content: string;
+  url: string | null;
+  url_title: string | null;
+  url_summary: string | null;
+  url_titles: string | null;
+  category: string | null;
+  tags: string[];
+  title: string | null;
+  is_sensitive: boolean;
+  todo_due: string | null;
+  todo_done: boolean;
+  done_at: string | null;
+  amount: number | null;
+  currency: string | null;
+  meta: NoteMeta | null;
+  thread_title: string | null;
+  created_at: string;
+  updated_at: string;
+  attachments: BackupAttachment[];
+}
+
+export interface BackupManifest {
+  format: string;
+  version: number;
+  exported_at: string;
+  include_sensitive: boolean;
+  counts: { notes: number; threads: number; reports: number; attachments: number };
+}
+
+function safeParse<T>(raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function attachmentName(r2Key: string, idx: number): string {
+  const base = (r2Key.split("/").pop() || "file").replace(/^\d+-/, "");
+  return `${idx}-${base}`;
+}
+
+/**
+ * Stream a full backup zip: JSON entries first (deflated), then each R2
+ * original as a stored (pass-through) entry, chunk by chunk, so worker memory
+ * stays bounded regardless of the user's total media size.
+ */
+export async function buildBackupZip(
+  env: Env,
+  userId: string,
+  includeSensitive: boolean,
+  waitUntil: (p: Promise<unknown>) => void
+): Promise<Response> {
+  const [notesR, threadsR, reportsR] = await Promise.all([
+    env.DB.prepare("SELECT * FROM notes WHERE user_id = ? ORDER BY created_at ASC").bind(userId).all<NoteRow>(),
+    env.DB.prepare("SELECT * FROM threads WHERE user_id = ? ORDER BY updated_at DESC").bind(userId).all<ThreadRow>(),
+    env.DB.prepare("SELECT * FROM weekly_reports WHERE user_id = ? ORDER BY week_start DESC")
+      .bind(userId)
+      .all<WeeklyReportRow>(),
+  ]);
+  const notes = notesR.results ?? [];
+  const threads = threadsR.results ?? [];
+  const reports = reportsR.results ?? [];
+  const attsR = await env.DB.prepare(
+    "SELECT a.* FROM attachments a JOIN notes n ON a.note_id = n.id WHERE n.user_id = ? ORDER BY a.rowid ASC"
+  )
+    .bind(userId)
+    .all<AttachmentRow>();
+  const attachments = attsR.results ?? [];
+  const attsByNote = new Map<string, AttachmentRow[]>();
+  for (const a of attachments) {
+    const list = attsByNote.get(a.note_id) ?? [];
+    list.push(a);
+    attsByNote.set(a.note_id, list);
+  }
+
+  const threadTitle = new Map(threads.map((t) => [t.id, t.title]));
+  const backupNotes: BackupNote[] = [];
+  const mediaEntries: { path: string; r2_key: string }[] = [];
+  for (const n of notes) {
+    let content = n.content;
+    if (n.is_sensitive) {
+      if (includeSensitive) {
+        if (n.content_enc && env.SUINIAN_ENC_KEY) {
+          const plain = await decryptContent(env.SUINIAN_ENC_KEY, n.content_enc);
+          if (plain !== null) content = plain;
+        }
+      } else {
+        content = SENSITIVE_EXPORT_PLACEHOLDER;
+      }
+    }
+    const noteAtts = attsByNote.get(n.id) ?? [];
+    const backupAtts: BackupAttachment[] = noteAtts.map((a, i) => {
+      const name = attachmentName(a.r2_key, i);
+      const path = `media/${n.id}/${name}`;
+      mediaEntries.push({ path, r2_key: a.r2_key });
+      return { path, name, mime: a.mime, size: a.size };
+    });
+    backupNotes.push({
+      id: n.id,
+      source: n.source,
+      raw_type: n.raw_type,
+      content,
+      url: n.url,
+      url_title: n.url_title,
+      url_summary: n.url_summary,
+      url_titles: n.url_titles,
+      category: n.category,
+      tags: safeParse<string[]>(n.tags) ?? [],
+      title: n.title,
+      is_sensitive: !!n.is_sensitive,
+      todo_due: n.todo_due,
+      todo_done: !!n.todo_done,
+      done_at: n.done_at,
+      amount: n.amount,
+      currency: n.currency,
+      meta: safeParse<NoteMeta>(n.meta),
+      thread_title: n.thread_id ? (threadTitle.get(n.thread_id) ?? null) : null,
+      created_at: n.created_at,
+      updated_at: n.updated_at,
+      attachments: backupAtts,
+    });
+  }
+
+  const manifest: BackupManifest = {
+    format: BACKUP_FORMAT,
+    version: BACKUP_VERSION,
+    exported_at: new Date().toISOString(),
+    include_sensitive: includeSensitive,
+    counts: { notes: notes.length, threads: threads.length, reports: reports.length, attachments: mediaEntries.length },
+  };
+
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  let failed = false;
+  const zip = new Zip((err, dat, final) => {
+    if (failed) return;
+    if (err) {
+      failed = true;
+      void writer.abort(err);
+      return;
+    }
+    void writer.write(dat).catch(() => {
+      failed = true;
+    });
+    if (final) void writer.close().catch(() => undefined);
+  });
+
+  const addJson = (name: string, obj: unknown) => {
+    const f = new ZipDeflate(name, { level: 6 });
+    zip.add(f);
+    f.push(strToU8(JSON.stringify(obj, null, 1)), true);
+  };
+
+  const drive = async () => {
+    try {
+      addJson("manifest.json", manifest);
+      addJson("notes.json", backupNotes);
+      addJson("threads.json", threads);
+      addJson("reports.json", reports);
+      for (const m of mediaEntries) {
+        if (failed || !env.MEDIA) break;
+        const obj = await env.MEDIA.get(m.r2_key);
+        if (!obj) continue;
+        const f = new ZipPassThrough(m.path);
+        zip.add(f);
+        const reader = (obj.body as ReadableStream<Uint8Array>).getReader();
+        let prev: Uint8Array | null = null;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (prev) {
+            await writer.ready;
+            f.push(prev);
+          }
+          prev = value;
+        }
+        f.push(prev ?? new Uint8Array(0), true);
+      }
+      zip.end();
+    } catch (e) {
+      failed = true;
+      console.error("backup: zip stream failed", e);
+      void writer.abort(e).catch(() => undefined);
+    }
+  };
+  waitUntil(drive());
+
+  const date = new Date().toISOString().slice(0, 10);
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Disposition": `attachment; filename="suinian-backup-${date}.zip"`,
+      "Cache-Control": "private, no-store",
+    },
+  });
+}
+
+// ---- restore ----
+
+export interface RestoreStats {
+  notes_total: number;
+  notes_imported: number;
+  notes_skipped: number;
+  media_imported: number;
+  media_skipped: number;
+  media_failed: number;
+}
+
+function sanitizeMetaForRestore(meta: NoteMeta | null): NoteMeta | null {
+  if (!meta) return null;
+  // strip pipeline markers so the cron backfills re-run graph extraction
+  const { graph_extracted_at: _g, ...rest } = meta as NoteMeta & { graph_extracted_at?: string };
+  return Object.keys(rest).length > 0 ? rest : null;
+}
+
+const DATETIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+function validNote(raw: unknown): raw is BackupNote {
+  if (typeof raw !== "object" || raw === null) return false;
+  const n = raw as Record<string, unknown>;
+  return (
+    typeof n.content === "string" &&
+    n.content.length > 0 &&
+    typeof n.created_at === "string" &&
+    DATETIME_RE.test(n.created_at)
+  );
+}
+
+function concat(bufs: Uint8Array[]): Uint8Array {
+  const total = bufs.reduce((s, b) => s + b.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const b of bufs) {
+    out.set(b, off);
+    off += b.length;
+  }
+  return out;
+}
+
+interface ZipEntry {
+  name: string;
+  data: Uint8Array;
+}
+
+/**
+ * Restore a backup zip: insert notes (preserving created time / tags /
+ * category / finance fields), re-upload media into R2 keyed by the new note
+ * ids, and skip duplicates (same content + created_at). Embeddings / graph /
+ * clustering are re-built by the existing cron backfills.
+ */
+export async function restoreBackup(
+  env: Env,
+  userId: string,
+  stream: ReadableStream<Uint8Array>,
+  waitUntil: (p: Promise<unknown>) => void
+): Promise<RestoreStats | { error: string; status: 400 | 413 }> {
+  const stats: RestoreStats = {
+    notes_total: 0,
+    notes_imported: 0,
+    notes_skipped: 0,
+    media_imported: 0,
+    media_skipped: 0,
+    media_failed: 0,
+  };
+
+  // old note id -> new note id (only for imported, non-duplicate notes)
+  const idMap = new Map<string, string>();
+  // restored idea notes get a first clustering pass in the background
+  const ideaIds: string[] = [];
+  // zip path -> attachment info from notes.json
+  const attByPath = new Map<string, { oldNoteId: string; att: BackupAttachment }>();
+  let notesSeen = false;
+  let unzipError: string | null = null;
+  const completed: ZipEntry[] = [];
+  const pendingMedia: ZipEntry[] = [];
+  let pendingBytes = 0;
+
+  const unzip = new Unzip((file) => {
+    const name = file.name;
+    const isNotes = name === "notes.json";
+    const isMedia = name.startsWith("media/");
+    if (!isNotes && !isMedia) return;
+    if (isMedia && file.originalSize !== undefined && file.originalSize > MAX_MEDIA_ENTRY_BYTES) {
+      stats.media_failed++;
+      return;
+    }
+    const bufs: Uint8Array[] = [];
+    let size = 0;
+    file.ondata = (err, dat, final) => {
+      if (err) {
+        unzipError = `备份文件损坏（${name} 解压失败）`;
+        return;
+      }
+      size += dat.length;
+      if (isMedia && size > MAX_MEDIA_ENTRY_BYTES) {
+        // oversized single media: drop it, keep going
+        stats.media_failed++;
+        file.terminate();
+        return;
+      }
+      bufs.push(dat);
+      if (final) completed.push({ name, data: concat(bufs) });
+    };
+    file.start();
+  });
+  unzip.register(UnzipInflate);
+
+  const processNotes = async (data: Uint8Array): Promise<{ error: string; status: 400 } | null> => {
+    const parsed = safeParse<unknown>(strFromU8(data));
+    if (!Array.isArray(parsed)) return { error: "备份包里的 notes.json 不是有效的笔记列表", status: 400 };
+    const rawNotes = parsed.filter(validNote);
+    stats.notes_total = rawNotes.length;
+    const CHUNK = 40;
+    for (let i = 0; i < rawNotes.length; i += CHUNK) {
+      const chunk = rawNotes.slice(i, i + CHUNK);
+      const ph = chunk.map(() => "?").join(",");
+      const existing = await env.DB.prepare(
+        `SELECT content, created_at FROM notes WHERE user_id = ? AND content IN (${ph})`
+      )
+        .bind(userId, ...chunk.map((n) => n.content))
+        .all<{ content: string; created_at: string }>();
+      const seen = new Set((existing.results ?? []).map((r) => `${r.created_at}\u0000${r.content}`));
+      const insert = env.DB.prepare(
+        `INSERT INTO notes (id, user_id, source, raw_type, content, url, url_title, url_summary, url_titles,
+           category, tags, title, is_sensitive, content_enc, todo_due, todo_done, done_at, amount, currency,
+           meta, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      const stmts: D1PreparedStatement[] = [];
+      for (const n of chunk) {
+        const key = `${n.created_at}\u0000${n.content}`;
+        if (seen.has(key)) {
+          stats.notes_skipped++;
+          for (const _a of n.attachments ?? []) stats.media_skipped++;
+          continue;
+        }
+        seen.add(key);
+        const newId = crypto.randomUUID();
+        if (typeof n.id === "string") idMap.set(n.id, newId);
+        if (n.category === "idea") ideaIds.push(newId);
+        for (const a of n.attachments ?? []) {
+          if (a && typeof a.path === "string") attByPath.set(a.path, { oldNoteId: n.id, att: a });
+        }
+        let content = n.content;
+        let contentEnc: string | null = null;
+        const sensitive = n.is_sensitive === true;
+        // re-encrypt plaintext sensitive content at rest (redacted placeholders stay as-is)
+        if (sensitive && content !== SENSITIVE_EXPORT_PLACEHOLDER && env.SUINIAN_ENC_KEY) {
+          try {
+            contentEnc = await encryptContent(env.SUINIAN_ENC_KEY, content);
+            content = ENC_PLACEHOLDER;
+          } catch {
+            contentEnc = null;
+          }
+        }
+        const meta = sanitizeMetaForRestore(typeof n.meta === "object" ? n.meta : null);
+        stmts.push(
+          insert.bind(
+            newId,
+            userId,
+            typeof n.source === "string" ? n.source : "import",
+            typeof n.raw_type === "string" ? n.raw_type : "text",
+            content,
+            typeof n.url === "string" ? n.url : null,
+            typeof n.url_title === "string" ? n.url_title : null,
+            typeof n.url_summary === "string" ? n.url_summary : null,
+            typeof n.url_titles === "string" ? n.url_titles : null,
+            typeof n.category === "string" ? n.category : null,
+            JSON.stringify(Array.isArray(n.tags) ? n.tags.slice(0, 6) : []),
+            typeof n.title === "string" ? n.title : null,
+            sensitive ? 1 : 0,
+            contentEnc,
+            typeof n.todo_due === "string" ? n.todo_due : null,
+            n.todo_done === true ? 1 : 0,
+            typeof n.done_at === "string" ? n.done_at : null,
+            typeof n.amount === "number" ? n.amount : null,
+            typeof n.currency === "string" ? n.currency : null,
+            meta ? JSON.stringify(meta) : null,
+            n.created_at,
+            DATETIME_RE.test(n.updated_at ?? "") ? n.updated_at : n.created_at
+          )
+        );
+      }
+      if (stmts.length > 0) await env.DB.batch(stmts);
+      stats.notes_imported += stmts.length;
+    }
+    return null;
+  };
+
+  const storeMedia = async (entry: ZipEntry): Promise<void> => {
+    const info = attByPath.get(entry.name);
+    if (!info) {
+      stats.media_skipped++;
+      return;
+    }
+    const newNoteId = idMap.get(info.oldNoteId);
+    if (!newNoteId) {
+      // parent note was a duplicate (already counted) or invalid
+      stats.media_skipped++;
+      return;
+    }
+    if (!env.MEDIA) {
+      stats.media_failed++;
+      return;
+    }
+    const safeName = info.att.name.replace(/[^\w.\-\u4e00-\u9fff]/g, "_");
+    const key = `media/${userId}/${newNoteId}/${Date.now()}-${safeName}`;
+    try {
+      await env.MEDIA.put(key, entry.data, {
+        httpMetadata: { contentType: info.att.mime ?? "application/octet-stream" },
+      });
+      await env.DB.prepare("INSERT INTO attachments (id, note_id, r2_key, mime, size) VALUES (?, ?, ?, ?, ?)")
+        .bind(crypto.randomUUID(), newNoteId, key, info.att.mime, entry.data.length)
+        .run();
+      stats.media_imported++;
+    } catch (e) {
+      console.error("restore: media upload failed", e);
+      stats.media_failed++;
+    }
+  };
+
+  const drain = async (): Promise<{ error: string; status: 400 | 413 } | null> => {
+    while (completed.length > 0) {
+      const entry = completed.shift()!;
+      if (entry.name === "notes.json") {
+        notesSeen = true;
+        const err = await processNotes(entry.data);
+        if (err) return err;
+        // media that arrived before notes.json (foreign zip ordering)
+        while (pendingMedia.length > 0) await storeMedia(pendingMedia.shift()!);
+        pendingBytes = 0;
+      } else if (!notesSeen) {
+        pendingBytes += entry.data.length;
+        if (pendingBytes > MAX_PENDING_MEDIA_BYTES) {
+          return { error: "备份包过大或格式异常（notes.json 之前的媒体太多）", status: 413 };
+        }
+        pendingMedia.push(entry);
+      } else {
+        await storeMedia(entry);
+      }
+    }
+    return null;
+  };
+
+  const reader = stream.getReader();
+  let totalBytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        unzip.push(new Uint8Array(0), true);
+        break;
+      }
+      totalBytes += value.length;
+      if (totalBytes > MAX_RESTORE_BYTES) {
+        return { error: `备份文件过大：最大支持 ${MAX_RESTORE_BYTES / 1024 / 1024}MB`, status: 413 };
+      }
+      unzip.push(value);
+      if (unzipError) return { error: unzipError, status: 400 };
+      const err = await drain();
+      if (err) return err;
+    }
+  } catch (e) {
+    console.error("restore: unzip failed", e);
+    return { error: "无法解析备份文件，请确认是碎念导出的完整备份 zip", status: 400 };
+  }
+  if (unzipError) return { error: unzipError, status: 400 };
+  const err = await drain();
+  if (err) return err;
+  if (!notesSeen) return { error: "备份包里没有 notes.json，请确认是碎念导出的完整备份 zip", status: 400 };
+
+  // kick the pipeline for a first batch right away; the 10-minute cron
+  // backfills (embeddings / graph / link extracts) cover the rest gradually
+  waitUntil(
+    (async () => {
+      await backfillEmbeddings(env).catch(() => 0);
+      await backfillGraphExtracts(env).catch(() => 0);
+      for (const id of ideaIds.slice(0, 30)) {
+        const n = await env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
+        if (n) await clusterNote(env, n).catch(() => undefined);
+      }
+    })()
+  );
+  return stats;
+}

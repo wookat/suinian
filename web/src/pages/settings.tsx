@@ -28,12 +28,16 @@ import {
   getMe,
   getTags,
   importData,
+  downloadBackup,
+  restoreBackup,
+  MAX_RESTORE_BYTES,
   renameTag,
   rotateToken,
   testConnection,
   MAX_IMPORT_BYTES,
   type ImportSource,
   type ImportStats,
+  type RestoreStats,
   type PushPreferences,
   type TestConnectionResult,
 } from "@/lib/api"
@@ -393,14 +397,17 @@ export function SettingsPage() {
   const [accountMsg, setAccountMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [includeSensitive, setIncludeSensitive] = useState(false)
-  const [exporting, setExporting] = useState<"json" | "markdown" | null>(null)
+  const [exporting, setExporting] = useState<"json" | "markdown" | "backup" | null>(null)
   const [exportMsg, setExportMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [importSource, setImportSource] = useState<ImportSource>("cubox")
   const [guideOpen, setGuideOpen] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [restoring, setRestoring] = useState(false)
+  const [restoreMsg, setRestoreMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [lastUsedAt, setLastUsedAt] = useState<string | null>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
+  const restoreInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const s = loadSettings()
@@ -432,12 +439,35 @@ export function SettingsPage() {
     }
   }
 
-  async function handleExport(format: "json" | "markdown") {
+  async function handleRestoreFile(file: File) {
+    if (restoring) return
+    if (file.size > MAX_RESTORE_BYTES) {
+      setRestoreMsg({ ok: false, text: "备份文件过大：最大支持 200MB" })
+      return
+    }
+    setRestoring(true)
+    setRestoreMsg(null)
+    try {
+      const stats: RestoreStats = await restoreBackup(file)
+      setRestoreMsg({
+        ok: true,
+        text: `恢复完成：笔记 ${stats.notes_imported}/${stats.notes_total} 条（跳过重复 ${stats.notes_skipped} 条），媒体 ${stats.media_imported} 个${stats.media_failed > 0 ? `，失败 ${stats.media_failed} 个` : ""}。AI 分拣/线索/图谱会在后台陆续补全`,
+      })
+    } catch (e) {
+      setRestoreMsg({ ok: false, text: e instanceof Error ? e.message : "恢复失败，请稍后重试" })
+    } finally {
+      setRestoring(false)
+      if (restoreInputRef.current) restoreInputRef.current.value = ""
+    }
+  }
+
+  async function handleExport(format: "json" | "markdown" | "backup") {
     if (exporting) return
     setExporting(format)
     setExportMsg(null)
     try {
-      const { blob, filename } = await exportData(format, includeSensitive)
+      const { blob, filename } =
+        format === "backup" ? await downloadBackup(includeSensitive) : await exportData(format, includeSensitive)
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
@@ -753,7 +783,22 @@ export function SettingsPage() {
           />
           包含敏感内容（明文导出密码等加密笔记）
         </label>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <Button
+            onClick={() => void handleExport("backup")}
+            disabled={exporting !== null}
+            className="w-full sm:w-auto"
+          >
+            {exporting === "backup" ? (
+              <>
+                <Loader2 className="animate-spin" /> 打包中，请勿关闭页面…
+              </>
+            ) : (
+              <>
+                <Download /> 下载完整备份（zip 含媒体）
+              </>
+            )}
+          </Button>
           <Button
             variant="outline"
             onClick={() => void handleExport("json")}
@@ -787,6 +832,9 @@ export function SettingsPage() {
             )}
           </Button>
         </div>
+        <p className="text-xs text-muted-foreground">
+          完整备份包含全部笔记字段与语音/图片/文件原件，可在下方「从完整备份恢复」无损搬家到新账号/新实例
+        </p>
         {exportMsg && (
           <p
             className={cn(
@@ -904,6 +952,56 @@ export function SettingsPage() {
               <CircleAlert className="size-4 shrink-0" />
             )}
             {importMsg.text}
+          </p>
+        )}
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <div>
+          <h2 className="text-sm font-medium">从完整备份恢复</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            导入「下载完整备份」导出的 zip：笔记保留原时间/标签/分类，语音/图片/文件原件重新入库；重复导入自动跳过（最大 200MB）
+          </p>
+        </div>
+        <input
+          ref={restoreInputRef}
+          type="file"
+          accept=".zip"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) void handleRestoreFile(f)
+          }}
+        />
+        <Button
+          variant="outline"
+          onClick={() => restoreInputRef.current?.click()}
+          disabled={restoring}
+          className="w-full sm:w-auto"
+        >
+          {restoring ? (
+            <>
+              <Loader2 className="animate-spin" /> 恢复中，请勿关闭页面…
+            </>
+          ) : (
+            <>
+              <Upload /> 选择备份 zip 恢复
+            </>
+          )}
+        </Button>
+        {restoreMsg && (
+          <p
+            className={cn(
+              "flex items-center gap-1.5 text-sm",
+              restoreMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+            )}
+          >
+            {restoreMsg.ok ? (
+              <CircleCheck className="size-4 shrink-0" />
+            ) : (
+              <CircleAlert className="size-4 shrink-0" />
+            )}
+            {restoreMsg.text}
           </p>
         )}
       </Card>
