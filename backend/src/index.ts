@@ -37,6 +37,7 @@ import { detectFileKind, buildFileNote, buildFileReply } from "./files";
 import { parseImportFile, runImport, IMPORT_SOURCES, type ImportSource } from "./import";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse } from "./ask";
 import { PIPELINE_TIMEOUT_MS, SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 
 type Vars = { userId: string };
@@ -1180,6 +1181,8 @@ app.post("/api/ask", async (c) => {
 
   // query rewrite: resolve pronouns/ordinals against history, then keyword recall
   const recallQuestion = await rewriteAskQuestion(c.env, question, history);
+  // explicit time scope ("上个月/最近一周/去年…") narrows recall to that window
+  const timeRange = parseTimeRange(recallQuestion);
   const terms = extractAskTerms(recallQuestion, history);
   const conds: string[] = ["user_id = ?"];
   const binds: unknown[] = [userId];
@@ -1191,6 +1194,14 @@ app.post("/api/ask", async (c) => {
       binds.push(like, like, like, like);
     }
   }
+  if (timeRange?.start) {
+    conds.push("created_at >= ?");
+    binds.push(timeRange.start);
+  }
+  if (timeRange?.end) {
+    conds.push("created_at < ?");
+    binds.push(timeRange.end);
+  }
   const { results } = await c.env.DB.prepare(
     `SELECT * FROM notes WHERE ${conds.join(" AND ")} ORDER BY created_at DESC LIMIT 20`
   )
@@ -1201,16 +1212,30 @@ app.post("/api/ask", async (c) => {
   // hybrid recall: add semantic hits (same query-rewritten question) that the
   // keyword LIKE recall missed; failures silently degrade to keyword-only
   const semHits = await semanticRecall(c.env, userId, recallQuestion, 10);
+  const semScore = new Map(semHits.map((h) => [h.note_id, h.score]));
   const have = new Set(notes.map((n) => n.id));
   const extraIds = semHits.filter((h) => !have.has(h.note_id)).map((h) => h.note_id);
+  // semantic hits outside an explicit time window are kept aside as suggestions
+  let outOfRange: NoteRow[] = [];
   if (extraIds.length > 0) {
     const ph = extraIds.map(() => "?").join(",");
     const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${ph})`)
       .bind(userId, ...extraIds)
       .all<NoteRow>();
     const byId = new Map((r.results ?? []).map((n) => [n.id, n]));
+    let extras = extraIds.map((id) => byId.get(id)).filter((n): n is NoteRow => !!n);
+    if (timeRange) {
+      outOfRange = extras.filter((n) => !inTimeRange(n.created_at, timeRange));
+      extras = extras.filter((n) => inTimeRange(n.created_at, timeRange));
+    }
     // semantic hits go first in score order so they survive the 20-note cap
-    notes = [...extraIds.map((id) => byId.get(id)).filter((n): n is NoteRow => !!n), ...notes].slice(0, 20);
+    notes = [...extras, ...notes].slice(0, 20);
+  }
+  // time window emptied recall entirely: relax it (the model sees dates and
+  // can say the hits are outside the asked window) instead of a dead end
+  if (notes.length === 0 && outOfRange.length > 0) {
+    notes = outOfRange.slice(0, 20);
+    outOfRange = [];
   }
   // GraphRAG: expand recalled notes 1 hop along the knowledge graph so strongly
   // related fragments (shared entities/relations) join the context
@@ -1233,13 +1258,24 @@ app.post("/api/ask", async (c) => {
     }
   }
   if (notes.length === 0) {
-    // keyword recall missed (common for CJK questions): fall back to recent notes
-    const recent = await c.env.DB.prepare(
-      "SELECT * FROM notes WHERE user_id = ? ORDER BY created_at DESC LIMIT 20"
-    )
-      .bind(userId)
-      .all<NoteRow>();
-    notes = recent.results ?? [];
+    // nothing recalled at all: answer "没找到" honestly (never bluff over the
+    // recent-20) and suggest the nearest notes below the semantic threshold
+    const near = await semanticRecall(c.env, userId, recallQuestion, 3, 0.3);
+    let suggestions: NoteRow[] = [];
+    if (near.length > 0) {
+      const ph = near.map(() => "?").join(",");
+      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${ph})`)
+        .bind(userId, ...near.map((h) => h.note_id))
+        .all<NoteRow>();
+      const byId = new Map((r.results ?? []).map((n) => [n.id, n]));
+      suggestions = near.map((h) => byId.get(h.note_id)).filter((n): n is NoteRow => !!n);
+    }
+    const { answer, references } = buildNoAnswerResponse(suggestions);
+    const sugById = new Map(suggestions.map((n) => [n.id, n]));
+    const refNotes = await Promise.all(
+      references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
+    );
+    return c.json({ answer, references, notes: refNotes, no_answer: true });
   }
 
   const noteIds = notes.map((n) => n.id);
@@ -1265,19 +1301,31 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。可结合之前的对话上下文理解代词与省略。若笔记中没有相关信息，直接说没找到。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。可结合之前的对话上下文理解代词与省略。若笔记中没有能回答问题的信息，直接说没找到，绝不要编造或强行凑答案。回答用中文，简洁。",
       },
       ...history,
       {
         role: "user",
         content: `笔记片段：\n${context || "（无相关笔记）"}${
           graphTriples.length > 0 ? `\n\n实体关系：\n${graphTriples.join("\n")}` : ""
-        }\n\n问题：${question}${
+        }${timeRange ? `\n\n（问题的时间范围：${timeRange.phrase}）` : ""}\n\n问题：${question}${
           recallQuestion !== question ? `\n（即：${recallQuestion}）` : ""
         }`,
       },
     ],
   });
+  // the model itself concluded "没找到": swap the reference dump (uncited
+  // recall context) for up to 3 nearest-by-semantic suggestions
+  if (answer && isRefusalAnswer(answer)) {
+    const ranked = [...notes].sort((a, b) => (semScore.get(b.id) ?? 0) - (semScore.get(a.id) ?? 0));
+    const suggestions = ranked.filter((n) => (semScore.get(n.id) ?? 0) > 0).slice(0, 3);
+    const { answer: noAnswer, references } = buildNoAnswerResponse(suggestions);
+    const sugById = new Map(suggestions.map((n) => [n.id, n]));
+    const refNotes = await Promise.all(
+      references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
+    );
+    return c.json({ answer: noAnswer, references, notes: refNotes, no_answer: true });
+  }
   const references = buildAskReferences(answer ?? "", noteIds);
   const byId = new Map(notes.map((n) => [n.id, n]));
   const refNotes = await Promise.all(
