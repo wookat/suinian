@@ -6,6 +6,8 @@ export interface Settings {
   useMock: boolean
   /** true once the user has made a first-run choice (demo / token / register) */
   onboarded: boolean
+  /** true once the first-entry feature tour was shown or skipped (only false right after registering) */
+  tourSeen: boolean
 }
 
 const OFFICIAL_API_BASE = "https://suinian-api.zalize.com"
@@ -43,12 +45,14 @@ export function loadSettings(): Settings {
         useMock: parsed.useMock ?? true,
         // existing installs with a token already made their choice
         onboarded: parsed.onboarded ?? !!parsed.apiToken,
+        // existing installs never get the tour retroactively
+        tourSeen: parsed.tourSeen ?? true,
       }
     }
   } catch {
     // ignore corrupted settings
   }
-  return { apiBaseUrl: ENV_API_BASE, apiToken: "", useMock: true, onboarded: false }
+  return { apiBaseUrl: ENV_API_BASE, apiToken: "", useMock: true, onboarded: false, tourSeen: true }
 }
 
 export const SETTINGS_CHANGED_EVENT = "suinian:settings-changed"

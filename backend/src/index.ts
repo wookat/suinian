@@ -1145,6 +1145,48 @@ export function extractAskTerms(question: string, history: AskHistoryMessage[]):
   return terms;
 }
 
+const CJK_RE = /[\u4e00-\u9fff]/;
+
+/**
+ * Whether naive punctuation-splitting failed to produce usable recall terms:
+ * long unsegmented CJK questions come out as whole clauses ("最近几天收藏的那
+ * 个咖啡视频讲什么") that never LIKE-match any note. Such questions need LLM
+ * keyword extraction before keyword recall.
+ */
+export function needsCjkKeywordExtraction(terms: string[]): boolean {
+  return terms.length === 0 || terms.some((t) => CJK_RE.test(t) && !/\s/.test(t) && t.length >= 8);
+}
+
+const ASK_KEYWORDS_SYSTEM =
+  "你是中文检索关键词抽取器。从问题中抽取 2-6 个最能定位相关笔记的关键词（具体的名词、动词或专有名词，每个 2-6 个字），用空格分隔输出，不要任何标点、解释或前缀。忽略疑问词（什么/哪个/怎么/是啥）、时间词（今天/最近几天/上个月/去年）、代词和语气助词。例如「最近几天收藏的那个咖啡视频讲什么」输出「咖啡 视频 收藏」。";
+
+/**
+ * LLM keyword extraction for unsegmented CJK questions (query-rewrite stage):
+ * returns 0-6 short terms usable as LIKE recall keywords. Returns [] when the
+ * AI is unavailable or the output is unusable — callers keep the naive terms.
+ */
+export async function extractAskKeywords(
+  env: Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL">,
+  question: string
+): Promise<string[]> {
+  const out = await chatComplete(env, {
+    temperature: 0,
+    max_tokens: 100,
+    timeout_ms: 10_000,
+    messages: [
+      { role: "system", content: ASK_KEYWORDS_SYSTEM },
+      { role: "user", content: question },
+    ],
+  });
+  if (!out) return [];
+  return out
+    .trim()
+    .split(/[\s,，、。/|;；:：]+/)
+    .map((t) => capBytes(t.trim(), 45))
+    .filter((t) => t.length >= 2 && t.length <= 12)
+    .slice(0, 6);
+}
+
 const ASK_REWRITE_SYSTEM =
   "你是检索查询改写器。把用户在多轮对话中的最后一个问题改写为不依赖上下文、可独立理解的完整问题：把代词（它/这个/那个/他们）和序数词（第一个/第二个/最后一个）替换为前文对应的具体事物，补全省略的主语和话题。只输出改写后的问题本身，不要任何解释或前缀。若问题本身已完整，原样输出。";
 
@@ -1183,8 +1225,19 @@ app.post("/api/ask", async (c) => {
   const recallQuestion = await rewriteAskQuestion(c.env, question, history);
   // explicit time scope ("上个月/最近一周/去年…") narrows recall to that window
   const timeRange = parseTimeRange(recallQuestion);
-  const terms = extractAskTerms(recallQuestion, history);
-  const conds: string[] = ["user_id = ?"];
+  let terms = extractAskTerms(recallQuestion, history);
+  // unsegmented CJK clauses never LIKE-match: extract real keywords via LLM,
+  // keeping any short naive terms; failures keep the naive terms untouched
+  if (needsCjkKeywordExtraction(terms)) {
+    const kw = await extractAskKeywords(c.env, recallQuestion);
+    if (kw.length > 0) {
+      terms = [...kw, ...terms.filter((t) => !(CJK_RE.test(t) && t.length >= 8))]
+        .filter((t, i, a) => a.indexOf(t) === i)
+        .slice(0, 8);
+    }
+  }
+  // sensitive (encrypted) notes never enter the ask context — not even their titles
+  const conds: string[] = ["user_id = ?", "is_sensitive = 0"];
   const binds: unknown[] = [userId];
   if (terms.length > 0) {
     const ors = terms.map(() => "(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)");
@@ -1219,7 +1272,7 @@ app.post("/api/ask", async (c) => {
   let outOfRange: NoteRow[] = [];
   if (extraIds.length > 0) {
     const ph = extraIds.map(() => "?").join(",");
-    const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${ph})`)
+    const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND id IN (${ph})`)
       .bind(userId, ...extraIds)
       .all<NoteRow>();
     const byId = new Map((r.results ?? []).map((n) => [n.id, n]));
@@ -1247,7 +1300,7 @@ app.post("/api/ask", async (c) => {
     const missing = expansion.note_ids.filter((nid) => !notes.some((n) => n.id === nid));
     if (missing.length > 0) {
       const ph = missing.map(() => "?").join(",");
-      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${ph})`)
+      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND id IN (${ph})`)
         .bind(userId, ...missing)
         .all<NoteRow>();
       for (const n of r.results ?? []) {
@@ -1264,7 +1317,7 @@ app.post("/api/ask", async (c) => {
     let suggestions: NoteRow[] = [];
     if (near.length > 0) {
       const ph = near.map(() => "?").join(",");
-      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND id IN (${ph})`)
+      const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND id IN (${ph})`)
         .bind(userId, ...near.map((h) => h.note_id))
         .all<NoteRow>();
       const byId = new Map((r.results ?? []).map((n) => [n.id, n]));

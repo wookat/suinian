@@ -43,6 +43,8 @@ export function AuthPage() {
         apiToken: res.api_token,
         useMock: false,
         onboarded: true,
+        // fresh registrations get the one-time feature tour on first timeline entry
+        tourSeen: mode !== "register",
       })
       window.location.hash = "#/"
     } catch (e) {
