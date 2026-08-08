@@ -227,21 +227,32 @@ export async function deleteNote(id: string): Promise<void> {
   await realFetch<{ ok: boolean }>(`/api/notes/${id}`, { method: "DELETE" })
 }
 
-/** 撤销删除：清除软删标记，恢复笔记 */
+/** 撤销删除：清除软删标记，恢复笔记（服务端单次上限 1000，超出自动分批） */
 export async function restoreNotes(ids: string[]): Promise<number> {
   if (loadSettings().useMock) throw new Error("演示模式不支持恢复，请先配置真实 API")
-  const res = await realFetch<{ ok: boolean; restored: number }>("/api/notes/restore", {
-    method: "POST",
-    body: JSON.stringify({ ids }),
-  })
-  return res.restored
+  let restored = 0
+  for (let i = 0; i < ids.length; i += 1000) {
+    const res = await realFetch<{ ok: boolean; restored: number }>("/api/notes/restore", {
+      method: "POST",
+      body: JSON.stringify({ ids: ids.slice(i, i + 1000) }),
+    })
+    restored += res.restored
+  }
+  return restored
 }
 
-/** NDJSON 批量流：{done,total} 进度行 + 最终 {ok,affected}（或 {error}） */
+/** 批量操作结果：affected=本次影响条数；remaining=筛选匹配超上限未处理条数；ids=删除时被软删的 id（供撤销） */
+export interface BatchResult {
+  affected: number
+  remaining: number
+  ids: string[]
+}
+
+/** NDJSON 批量流：{done,total} 进度行 + 最终 {ok,affected,remaining,ids?}（或 {error}） */
 async function batchStream(
   body: Record<string, unknown>,
   onProgress?: (done: number, total: number) => void,
-): Promise<number> {
+): Promise<BatchResult> {
   const { apiBaseUrl, apiToken, useMock } = loadSettings()
   if (useMock || !apiBaseUrl) throw new Error("演示模式不支持批量操作，请先配置真实 API")
   let res: Response
@@ -267,22 +278,23 @@ async function batchStream(
   }
   const reader = res.body?.getReader()
   if (!reader) {
-    const legacy = (await res.json()) as { affected?: number }
-    return legacy.affected ?? 0
+    const legacy = (await res.json()) as { affected?: number; remaining?: number; ids?: string[] }
+    return { affected: legacy.affected ?? 0, remaining: legacy.remaining ?? 0, ids: legacy.ids ?? [] }
   }
   const decoder = new TextDecoder()
   let buffer = ""
-  let affected: number | null = null
+  let result: BatchResult | null = null
   const handleLine = (line: string) => {
     if (!line.trim()) return
-    let obj: { done?: number; total?: number; ok?: boolean; affected?: number; error?: string }
+    let obj: { done?: number; total?: number; ok?: boolean; affected?: number; remaining?: number; ids?: string[]; error?: string }
     try {
       obj = JSON.parse(line)
     } catch {
       return
     }
     if (typeof obj.error === "string") throw new ApiError(500, obj.error)
-    if (typeof obj.affected === "number") affected = obj.affected
+    if (typeof obj.affected === "number")
+      result = { affected: obj.affected, remaining: obj.remaining ?? 0, ids: Array.isArray(obj.ids) ? obj.ids : [] }
     else if (typeof obj.done === "number" && typeof obj.total === "number") onProgress?.(obj.done, obj.total)
   }
   for (;;) {
@@ -294,8 +306,8 @@ async function batchStream(
     for (const line of lines) handleLine(line)
   }
   handleLine(buffer)
-  if (affected === null) throw new Error("批量操作未返回结果，请刷新时间流确认后重试")
-  return affected
+  if (result === null) throw new Error("批量操作未返回结果，请刷新时间流确认后重试")
+  return result
 }
 
 /** 批量操作：删除 / 加标签 / 去标签 / 改分类（进度经 onProgress 回调） */
@@ -305,7 +317,7 @@ export async function batchNotes(
   opts?: { tags?: string[]; category?: string },
   onProgress?: (done: number, total: number) => void,
 ): Promise<number> {
-  return batchStream({ action, ids, ...opts }, onProgress)
+  return (await batchStream({ action, ids, ...opts }, onProgress)).affected
 }
 
 export interface BatchFilter {
@@ -323,7 +335,7 @@ export async function batchNotesByFilter(
   filter: BatchFilter,
   opts?: { tags?: string[]; category?: string },
   onProgress?: (done: number, total: number) => void,
-): Promise<number> {
+): Promise<BatchResult> {
   return batchStream({ action, filter, ...opts }, onProgress)
 }
 

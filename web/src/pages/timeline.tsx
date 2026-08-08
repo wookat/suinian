@@ -257,11 +257,29 @@ export function TimelinePage() {
       if (!window.confirm("确定删除当前筛选条件下的全部匹配碎念吗？")) return
       setBatchBusy(true)
       setBatchProgress(null)
-      void batchNotesByFilter("delete", currentFilter(), undefined, onProgress)
-        .then((n) => {
-          exitSelectMode()
-          showToast(`已删除全部匹配的 ${n} 条`)
-        })
+      // 服务端单次上限 1000 条：自动续删到全部匹配清完，累计 ids 供一次性撤销
+      void (async () => {
+        const allIds: string[] = []
+        let base = 0
+        let extraRemaining = 0
+        for (;;) {
+          const res = await batchNotesByFilter("delete", currentFilter(), undefined, (done, total) =>
+            setBatchProgress({ done: base + done, total: base + total + extraRemaining }),
+          )
+          allIds.push(...res.ids)
+          base += res.affected
+          extraRemaining = res.remaining
+          if (res.remaining <= 0 || res.affected === 0) break
+          showToast(`已删除前 ${base} 条，剩余 ${res.remaining} 条，正在继续删除…`)
+        }
+        exitSelectMode()
+        if (allIds.length > 0) {
+          notifyNotesDeleted(allIds)
+          showUndoDeleteToast(allIds, `已删除全部匹配的 ${base} 条`)
+        } else {
+          showToast("没有可删除的匹配碎念")
+        }
+      })()
         .catch((e) => showToast(e instanceof Error ? e.message : String(e)))
         .finally(() => {
           setBatchBusy(false)
@@ -300,13 +318,17 @@ export function TimelinePage() {
     setBatchBusy(true)
     if (allMatching) {
       try {
-        const n = await batchNotesByFilter("add_tags", currentFilter(), { tags: [tag] }, (done, total) =>
+        const res = await batchNotesByFilter("add_tags", currentFilter(), { tags: [tag] }, (done, total) =>
           setBatchProgress({ done, total }),
         )
         setBatchTagInput("")
         setTagPanelOpen(false)
         exitSelectMode()
-        showToast(`已为全部匹配的 ${n} 条加上 #${tag}`)
+        showToast(
+          res.remaining > 0
+            ? `已为前 ${res.affected} 条加上 #${tag}，剩余 ${res.remaining} 条请再次执行`
+            : `已为全部匹配的 ${res.affected} 条加上 #${tag}`,
+        )
         void load()
       } catch (e) {
         showToast(e instanceof Error ? e.message : String(e))
@@ -342,13 +364,17 @@ export function TimelinePage() {
     setBatchBusy(true)
     if (allMatching) {
       try {
-        const n = await batchNotesByFilter("set_category", currentFilter(), { category: cat }, (done, total) =>
+        const res = await batchNotesByFilter("set_category", currentFilter(), { category: cat }, (done, total) =>
           setBatchProgress({ done, total }),
         )
         setCatPanelOpen(false)
         exitSelectMode()
         const label = CATEGORY_OPTIONS.find((c) => c.value === cat)?.label ?? cat
-        showToast(`已将全部匹配的 ${n} 条改为「${label}」`)
+        showToast(
+          res.remaining > 0
+            ? `已将前 ${res.affected} 条改为「${label}」，剩余 ${res.remaining} 条请再次执行`
+            : `已将全部匹配的 ${res.affected} 条改为「${label}」`,
+        )
         void load()
       } catch (e) {
         showToast(e instanceof Error ? e.message : String(e))
