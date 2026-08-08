@@ -23,9 +23,10 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import { AskChat } from "@/components/ask-chat"
-import { getNotes, getNote, patchNote, deleteNote, batchNotes, batchNotesByFilter, ApiError, NetworkError } from "@/lib/api"
+import { getNotes, getNote, createNote, patchNote, deleteNote, batchNotes, batchNotesByFilter, ApiError, NetworkError } from "@/lib/api"
 import type { BatchFilter } from "@/lib/api"
-import { useSettingsVersion } from "@/lib/settings"
+import { loadSettings, useSettingsVersion } from "@/lib/settings"
+import { FirstRunTour } from "@/components/first-run-tour"
 import { cn } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
 
@@ -47,6 +48,13 @@ const CATEGORY_TABS = [
   { value: "expense", label: "支出" },
   { value: "income", label: "收入" },
 ] as const
+
+const SAMPLE_TAG = "示例"
+const SAMPLE_NOTES = [
+  "周末想试试手冲咖啡，先从 V60 滤杯开始研究，豆子买浅烘的",
+  "明天下午三点前给牙医回电话，预约洗牙",
+  "https://github.com/wookat/suinian 碎念开源仓库，有空研究下自部署",
+]
 
 const TOP_TAGS = 12
 const MOBILE_TOP_TAGS = 6
@@ -93,6 +101,12 @@ export function TimelinePage() {
   const pollersRef = useRef<Map<string, number>>(new Map())
   const quickInputRef = useRef<HTMLDivElement>(null)
   const settingsVersion = useSettingsVersion()
+  // 新注册用户首次进入时间流：一次性功能引导
+  const [showTour, setShowTour] = useState(() => {
+    const s = loadSettings()
+    return !s.useMock && !!s.apiToken && !s.tourSeen
+  })
+  const [seeding, setSeeding] = useState(false)
 
   // 多选批量操作
   const [selectMode, setSelectMode] = useState(false)
@@ -281,6 +295,36 @@ export function TimelinePage() {
     }
   }
 
+  async function seedSamples() {
+    if (seeding) return
+    setSeeding(true)
+    try {
+      for (const content of SAMPLE_NOTES) {
+        const note = await createNote({ source: "web", raw_type: "text", content, tags: [SAMPLE_TAG] })
+        handleCreated(note)
+      }
+      showToast(`已丢入 ${SAMPLE_NOTES.length} 条示例，AI 正在自动分拣…`)
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSeeding(false)
+    }
+  }
+
+  const sampleIds = useMemo(() => notes.filter((n) => n.tags.includes(SAMPLE_TAG)).map((n) => n.id), [notes])
+
+  async function clearSamples() {
+    const ids = sampleIds
+    if (ids.length === 0) return
+    try {
+      await batchNotes("delete", ids)
+      setNotes((ns) => ns.filter((n) => !ids.includes(n.id)))
+      showToast(`已清除 ${ids.length} 条示例笔记`)
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   const load = useCallback(async () => {
     abortRef.current?.abort()
     const controller = new AbortController()
@@ -437,6 +481,7 @@ export function TimelinePage() {
 
   return (
     <div className="space-y-4">
+      {showTour && <FirstRunTour onDone={() => setShowTour(false)} />}
       <DailyReview onTagClick={setTag} />
 
       <div ref={quickInputRef}>
@@ -622,19 +667,42 @@ export function TimelinePage() {
             }}
           />
         ) : (
-          <EmptyState
-            icon={PenLine}
-            title="还没有碎念"
-            description="想法、待办、链接、资料，想到什么就丢进来，AI 会帮你自动分拣整理。"
-            actionLabel="记下第一条"
-            onAction={() => {
-              quickInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
-              quickInputRef.current?.querySelector("textarea")?.focus()
-            }}
-          />
+          <Card className="flex flex-col items-center gap-3 p-10 text-center animate-in fade-in duration-300">
+            <span className="flex size-14 items-center justify-center rounded-full bg-accent">
+              <PenLine className="size-7 text-accent-foreground" />
+            </span>
+            <h2 className="text-base font-medium">还没有碎念</h2>
+            <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
+              想法、待办、链接、资料，想到什么就丢进来，AI 会帮你自动分拣整理。
+            </p>
+            <div className="mt-1 flex flex-wrap justify-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => {
+                  quickInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+                  quickInputRef.current?.querySelector("textarea")?.focus()
+                }}
+              >
+                <PenLine /> 记下第一条
+              </Button>
+              <Button size="sm" variant="outline" disabled={seeding} onClick={() => void seedSamples()}>
+                {seeding ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                先丢入 {SAMPLE_NOTES.length} 条示例看看
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">示例会打上 #{SAMPLE_TAG} 标签，可随时一键清除</p>
+          </Card>
         )
       ) : (
         <div className="space-y-4">
+          {sampleIds.length > 0 && (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-dashed bg-secondary/50 px-3 py-2 text-xs text-muted-foreground">
+              <span>时间流里有 {sampleIds.length} 条示例笔记（#{SAMPLE_TAG}）</span>
+              <button onClick={() => void clearSamples()} className="shrink-0 font-medium text-primary hover:underline">
+                一键清除
+              </button>
+            </div>
+          )}
           {grouped.map((g) => (
             <section key={g.label}>
               <div className="sticky top-[52px] z-10 -mx-1 bg-background/95 px-1 py-1.5 backdrop-blur md:top-0">

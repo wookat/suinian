@@ -532,7 +532,7 @@ export function SettingsPage() {
       )
     )
       return
-    saveSettings({ apiBaseUrl: "", apiToken: "", useMock: true, onboarded: false })
+    saveSettings({ apiBaseUrl: "", apiToken: "", useMock: true, onboarded: false, tourSeen: true })
     window.location.hash = "#/"
     window.location.reload()
   }
@@ -549,7 +549,7 @@ export function SettingsPage() {
     setAccountMsg(null)
     try {
       await deleteAccount()
-      saveSettings({ apiBaseUrl: "", apiToken: "", useMock: true, onboarded: false })
+      saveSettings({ apiBaseUrl: "", apiToken: "", useMock: true, onboarded: false, tourSeen: true })
       window.location.hash = "#/"
       window.location.reload()
     } catch (e) {
