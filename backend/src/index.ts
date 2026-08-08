@@ -1588,7 +1588,9 @@ app.get("/api/export", async (c) => {
   const notes = await Promise.all(
     (notesR.results ?? []).map((n) =>
       n.is_sensitive && !includeSensitive
-        ? Promise.resolve(noteToJson({ ...n, content: SENSITIVE_EXPORT_PLACEHOLDER }))
+        ? Promise.resolve(
+            noteToJson({ ...n, content: SENSITIVE_EXPORT_PLACEHOLDER, title: SENSITIVE_EXPORT_PLACEHOLDER, tags: "[]" })
+          )
         : noteToJsonDecrypted(c.env, n)
     )
   );

@@ -3,6 +3,7 @@ import { CalendarClock, ChevronDown, ChevronRight, Eye, EyeOff, Sparkles } from 
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { getTodayReview } from "@/lib/api"
+import { onReviewNotesChanged } from "@/lib/review-bus"
 import { useSettingsVersion } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import type { DailyReviewItem } from "@/lib/types"
@@ -31,6 +32,8 @@ export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void
   const [loaded, setLoaded] = useState(false)
   const settingsVersion = useSettingsVersion()
 
+  const [refreshKey, setRefreshKey] = useState(0)
+
   useEffect(() => {
     let cancelled = false
     getTodayReview()
@@ -48,7 +51,24 @@ export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void
     return () => {
       cancelled = true
     }
-  }, [settingsVersion])
+  }, [settingsVersion, refreshKey])
+
+  // 删除笔记（含一键清除示例）时即时剔除引用已删除笔记的回顾条目，避免横幅残留
+  useEffect(() => {
+    return onReviewNotesChanged((deletedIds) => {
+      if (deletedIds === null) {
+        setRefreshKey((k) => k + 1)
+        return
+      }
+      const dropped = new Set(deletedIds)
+      setItems((prev) => {
+        const next = prev.filter((it) => !dropped.has(it.note.id))
+        // 有条目被剔除时把游标拉回第一条，避免 index 悬空越界
+        if (next.length !== prev.length) setIndex(0)
+        return next
+      })
+    })
+  }, [])
 
   const toggleCollapsed = useCallback(() => {
     setCollapsed((c) => {

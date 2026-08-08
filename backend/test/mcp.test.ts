@@ -4,14 +4,18 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildMcpServer, redactNote, MCP_SENSITIVE_PLACEHOLDER } from "../src/mcp";
 
 describe("redactNote", () => {
-  it("replaces content of sensitive notes", () => {
-    const n = redactNote({ is_sensitive: true, content: "wifi 密码 hunter2" });
+  it("replaces content, title and tags of sensitive notes", () => {
+    const n = redactNote({ is_sensitive: true, content: "wifi 密码 hunter2", title: "家里 wifi 密码", tags: ["密码"] });
     expect(n.content).toBe(MCP_SENSITIVE_PLACEHOLDER);
+    expect(n.title).toBe(MCP_SENSITIVE_PLACEHOLDER);
+    expect(n.tags).toEqual([]);
   });
 
   it("leaves normal notes untouched", () => {
-    const n = redactNote({ is_sensitive: false, content: "今天想到一个点子" });
+    const n = redactNote({ is_sensitive: false, content: "今天想到一个点子", title: "点子", tags: ["想法"] });
     expect(n.content).toBe("今天想到一个点子");
+    expect(n.title).toBe("点子");
+    expect(n.tags).toEqual(["想法"]);
   });
 });
 
@@ -78,16 +82,25 @@ describe("MCP server tools", () => {
         {
           "GET /api/notes": {
             status: 200,
-            body: { notes: [{ id: "a", content: "普通", is_sensitive: false }, { id: "b", content: "机密", is_sensitive: true }] },
+            body: {
+              notes: [
+                { id: "a", content: "普通", is_sensitive: false },
+                { id: "b", content: "机密", title: "银行卡密码", tags: ["密码"], is_sensitive: true },
+              ],
+            },
           },
         },
         []
       )
     );
     const res = await client.callTool({ name: "search_notes", arguments: { query: "x" } });
-    const notes = JSON.parse((res.content as { text: string }[])[0].text).notes;
+    const text = (res.content as { text: string }[])[0].text;
+    const notes = JSON.parse(text).notes;
     expect(notes[0].content).toBe("普通");
     expect(notes[1].content).toBe(MCP_SENSITIVE_PLACEHOLDER);
+    expect(notes[1].title).toBe(MCP_SENSITIVE_PLACEHOLDER);
+    expect(notes[1].tags).toEqual([]);
+    expect(text).not.toContain("银行卡密码");
   });
 
   it("list_todos filters out done todos by default", async () => {
