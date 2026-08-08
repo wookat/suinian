@@ -1607,8 +1607,15 @@ app.post("/api/import", async (c) => {
     const file = form.get("file");
     if (!(file instanceof File)) return c.json({ error: "file required" }, 400);
     if (file.size > MAX_IMPORT_BYTES) return c.json({ error: "文件过大：最大支持 20MB" }, 413);
-    if (isZipSource(source)) zipBytes = new Uint8Array(await file.arrayBuffer());
-    else text = await file.text();
+    if (isZipSource(source)) {
+      zipBytes = new Uint8Array(await file.arrayBuffer());
+    } else {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)) {
+        return c.json({ error: "该来源不支持 zip 文件，请选择 Notion / Obsidian / Apple 备忘录来源上传 zip" }, 400);
+      }
+      text = new TextDecoder().decode(bytes);
+    }
   } else {
     const body = await c.req.json<{ source?: unknown; content?: unknown }>().catch(() => null);
     source = typeof body?.source === "string" ? body.source : "";
