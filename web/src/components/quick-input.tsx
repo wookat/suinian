@@ -1,5 +1,5 @@
-import { useRef, useState } from "react"
-import { Send, Loader2, Paperclip } from "lucide-react"
+import { useMemo, useRef, useState } from "react"
+import { Send, Loader2, Paperclip, Sparkles, Lock, Tag } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { ApiError, createNote, ingestMedia, MAX_MEDIA_BYTES, SUPPORTED_FILE_EXTS } from "@/lib/api"
@@ -9,7 +9,29 @@ import type { Note } from "@/lib/types"
 export const MAX_CONTENT_CHARS = 20_000
 const COUNTER_THRESHOLD = 18_000
 
-export function QuickInput({ onCreated }: { onCreated: (note: Note) => void }) {
+/** 内联指令（与帮助文案/微信指令对齐）：?问题 提问；!内容 原样保存；#标签 内容 手动打标 */
+export type InlineCommand =
+  | { kind: "ask"; question: string }
+  | { kind: "raw"; content: string }
+  | { kind: "tags"; tags: string[]; content: string }
+  | null
+
+export function parseInlineCommand(value: string): InlineCommand {
+  const v = value.trimStart()
+  if (v.startsWith("?") || v.startsWith("？")) return { kind: "ask", question: v.slice(1).trim() }
+  if (v.startsWith("!") || v.startsWith("！")) return { kind: "raw", content: v.slice(1).trim() }
+  if (v.startsWith("#")) {
+    const m = v.match(/^((?:#[^\s#＃]+[ \t]*)+)([\s\S]*)$/)
+    if (!m) return null
+    const tags = (m[1].match(/#[^\s#＃]+/g) ?? []).map((t) => t.slice(1)).slice(0, 6)
+    const content = m[2].trim()
+    if (tags.length === 0) return null
+    return { kind: "tags", tags, content }
+  }
+  return null
+}
+
+export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => void; onAsk?: (question: string) => void }) {
   const [value, setValue] = useState("")
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -18,14 +40,28 @@ export function QuickInput({ onCreated }: { onCreated: (note: Note) => void }) {
 
   const length = value.length
   const overLimit = length > MAX_CONTENT_CHARS
+  const command = useMemo(() => parseInlineCommand(value), [value])
 
   async function submit() {
     const content = value.trim()
     if (!content || saving || overLimit) return
+    if (command?.kind === "ask") {
+      if (!command.question) return
+      setValue("")
+      setError(null)
+      onAsk?.(command.question)
+      return
+    }
+    if ((command?.kind === "raw" || command?.kind === "tags") && !command.content) return
     setSaving(true)
     setError(null)
     try {
-      const note = await createNote({ source: "web", raw_type: "text", content })
+      const note =
+        command?.kind === "raw"
+          ? await createNote({ source: "web", raw_type: "text", content: command.content, skip_triage: true })
+          : command?.kind === "tags" && command.content
+            ? await createNote({ source: "web", raw_type: "text", content: command.content, tags: command.tags })
+            : await createNote({ source: "web", raw_type: "text", content })
       setValue("")
       onCreated(note)
     } catch (e) {
@@ -82,13 +118,31 @@ export function QuickInput({ onCreated }: { onCreated: (note: Note) => void }) {
             void submit()
           }
         }}
-        placeholder="记点什么… 回车即存（Shift+回车换行）"
+        placeholder={
+          command?.kind === "ask"
+            ? "问答模式：回车直接向你的笔记提问"
+            : "记点什么… 回车即存（Shift+回车换行）"
+        }
         className="min-h-[52px] resize-none border-0 p-1 shadow-none focus-visible:ring-0"
       />
       <div className="mt-1 flex items-center justify-between gap-2">
-        <span className="min-w-0 truncate text-xs text-muted-foreground">
-          想法 / 待办 / 链接 / 资料 / 图片 / 文件，AI 自动分拣
-        </span>
+        {command?.kind === "ask" ? (
+          <span className="inline-flex min-w-0 items-center gap-1 truncate text-xs font-medium text-primary">
+            <Sparkles className="size-3.5 shrink-0" /> 问答模式：回车直接提问，不会存为笔记
+          </span>
+        ) : command?.kind === "raw" ? (
+          <span className="inline-flex min-w-0 items-center gap-1 truncate text-xs font-medium text-primary">
+            <Lock className="size-3.5 shrink-0" /> 原样保存：不经 AI 分拣，存为「想法」
+          </span>
+        ) : command?.kind === "tags" ? (
+          <span className="inline-flex min-w-0 items-center gap-1 truncate text-xs font-medium text-primary">
+            <Tag className="size-3.5 shrink-0" /> 手动打标：{command.tags.map((t) => `#${t}`).join(" ")}
+          </span>
+        ) : (
+          <span className="min-w-0 truncate text-xs text-muted-foreground">
+            想法 / 待办 / 链接 / 图片 / 文件，AI 自动分拣；?提问 !原样存 #打标
+          </span>
+        )}
         <div className="flex shrink-0 items-center gap-2">
           <input
             ref={fileInputRef}
@@ -124,10 +178,17 @@ export function QuickInput({ onCreated }: { onCreated: (note: Note) => void }) {
           <Button
             size="sm"
             onClick={() => void submit()}
-            disabled={!value.trim() || saving || overLimit}
+            disabled={
+              !value.trim() ||
+              saving ||
+              overLimit ||
+              (command?.kind === "ask" && !command.question) ||
+              (command?.kind === "raw" && !command.content) ||
+              (command?.kind === "tags" && !command.content)
+            }
           >
-            {saving ? <Loader2 className="animate-spin" /> : <Send />}
-            记下
+            {saving ? <Loader2 className="animate-spin" /> : command?.kind === "ask" ? <Sparkles /> : <Send />}
+            {command?.kind === "ask" ? "提问" : "记下"}
           </Button>
         </div>
       </div>

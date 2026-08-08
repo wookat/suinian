@@ -35,6 +35,11 @@ const CHOICES = [
 
 const REPO = "https://github.com/wookat/suinian"
 
+/** Cubox 速记 2027-05 停服；返回距停服还剩几个整月（不足一月计 0） */
+export function monthsUntilCuboxShutdown(now: Date = new Date()): number {
+  return Math.max(0, (2027 - now.getFullYear()) * 12 + (4 - now.getMonth()))
+}
+
 const CHANNELS = [
   { icon: MessageCircle, label: "微信 bot", blurb: "给 bot 发消息就是记录", href: `${REPO}/tree/main/skill` },
   { icon: Scissors, label: "剪藏扩展", blurb: "网页选中一键收进碎念", href: `${REPO}/tree/main/extension` },
@@ -101,7 +106,7 @@ export function Onboarding() {
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-medium">Cubox / flomo 搬家？三步搬完</span>
             <span className="block text-xs text-muted-foreground">
-              Cubox 速记 2027-05 停服。导出文件 → 设置页一键导入 → 原时间与标签全保留，AI 自动补分拣、串线索
+              Cubox 速记 2027-05 停服（还剩约 {monthsUntilCuboxShutdown()} 个月）。导出文件 → 设置页一键导入 → 原时间与标签全保留，AI 自动补分拣、串线索
             </span>
           </span>
           <ChevronRight className="mt-2 size-4 shrink-0 text-muted-foreground" />

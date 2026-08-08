@@ -14,7 +14,7 @@ export const HELP_TEXT = [
   "碎念能帮你：",
   "• 随手记：首页输入框/微信 bot 丢文字、链接、语音、图片、文件，AI 自动分拣为想法/待办/收藏/资料",
   "• 问答：在这里直接提问，如「我最近在想什么」，支持多轮追问，回答中 [n] 可点击查看引用笔记",
-  "• 微信指令：?问题 提问；!内容 强制原样保存不分拣；#标签 内容 手动打标",
+  "• 快捷指令（微信 & 首页速记框）：?问题 提问；!内容 强制原样保存不分拣；#标签 内容 手动打标",
   "• 回顾：每天推送往日笔记回顾；每周一生成周报；同主题想法自动串成线索",
   "• 数据：设置页可导入 flomo/Cubox、导出 JSON/Markdown，也可用 API 直接写入",
 ].join("\n")
@@ -78,7 +78,16 @@ function AnswerText({ msgId, content, refIndexes }: { msgId: string; content: st
   )
 }
 
-export function AskChat({ onTagClick }: { onTagClick?: (tag: string) => void }) {
+export function AskChat({
+  onTagClick,
+  initialQuestion,
+  onInitialQuestionConsumed,
+}: {
+  onTagClick?: (tag: string) => void
+  /** 首页速记框 `?问题` 内联指令带过来的问题，挂载/变化时自动发送 */
+  initialQuestion?: string | null
+  onInitialQuestionConsumed?: () => void
+}) {
   const [messages, setMessages] = useState<AskChatMessage[]>(loadMessages)
   const [input, setInput] = useState("")
   const [asking, setAsking] = useState(false)
@@ -109,10 +118,10 @@ export function AskChat({ onTagClick }: { onTagClick?: (tag: string) => void }) 
     ])
   }
 
-  async function send() {
-    const q = input.trim()
+  async function send(question?: string) {
+    const q = (question ?? input).trim()
     if (!q || asking) return
-    setInput("")
+    if (question === undefined) setInput("")
     setAsking(true)
     const userMsg: AskChatMessage = { id: crypto.randomUUID(), role: "user", content: q }
     setMessages((ms) => [...ms, userMsg])
@@ -140,6 +149,19 @@ export function AskChat({ onTagClick }: { onTagClick?: (tag: string) => void }) 
       setAsking(false)
     }
   }
+
+  const initialSentRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!initialQuestion) {
+      initialSentRef.current = null
+      return
+    }
+    if (initialSentRef.current === initialQuestion) return
+    initialSentRef.current = initialQuestion
+    onInitialQuestionConsumed?.()
+    void send(initialQuestion)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- send 依赖当前 state，仅在新问题到来时触发
+  }, [initialQuestion])
 
   return (
     <Card className="flex flex-col gap-0 overflow-hidden p-0">

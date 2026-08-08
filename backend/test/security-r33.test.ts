@@ -184,10 +184,11 @@ describe("fallback weekly report (H-1 / L-2)", () => {
     expect(md).toContain("&lt;img");
   });
 
-  it("excludes sensitive notes entirely and counts only visible ones", () => {
+  it("counts sensitive notes but never shows their content", () => {
     const md = fallbackMarkdown("2026-08-03", "2026-08-09", notes);
     expect(md).not.toContain("secret-password-value");
-    expect(md).toContain("本周共记录 1 条");
+    expect(md).toContain("本周共记录 2 条（含 1 条敏感记录，仅计数不展示内容）");
+    expect(md).toContain("（另有 1 条敏感记录，内容不展示）");
   });
 
   it("escapeMdText handles all dangerous characters", () => {

@@ -118,13 +118,27 @@ async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind): Promise
  * long-untouched high-value ideas. Sensitive notes never enter reviews.
  */
 export async function generateDailyReview(env: Env, userId: string, now: Date = new Date()): Promise<number> {
+  return (await generateDailyReviewDetailed(env, userId, now)).count;
+}
+
+export interface DailyReviewGenResult {
+  count: number;
+  /** "generated" = new rows written; "already" = rows existed for today; "empty" = no material */
+  outcome: "generated" | "already" | "empty";
+}
+
+export async function generateDailyReviewDetailed(
+  env: Env,
+  userId: string,
+  now: Date = new Date()
+): Promise<DailyReviewGenResult> {
   const today = shanghaiDate(now);
   const existing = await env.DB.prepare(
     "SELECT COUNT(*) AS n FROM daily_reviews WHERE user_id = ? AND review_date = ?"
   )
     .bind(userId, today)
     .first<{ n: number }>();
-  if ((existing?.n ?? 0) > 0) return existing!.n;
+  if ((existing?.n ?? 0) > 0) return { count: existing!.n, outcome: "already" };
 
   const picks: { note: NoteRow; kind: ReviewKind }[] = [];
   const seen = new Set<string>();
@@ -149,7 +163,7 @@ export async function generateDailyReview(env: Env, userId: string, now: Date = 
   if (picks.length === 0) {
     // 真正无可选素材（新用户/空账号）：明确不落库，仅记日志
     console.log(`daily-review: no material for user=${userId} date=${today}`);
-    return 0;
+    return { count: 0, outcome: "empty" };
   }
 
   for (let i = 0; i < picks.length; i++) {
@@ -168,7 +182,7 @@ export async function generateDailyReview(env: Env, userId: string, now: Date = 
       .bind(crypto.randomUUID(), userId, today, note.id, kind, comment, i)
       .run();
   }
-  return picks.length;
+  return { count: picks.length, outcome: "generated" };
 }
 
 export interface TodayReviewItem {
@@ -210,19 +224,52 @@ export async function getTodayReview(env: Env, userId: string, now: Date = new D
 export interface DailyReviewSweepStats {
   users: number;
   generated: number;
+  already: number;
   empty: number;
   failed: number;
 }
 
-/** Daily cron: generate review items for all users; logs a per-run summary. */
-export async function generateAllDailyReviews(env: Env): Promise<DailyReviewSweepStats> {
+export interface CronHeartbeat {
+  job: string;
+  last_run_at: string;
+  source: string;
+  stats: string | null;
+}
+
+/** Persist a per-job heartbeat row so "cron 没跑" is distinguishable from "跑了但无素材". */
+export async function writeCronHeartbeat(env: Env, job: string, source: string, stats: unknown): Promise<void> {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO cron_heartbeats (job, last_run_at, source, stats) VALUES (?, datetime('now'), ?, ?)
+       ON CONFLICT (job) DO UPDATE SET last_run_at = excluded.last_run_at, source = excluded.source, stats = excluded.stats`
+    )
+      .bind(job, source, JSON.stringify(stats))
+      .run();
+  } catch (e) {
+    console.error(`heartbeat write failed for job=${job}`, e);
+  }
+}
+
+export async function readCronHeartbeats(env: Env, jobs: string[]): Promise<CronHeartbeat[]> {
+  try {
+    const ph = jobs.map(() => "?").join(",");
+    const { results } = await env.DB.prepare(`SELECT * FROM cron_heartbeats WHERE job IN (${ph})`)
+      .bind(...jobs)
+      .all<CronHeartbeat>();
+    return results ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Daily cron: generate review items for all users; logs and persists a per-run summary. */
+export async function generateAllDailyReviews(env: Env, source: "cron" | "admin" = "cron"): Promise<DailyReviewSweepStats> {
   const { results } = await env.DB.prepare("SELECT id FROM users").all<{ id: string }>();
-  const stats: DailyReviewSweepStats = { users: (results ?? []).length, generated: 0, empty: 0, failed: 0 };
+  const stats: DailyReviewSweepStats = { users: (results ?? []).length, generated: 0, already: 0, empty: 0, failed: 0 };
   for (const u of results ?? []) {
     try {
-      const n = await generateDailyReview(env, u.id);
-      if (n > 0) stats.generated++;
-      else stats.empty++;
+      const r = await generateDailyReviewDetailed(env, u.id);
+      stats[r.outcome === "generated" ? "generated" : r.outcome === "already" ? "already" : "empty"]++;
     } catch (e) {
       // per-user failures shouldn't stop the sweep, but must be visible
       stats.failed++;
@@ -230,7 +277,8 @@ export async function generateAllDailyReviews(env: Env): Promise<DailyReviewSwee
     }
   }
   console.log(
-    `daily-review sweep: users=${stats.users} generated=${stats.generated} empty=${stats.empty} failed=${stats.failed}`
+    `daily-review sweep (${source}): users=${stats.users} generated=${stats.generated} already=${stats.already} empty=${stats.empty} failed=${stats.failed}`
   );
+  await writeCronHeartbeat(env, `daily_review:${source}`, source, stats);
   return stats;
 }

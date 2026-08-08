@@ -139,26 +139,41 @@ export function financeSection(stats: FinanceStats): string {
   return md;
 }
 
+/** Per-category counts over ALL notes (sensitive included), so totals and
+ * category counts always add up; sensitive contents still never appear. */
+export function categoryCounts(allNotes: NoteRow[]): { counts: Map<string, number>; sensitive: number } {
+  const counts = new Map<string, number>();
+  let sensitive = 0;
+  for (const n of allNotes) {
+    const k = n.category ?? "idea";
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+    if (n.is_sensitive) sensitive++;
+  }
+  return { counts, sensitive };
+}
+
 export function fallbackMarkdown(
   weekStart: string,
   weekEnd: string,
   allNotes: NoteRow[],
   periodLabel: "week" | "month" = "week"
 ): string {
-  // sensitive notes are excluded entirely (even their titles), matching the AI digest path
-  const notes = allNotes.filter((n) => !n.is_sensitive);
+  // 口径统一：敏感笔记计入总数与分类计数，但正文（标题/内容）绝不展示
+  const { counts, sensitive } = categoryCounts(allNotes);
   const byCat = new Map<string, NoteRow[]>();
-  for (const n of notes) {
+  for (const n of allNotes) {
     const k = n.category ?? "idea";
     if (!byCat.has(k)) byCat.set(k, []);
     byCat.get(k)!.push(n);
   }
   const label = periodLabel === "month" ? "月报" : "周报";
   const unit = periodLabel === "month" ? "本月" : "本周";
-  let md = `# 碎念${label}（${weekStart} ~ ${weekEnd}）\n\n${unit}共记录 ${notes.length} 条。\n`;
+  let md = `# 碎念${label}（${weekStart} ~ ${weekEnd}）\n\n${unit}共记录 ${allNotes.length} 条${sensitive > 0 ? `（含 ${sensitive} 条敏感记录，仅计数不展示内容）` : ""}。\n`;
   for (const [cat, rows] of byCat) {
-    md += `\n## ${CATEGORY_LABEL[cat] ?? cat}（${rows.length}）\n`;
-    for (const n of rows) md += `- ${escapeMdText((n.title || n.content).slice(0, 60))}\n`;
+    md += `\n## ${CATEGORY_LABEL[cat] ?? cat}（${counts.get(cat) ?? rows.length}）\n`;
+    const hidden = rows.filter((n) => n.is_sensitive).length;
+    for (const n of rows.filter((n) => !n.is_sensitive)) md += `- ${escapeMdText((n.title || n.content).slice(0, 60))}\n`;
+    if (hidden > 0) md += `- （另有 ${hidden} 条敏感记录，内容不展示）\n`;
   }
   return md;
 }
@@ -227,6 +242,12 @@ export async function generatePeriodReport(
         finance.expenseCount + finance.incomeCount > 0
           ? `、收支合计（直接使用这份统计，不要自己重算：${finMd.replace(/\n/g, " ").trim()}）`
           : "";
+      // 口径统一：把权威计数（含敏感）交给 AI，避免它从摘要里自行数出对不上的总数
+      const { counts, sensitive } = categoryCounts(notes);
+      const countsLine = [...counts.entries()]
+        .map(([cat, n]) => `${CATEGORY_LABEL[cat] ?? cat} ${n} 条`)
+        .join("、");
+      const countsHint = `${unit}共记录 ${notes.length} 条（${countsLine}${sensitive > 0 ? `；其中 ${sensitive} 条为敏感记录，已计入以上计数但未提供内容，正文不得提及其内容` : ""}）。总数与分类计数直接使用这份统计，不要自己重算。`;
       const text = (
         await chatComplete(env, {
           temperature: 0.4,
@@ -235,7 +256,7 @@ export async function generatePeriodReport(
           messages: [
             {
               role: "system",
-              content: `你是「碎念」${label}助手。根据用户${prev}（${weekStart} ~ ${weekEnd}）记录的碎片，写一份 markdown ${label}：一级标题为「碎念${label}（${weekStart} ~ ${weekEnd}）」，内容包括：${unit}概览（数量/主题分布）、主要在想什么（归纳 2-4 个主题并展开）、待办盘点（完成/未完成，${unit}新增待办 ${stats.created} 条、共完成 ${stats.doneInWeek} 条）${financeHint}、值得回顾的收藏。语气亲切、简洁，用中文。不要编造笔记中没有的内容。`,
+              content: `你是「碎念」${label}助手。根据用户${prev}（${weekStart} ~ ${weekEnd}）记录的碎片，写一份 markdown ${label}：一级标题为「碎念${label}（${weekStart} ~ ${weekEnd}）」，内容包括：${unit}概览（${countsHint}）、主要在想什么（归纳 2-4 个主题并展开）、待办盘点（完成/未完成，${unit}新增待办 ${stats.created} 条、共完成 ${stats.doneInWeek} 条）${financeHint}、值得回顾的收藏。语气亲切、简洁，用中文。不要编造笔记中没有的内容。`,
             },
             { role: "user", content: digest || `（${unit}没有记录）` },
           ],

@@ -19,7 +19,7 @@ import {
   clientIp,
 } from "./auth";
 import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports } from "./reports";
-import { getTodayReview, generateAllDailyReviews } from "./review";
+import { getTodayReview, generateAllDailyReviews, readCronHeartbeats } from "./review";
 import { upsertNoteEmbedding, deleteNoteEmbedding, semanticRecall, backfillEmbeddings } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteUserGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
 import {
@@ -194,8 +194,15 @@ app.post("/api/admin/run-daily-reviews", async (c) => {
   const auth = c.req.header("authorization") || "";
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (!m || m[1] !== adminToken) return c.json({ error: "unauthorized" }, 401);
-  const stats = await generateAllDailyReviews(c.env);
-  return c.json({ ok: true, ...stats });
+  // read the cron-side heartbeat BEFORE running, so the response can tell
+  // "cron 没跑" (no/stale heartbeat) apart from "跑了但无素材" (fresh heartbeat, generated=0)
+  const heartbeats = await readCronHeartbeats(c.env, ["daily_review:cron", "daily_review:admin"]);
+  const stats = await generateAllDailyReviews(c.env, "admin");
+  return c.json({
+    ok: true,
+    ...stats,
+    heartbeats: heartbeats.map((h) => ({ ...h, stats: h.stats ? JSON.parse(h.stats) : null })),
+  });
 });
 
 // ---- auth ----
@@ -485,13 +492,15 @@ async function createNote(
 // ---- POST /api/notes ----
 app.post("/api/notes", async (c) => {
   const body = await c.req
-    .json<{ source?: string; raw_type?: string; content?: string; url?: string; tags?: string[] }>()
+    .json<{ source?: string; raw_type?: string; content?: string; url?: string; tags?: string[]; skip_triage?: boolean }>()
     .catch(() => null);
   if (!body || !(body.content ?? "").trim()) return c.json({ error: "content required" }, 400);
   const tooLong = contentTooLong(c, body.content ?? "");
   if (tooLong) return tooLong;
+  // skip_triage (`!` inline command): store as-is, never re-sorted
+  const skipTriage = body.skip_triage === true;
   // returns immediately; triage + link fetch + clustering backfill asynchronously
-  const { note } = await createNote(c, c.get("userId"), body, (p) => c.executionCtx.waitUntil(p), { syncTriage: false });
+  const { note } = await createNote(c, c.get("userId"), body, (p) => c.executionCtx.waitUntil(p), { syncTriage: false, skipTriage });
   return c.json({ note: noteToJson(note) }, 201);
 });
 
