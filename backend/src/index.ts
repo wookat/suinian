@@ -1295,9 +1295,14 @@ app.post("/api/ask", async (c) => {
 });
 
 // ---- GET /api/threads ----
+// last_note_at = newest fragment's created_at; the list sorts by it so that
+// "recently written-into" threads rank first (updated_at is bumped by the
+// daily summary refresh for every thread and doesn't reflect real activity).
 app.get("/api/threads", async (c) => {
   const { results } = await c.env.DB.prepare(
-    "SELECT * FROM threads WHERE user_id = ? AND note_count > 0 ORDER BY updated_at DESC LIMIT 100"
+    `SELECT t.*, (SELECT MAX(n.created_at) FROM notes n WHERE n.thread_id = t.id) AS last_note_at
+       FROM threads t WHERE t.user_id = ? AND t.note_count > 0
+      ORDER BY last_note_at DESC LIMIT 100`
   )
     .bind(c.get("userId"))
     .all<ThreadRow>();

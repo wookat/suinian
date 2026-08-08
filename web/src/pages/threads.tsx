@@ -149,9 +149,11 @@ export function ThreadsPage() {
                   return (
                     <div key={n.id} id={`thread-note-${n.id}`} className="relative">
                       {showDate && (
-                        <p className="relative mb-1.5 pt-1 text-xs font-medium text-muted-foreground">
-                          <span className="absolute -left-[13.5px] top-2 size-2 rounded-full bg-border" />
-                          {date}
+                        <p className="relative mb-2 pt-1">
+                          <span className="absolute -left-[14.5px] top-[9px] size-2.5 rounded-full border-2 border-background bg-primary/50" />
+                          <span className="inline-block rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                            {date}
+                          </span>
                         </p>
                       )}
                       <span className="absolute -left-[13.5px] top-5 size-2 rounded-full bg-primary/60" />
@@ -223,10 +225,27 @@ export function ThreadsPage() {
             <p className="mt-1.5 line-clamp-2 text-sm text-muted-foreground">{t.summary}</p>
           )}
           <p className="mt-2 text-xs text-muted-foreground">
-            {t.note_count} 条碎片 · 更新于 {formatTime(t.updated_at)}
+            {t.note_count} 条碎片 · 最近记录 {formatTime(t.last_note_at ?? t.updated_at)}
           </p>
         </Card>
       ))}
+      {threads.length <= 2 && (
+        <Card className="border-dashed p-4 text-center">
+          <p className="text-sm text-muted-foreground">
+            更多线索还在酝酿——继续记录想法，AI 会把同主题的碎片自动串成新线索
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-3"
+            onClick={() => {
+              window.location.hash = "#/"
+            }}
+          >
+            去首页记点想法
+          </Button>
+        </Card>
+      )}
     </div>
   )
 }

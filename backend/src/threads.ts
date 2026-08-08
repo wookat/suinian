@@ -345,6 +345,29 @@ export async function rebuildThreads(
   for (const n of rows) {
     await clusterNote(env, { ...n, thread_id: null }, opts);
   }
+  // drop threads emptied by mate-moves during clustering and dissolve 1-note
+  // leftovers, freeing their notes for the second pass below
+  await reconcileThreads(env, userId);
+  // second pass: ideas that stayed unthreaded on the chronological pass (their
+  // topic-mates came later) get one more match against the full thread set
+  const { results: leftovers } = await env.DB.prepare(
+    `SELECT * FROM notes WHERE user_id = ? AND category = 'idea' AND thread_id IS NULL
+       AND created_at >= datetime('now', '-90 days')
+     ORDER BY created_at ASC LIMIT 100`
+  )
+    .bind(userId)
+    .all<NoteRow>();
+  for (const n of leftovers ?? []) {
+    try {
+      const picked = await pickThreadByDeepseek(env, n);
+      if (picked) {
+        await attachNoteToThread(env, n.id, picked);
+        await summarizeThread(env, picked, n.title || undefined);
+      }
+    } catch (err) {
+      console.error(`threads: rebuild second pass failed for note=${n.id}`, err);
+    }
+  }
   const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM threads WHERE user_id = ? AND note_count > 0")
     .bind(userId)
     .first<{ c: number }>();
