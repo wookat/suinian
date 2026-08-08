@@ -26,10 +26,17 @@ describe("user deletion cascade coverage", () => {
     expect([...USER_ID_TABLES].sort()).toEqual(expected);
   });
 
-  it("every table referencing notes(id) is cleaned by the cascade", () => {
+  it("every table referencing notes(id) is cleaned by the cascade, before notes", () => {
     const noteTables = tablesWithForeignKey(/REFERENCES\s+notes\s*\(\s*id\s*\)/);
-    const covered = new Set<string>([...USER_ID_TABLES, ...NOTE_ID_TABLES]);
-    for (const t of noteTables) expect(covered.has(t)).toBe(true);
+    const notesIdx = USER_ID_TABLES.indexOf("notes");
+    for (const t of noteTables) {
+      const userIdx = (USER_ID_TABLES as readonly string[]).indexOf(t);
+      const inNoteList = (NOTE_ID_TABLES as readonly string[]).includes(t);
+      // must be covered, and if deleted via the user_id list it must come
+      // before notes or the FK constraint fires (the R49 daily_reviews 500)
+      expect(inNoteList || userIdx >= 0).toBe(true);
+      if (userIdx >= 0) expect(userIdx).toBeLessThan(notesIdx);
+    }
   });
 });
 
@@ -53,6 +60,19 @@ function fakeDb(rows: Record<string, { user_id?: string; note_id?: string; id?: 
           }
           const userScoped = sql.match(/^DELETE FROM (\w+) WHERE user_id = \?$/);
           if (userScoped) {
+            if (userScoped[1] === "notes") {
+              // emulate SQLite FK enforcement: deleting a note still referenced
+              // by a note_id child row must fail (production D1 behavior)
+              const doomed = new Set((rows.notes ?? []).filter((n) => n.user_id === binds[0]).map((n) => n.id));
+              for (const [table, tableRows] of Object.entries(rows)) {
+                if (table === "notes") continue;
+                for (const r of tableRows) {
+                  if (r.note_id && doomed.has(r.note_id)) {
+                    throw new Error(`FOREIGN KEY constraint failed: ${table}.note_id -> notes.id`);
+                  }
+                }
+              }
+            }
             rows[userScoped[1]] = (rows[userScoped[1]] ?? []).filter((r) => r.user_id !== binds[0]);
             return { meta: { changes: 1 } };
           }
@@ -86,7 +106,7 @@ describe("deleteUserData", () => {
       weekly_reports: [{ id: "w1", user_id: "u1" }],
       entities: [{ id: "e1", user_id: "u1" }],
       edges: [{ id: "g1", user_id: "u1" }],
-      daily_reviews: [{ id: "d1", user_id: "u1" }],
+      daily_reviews: [{ id: "d1", user_id: "u1", note_id: "n1" }],
       user_preferences: [{ user_id: "u1" }, { user_id: "u2" }],
     };
     const db = fakeDb(rows);
@@ -100,6 +120,8 @@ describe("deleteUserData", () => {
     expect(rows.entities).toEqual([]);
     expect(rows.edges).toEqual([]);
     expect(rows.daily_reviews).toEqual([]);
+    // note: d1 referenced n1 via note_id — the fake enforces the FK, so this
+    // passing proves daily_reviews is cleared before notes
     expect(rows.user_preferences).toEqual([{ user_id: "u2" }]);
   });
 });

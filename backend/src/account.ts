@@ -7,12 +7,13 @@ import type { Env } from "./types";
  * account-cascade test scans migrations/ and fails if this list drifts.
  */
 export const USER_ID_TABLES = [
+  // daily_reviews.note_id references notes(id): it must be cleared before notes
+  "daily_reviews",
   "notes",
   "threads",
   "weekly_reports",
   "entities",
   "edges",
-  "daily_reviews",
   "user_preferences",
 ] as const;
 
