@@ -5,11 +5,13 @@
     "moduleResolution": "node16",
     "outDir": "dist",
     "rootDir": "src",
+    "types": ["node"],
     "strict": true,
     "declaration": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
 }

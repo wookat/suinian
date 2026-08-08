@@ -43,7 +43,7 @@ export function buildMcpServer(api: ApiCall): McpServer {
     {
       title: "记一条碎念",
       description:
-        "往碎念收件箱丢一条笔记（想法/待办/收藏/资料/账目都行）。AI 会自动分拣分类、打标签、串线索；也可以手动指定标签或分类。",
+        "往碎念收件箱丢一条笔记（想法/待办/收藏/资料/账目都行）。用户说「帮我记一下…」「记个待办…」「存一下这个链接」「记账：午饭 30 元」时用这个工具。AI 会自动分拣分类、打标签、串线索；也可以手动指定标签或分类。示例：save_note(content=\"周末去看《沙丘 3》\")。",
       inputSchema: {
         content: z.string().min(1).max(20000).describe("笔记内容，纯文本，可含链接"),
         tags: z.array(z.string()).max(6).optional().describe("手动标签（可选，最多 6 个；不传则由 AI 自动打标签）"),
@@ -77,7 +77,8 @@ export function buildMcpServer(api: ApiCall): McpServer {
     "search_notes",
     {
       title: "搜索碎念",
-      description: "按关键词搜索笔记，自动混合关键词匹配与语义（embedding）召回。返回匹配的笔记列表。",
+      description:
+        "按关键词搜索笔记，自动混合关键词匹配与语义（embedding）召回，返回匹配的笔记原文列表。想找某几条笔记原文、按标签/分类筛选时用这个；如果用户想要总结性的回答（如「我之前对 X 是怎么想的」），用 ask 工具。",
       inputSchema: {
         query: z.string().min(1).describe("搜索关键词或一句自然语言"),
         category: z
@@ -104,7 +105,7 @@ export function buildMcpServer(api: ApiCall): McpServer {
     {
       title: "问碎念",
       description:
-        "用自然语言向自己的笔记提问（AI 问答），回答带 [序号] 引用，references 列出引用到的笔记。适合「我上个月关于 X 想过什么」这类问题。得到有价值的结论后，可用 save_note 工具把结论存回碎念（写回闭环）。",
+        "用自然语言向自己的全部笔记提问，AI 检索相关笔记并给出总结性回答（带 [序号] 引用，references 列出引用到的笔记）。用户问「我之前/上个月想过什么」「我对 X 的看法是什么」「关于 Y 我记过哪些要点」时用这个工具，不要用 search_notes。得到有价值的结论后，可用 save_note 工具把结论存回碎念（写回闭环）。",
       inputSchema: {
         question: z.string().min(1).describe("要问的问题，自然语言"),
       },
@@ -134,7 +135,8 @@ export function buildMcpServer(api: ApiCall): McpServer {
     "list_threads",
     {
       title: "列出思考线索",
-      description: "列出 AI 自动聚成的思考线索（同一主题的碎片串成一条线索），按更新时间倒序。",
+      description:
+        "列出 AI 自动聚成的思考线索（同一主题的碎片串成一条线索），按更新时间倒序。用户问「我最近在持续想什么」「有哪些思考线索」时用这个工具；看单条线索详情用 get_thread。",
       inputSchema: {},
     },
     async () => {
@@ -165,7 +167,8 @@ export function buildMcpServer(api: ApiCall): McpServer {
     "get_weekly_report",
     {
       title: "读周报",
-      description: "读取最近一份周报（每周一自动生成的「本周你在想什么」总结），或按 report_id 读指定一份。",
+      description:
+        "读取最近一份周报（每周一自动生成的「本周你在想什么」总结），或按 report_id 读指定一份。用户问「看下我的周报」「上周总结」时用这个工具。",
       inputSchema: {
         report_id: z.string().optional().describe("周报 id（可选；不传则返回最新一份）"),
       },
@@ -189,7 +192,8 @@ export function buildMcpServer(api: ApiCall): McpServer {
     "list_todos",
     {
       title: "列出待办",
-      description: "列出从碎念里自动识别出的待办事项，默认只看未完成的。",
+      description:
+        "列出从碎念里自动识别出的待办事项，默认只看未完成的。用户问「我还有什么没做完」「待办清单」时用这个工具。",
       inputSchema: {
         include_done: z.boolean().optional().describe("是否包含已完成的待办，默认 false"),
         limit: z.number().int().min(1).max(100).optional().describe("最多返回条数，默认 50"),
@@ -209,7 +213,7 @@ export function buildMcpServer(api: ApiCall): McpServer {
     "complete_todo",
     {
       title: "完成待办",
-      description: "把一条待办标记为已完成。",
+      description: "把一条待办标记为已完成。用户说「XX 做完了 / 勾掉 XX」时，先用 list_todos 或 search_notes 找到对应笔记 id，再调用本工具。",
       inputSchema: {
         note_id: z.string().min(1).describe("待办笔记的 id（来自 list_todos / search_notes）"),
       },
