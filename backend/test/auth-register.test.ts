@@ -327,9 +327,19 @@ describe("token rotate + me + delete", () => {
     );
     expect(res.status).toBe(200);
     expect(users.length).toBe(0);
-    expect(DB.deleted).toContain("notes");
-    expect(DB.deleted).toContain("threads");
-    expect(DB.deleted).toContain("weekly_reports");
+    for (const t of [
+      "attachments",
+      "note_embeddings",
+      "notes",
+      "threads",
+      "weekly_reports",
+      "entities",
+      "edges",
+      "daily_reviews",
+      "user_preferences",
+    ]) {
+      expect(DB.deleted).toContain(t);
+    }
   });
 });
 

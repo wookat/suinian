@@ -21,7 +21,8 @@ import {
 import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports } from "./reports";
 import { getTodayReview, generateAllDailyReviews, readCronHeartbeats, shanghaiDate } from "./review";
 import { upsertNoteEmbedding, deleteNoteEmbedding, semanticRecall, backfillEmbeddings } from "./semantic";
-import { extractGraph, deleteNoteGraph, deleteUserGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
+import { extractGraph, deleteNoteGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
+import { deleteUserData } from "./account";
 import {
   parseMediaRequest,
   transcribeAudio,
@@ -264,7 +265,6 @@ app.delete("/api/auth/me", async (c) => {
       c.env.MEDIA.delete((atts.results ?? []).map((a) => a.r2_key)).catch((e) => console.error("r2 delete failed", e))
     );
   }
-  await c.env.DB.prepare("DELETE FROM attachments WHERE note_id IN (SELECT id FROM notes WHERE user_id = ?)").bind(userId).run();
   if (c.env.VECTORIZE) {
     const ids = await c.env.DB.prepare("SELECT id FROM notes WHERE user_id = ?").bind(userId).all<{ id: string }>();
     const vec = c.env.VECTORIZE;
@@ -272,13 +272,7 @@ app.delete("/api/auth/me", async (c) => {
       vec.deleteByIds((ids.results ?? []).map((r) => r.id)).catch((e) => console.error("vectorize delete failed", e))
     );
   }
-  await c.env.DB.prepare("DELETE FROM note_embeddings WHERE note_id IN (SELECT id FROM notes WHERE user_id = ?)").bind(userId).run();
-  await deleteUserGraph(c.env, userId);
-  await c.env.DB.prepare("DELETE FROM daily_reviews WHERE user_id = ?").bind(userId).run();
-  await c.env.DB.prepare("DELETE FROM notes WHERE user_id = ?").bind(userId).run();
-  await c.env.DB.prepare("DELETE FROM threads WHERE user_id = ?").bind(userId).run();
-  await c.env.DB.prepare("DELETE FROM weekly_reports WHERE user_id = ?").bind(userId).run();
-  await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(userId).run();
+  await deleteUserData(c.env, userId);
   return c.json({ ok: true });
 });
 

@@ -106,6 +106,9 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
 }
 
 async function attachNoteToThread(env: Env, noteId: string, threadId: string): Promise<void> {
+  const prev = await env.DB.prepare("SELECT thread_id FROM notes WHERE id = ?")
+    .bind(noteId)
+    .first<{ thread_id: string | null }>();
   await env.DB.prepare("UPDATE notes SET thread_id = ?, updated_at = datetime('now') WHERE id = ?")
     .bind(threadId, noteId)
     .run();
@@ -114,6 +117,13 @@ async function attachNoteToThread(env: Env, noteId: string, threadId: string): P
   )
     .bind(threadId, threadId)
     .run();
+  // a note moved out of another thread (e.g. a graph-mate grab during
+  // incremental clustering) leaves it with a stale count or a lone note
+  if (prev?.thread_id && prev.thread_id !== threadId) {
+    await reconcileThread(env, prev.thread_id).catch((err) =>
+      console.error(`threads: reconcile after move failed for thread=${prev.thread_id}`, err)
+    );
+  }
 }
 
 async function deepseekPickNumber(env: Env, system: string, user: string, max: number): Promise<number | null> {
@@ -376,6 +386,45 @@ export async function rebuildThreads(
 }
 
 /**
+ * Reconcile a single thread against its actual notes: delete it when empty,
+ * dissolve it when only one note remains (detaching the note), or refresh a
+ * stale note_count. Pass knownCount when the caller already read note_count
+ * to skip a redundant UPDATE.
+ */
+export async function reconcileThread(
+  env: Env,
+  threadId: string,
+  knownCount?: number
+): Promise<"deleted" | "dissolved" | "recounted" | "ok"> {
+  const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM notes WHERE thread_id = ?")
+    .bind(threadId)
+    .first<{ c: number }>();
+  const c = cnt?.c ?? 0;
+  if (c === 0) {
+    await env.DB.prepare("DELETE FROM threads WHERE id = ?").bind(threadId).run();
+    return "deleted";
+  }
+  if (c === 1) {
+    await env.DB.prepare(
+      "UPDATE notes SET thread_id = NULL, updated_at = datetime('now') WHERE thread_id = ?"
+    )
+      .bind(threadId)
+      .run();
+    await env.DB.prepare("DELETE FROM threads WHERE id = ?").bind(threadId).run();
+    return "dissolved";
+  }
+  if (c !== knownCount) {
+    await env.DB.prepare(
+      "UPDATE threads SET note_count = ?, updated_at = datetime('now') WHERE id = ?"
+    )
+      .bind(c, threadId)
+      .run();
+    return "recounted";
+  }
+  return "ok";
+}
+
+/**
  * Recount every thread from its notes and clean up degenerate ones: a thread
  * with 0 notes is deleted, a thread left with a single note is dissolved (the
  * note is detached — a thread only makes sense with ≥2 fragments). Scoped to
@@ -394,28 +443,9 @@ export async function reconcileThreads(
   for (const t of results ?? []) {
     // isolate per-thread failures so one bad row never aborts the whole sweep
     try {
-      const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM notes WHERE thread_id = ?")
-        .bind(t.id)
-        .first<{ c: number }>();
-      const c = cnt?.c ?? 0;
-      if (c === 0) {
-        await env.DB.prepare("DELETE FROM threads WHERE id = ?").bind(t.id).run();
-        deleted++;
-      } else if (c === 1) {
-        await env.DB.prepare(
-          "UPDATE notes SET thread_id = NULL, updated_at = datetime('now') WHERE thread_id = ?"
-        )
-          .bind(t.id)
-          .run();
-        await env.DB.prepare("DELETE FROM threads WHERE id = ?").bind(t.id).run();
-        dissolved++;
-      } else if (c !== t.note_count) {
-        await env.DB.prepare(
-          "UPDATE threads SET note_count = ?, updated_at = datetime('now') WHERE id = ?"
-        )
-          .bind(c, t.id)
-          .run();
-      }
+      const outcome = await reconcileThread(env, t.id, t.note_count);
+      if (outcome === "deleted") deleted++;
+      else if (outcome === "dissolved") dissolved++;
     } catch (err) {
       console.error(`threads: reconcile failed for thread=${t.id}`, err);
     }
