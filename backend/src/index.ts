@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
-import { triageNote, loadTopTags, normalizeTodoDue, FALLBACK_TRIAGE } from "./triage";
+import { triageNote, loadTopTags, normalizeTodoDue, detectSensitive, FALLBACK_TRIAGE } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
@@ -430,21 +430,39 @@ async function createNote(
         }
       : (body.meta ?? null);
 
+  // sync sensitive pre-check (regex, no AI call): obvious credential values are
+  // encrypted from the very first write, so the pre-triage window never serves
+  // their plaintext through backup/export/MCP/list paths
+  let storedContent = content;
+  let preContentEnc: string | null = null;
+  let preSensitive = false;
+  if (detectSensitive(content) && c.env.SUINIAN_ENC_KEY) {
+    try {
+      preContentEnc = await encryptContent(c.env.SUINIAN_ENC_KEY, content);
+      storedContent = ENC_PLACEHOLDER;
+      preSensitive = true;
+    } catch {
+      preContentEnc = null;
+    }
+  }
+
   // insert immediately (category resolved by triage, sync or async)
   await c.env.DB.prepare(
-    `INSERT INTO notes (id, user_id, source, raw_type, content, url, category, tags, meta)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO notes (id, user_id, source, raw_type, content, url, category, tags, meta, is_sensitive, content_enc)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
       userId,
       source,
       rawType,
-      content,
+      storedContent,
       url ?? null,
       opts.skipTriage ? "idea" : null,
       JSON.stringify(manualTags),
-      meta ? JSON.stringify(meta) : null
+      meta ? JSON.stringify(meta) : null,
+      preSensitive ? 1 : 0,
+      preContentEnc
     )
     .run();
 
@@ -497,7 +515,7 @@ app.post("/api/notes", async (c) => {
   const skipTriage = body.skip_triage === true;
   // returns immediately; triage + link fetch + clustering backfill asynchronously
   const { note } = await createNote(c, c.get("userId"), body, (p) => c.executionCtx.waitUntil(p), { syncTriage: false, skipTriage });
-  return c.json({ note: noteToJson(note) }, 201);
+  return c.json({ note: await noteToJsonDecrypted(c.env, note) }, 201);
 });
 
 // ---- GET /api/notes ----
@@ -1594,8 +1612,13 @@ app.get("/api/export", async (c) => {
     c.env.DB.prepare("SELECT * FROM threads WHERE user_id = ? ORDER BY updated_at DESC").bind(userId).all<ThreadRow>(),
     c.env.DB.prepare("SELECT * FROM weekly_reports WHERE user_id = ? ORDER BY week_start DESC").bind(userId).all<WeeklyReportRow>(),
   ]);
+  // notes still waiting for AI triage may turn out sensitive: a default
+  // (redacted) export skips them and reports the count
+  const allNotes = notesR.results ?? [];
+  const exportable = includeSensitive ? allNotes : allNotes.filter((n) => n.category !== null || n.is_sensitive);
+  const pendingExcluded = allNotes.length - exportable.length;
   const notes = await Promise.all(
-    (notesR.results ?? []).map((n) =>
+    exportable.map((n) =>
       n.is_sensitive && !includeSensitive
         ? Promise.resolve(
             noteToJson({ ...n, content: SENSITIVE_EXPORT_PLACEHOLDER, title: SENSITIVE_EXPORT_PLACEHOLDER, tags: "[]" })
@@ -1608,7 +1631,7 @@ app.get("/api/export", async (c) => {
 
   const format = c.req.query("format");
   if (format === "markdown" || format === "md") {
-    let md = `# 碎念全量导出（${new Date().toISOString().slice(0, 10)}）\n\n共 ${notes.length} 条笔记、${threads.length} 条线索、${reports.length} 份周报。\n\n## 笔记\n`;
+    let md = `# 碎念全量导出（${new Date().toISOString().slice(0, 10)}）\n\n共 ${notes.length} 条笔记、${threads.length} 条线索、${reports.length} 份周报。${pendingExcluded > 0 ? `另有 ${pendingExcluded} 条待分拣笔记未包含（分拣完成后重新导出即可）。` : ""}\n\n## 笔记\n`;
     for (const n of notes) {
       md += `\n### ${n.title || n.content.slice(0, 30)}\n- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${n.url ? ` | 链接：${n.url}` : ""}\n\n${n.content}\n`;
     }
@@ -1626,6 +1649,7 @@ app.get("/api/export", async (c) => {
     notes,
     threads,
     reports,
+    ...(pendingExcluded > 0 ? { pending_excluded: pendingExcluded } : {}),
   });
 });
 
@@ -1670,15 +1694,21 @@ export { app };
 /** Re-triage notes the AI failed to sort (category still NULL), oldest first. */
 export async function retriageUnsorted(env: Env, limit = 10): Promise<void> {
   const { results } = await env.DB.prepare(
-    "SELECT id, user_id, content FROM notes WHERE category IS NULL AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT ?"
+    "SELECT id, user_id, content, content_enc FROM notes WHERE category IS NULL AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT ?"
   )
     .bind(limit)
-    .all<{ id: string; user_id: string; content: string }>();
+    .all<{ id: string; user_id: string; content: string; content_enc: string | null }>();
   for (const row of results ?? []) {
+    // pre-encrypted pending notes store a placeholder: triage the plaintext
+    let content = row.content;
+    if (row.content_enc && env.SUINIAN_ENC_KEY) {
+      const plain = await decryptContent(env.SUINIAN_ENC_KEY, row.content_enc);
+      if (plain !== null) content = plain;
+    }
     const topTags = await loadTopTags(env.DB, row.user_id).catch(() => [] as string[]);
-    const triage = await triageNote(row.content, env, topTags);
+    const triage = await triageNote(content, env, topTags);
     if (!triage) continue;
-    await applyTriage(env, row.id, triage, row.content);
+    await applyTriage(env, row.id, triage, content);
     const n = await env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(row.id).first<NoteRow>();
     if (n) {
       await extractGraph(env, n);

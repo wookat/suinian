@@ -18,8 +18,18 @@ export function redactNote<T extends { is_sensitive?: unknown; content?: unknown
   return note;
 }
 
-function redactNotes<T extends { is_sensitive?: unknown; content?: unknown; title?: unknown; tags?: unknown }>(notes: T[] | undefined | null): T[] {
-  return (notes ?? []).map(redactNote);
+export const MCP_PENDING_PLACEHOLDER = "[待分拣，内容暂不返回]";
+
+/** Notes still waiting for AI triage may turn out sensitive: list/search-style
+ * MCP outputs treat them conservatively and withhold the content until sorted. */
+export function redactPendingNote<T extends { is_sensitive?: unknown; category?: unknown; content?: unknown; title?: unknown; tags?: unknown }>(note: T): T {
+  if (note && !note.is_sensitive && (note.category ?? null) === null)
+    return { ...note, content: MCP_PENDING_PLACEHOLDER, title: MCP_PENDING_PLACEHOLDER, tags: [] };
+  return note;
+}
+
+function redactNotes<T extends { is_sensitive?: unknown; category?: unknown; content?: unknown; title?: unknown; tags?: unknown }>(notes: T[] | undefined | null): T[] {
+  return (notes ?? []).map((n) => redactPendingNote(redactNote(n)));
 }
 
 type ApiCall = (path: string, init?: RequestInit) => Promise<{ status: number; body: unknown }>;
