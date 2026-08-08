@@ -11,7 +11,9 @@ import com.zalize.suinian.SuinianApp
 import com.zalize.suinian.data.AppSettings
 import com.zalize.suinian.data.CreateNoteRequest
 import com.zalize.suinian.data.DailyReviewItem
+import com.zalize.suinian.data.InlineCommand
 import com.zalize.suinian.data.Note
+import com.zalize.suinian.data.parseInlineCommand
 import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.SendResult
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +36,8 @@ data class NotesUiState(
     val reviewItems: List<DailyReviewItem> = emptyList(),
     val selectionMode: Boolean = false,
     val selectedIds: Set<String> = emptySet(),
+    /** 「全选全部匹配结果」：服务端按当前筛选条件执行，不限已加载项 */
+    val allMatching: Boolean = false,
     val batchBusy: Boolean = false,
     val editingNote: Note? = null,
     val savingEdit: Boolean = false,
@@ -249,7 +253,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun quickSend(text: String) {
+    /** 速记发送；内联指令 ?问题 由 onAsk 路由到问答 tab，!内容 原样保存，#标签 内容 手动打标 */
+    fun quickSend(text: String, onAsk: ((String) -> Unit)? = null) {
         val content = text.trim()
         if (content.isEmpty()) return
         if (content.length > NotesViewLimits.MAX_CONTENT_CHARS) {
@@ -258,19 +263,40 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             )
             return
         }
-        _ui.value = _ui.value.copy(sending = true)
-        viewModelScope.launch {
-            val isLink = content.startsWith("http://") || content.startsWith("https://")
-            val result = repo.send(
+        val command = parseInlineCommand(content)
+        if (command is InlineCommand.Ask) {
+            if (command.question.isBlank()) return
+            onAsk?.invoke(command.question)
+            return
+        }
+        val req = when (command) {
+            is InlineCommand.Raw -> {
+                if (command.content.isBlank()) return
+                CreateNoteRequest(source = "android", rawType = "text", content = command.content, skipTriage = true)
+            }
+            is InlineCommand.Tags -> {
+                if (command.content.isBlank()) return
+                CreateNoteRequest(source = "android", rawType = "text", content = command.content, tags = command.tags)
+            }
+            else -> {
+                val isLink = content.startsWith("http://") || content.startsWith("https://")
                 CreateNoteRequest(
                     source = "android",
                     rawType = if (isLink) "link" else "text",
                     content = content,
                     url = if (isLink) content else null,
                 )
-            )
+            }
+        }
+        _ui.value = _ui.value.copy(sending = true)
+        viewModelScope.launch {
+            val result = repo.send(req)
             val toast = when (result) {
-                is SendResult.Sent -> "已记下"
+                is SendResult.Sent -> when (command) {
+                    is InlineCommand.Raw -> "已原样保存（不经 AI 分拣）"
+                    is InlineCommand.Tags -> "已记下，标签：" + command.tags.joinToString(" ") { "#$it" }
+                    else -> "已记下"
+                }
                 SendResult.Queued -> "已离线暂存，稍后自动重试"
             }
             _ui.value = _ui.value.copy(sending = false, toast = toast)
@@ -291,15 +317,50 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleSelect(note: Note) {
         val cur = _ui.value.selectedIds
         val next = if (note.id in cur) cur - note.id else cur + note.id
-        _ui.value = _ui.value.copy(selectedIds = next)
+        _ui.value = _ui.value.copy(selectedIds = next, allMatching = false)
+    }
+
+    /** 全选/清空已加载项 */
+    fun toggleSelectAllLoaded() {
+        val s = _ui.value
+        if (s.allMatching || s.selectedIds.size == s.notes.size) {
+            _ui.value = s.copy(selectedIds = emptySet(), allMatching = false)
+        } else {
+            _ui.value = s.copy(selectedIds = s.notes.map { it.id }.toSet())
+        }
+    }
+
+    /** 选中全部匹配结果（服务端按当前筛选条件执行） */
+    fun selectAllMatching() {
+        _ui.value = _ui.value.copy(allMatching = true)
     }
 
     fun exitSelection() {
-        _ui.value = _ui.value.copy(selectionMode = false, selectedIds = emptySet())
+        _ui.value = _ui.value.copy(selectionMode = false, selectedIds = emptySet(), allMatching = false)
     }
 
     fun batchDelete() {
-        val ids = _ui.value.selectedIds.toList()
+        val s = _ui.value
+        if (s.allMatching) {
+            _ui.value = s.copy(batchBusy = true)
+            viewModelScope.launch {
+                try {
+                    val res = repo.batchNotesByFilter("delete", s.category, s.query.ifBlank { null })
+                    _ui.value = _ui.value.copy(
+                        batchBusy = false,
+                        selectionMode = false,
+                        selectedIds = emptySet(),
+                        allMatching = false,
+                        toast = "已删除全部匹配的 ${res.affected} 条",
+                    )
+                    refresh()
+                } catch (e: Exception) {
+                    _ui.value = _ui.value.copy(batchBusy = false, toast = e.message ?: "批量删除失败")
+                }
+            }
+            return
+        }
+        val ids = s.selectedIds.toList()
         if (ids.isEmpty()) return
         _ui.value = _ui.value.copy(batchBusy = true)
         viewModelScope.launch {
@@ -319,9 +380,30 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun batchAddTag(tag: String) {
-        val ids = _ui.value.selectedIds.toList()
+        val s = _ui.value
         val t = tag.trim().removePrefix("#")
-        if (ids.isEmpty() || t.isEmpty()) return
+        if (t.isEmpty()) return
+        if (s.allMatching) {
+            _ui.value = s.copy(batchBusy = true)
+            viewModelScope.launch {
+                try {
+                    val res = repo.batchNotesByFilter("add_tags", s.category, s.query.ifBlank { null }, tags = listOf(t))
+                    _ui.value = _ui.value.copy(
+                        batchBusy = false,
+                        selectionMode = false,
+                        selectedIds = emptySet(),
+                        allMatching = false,
+                        toast = "已为全部匹配的 ${res.affected} 条加上 #$t",
+                    )
+                    refresh()
+                } catch (e: Exception) {
+                    _ui.value = _ui.value.copy(batchBusy = false, toast = e.message ?: "批量打标失败")
+                }
+            }
+            return
+        }
+        val ids = s.selectedIds.toList()
+        if (ids.isEmpty()) return
         _ui.value = _ui.value.copy(batchBusy = true)
         viewModelScope.launch {
             try {
@@ -340,7 +422,27 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun batchSetCategory(category: String) {
-        val ids = _ui.value.selectedIds.toList()
+        val s = _ui.value
+        if (s.allMatching) {
+            _ui.value = s.copy(batchBusy = true)
+            viewModelScope.launch {
+                try {
+                    val res = repo.batchNotesByFilter("set_category", s.category, s.query.ifBlank { null }, setCategory = category)
+                    _ui.value = _ui.value.copy(
+                        batchBusy = false,
+                        selectionMode = false,
+                        selectedIds = emptySet(),
+                        allMatching = false,
+                        toast = "已将全部匹配的 ${res.affected} 条改分类",
+                    )
+                    refresh()
+                } catch (e: Exception) {
+                    _ui.value = _ui.value.copy(batchBusy = false, toast = e.message ?: "批量改分类失败")
+                }
+            }
+            return
+        }
+        val ids = s.selectedIds.toList()
         if (ids.isEmpty()) return
         _ui.value = _ui.value.copy(batchBusy = true)
         viewModelScope.launch {

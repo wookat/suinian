@@ -7,6 +7,9 @@ import com.zalize.suinian.data.local.PendingNoteDao
 import com.zalize.suinian.sync.SyncWorker
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 
 sealed class SendResult {
     data class Sent(val note: Note?) : SendResult()
@@ -22,6 +25,9 @@ class NotesRepository(
 
     val pendingCount: Flow<Int> = pendingDao.count()
 
+    private val json = Json { ignoreUnknownKeys = true }
+    private val tagsSerializer = ListSerializer(String.serializer())
+
     private suspend fun api(): Pair<ApiClient, Boolean> {
         val s = settingsRepo.settings.first()
         return ApiClient(s.baseUrl, s.token) to s.mockMode
@@ -35,7 +41,14 @@ class NotesRepository(
             SendResult.Sent(client.createNote(req))
         } catch (e: Exception) {
             pendingDao.insert(
-                PendingNote(source = req.source, rawType = req.rawType, content = req.content, url = req.url)
+                PendingNote(
+                    source = req.source,
+                    rawType = req.rawType,
+                    content = req.content,
+                    url = req.url,
+                    tagsJson = req.tags?.let { json.encodeToString(tagsSerializer, it) },
+                    skipTriage = req.skipTriage == true,
+                )
             )
             SyncWorker.schedule(context)
             SendResult.Queued
@@ -88,6 +101,19 @@ class NotesRepository(
         return client.batchNotes(action, ids, tags, category)
     }
 
+    /** 批量操作（全部匹配结果）：服务端按筛选条件执行，不限已加载项 */
+    suspend fun batchNotesByFilter(
+        action: String,
+        filterCategory: String? = null,
+        filterQuery: String? = null,
+        tags: List<String>? = null,
+        setCategory: String? = null,
+    ): BatchResponse {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.batchNotesByFilter(action, filterCategory, filterQuery, tags, setCategory)
+    }
+
     /** 标签列表（含使用次数） */
     suspend fun listTags(): List<TagCount> {
         val (client, mock) = api()
@@ -116,11 +142,11 @@ class NotesRepository(
         return client.getTodayReview()
     }
 
-    /** 手动生成周报 */
-    suspend fun generateReport(week: String = "this"): Report {
+    /** 手动生成周报/月报 */
+    suspend fun generateReport(which: String = "this", period: String = "week"): Report {
         val (client, mock) = api()
         if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
-        return client.generateReport(week)
+        return client.generateReport(which, period)
     }
 
     /** 永久注销账号并删除全部云端数据，成功后清本机登录状态 */
@@ -212,7 +238,21 @@ class NotesRepository(
         var allOk = true
         for (p in pending) {
             try {
-                val req = CreateNoteRequest(source = p.source, rawType = p.rawType, content = p.content, url = p.url)
+                val tags = p.tagsJson?.let {
+                    try {
+                        json.decodeFromString(tagsSerializer, it)
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+                val req = CreateNoteRequest(
+                    source = p.source,
+                    rawType = p.rawType,
+                    content = p.content,
+                    url = p.url,
+                    tags = tags,
+                    skipTriage = if (p.skipTriage) true else null,
+                )
                 if (mock) MockStore.create(req) else client.createNote(req)
                 pendingDao.delete(p)
             } catch (e: Exception) {

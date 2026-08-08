@@ -56,7 +56,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
+import com.zalize.suinian.data.InlineCommand
 import com.zalize.suinian.data.NotesViewLimits
+import com.zalize.suinian.data.parseInlineCommand
 import com.zalize.suinian.ui.components.DailyReviewCard
 import com.zalize.suinian.ui.components.NoteCard
 import com.zalize.suinian.ui.components.NoteEditSheet
@@ -67,11 +69,18 @@ private val categories = listOf(
     "todo" to "待办",
     "collect" to "收藏",
     "data" to "资料",
+    "expense" to "支出",
+    "income" to "收入",
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNoteSignal: Int = 0) {
+fun HomeScreen(
+    vm: NotesViewModel,
+    modifier: Modifier = Modifier,
+    focusQuickNoteSignal: Int = 0,
+    onAsk: ((String) -> Unit)? = null,
+) {
     val ui by vm.ui.collectAsState()
     val pending by vm.pendingCount.collectAsState()
     var draft by rememberSaveable { mutableStateOf("") }
@@ -127,8 +136,8 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
     if (confirmBatchDelete) {
         AlertDialog(
             onDismissRequest = { confirmBatchDelete = false },
-            title = { Text("删除选中的 ${ui.selectedIds.size} 条笔记？") },
-            text = { Text("删除后不可恢复") },
+            title = { Text(if (ui.allMatching) "删除当前筛选下的全部匹配笔记？" else "删除选中的 ${ui.selectedIds.size} 条笔记？") },
+            text = { Text(if (ui.allMatching) "将删除全部匹配结果（不限已加载项），删除后不可恢复" else "删除后不可恢复") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmBatchDelete = false
@@ -142,7 +151,7 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
     if (batchTagDialog) {
         AlertDialog(
             onDismissRequest = { batchTagDialog = false },
-            title = { Text("给 ${ui.selectedIds.size} 条笔记加标签") },
+            title = { Text(if (ui.allMatching) "给全部匹配笔记加标签" else "给 ${ui.selectedIds.size} 条笔记加标签") },
             text = {
                 OutlinedTextField(
                     value = batchTagInput,
@@ -169,7 +178,7 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
     if (batchCategoryDialog) {
         AlertDialog(
             onDismissRequest = { batchCategoryDialog = false },
-            title = { Text("把 ${ui.selectedIds.size} 条笔记改分类为") },
+            title = { Text(if (ui.allMatching) "把全部匹配笔记改分类为" else "把 ${ui.selectedIds.size} 条笔记改分类为") },
             text = {
                 Column {
                     categories.filter { it.first != null }.forEach { (value, label) ->
@@ -199,16 +208,24 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
                     Icon(Icons.Outlined.Close, contentDescription = "退出多选")
                 }
                 Text(
-                    "已选 ${ui.selectedIds.size} 条",
+                    if (ui.allMatching) "已选全部匹配结果" else "已选 ${ui.selectedIds.size} 条",
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.weight(1f),
                 )
+                TextButton(onClick = { vm.toggleSelectAllLoaded() }) {
+                    Text(if (ui.allMatching || (ui.notes.isNotEmpty() && ui.selectedIds.size == ui.notes.size)) "清空" else "全选")
+                }
+            }
+            if (!ui.allMatching && ui.notes.isNotEmpty() && ui.selectedIds.size == ui.notes.size) {
+                TextButton(onClick = { vm.selectAllMatching() }) {
+                    Text("选中全部匹配结果", color = MaterialTheme.colorScheme.primary)
+                }
             }
             Row(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                val hasSelection = ui.selectedIds.isNotEmpty() && !ui.batchBusy
+                val hasSelection = (ui.selectedIds.isNotEmpty() || ui.allMatching) && !ui.batchBusy
                 AssistChip(
                     onClick = { batchTagDialog = true },
                     label = { Text("加标签") },
@@ -229,21 +246,34 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
         }
 
         if (!ui.selectionMode) {
-        // 速记框
+        // 速记框（内联指令：?提问 !原样存 #打标）
         val overLimit = draft.length > NotesViewLimits.MAX_CONTENT_CHARS
+        val command = remember(draft) { parseInlineCommand(draft) }
+        val commandHint = when (command) {
+            is InlineCommand.Ask -> "问答模式：发送后直接向你的笔记提问，不会存为笔记"
+            is InlineCommand.Raw -> "原样保存：不经 AI 分拣，存为「想法」"
+            is InlineCommand.Tags -> "手动打标：" + command.tags.joinToString(" ") { "#$it" }
+            null -> null
+        }
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
             modifier = Modifier
                 .fillMaxWidth()
                 .focusRequester(focusRequester),
-            placeholder = { Text("现在的想法是……") },
+            placeholder = { Text("现在的想法是…… 支持 ?提问 !原样存 #打标") },
             shape = RoundedCornerShape(16.dp),
             maxLines = 4,
             isError = overLimit,
-            supportingText = if (overLimit) {
-                { Text("内容过长：最多 ${NotesViewLimits.MAX_CONTENT_CHARS} 字符，当前 ${draft.length} 字符") }
-            } else null,
+            supportingText = when {
+                overLimit -> {
+                    { Text("内容过长：最多 ${NotesViewLimits.MAX_CONTENT_CHARS} 字符，当前 ${draft.length} 字符") }
+                }
+                commandHint != null -> {
+                    { Text(commandHint, color = MaterialTheme.colorScheme.primary) }
+                }
+                else -> null
+            },
             trailingIcon = {
                 Row {
                     IconButton(
@@ -261,14 +291,24 @@ fun HomeScreen(vm: NotesViewModel, modifier: Modifier = Modifier, focusQuickNote
                     ) {
                         Icon(Icons.Outlined.AttachFile, contentDescription = "选择文件入库")
                     }
+                    val commandEmpty = when (command) {
+                        is InlineCommand.Ask -> command.question.isBlank()
+                        is InlineCommand.Raw -> command.content.isBlank()
+                        is InlineCommand.Tags -> command.content.isBlank()
+                        null -> false
+                    }
                     IconButton(
                         onClick = {
-                            vm.quickSend(draft)
+                            vm.quickSend(draft, onAsk)
                             draft = ""
                         },
-                        enabled = draft.isNotBlank() && !overLimit && !ui.sending,
+                        enabled = draft.isNotBlank() && !overLimit && !ui.sending && !commandEmpty,
                     ) {
-                        Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "记下")
+                        Icon(
+                            if (command is InlineCommand.Ask) Icons.Outlined.AutoAwesome
+                            else Icons.AutoMirrored.Outlined.Send,
+                            contentDescription = if (command is InlineCommand.Ask) "提问" else "记下",
+                        )
                     }
                 }
             },

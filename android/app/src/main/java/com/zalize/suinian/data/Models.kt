@@ -50,6 +50,7 @@ data class NoteMeta(
     @SerialName("file_kind") val fileKind: String? = null, // pdf|txt|md|docx
     @SerialName("file_excerpt") val fileExcerpt: String? = null,
     @SerialName("file_status") val fileStatus: String? = null, // ok|extract_failed
+    @SerialName("finance_merchant") val financeMerchant: String? = null,
 )
 
 /** Note，字段形状与 docs/SPEC.md D1 notes 表一致 */
@@ -65,8 +66,10 @@ data class Note(
     @SerialName("url_summary") val urlSummary: String? = null,
     @SerialName("url_titles") val urlTitles: List<UrlTitle>? = null,
     val title: String? = null,
-    val category: String? = null,            // idea|todo|collect|data
+    val category: String? = null,            // idea|todo|collect|data|expense|income
     val tags: List<String> = emptyList(),
+    val amount: Double? = null,
+    val currency: String? = null,
     @SerialName("thread_id") val threadId: String? = null,
     @SerialName("is_sensitive")
     @Serializable(with = FlexibleBooleanSerializer::class)
@@ -87,13 +90,15 @@ data class UrlTitle(
     val title: String? = null,
 )
 
-/** POST /api/notes 请求体：{source, raw_type, content, url?} */
+/** POST /api/notes 请求体：{source, raw_type, content, url?, tags?, skip_triage?} */
 @Serializable
 data class CreateNoteRequest(
     val source: String,
     @SerialName("raw_type") val rawType: String,
     val content: String,
     val url: String? = null,
+    val tags: List<String>? = null,
+    @SerialName("skip_triage") val skipTriage: Boolean? = null,
 )
 
 @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
@@ -151,6 +156,7 @@ data class GraphRelation(
 data class ReportSummary(
     val id: String,
     @SerialName("week_start") val weekStart: String = "",
+    val period: String = "week", // week|month
     @SerialName("created_at") val createdAt: String = "",
 )
 
@@ -162,6 +168,7 @@ data class ReportsPage(val reports: List<ReportSummary> = emptyList())
 data class Report(
     val id: String,
     @SerialName("week_start") val weekStart: String = "",
+    val period: String = "week", // week|month
     @SerialName("content_md") val contentMd: String = "",
     @SerialName("created_at") val createdAt: String = "",
 )
