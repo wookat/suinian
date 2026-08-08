@@ -215,7 +215,7 @@ fun SuinianNavHost(focusQuickNoteSignal: Int) {
                 ThreadDetailScreen(threadId = id, onBack = { navController.popBackStack() })
             }
             composable("tags") {
-                TagsScreen(onBack = { navController.popBackStack() })
+                TagsScreen(onBack = { navController.popBackStack() }, onTagsChanged = { vm.refresh() })
             }
             composable("reports") {
                 ReportsScreen(onOpenReport = { id -> navController.navigate("reports/$id") })

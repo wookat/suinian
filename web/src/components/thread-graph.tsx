@@ -129,15 +129,18 @@ export function ThreadGraphView({
     let minY = Infinity
     let maxY = -Infinity
     for (const n of pts) {
-      minX = Math.min(minX, (n.x ?? 0) - n.radius)
-      maxX = Math.max(maxX, (n.x ?? 0) + n.radius)
+      // labels render below nodes, centered; approximate their box so the fit
+      // keeps them inside the container (CJK glyphs ≈ fontSize px wide each)
+      const labelHalfW = (n.label.length * (n.kind === "entity" ? 11 : 9)) / 2
+      minX = Math.min(minX, (n.x ?? 0) - Math.max(n.radius, labelHalfW))
+      maxX = Math.max(maxX, (n.x ?? 0) + Math.max(n.radius, labelHalfW))
       minY = Math.min(minY, (n.y ?? 0) - n.radius)
-      maxY = Math.max(maxY, (n.y ?? 0) + n.radius + 14) // room for labels below nodes
+      maxY = Math.max(maxY, (n.y ?? 0) + n.radius + 16)
     }
     const { w, h } = sizeRef.current
     const bw = Math.max(1, maxX - minX)
     const bh = Math.max(1, maxY - minY)
-    const k = Math.min(1.5, Math.max(0.3, Math.min((w - pad * 2) / bw, (h - pad * 2) / bh)))
+    const k = Math.min(1.5, Math.max(0.2, Math.min((w - pad * 2) / bw, (h - pad * 2) / bh)))
     setTransform({
       k,
       x: w / 2 - ((minX + maxX) / 2) * k,

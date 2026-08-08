@@ -58,6 +58,8 @@ data class TagsUiState(
     val tags: List<TagCount> = emptyList(),
     val busy: Boolean = false,
     val toast: String? = null,
+    /** bumped on successful rename/delete so the host can refresh dependent screens */
+    val changes: Int = 0,
 )
 
 class TagsViewModel(app: Application) : AndroidViewModel(app) {
@@ -92,6 +94,7 @@ class TagsViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(
                     busy = false,
                     toast = if (merging) "已合并到 #$target" else "已重命名为 #$target",
+                    changes = _ui.value.changes + 1,
                 )
                 refresh()
             } catch (e: Exception) {
@@ -105,7 +108,7 @@ class TagsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 repo.deleteTag(tag)
-                _ui.value = _ui.value.copy(busy = false, toast = "已删除标签 #$tag")
+                _ui.value = _ui.value.copy(busy = false, toast = "已删除标签 #$tag", changes = _ui.value.changes + 1)
                 refresh()
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(busy = false, toast = e.message ?: "删除失败")
@@ -121,7 +124,7 @@ class TagsViewModel(app: Application) : AndroidViewModel(app) {
 /** 标签管理页：列表（含使用次数）/重命名/合并/删除（对齐 Web R36） */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TagsScreen(onBack: () -> Unit, vm: TagsViewModel = viewModel()) {
+fun TagsScreen(onBack: () -> Unit, onTagsChanged: () -> Unit = {}, vm: TagsViewModel = viewModel()) {
     val ui by vm.ui.collectAsState()
     val context = LocalContext.current
     var renaming by remember { mutableStateOf<String?>(null) }
@@ -133,6 +136,10 @@ fun TagsScreen(onBack: () -> Unit, vm: TagsViewModel = viewModel()) {
             Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
             vm.consumeToast()
         }
+    }
+
+    LaunchedEffect(ui.changes) {
+        if (ui.changes > 0) onTagsChanged()
     }
 
     renaming?.let { from ->
