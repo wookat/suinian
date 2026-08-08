@@ -84,8 +84,8 @@ describe("MCP server tools", () => {
             status: 200,
             body: {
               notes: [
-                { id: "a", content: "普通", is_sensitive: false },
-                { id: "b", content: "机密", title: "银行卡密码", tags: ["密码"], is_sensitive: true },
+                { id: "a", content: "普通", category: "idea", is_sensitive: false },
+                { id: "b", content: "机密", title: "银行卡密码", tags: ["密码"], category: "data", is_sensitive: true },
               ],
             },
           },
