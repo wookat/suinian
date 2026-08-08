@@ -50,9 +50,9 @@ fun OnboardingScreen(
     var busy by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
 
-    fun finish(savedToken: String, savedName: String?) {
+    fun finish(savedToken: String, savedName: String?, showTour: Boolean = false) {
         scope.launch {
-            settingsRepo.completeOnboarding(baseUrl, savedToken, savedName)
+            settingsRepo.completeOnboarding(baseUrl, savedToken, savedName, showTour)
             onDone()
         }
     }
@@ -80,7 +80,7 @@ fun OnboardingScreen(
                         } else {
                             ApiClient.login(baseUrl.trim(), name.trim(), password)
                         }
-                        finish(res.apiToken, res.user.name)
+                        finish(res.apiToken, res.user.name, showTour = mode == OnboardingMode.Register)
                     } catch (e: ApiException) {
                         error = e.message
                     } catch (e: Exception) {

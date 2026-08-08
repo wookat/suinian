@@ -171,6 +171,20 @@ class NotesRepository(
         return client.downloadNoteFile(id)
     }
 
+    /** 下载全量备份 zip：返回字节 + 文件名 */
+    suspend fun downloadBackup(): Pair<ByteArray, String> {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.downloadBackup()
+    }
+
+    /** 从备份 zip 恢复：返回恢复统计 */
+    suspend fun restoreBackup(bytes: ByteArray, fileName: String): RestoreStats {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.restoreBackup(bytes, fileName)
+    }
+
     suspend fun delete(id: String) {
         val (client, mock) = api()
         if (mock) {

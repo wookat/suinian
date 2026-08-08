@@ -68,6 +68,36 @@ fun SettingsScreen(
     var deleteAccountInput by remember { mutableStateOf("") }
     var deletingAccount by remember { mutableStateOf(false) }
     var deleteAccountMessage by remember { mutableStateOf<String?>(null) }
+    var backingUp by remember { mutableStateOf(false) }
+    var backupMessage by remember { mutableStateOf<String?>(null) }
+    var restoring by remember { mutableStateOf(false) }
+    var restoreMessage by remember { mutableStateOf<String?>(null) }
+
+    val restorePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        restoring = true
+        restoreMessage = null
+        scope.launch {
+            try {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalStateException("无法读取所选文件")
+                if (bytes.size > 200 * 1024 * 1024) {
+                    restoreMessage = "备份文件过大：最大支持 200MB"
+                } else {
+                    val stats = vm.restoreFromBackup(bytes, "backup.zip")
+                    restoreMessage = "恢复完成：笔记 ${stats.notesImported}/${stats.notesTotal} 条（跳过重复 ${stats.notesSkipped} 条），媒体 ${stats.mediaImported} 个" +
+                        (if (stats.mediaFailed > 0) "，失败 ${stats.mediaFailed} 个" else "") +
+                        "。AI 分拣/线索/图谱会在后台陆续补全"
+                }
+            } catch (e: Exception) {
+                restoreMessage = e.message ?: "恢复失败，请稍后重试"
+            } finally {
+                restoring = false
+            }
+        }
+    }
 
     LaunchedEffect(settings) {
         if (!initialized) {
@@ -310,6 +340,53 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = {
+                    backingUp = true
+                    backupMessage = null
+                    scope.launch {
+                        try {
+                            val fileName = vm.downloadBackupToDownloads()
+                            backupMessage = "已保存到系统下载：$fileName"
+                        } catch (e: Exception) {
+                            backupMessage = e.message ?: "备份下载失败，请稍后重试"
+                        } finally {
+                            backingUp = false
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !settings.mockMode && !backingUp && !restoring,
+            ) { Text(if (backingUp) "备份打包中，请稍候…" else "下载完整备份（zip 含媒体）") }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "完整备份包含全部笔记字段与语音/图片/文件原件，可在下方「从备份恢复」无损搬家到新账号/新实例",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            backupMessage?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { restorePicker.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !settings.mockMode && !restoring && !backingUp,
+            ) { Text(if (restoring) "恢复中，请勿离开…" else "从备份恢复（选择 zip）") }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "导入「下载完整备份」导出的 zip：笔记保留原时间/标签/分类，重复导入自动跳过（最大 200MB）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            restoreMessage?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
 
             Spacer(Modifier.height(24.dp))
             Text("账号", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)

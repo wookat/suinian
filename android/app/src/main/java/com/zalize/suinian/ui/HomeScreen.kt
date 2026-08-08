@@ -29,7 +29,9 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -47,6 +49,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,9 +62,12 @@ import androidx.compose.ui.unit.dp
 import com.zalize.suinian.data.InlineCommand
 import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.parseInlineCommand
+import androidx.compose.foundation.border
 import com.zalize.suinian.ui.components.DailyReviewCard
+import com.zalize.suinian.ui.components.FirstRunTour
 import com.zalize.suinian.ui.components.NoteCard
 import com.zalize.suinian.ui.components.NoteEditSheet
+import kotlinx.coroutines.launch
 
 private val categories = listOf(
     null to "全部",
@@ -83,6 +89,8 @@ fun HomeScreen(
 ) {
     val ui by vm.ui.collectAsState()
     val pending by vm.pendingCount.collectAsState()
+    val settings by vm.settings.collectAsState()
+    val scope = rememberCoroutineScope()
     var draft by rememberSaveable { mutableStateOf("") }
     var confirmBatchDelete by rememberSaveable { mutableStateOf(false) }
     var batchTagDialog by rememberSaveable { mutableStateOf(false) }
@@ -112,6 +120,11 @@ fun HomeScreen(
             } ?: uri.lastPathSegment ?: "file"
             vm.uploadFile(bytes, mime, name)
         }
+    }
+
+    // 新注册用户首次进入：一次性 4 步功能引导，可跳过不再显示
+    if (!settings.tourSeen && !settings.mockMode && settings.token.isNotBlank()) {
+        FirstRunTour(onDone = { scope.launch { vm.settingsRepo.setTourSeen(true) } })
     }
 
     LaunchedEffect(focusQuickNoteSignal) {
@@ -395,11 +408,34 @@ fun HomeScreen(
             }
             ui.notes.isEmpty() -> {
                 Column(
-                    Modifier.fillMaxSize(),
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    Text("还没有碎念，记一条吧", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("还没有碎念", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "想法、待办、链接、资料，想到什么就丢进来，AI 会帮你自动分拣整理。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            focusRequester.requestFocus()
+                            keyboard?.show()
+                        }) { Text("记下第一条") }
+                        OutlinedButton(
+                            onClick = { vm.seedSamples() },
+                            enabled = !ui.seedingSamples && !settings.mockMode,
+                        ) { Text(if (ui.seedingSamples) "示例创建中…" else "先丢入 ${SAMPLE_NOTES.size} 条示例看看") }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "示例会打上 #$SAMPLE_TAG 标签，可随时一键清除",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
             else -> {
@@ -430,6 +466,30 @@ fun HomeScreen(
                         if (!ui.selectionMode && ui.reviewItems.isNotEmpty()) {
                             item(key = "daily-review") {
                                 DailyReviewCard(ui.reviewItems)
+                            }
+                        }
+                        val sampleCount = ui.notes.count { SAMPLE_TAG in it.tags }
+                        if (!ui.selectionMode && sampleCount > 0) {
+                            item(key = "sample-banner") {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .border(
+                                            1.dp,
+                                            MaterialTheme.colorScheme.outlineVariant,
+                                            RoundedCornerShape(12.dp),
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                                ) {
+                                    Text(
+                                        "时间流里有 $sampleCount 条示例笔记（#$SAMPLE_TAG）",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    TextButton(onClick = { vm.clearSamples() }) { Text("一键清除") }
+                                }
                             }
                         }
                         items(ui.notes, key = { it.id }) { note ->

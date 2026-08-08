@@ -14,6 +14,7 @@ import com.zalize.suinian.data.ReportDetail
 import com.zalize.suinian.data.ReportsPage
 import com.zalize.suinian.data.ReportSummary
 import com.zalize.suinian.data.ThreadDetail
+import com.zalize.suinian.data.RestoreStats
 import com.zalize.suinian.data.RotateTokenResponse
 import com.zalize.suinian.data.TagCount
 import com.zalize.suinian.data.TagsPage
@@ -402,6 +403,50 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             if (!it.isSuccessful) throw httpError(it.code, text)
             try {
                 json.decodeFromString(MediaIngestResponse.serializer(), text)
+            } catch (e: Exception) {
+                throw ApiException("服务器返回了无法识别的数据", e)
+            }
+        }
+    }
+
+    /** GET /api/backup：全量备份 zip（笔记全字段 + 线索/周报 + 媒体原件），返回字节与文件名 */
+    suspend fun downloadBackup(): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
+        val client120 = client.newBuilder().readTimeout(120, TimeUnit.SECONDS).build()
+        val resp = try {
+            client120.newCall(request("/api/backup").get().build()).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use {
+            if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
+            val bytes = it.body?.bytes() ?: throw ApiException("备份下载失败：内容为空")
+            val disposition = it.header("Content-Disposition").orEmpty()
+            val fileName = Regex("filename=\"?([^\";]+)\"?").find(disposition)?.groupValues?.get(1)
+                ?: "suinian-backup.zip"
+            bytes to fileName
+        }
+    }
+
+    /** POST /api/backup/restore：上传备份 zip 恢复（multipart file），返回恢复统计 */
+    suspend fun restoreBackup(bytes: ByteArray, fileName: String): RestoreStats = withContext(Dispatchers.IO) {
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("file", fileName, bytes.toRequestBody("application/zip".toMediaType()))
+            .build()
+        val client300 = client.newBuilder()
+            .readTimeout(300, TimeUnit.SECONDS)
+            .writeTimeout(300, TimeUnit.SECONDS)
+            .build()
+        val resp = try {
+            client300.newCall(request("/api/backup/restore").post(body).build()).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use {
+            val text = it.body?.string().orEmpty()
+            if (!it.isSuccessful) throw httpError(it.code, text)
+            try {
+                json.decodeFromString(RestoreStats.serializer(), text)
             } catch (e: Exception) {
                 throw ApiException("服务器返回了无法识别的数据", e)
             }

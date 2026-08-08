@@ -249,6 +249,17 @@ data class BatchResponse(
     val affected: Int = 0,
 )
 
+/** POST /api/backup/restore 响应：恢复统计 */
+@Serializable
+data class RestoreStats(
+    @SerialName("notes_total") val notesTotal: Int = 0,
+    @SerialName("notes_imported") val notesImported: Int = 0,
+    @SerialName("notes_skipped") val notesSkipped: Int = 0,
+    @SerialName("media_imported") val mediaImported: Int = 0,
+    @SerialName("media_skipped") val mediaSkipped: Int = 0,
+    @SerialName("media_failed") val mediaFailed: Int = 0,
+)
+
 /** POST /api/ingest/media 响应（只取 note 与 text） */
 @Serializable
 data class MediaIngestResponse(
