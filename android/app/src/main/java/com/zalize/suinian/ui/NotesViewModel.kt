@@ -115,9 +115,11 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     private var refreshJob: Job? = null
 
-    fun refresh() {
+    /** clearFirst=true 时先清空列表（如首登切换 Mock→真实后端），避免旧数据闪现 */
+    fun refresh(clearFirst: Boolean = false) {
         val s = _ui.value
-        _ui.value = s.copy(loading = true, error = null)
+        _ui.value = if (clearFirst) s.copy(notes = emptyList(), cursor = null, loading = true, error = null)
+        else s.copy(loading = true, error = null)
         // 取消未完成的上一次刷新，避免陆续完成时旧结果（如首启 Mock 数据）覆盖新结果
         refreshJob?.cancel()
         refreshJob = viewModelScope.launch {

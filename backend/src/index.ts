@@ -1668,7 +1668,10 @@ app.post("/api/ask", async (c) => {
   const graphNoteIds = new Set<string>();
   let graphTriples: string[] = [];
   if (useGraph && notes.length > 0) {
-    const expansion = await graphExpand(c.env, userId, notes.map((n) => n.id), 5);
+    // relation-flavored questions (evolution / why / follow-up / provenance)
+    // lean hardest on the graph: widen the expansion budget for them
+    const relationQ = /关系|关联|变化|演化|脉络|为什么|依据|后来|进展|着落|转折|一步步|怎么变/.test(recallQuestion);
+    const expansion = await graphExpand(c.env, userId, notes.map((n) => n.id), relationQ ? 8 : 5, recallQuestion);
     graphTriples = expansion.triples;
     const missing = expansion.note_ids.filter((nid) => !notes.some((n) => n.id === nid));
     if (missing.length > 0) {
@@ -1678,11 +1681,13 @@ app.post("/api/ask", async (c) => {
       )
         .bind(userId, ...missing)
         .all<NoteRow>();
+      // graph notes get reserved slots beyond the base 20-note cap (up to 25
+      // total) — otherwise a full keyword recall silently drops every one
       for (const n of r.results ?? []) {
         graphNoteIds.add(n.id);
         notes.push(n);
       }
-      notes = notes.slice(0, 20);
+      notes = notes.slice(0, 25);
     }
   }
   if (notes.length === 0) {
@@ -1731,7 +1736,7 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。可结合之前的对话上下文理解代词与省略。若笔记中没有能回答问题的信息，直接说没找到，绝不要编造或强行凑答案。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。若笔记中没有能回答问题的信息，直接说没找到，绝不要编造或强行凑答案。回答用中文，简洁。",
       },
       ...history,
       {

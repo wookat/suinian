@@ -1,10 +1,12 @@
 import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
-import { embedText } from "./semantic";
+import { embedText, semanticRecall } from "./semantic";
 import { cosineSim } from "./threads";
 
 /** Cosine similarity between entity-name embeddings above which two names are the same entity. */
 const ENTITY_MERGE_SIM = 0.92;
+/** looser than merge: near-duplicate topic nodes count as bridges during expansion */
+const ENTITY_EXPAND_SIM = 0.8;
 /** Entity-entity edge confidence considered a strong relation for clustering. */
 export const STRONG_EDGE_CONF = 0.6;
 
@@ -467,7 +469,13 @@ export interface GraphExpansion {
  * entities and bring back other notes mentioning the same entities (ranked by
  * shared-entity count), plus relation triples for the prompt. Never throws.
  */
-export async function graphExpand(env: Env, userId: string, noteIds: string[], limit = 5): Promise<GraphExpansion> {
+export async function graphExpand(
+  env: Env,
+  userId: string,
+  noteIds: string[],
+  limit = 5,
+  hintQuery = ""
+): Promise<GraphExpansion> {
   try {
     if (noteIds.length === 0) return { note_ids: [], triples: [] };
     const ph = noteIds.map(() => "?").join(",");
@@ -479,18 +487,92 @@ export async function graphExpand(env: Env, userId: string, noteIds: string[], l
       .all<{ dst_id: string }>();
     const entityIds = (ents ?? []).map((r) => r.dst_id).slice(0, 30);
     if (entityIds.length === 0) return { note_ids: [], triples: [] };
-    const eph = entityIds.map(() => "?").join(",");
+    const expanded = new Set(entityIds);
+    // walk strong entity-entity edges: neighbors of recalled entities join the
+    // set so genuinely multi-hop fragments (A→B→note) become reachable
+    {
+      const p = entityIds.map(() => "?").join(",");
+      const { results: nbrs } = await env.DB.prepare(
+        `SELECT src_id, dst_id FROM edges
+         WHERE user_id = ? AND src_type = 'entity' AND dst_type = 'entity' AND confidence >= ?
+           AND (src_id IN (${p}) OR dst_id IN (${p}))
+         ORDER BY confidence DESC LIMIT 20`
+      )
+        .bind(userId, STRONG_EDGE_CONF, ...entityIds, ...entityIds)
+        .all<{ src_id: string; dst_id: string }>();
+      for (const r of nbrs ?? []) {
+        if (expanded.size >= 40) break;
+        expanded.add(r.src_id);
+        expanded.add(r.dst_id);
+      }
+    }
+    // name-vector similar entities (cross-type) join too: extraction often
+    // splits one topic into near-duplicate nodes (“咖啡豆供应链” vs
+    // “咖啡豆供应商”) that no edge connects
+    {
+      const { results: all } = await env.DB.prepare(
+        "SELECT id, vector FROM entities WHERE user_id = ? AND vector IS NOT NULL"
+      )
+        .bind(userId)
+        .all<{ id: string; vector: string }>();
+      const rows = all ?? [];
+      const seedVecs: number[][] = [];
+      for (const r of rows) {
+        if (!expanded.has(r.id)) continue;
+        try {
+          seedVecs.push(JSON.parse(r.vector) as number[]);
+        } catch {
+          /* skip */
+        }
+      }
+      if (seedVecs.length > 0) {
+        for (const r of rows) {
+          if (expanded.has(r.id) || expanded.size >= 40) continue;
+          try {
+            const v = JSON.parse(r.vector) as number[];
+            if (seedVecs.some((s) => cosineSim(s, v) >= ENTITY_EXPAND_SIM)) expanded.add(r.id);
+          } catch {
+            /* skip */
+          }
+        }
+      }
+    }
+    const allEntityIds = [...expanded].slice(0, 40);
+    const eph = allEntityIds.map(() => "?").join(",");
+    // rank: shared-entity count first, then entity specificity (rare entities
+    // are stronger bridges than hubs mentioned everywhere), then recency —
+    // without the tiebreaks, specific bridge notes lose ties arbitrarily
     const { results: hits } = await env.DB.prepare(
-      `SELECT e.src_id AS note_id, COUNT(DISTINCT e.dst_id) AS shared
-       FROM edges e JOIN notes n ON n.id = e.src_id
+      `SELECT e.src_id AS note_id, COUNT(DISTINCT e.dst_id) AS shared,
+              SUM(1.0 / MAX(en.note_count, 1)) AS spec
+       FROM edges e JOIN notes n ON n.id = e.src_id JOIN entities en ON en.id = e.dst_id
        WHERE e.user_id = ? AND e.src_type = 'note' AND e.relation = 'mentions'
          AND e.dst_id IN (${eph}) AND e.src_id NOT IN (${ph})
          AND n.is_sensitive = 0
-       GROUP BY e.src_id ORDER BY shared DESC LIMIT ?`
+       GROUP BY e.src_id ORDER BY shared DESC, spec DESC, n.created_at DESC LIMIT ?`
     )
-      .bind(userId, ...entityIds, ...noteIds, limit)
+      .bind(userId, ...allEntityIds, ...noteIds, limit)
       .all<{ note_id: string; shared: number }>();
     const extra = (hits ?? []).map((h) => h.note_id);
+    // semantic bridge: the recalled entities' names as a query over note
+    // vectors picks up fragments about the same topic that share no entity
+    // node at all (extraction granularity varies note to note)
+    {
+      const { results: seedRows } = await env.DB.prepare(
+        `SELECT name FROM entities WHERE user_id = ? AND id IN (${entityIds.map(() => "?").join(",")}) LIMIT 8`
+      )
+        .bind(userId, ...entityIds)
+        .all<{ name: string }>();
+      const names = (seedRows ?? []).map((r) => r.name);
+      if (names.length > 0) {
+        const bridgeQuery = [hintQuery, ...names].filter(Boolean).join(" ");
+        const semHits = await semanticRecall(env, userId, bridgeQuery, limit * 2, 0.45);
+        for (const h of semHits) {
+          if (extra.length >= limit + 2) break;
+          if (!noteIds.includes(h.note_id) && !extra.includes(h.note_id)) extra.push(h.note_id);
+        }
+      }
+    }
     // relation triples among the touched entities, for answer justification
     const { results: rels } = await env.DB.prepare(
       `SELECT s.name AS src, e.relation, d.name AS dst
@@ -499,7 +581,7 @@ export async function graphExpand(env: Env, userId: string, noteIds: string[], l
          AND (e.src_id IN (${eph}) OR e.dst_id IN (${eph}))
        ORDER BY e.confidence DESC LIMIT 10`
     )
-      .bind(userId, ...entityIds, ...entityIds)
+      .bind(userId, ...allEntityIds, ...allEntityIds)
       .all<{ src: string; relation: string; dst: string }>();
     const triples = (rels ?? []).map((r) => `${r.src} —${RELATION_LABEL[r.relation] ?? r.relation}→ ${r.dst}`);
     return { note_ids: extra, triples };
