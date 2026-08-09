@@ -79,6 +79,11 @@ data class Note(
     @Serializable(with = FlexibleBooleanSerializer::class)
     val todoDone: Boolean? = null,
     val meta: NoteMeta? = null,
+    /** 搜索召回方式（与 Web 一致）：keyword|semantic|both */
+    val match: String? = null,
+    @SerialName("deleted_at") val deletedAt: String? = null,
+    /** 最近删除列表项：预计彻底清理时间（UTC） */
+    @SerialName("purge_at") val purgeAt: String? = null,
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("updated_at") val updatedAt: String? = null,
 )
@@ -281,6 +286,62 @@ data class RestoreStats(
     @SerialName("media_imported") val mediaImported: Int = 0,
     @SerialName("media_skipped") val mediaSkipped: Int = 0,
     @SerialName("media_failed") val mediaFailed: Int = 0,
+)
+
+/** GET /api/notes/trash：最近删除（软删且未彻底清理） */
+@Serializable
+data class TrashResponse(
+    val notes: List<Note> = emptyList(),
+    @SerialName("retention_days") val retentionDays: Int = 30,
+)
+
+/** POST /api/notes/purge 与 /api/notes/trash/empty 响应 */
+@Serializable
+data class PurgeResponse(
+    val ok: Boolean = false,
+    val purged: Int = 0,
+)
+
+/** GET /api/stats：洞察页统计（与 Web 共用后端口径） */
+@Serializable
+data class StatsDaily(
+    val date: String = "",
+    val count: Int = 0,
+)
+
+@Serializable
+data class StatsStreak(
+    val current: Int = 0,
+    val longest: Int = 0,
+)
+
+@Serializable
+data class StatsCategoryCount(
+    val category: String = "",
+    val count: Int = 0,
+)
+
+@Serializable
+data class StatsSourceCount(
+    val source: String = "",
+    val count: Int = 0,
+)
+
+@Serializable
+data class StatsResponse(
+    @SerialName("total_notes") val totalNotes: Int = 0,
+    @SerialName("thread_count") val threadCount: Int = 0,
+    val daily: List<StatsDaily> = emptyList(),
+    val streak: StatsStreak = StatsStreak(),
+    val categories: List<StatsCategoryCount> = emptyList(),
+    val sources: List<StatsSourceCount> = emptyList(),
+    @SerialName("top_tags") val topTags: List<TagCount> = emptyList(),
+)
+
+/** GET /api/notes/random 响应：随机漫步一条历史笔记 */
+@Serializable
+data class RandomNoteResponse(
+    val note: Note? = null,
 )
 
 /** POST /api/ingest/media 响应（只取 note 与 text） */

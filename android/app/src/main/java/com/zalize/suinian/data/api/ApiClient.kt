@@ -14,8 +14,12 @@ import com.zalize.suinian.data.ReportDetail
 import com.zalize.suinian.data.ReportsPage
 import com.zalize.suinian.data.ReportSummary
 import com.zalize.suinian.data.ThreadDetail
+import com.zalize.suinian.data.PurgeResponse
 import com.zalize.suinian.data.PushPreferences
+import com.zalize.suinian.data.RandomNoteResponse
 import com.zalize.suinian.data.RestoreResponse
+import com.zalize.suinian.data.StatsResponse
+import com.zalize.suinian.data.TrashResponse
 import com.zalize.suinian.data.RestoreStats
 import com.zalize.suinian.data.TodosTodayResponse
 import com.zalize.suinian.data.RotateTokenResponse
@@ -353,6 +357,49 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             putJsonArray("ids") { ids.forEach { add(JsonPrimitive(it)) } }
         }.toString().toRequestBody(jsonMedia)
         execute(request("/api/notes/restore").post(body).build(), RestoreResponse.serializer())
+    }
+
+    /** GET /api/notes/trash：最近删除（软删且未彻底清理，含 purge_at） */
+    suspend fun listTrash(): TrashResponse = withContext(Dispatchers.IO) {
+        execute(request("/api/notes/trash").get().build(), TrashResponse.serializer())
+    }
+
+    /** POST /api/notes/purge：立即彻底删除已软删的笔记（不可恢复） */
+    suspend fun purgeNotes(ids: List<String>): PurgeResponse = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            putJsonArray("ids") { ids.forEach { add(JsonPrimitive(it)) } }
+        }.toString().toRequestBody(jsonMedia)
+        execute(request("/api/notes/purge").post(body).build(), PurgeResponse.serializer())
+    }
+
+    /** POST /api/notes/trash/empty：清空回收站（不可恢复） */
+    suspend fun emptyTrash(): PurgeResponse = withContext(Dispatchers.IO) {
+        val body = "{}".toRequestBody(jsonMedia)
+        execute(request("/api/notes/trash/empty").post(body).build(), PurgeResponse.serializer())
+    }
+
+    /** GET /api/stats：洞察页统计（days 默认 365，tz_offset 为东厕分钟数） */
+    suspend fun getStats(days: Int = 365, tzOffsetMinutes: Int): StatsResponse = withContext(Dispatchers.IO) {
+        execute(request("/api/stats?days=$days&tz_offset=$tzOffsetMinutes").get().build(), StatsResponse.serializer())
+    }
+
+    /** GET /api/notes/random：随机漫步一条历史笔记（无可抽时后端返 404） */
+    suspend fun getRandomNote(): Note? = withContext(Dispatchers.IO) {
+        val resp = try {
+            client.newCall(request("/api/notes/random").get().build()).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use {
+            val text = it.body?.string().orEmpty()
+            if (it.code == 404) return@withContext null
+            if (!it.isSuccessful) throw httpError(it.code, text)
+            try {
+                json.decodeFromString(RandomNoteResponse.serializer(), text).note
+            } catch (e: Exception) {
+                throw ApiException("服务器返回了无法识别的数据，请检查设置中的 API Base URL 是否正确", e)
+            }
+        }
     }
 
     /** GET /api/preferences：推送偏好 */

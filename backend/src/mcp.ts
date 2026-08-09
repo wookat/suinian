@@ -277,7 +277,7 @@ export function buildMcpServer(api: ApiCall): McpServer {
     {
       title: "删除笔记",
       description:
-        "删除一条笔记（软删除）：笔记先进入可恢复状态，约 30 分钟内可用 restore_notes 撤销，之后才会被彻底清理。用户说「把 XX 删了 / 删掉那条」时，先用 search_notes 找到笔记 id 再调用本工具。",
+        "删除一条笔记（软删除）：笔记先进入「最近删除」，30 天内可用 restore_notes 撤销，之后才会被彻底清理。用户说「把 XX 删了 / 删掉那条」时，先用 search_notes 找到笔记 id 再调用本工具。",
       inputSchema: {
         note_id: z.string().min(1).describe("要删除的笔记 id"),
       },
@@ -285,7 +285,7 @@ export function buildMcpServer(api: ApiCall): McpServer {
     async ({ note_id }) => {
       const res = await api(`/api/notes/${encodeURIComponent(note_id)}`, { method: "DELETE" });
       if (res.status !== 200) return errorResult(res.status, res.body);
-      return jsonResult({ deleted: true, note_id, hint: "软删除：约 30 分钟内可用 restore_notes 恢复" });
+      return jsonResult({ deleted: true, note_id, hint: "软删除：30 天内可用 restore_notes 恢复" });
     }
   );
 
@@ -294,7 +294,7 @@ export function buildMcpServer(api: ApiCall): McpServer {
     {
       title: "恢复删除的笔记",
       description:
-        "恢复刚删除（软删除）的笔记，支持批量。只对删除后约 30 分钟内、尚未被清理的笔记有效。用户说「刚才删错了，恢复一下」时用这个工具。",
+        "恢复刚删除（软删除）的笔记，支持批量。只对删除后 30 天内、尚未被彻底清理的笔记有效。用户说「刚才删错了，恢复一下」时用这个工具。",
       inputSchema: {
         note_ids: z.array(z.string().min(1)).min(1).max(100).describe("要恢复的笔记 id 列表"),
       },

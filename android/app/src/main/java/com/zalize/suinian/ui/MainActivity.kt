@@ -11,6 +11,7 @@ import androidx.compose.material.icons.automirrored.outlined.Notes
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -186,6 +187,9 @@ fun SuinianNavHost(focusQuickNoteSignal: Int, navigateRouteSignal: Pair<String, 
                         )
                     },
                     actions = {
+                        IconButton(onClick = { navController.navigate("insights") }) {
+                            Icon(Icons.Outlined.BarChart, contentDescription = "洞察")
+                        }
                         IconButton(onClick = { navController.navigate("settings") }) {
                             Icon(Icons.Outlined.Settings, contentDescription = "设置")
                         }
@@ -257,11 +261,18 @@ fun SuinianNavHost(focusQuickNoteSignal: Int, navigateRouteSignal: Pair<String, 
                 val id = entry.arguments?.getString("id") ?: return@composable
                 ReportDetailScreen(reportId = id, onBack = { navController.popBackStack() })
             }
+            composable("insights") {
+                InsightsScreen(vm = vm, onBack = { navController.popBackStack() })
+            }
+            composable("trash") {
+                TrashScreen(vm = vm, onBack = { navController.popBackStack() })
+            }
             composable("settings") {
                 SettingsScreen(
                     vm = vm,
                     onBack = { navController.popBackStack() },
                     onOpenTags = { navController.navigate("tags") },
+                    onOpenTrash = { navController.navigate("trash") },
                     onLogout = {
                         navController.navigate("home") {
                             popUpTo(navController.graph.findStartDestination().id) { inclusive = true }

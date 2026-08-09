@@ -29,6 +29,7 @@ import type {
   ReportsResponse,
   ThreadDetail,
   ThreadsResponse,
+  TrashResponse,
   TodayReviewResponse,
   WeeklyReport,
 } from "./types"
@@ -265,6 +266,38 @@ export async function restoreNotes(ids: string[]): Promise<number> {
     restored += res.restored
   }
   return restored
+}
+
+/** 最近删除列表：软删且未彻底清理的笔记（含剩余保留时间） */
+export async function getTrash(): Promise<TrashResponse> {
+  if (loadSettings().useMock) throw new Error("演示模式不支持最近删除，请先配置真实 API")
+  const res = await realFetch<{ notes: Record<string, unknown>[]; retention_days: number }>("/api/notes/trash")
+  return {
+    notes: (res.notes ?? []).map((n) => ({
+      ...normalizeNote(n),
+      deleted_at: typeof n.deleted_at === "string" ? n.deleted_at : null,
+      purge_at: typeof n.purge_at === "string" ? n.purge_at : null,
+    })),
+    retention_days: res.retention_days ?? 30,
+  }
+}
+
+/** 立即彻底删除回收站里的笔记（不可恢复） */
+export async function purgeNotes(ids: string[]): Promise<number> {
+  const res = await realFetch<{ ok: boolean; purged: number }>("/api/notes/purge", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  })
+  return res.purged
+}
+
+/** 清空回收站：彻底删除全部软删笔记（不可恢复） */
+export async function emptyTrash(): Promise<number> {
+  const res = await realFetch<{ ok: boolean; purged: number }>("/api/notes/trash/empty", {
+    method: "POST",
+    body: JSON.stringify({}),
+  })
+  return res.purged
 }
 
 /** 批量操作结果：affected=本次影响条数；remaining=筛选匹配超上限未处理条数；ids=删除时被软删的 id（供撤销） */

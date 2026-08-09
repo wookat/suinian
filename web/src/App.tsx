@@ -24,6 +24,7 @@ const ReportsPage = lazy(() => import("@/pages/reports").then((m) => ({ default:
 const InsightsPage = lazy(() => import("@/pages/insights").then((m) => ({ default: m.InsightsPage })))
 const SettingsPage = lazy(() => import("@/pages/settings").then((m) => ({ default: m.SettingsPage })))
 const AuthPage = lazy(() => import("@/pages/auth").then((m) => ({ default: m.AuthPage })))
+const TrashPage = lazy(() => import("@/pages/trash").then((m) => ({ default: m.TrashPage })))
 
 const ROUTES = [
   {
@@ -104,6 +105,16 @@ function useMockMode(): boolean {
   return mock
 }
 
+// off-nav route: 最近删除 recycle bin (linked from settings)
+const TRASH_ROUTE = {
+  path: "trash",
+  label: "最近删除",
+  icon: SettingsIcon,
+  page: TrashPage,
+  title: "最近删除",
+  description: "删除的笔记保留 30 天，可恢复或立即彻底删除",
+} as const
+
 // off-nav route: register/login (linked from onboarding & settings)
 const AUTH_ROUTE = {
   path: "auth",
@@ -131,7 +142,11 @@ function useOnboarded(): boolean {
 export default function App() {
   const route = useHashRoute()
   const active =
-    route === AUTH_ROUTE.path ? AUTH_ROUTE : (ROUTES.find((r) => r.path === route) ?? ROUTES[0])
+    route === AUTH_ROUTE.path
+      ? AUTH_ROUTE
+      : route === TRASH_ROUTE.path
+        ? TRASH_ROUTE
+        : (ROUTES.find((r) => r.path === route) ?? ROUTES[0])
   const Page = active.page
   const isMock = useMockMode()
   const onboarded = useOnboarded()

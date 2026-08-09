@@ -772,8 +772,8 @@ async function deleteNoteRecord(
   return true;
 }
 
-/** Undo window before a soft-deleted note is hard-deleted by the cron sweep. */
-const SOFT_DELETE_RETENTION_MINUTES = 30;
+/** Retention window (最近删除) before a soft-deleted note is hard-deleted by the cron sweep. */
+export const SOFT_DELETE_RETENTION_DAYS = 30;
 const PURGE_BATCH = 200;
 /** Wall-clock budget per cron run; keeps well under the 30s cron CPU/duration limits. */
 const PURGE_TIME_BUDGET_MS = 20_000;
@@ -823,7 +823,7 @@ export async function purgeExpiredSoftDeletes(
     const { results } = await env.DB.prepare(
       `SELECT id, user_id FROM notes WHERE deleted_at IS NOT NULL AND deleted_at <= datetime('now', ?) ORDER BY deleted_at ASC LIMIT ${PURGE_BATCH}`
     )
-      .bind(`-${SOFT_DELETE_RETENTION_MINUTES} minutes`)
+      .bind(`-${SOFT_DELETE_RETENTION_DAYS} days`)
       .all<{ id: string; user_id: string }>();
     const rows = results ?? [];
     if (rows.length === 0) break;
@@ -873,6 +873,83 @@ app.post("/api/notes/restore", async (c) => {
     restored += res.meta.changes ?? 0;
   }
   return c.json({ ok: true, restored });
+});
+
+/** UTC "YYYY-MM-DD HH:MM:SS" when a soft-deleted note becomes eligible for the purge sweep. */
+export function purgeAtOf(deletedAt: string, retentionDays = SOFT_DELETE_RETENTION_DAYS): string | null {
+  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(deletedAt) ? `${deletedAt.replace(" ", "T")}Z` : deletedAt;
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  return new Date(ms + retentionDays * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+}
+
+// ---- GET /api/notes/trash ----
+// 最近删除: soft-deleted, not-yet-purged notes, newest deletions first. Each
+// item carries purge_at so clients can show the remaining retention time.
+app.get("/api/notes/trash", async (c) => {
+  const userId = c.get("userId");
+  const { results } = await c.env.DB.prepare(
+    "SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 200"
+  )
+    .bind(userId)
+    .all<NoteRow>();
+  const notes = await Promise.all(
+    (results ?? []).map(async (n) => ({
+      ...(await noteToJsonDecrypted(c.env, n)),
+      purge_at: purgeAtOf(n.deleted_at!),
+    }))
+  );
+  return c.json({ notes, retention_days: SOFT_DELETE_RETENTION_DAYS });
+});
+
+// ---- POST /api/notes/purge ----
+// Immediately hard-delete owned, already soft-deleted notes (and derived data).
+app.post("/api/notes/purge", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ ids?: unknown }>().catch(() => null);
+  const ids = Array.isArray(body?.ids) ? body.ids.filter((v): v is string => typeof v === "string") : [];
+  if (ids.length === 0) return c.json({ error: "ids required" }, 400);
+  if (ids.length > BATCH_MAX_IDS) return c.json({ error: `一次最多彻底删除 ${BATCH_MAX_IDS} 条` }, 400);
+  const owned: string[] = [];
+  for (const chunk of chunkIds(ids)) {
+    const ph = chunk.map(() => "?").join(",");
+    const r = await c.env.DB.prepare(
+      `SELECT id FROM notes WHERE user_id = ? AND deleted_at IS NOT NULL AND id IN (${ph})`
+    )
+      .bind(userId, ...chunk)
+      .all<{ id: string }>();
+    owned.push(...(r.results ?? []).map((x) => x.id));
+  }
+  if (owned.length > 0) {
+    await purgeNotesBatch(c.env, owned, (p) => c.executionCtx.waitUntil(p));
+    c.executionCtx.waitUntil(reconcileThreads(c.env, userId));
+  }
+  return c.json({ ok: true, purged: owned.length });
+});
+
+// ---- POST /api/notes/trash/empty ----
+// Hard-delete every soft-deleted note the user still has in 最近删除.
+app.post("/api/notes/trash/empty", async (c) => {
+  const userId = c.get("userId");
+  let purged = 0;
+  for (;;) {
+    const { results } = await c.env.DB.prepare(
+      `SELECT id FROM notes WHERE user_id = ? AND deleted_at IS NOT NULL LIMIT ${PURGE_BATCH}`
+    )
+      .bind(userId)
+      .all<{ id: string }>();
+    const rows = results ?? [];
+    if (rows.length === 0) break;
+    await purgeNotesBatch(
+      c.env,
+      rows.map((r) => r.id),
+      (p) => c.executionCtx.waitUntil(p)
+    );
+    purged += rows.length;
+    if (rows.length < PURGE_BATCH) break;
+  }
+  if (purged > 0) c.executionCtx.waitUntil(reconcileThreads(c.env, userId));
+  return c.json({ ok: true, purged });
 });
 
 // ---- POST /api/notes/batch ----

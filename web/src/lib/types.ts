@@ -48,6 +48,17 @@ export interface Note {
   updated_at: string
 }
 
+/** 最近删除（回收站）里的笔记：附软删时间与预计彻底清理时间 */
+export interface TrashNote extends Note {
+  deleted_at: string | null
+  purge_at: string | null
+}
+
+export interface TrashResponse {
+  notes: TrashNote[]
+  retention_days: number
+}
+
 export interface NotesResponse {
   notes: Note[]
   cursor: string | null
