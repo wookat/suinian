@@ -38,8 +38,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.zalize.suinian.ui.components.NoteCard
 import com.zalize.suinian.ui.components.parseDueInstant
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.ZoneId
@@ -70,7 +72,6 @@ data class TodosUiState(
     val error: String? = null,
     val notes: List<Note> = emptyList(),
     val toast: String? = null,
-    val undo: UndoDelete? = null,
 )
 
 class TodosViewModel(app: Application) : AndroidViewModel(app) {
@@ -78,6 +79,10 @@ class TodosViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _ui = MutableStateFlow(TodosUiState())
     val ui: StateFlow<TodosUiState> = _ui
+
+    /** 删除撤销一次性事件：用 Channel 而非 state，避免重组时 LaunchedEffect 重启丢失撤销回调 */
+    private val _undoEvents = Channel<UndoDelete>(Channel.BUFFERED)
+    val undoEvents = _undoEvents.receiveAsFlow()
 
     init {
         refresh()
@@ -109,7 +114,7 @@ class TodosViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 repo.delete(note.id)
-                _ui.value = _ui.value.copy(undo = UndoDelete("已删除", listOf(note.id)))
+                _undoEvents.send(UndoDelete("已删除", listOf(note.id)))
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(notes = prev, toast = e.message ?: "删除失败")
             }
@@ -127,10 +132,6 @@ class TodosViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(toast = e.message ?: "撤销失败")
             }
         }
-    }
-
-    fun consumeUndo() {
-        _ui.value = _ui.value.copy(undo = null)
     }
 
     fun consumeToast() {
@@ -172,17 +173,17 @@ fun TodosScreen(modifier: Modifier = Modifier, vm: TodosViewModel = viewModel())
         }
     }
 
-    // 删除撤销 Snackbar
-    LaunchedEffect(ui.undo) {
-        val undo = ui.undo ?: return@LaunchedEffect
-        val result = snackbarHostState.showSnackbar(
-            message = undo.message,
-            actionLabel = "撤销",
-            duration = SnackbarDuration.Long,
-        )
-        vm.consumeUndo()
-        if (result == SnackbarResult.ActionPerformed) {
-            vm.undoDelete(undo)
+    // 删除撤销 Snackbar：Channel 事件 + LaunchedEffect(Unit)，避免重组时 effect 重启丢失撤销回调
+    LaunchedEffect(Unit) {
+        vm.undoEvents.collect { undo ->
+            val result = snackbarHostState.showSnackbar(
+                message = undo.message,
+                actionLabel = "撤销",
+                duration = SnackbarDuration.Long,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                vm.undoDelete(undo)
+            }
         }
     }
 

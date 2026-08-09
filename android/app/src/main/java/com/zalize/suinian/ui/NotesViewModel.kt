@@ -18,7 +18,9 @@ import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.RestoreStats
 import com.zalize.suinian.data.SendResult
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -39,7 +41,6 @@ data class NotesUiState(
     val filterSource: String? = null,
     val filterTime: TimeRange? = null,
     val availableTags: List<String> = emptyList(),
-    val undo: UndoDelete? = null,
     /** 批量删除进度（done/total） */
     val batchProgress: Pair<Int, Int>? = null,
     val sending: Boolean = false,
@@ -74,6 +75,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _ui = MutableStateFlow(NotesUiState())
     val ui: StateFlow<NotesUiState> = _ui
+
+    /** 删除撤销一次性事件：用 Channel 而非 state，避免重组时 LaunchedEffect 重启丢失撤销回调 */
+    private val _undoEvents = Channel<UndoDelete>(Channel.BUFFERED)
+    val undoEvents = _undoEvents.receiveAsFlow()
 
     val settings: StateFlow<AppSettings> = settingsRepo.settings
         .stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
@@ -314,7 +319,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 repo.delete(note.id)
-                _ui.value = _ui.value.copy(undo = UndoDelete("已删除", listOf(note.id)))
+                _undoEvents.send(UndoDelete("已删除", listOf(note.id)))
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(notes = prev, toast = e.message ?: "删除失败")
             }
@@ -332,10 +337,6 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(toast = e.message ?: "撤销失败")
             }
         }
-    }
-
-    fun consumeUndo() {
-        _ui.value = _ui.value.copy(undo = null)
     }
 
     /** 速记发送；内联指令 ?问题 由 onAsk 路由到问答 tab，!内容 原样保存，#标签 内容 手动打标 */
@@ -508,8 +509,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                         selectionMode = false,
                         selectedIds = emptySet(),
                         allMatching = false,
-                        undo = UndoDelete("已删除全部匹配的 $affected 条", deletedIds),
                     )
+                    _undoEvents.send(UndoDelete("已删除全部匹配的 $affected 条", deletedIds))
                     refresh()
                 } catch (e: Exception) {
                     _ui.value = _ui.value.copy(batchBusy = false, batchProgress = null, toast = e.message ?: "批量删除失败")
@@ -536,8 +537,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                     selectionMode = false,
                     selectedIds = emptySet(),
                     notes = _ui.value.notes.filter { it.id !in ids },
-                    undo = UndoDelete("已删除 $affected 条", ids),
                 )
+                _undoEvents.send(UndoDelete("已删除 $affected 条", ids))
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(batchBusy = false, batchProgress = null, toast = e.message ?: "批量删除失败")
                 refresh()

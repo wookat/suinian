@@ -128,16 +128,17 @@ fun SuinianNavHost(focusQuickNoteSignal: Int, navigateRouteSignal: Pair<String, 
     }
 
     // 删除撤销 Snackbar：点「撤销」调后端恢复接口
-    LaunchedEffect(ui.undo) {
-        val undo = ui.undo ?: return@LaunchedEffect
-        val result = snackbarHostState.showSnackbar(
-            message = undo.message,
-            actionLabel = "撤销",
-            duration = androidx.compose.material3.SnackbarDuration.Long,
-        )
-        vm.consumeUndo()
-        if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
-            vm.undoDelete(undo)
+    // 用 Channel 事件 + LaunchedEffect(Unit)，避免重组时 effect 重启导致撤销回调丢失
+    LaunchedEffect(Unit) {
+        vm.undoEvents.collect { undo ->
+            val result = snackbarHostState.showSnackbar(
+                message = undo.message,
+                actionLabel = "撤销",
+                duration = androidx.compose.material3.SnackbarDuration.Long,
+            )
+            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                vm.undoDelete(undo)
+            }
         }
     }
 
