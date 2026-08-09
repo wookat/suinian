@@ -44,7 +44,7 @@ blockquote {
 }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field span { font-size: 12px; color: var(--muted); }
-textarea, input[type="text"] {
+textarea, input[type="text"], select {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -68,4 +68,6 @@ textarea, input[type="text"] {
 #save:disabled { opacity: 0.6; cursor: default; }
 .status { margin: 0; font-size: 12px; }
 .status.ok { color: var(--ok); }
+.status a { color: var(--accent); font-weight: 600; text-decoration: none; }
+.status a:hover { text-decoration: underline; }
 .status.error { color: var(--danger); }

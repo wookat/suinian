@@ -88,21 +88,27 @@ export function buildMcpServer(api: ApiCall): McpServer {
     {
       title: "搜索碎念",
       description:
-        "按关键词搜索笔记，自动混合关键词匹配与语义（embedding）召回，返回匹配的笔记原文列表。想找某几条笔记原文、按标签/分类筛选时用这个；如果用户想要总结性的回答（如「我之前对 X 是怎么想的」），用 ask 工具。",
+        "按关键词搜索笔记，自动混合关键词匹配与语义（embedding）召回，返回匹配的笔记原文列表。支持按分类/标签/来源/创建时间范围组合筛选。想找某几条笔记原文、按条件筛选时用这个；如果用户想要总结性的回答（如「我之前对 X 是怎么想的」），用 ask 工具。",
       inputSchema: {
         query: z.string().min(1).describe("搜索关键词或一句自然语言"),
         category: z
           .enum(["idea", "todo", "collect", "data", "expense", "income"])
           .optional()
-          .describe("限定分类（可选；指定后只做关键词匹配）"),
-        tag: z.string().optional().describe("限定标签（可选；指定后只做关键词匹配）"),
+          .describe("限定分类（可选）"),
+        tag: z.string().optional().describe("限定标签（可选）"),
+        source: z.string().optional().describe('限定来源（可选：如 "web" / "api" / "mcp" / "extension" / "wechat"）'),
+        from: z.string().optional().describe('创建时间下限（可选，"YYYY-MM-DD" 或 "YYYY-MM-DD HH:mm"，含当天/当刻）'),
+        to: z.string().optional().describe('创建时间上限（可选，同 from 格式，含当天/当刻）'),
         limit: z.number().int().min(1).max(50).optional().describe("最多返回条数，默认 20"),
       },
     },
-    async ({ query, category, tag, limit }) => {
+    async ({ query, category, tag, source, from, to, limit }) => {
       const params = new URLSearchParams({ q: query, limit: String(limit ?? 20) });
       if (category) params.set("category", category);
       if (tag) params.set("tag", tag);
+      if (source) params.set("source", source);
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
       const res = await api(`/api/notes?${params}`);
       if (res.status !== 200) return errorResult(res.status, res.body);
       const body = res.body as { notes: { is_sensitive?: unknown; content?: unknown }[] };
@@ -237,6 +243,71 @@ export function buildMcpServer(api: ApiCall): McpServer {
       if (res.status !== 200) return errorResult(res.status, res.body);
       const body = res.body as { note: { is_sensitive?: unknown; content?: unknown } };
       return jsonResult({ completed: true, note: redactNote(body.note) });
+    }
+  );
+
+  server.registerTool(
+    "set_todo_due",
+    {
+      title: "设置待办到期时间",
+      description:
+        "给一条待办设置（或清除）到期时间。用户说「XX 改到周五 / 给 XX 加个提醒时间 / 取消 XX 的截止」时，先用 list_todos / search_notes 找到笔记 id，再调用本工具。手动设置后该字段受保护，AI 分拣不会再覆盖它。",
+      inputSchema: {
+        note_id: z.string().min(1).describe("待办笔记的 id（来自 list_todos / search_notes）"),
+        due: z
+          .string()
+          .nullable()
+          .describe('到期时间："YYYY-MM-DD" 或带时刻的 ISO 8601（如 "2026-08-12T15:00:00+08:00"）；传 null 清除到期时间'),
+      },
+    },
+    async ({ note_id, due }) => {
+      const res = await api(`/api/notes/${encodeURIComponent(note_id)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ todo_due: due }),
+      });
+      if (res.status !== 200) return errorResult(res.status, res.body);
+      const body = res.body as { note: { is_sensitive?: unknown; content?: unknown } };
+      return jsonResult({ updated: true, note: redactNote(body.note) });
+    }
+  );
+
+  server.registerTool(
+    "delete_note",
+    {
+      title: "删除笔记",
+      description:
+        "删除一条笔记（软删除）：笔记先进入可恢复状态，约 30 分钟内可用 restore_notes 撤销，之后才会被彻底清理。用户说「把 XX 删了 / 删掉那条」时，先用 search_notes 找到笔记 id 再调用本工具。",
+      inputSchema: {
+        note_id: z.string().min(1).describe("要删除的笔记 id"),
+      },
+    },
+    async ({ note_id }) => {
+      const res = await api(`/api/notes/${encodeURIComponent(note_id)}`, { method: "DELETE" });
+      if (res.status !== 200) return errorResult(res.status, res.body);
+      return jsonResult({ deleted: true, note_id, hint: "软删除：约 30 分钟内可用 restore_notes 恢复" });
+    }
+  );
+
+  server.registerTool(
+    "restore_notes",
+    {
+      title: "恢复删除的笔记",
+      description:
+        "恢复刚删除（软删除）的笔记，支持批量。只对删除后约 30 分钟内、尚未被清理的笔记有效。用户说「刚才删错了，恢复一下」时用这个工具。",
+      inputSchema: {
+        note_ids: z.array(z.string().min(1)).min(1).max(100).describe("要恢复的笔记 id 列表"),
+      },
+    },
+    async ({ note_ids }) => {
+      const res = await api("/api/notes/restore", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: note_ids }),
+      });
+      if (res.status !== 200) return errorResult(res.status, res.body);
+      const body = res.body as { restored?: number };
+      return jsonResult({ restored: body.restored ?? 0 });
     }
   );
 

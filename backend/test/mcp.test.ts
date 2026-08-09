@@ -47,12 +47,15 @@ describe("MCP server tools", () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       "ask",
       "complete_todo",
+      "delete_note",
       "get_thread",
       "get_weekly_report",
       "list_threads",
       "list_todos",
+      "restore_notes",
       "save_note",
       "search_notes",
+      "set_todo_due",
     ]);
   });
 
@@ -119,6 +122,58 @@ describe("MCP server tools", () => {
     const todos = JSON.parse((res.content as { text: string }[])[0].text).todos;
     expect(todos).toHaveLength(1);
     expect(todos[0].id).toBe("a");
+  });
+
+  it("search_notes forwards source/from/to filters as query params", async () => {
+    const calls: Call[] = [];
+    const client = await connect(fakeApi({ "GET /api/notes": { status: 200, body: { notes: [] } } }, calls));
+    await client.callTool({
+      name: "search_notes",
+      arguments: { query: "x", category: "todo", tag: "工作", source: "extension", from: "2026-08-01", to: "2026-08-09" },
+    });
+    const params = new URLSearchParams(calls[0].path.split("?")[1]);
+    expect(params.get("category")).toBe("todo");
+    expect(params.get("tag")).toBe("工作");
+    expect(params.get("source")).toBe("extension");
+    expect(params.get("from")).toBe("2026-08-01");
+    expect(params.get("to")).toBe("2026-08-09");
+  });
+
+  it("delete_note soft-deletes via DELETE /api/notes/:id", async () => {
+    const calls: Call[] = [];
+    const client = await connect(fakeApi({ "DELETE /api/notes/n1": { status: 200, body: { ok: true } } }, calls));
+    const res = await client.callTool({ name: "delete_note", arguments: { note_id: "n1" } });
+    expect(res.isError).toBeFalsy();
+    expect(calls[0].init?.method).toBe("DELETE");
+    const out = JSON.parse((res.content as { text: string }[])[0].text);
+    expect(out.deleted).toBe(true);
+    expect(out.hint).toContain("restore_notes");
+  });
+
+  it("restore_notes posts ids to /api/notes/restore", async () => {
+    const calls: Call[] = [];
+    const client = await connect(
+      fakeApi({ "POST /api/notes/restore": { status: 200, body: { ok: true, restored: 2 } } }, calls)
+    );
+    const res = await client.callTool({ name: "restore_notes", arguments: { note_ids: ["a", "b"] } });
+    expect(JSON.parse(String(calls[0].init?.body)).ids).toEqual(["a", "b"]);
+    expect(JSON.parse((res.content as { text: string }[])[0].text).restored).toBe(2);
+  });
+
+  it("set_todo_due patches todo_due (and can clear it with null)", async () => {
+    const calls: Call[] = [];
+    const client = await connect(
+      fakeApi(
+        { "PATCH /api/notes/n1": { status: 200, body: { note: { id: "n1", todo_due: "2026-08-12", is_sensitive: false } } } },
+        calls
+      )
+    );
+    const res = await client.callTool({ name: "set_todo_due", arguments: { note_id: "n1", due: "2026-08-12" } });
+    expect(JSON.parse(String(calls[0].init?.body)).todo_due).toBe("2026-08-12");
+    expect(JSON.parse((res.content as { text: string }[])[0].text).updated).toBe(true);
+
+    await client.callTool({ name: "set_todo_due", arguments: { note_id: "n1", due: null } });
+    expect(JSON.parse(String(calls[1].init?.body)).todo_due).toBeNull();
   });
 
   it("surfaces API errors as isError results", async () => {

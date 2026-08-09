@@ -1,4 +1,4 @@
-import { loadSettings, saveNote, pageContent, selectionContent } from "@/utils/api";
+import { loadSettings, saveNote, pageContent, selectionContent, CATEGORY_OPTIONS, type Category } from "@/utils/api";
 import type { ExtractResult } from "@/entrypoints/extract";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -12,8 +12,18 @@ const useSelectionEl = $<HTMLInputElement>("use-selection");
 const noteEl = $<HTMLTextAreaElement>("note");
 const tagsEl = $<HTMLInputElement>("tags");
 const includeExcerptEl = $<HTMLInputElement>("include-excerpt");
+const categoryEl = $<HTMLSelectElement>("category");
 const saveBtn = $<HTMLButtonElement>("save");
 const statusEl = $<HTMLParagraphElement>("status");
+const viewLinkEl = $<HTMLParagraphElement>("view-link");
+const openWebEl = $<HTMLAnchorElement>("open-web");
+
+for (const opt of CATEGORY_OPTIONS) {
+  const o = document.createElement("option");
+  o.value = opt.value;
+  o.textContent = opt.label;
+  categoryEl.appendChild(o);
+}
 
 let tab: Browser.tabs.Tab | undefined;
 let extract: ExtractResult | null = null;
@@ -32,8 +42,11 @@ function parseTags(raw: string): string[] {
     .slice(0, 6);
 }
 
+let webBase = "https://suinian.zalize.com";
+
 async function init() {
-  const { apiToken } = await loadSettings();
+  const { apiToken, webBaseUrl } = await loadSettings();
+  webBase = webBaseUrl;
   if (!apiToken) {
     titleEl.textContent = "还没配置 API";
     extractStatusEl.textContent = "点右上角「设置」填 API 地址与 Token（与 Web 端一致）";
@@ -85,9 +98,11 @@ saveBtn.addEventListener("click", async () => {
           url: tab.url,
           excerpt: includeExcerptEl.checked ? extract?.excerpt : undefined,
         });
-    await saveNote({ content, url: tab.url, tags });
+    const category = (categoryEl.value || undefined) as Category | undefined;
+    await saveNote({ content, url: tab.url, tags, category });
     setStatus("✅ 已保存到碎念", "ok");
-    setTimeout(() => window.close(), 1200);
+    viewLinkEl.hidden = false;
+    openWebEl.href = `${webBase}/#/`;
   } catch (e) {
     setStatus(`保存失败：${e instanceof Error ? e.message : String(e)}`, "error");
     saveBtn.disabled = false;
@@ -96,6 +111,12 @@ saveBtn.addEventListener("click", async () => {
 
 $("open-options").addEventListener("click", () => {
   void browser.runtime.openOptionsPage();
+});
+
+openWebEl.addEventListener("click", (e) => {
+  e.preventDefault();
+  void browser.tabs.create({ url: `${webBase}/#/` });
+  window.close();
 });
 
 void init();

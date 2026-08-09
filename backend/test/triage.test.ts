@@ -134,7 +134,7 @@ describe("relative date grounding (R9)", () => {
   it("prompt includes category examples and tag prefix rule", () => {
     const p = buildTriagePrompt(friday);
     expect(p).toContain("公司报销流程");
-    expect(p).toContain("不得照抄内容开头的括号前缀");
+    expect(p).toContain("方括号前缀标记");
   });
 });
 

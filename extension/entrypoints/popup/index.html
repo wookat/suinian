@@ -34,10 +34,18 @@
         <input id="tags" type="text" placeholder="稍后读, 技术" />
       </label>
 
+      <label class="field">
+        <span>分类（可选，默认 AI 自动分拣）</span>
+        <select id="category">
+          <option value="">AI 自动分拣</option>
+        </select>
+      </label>
+
       <label class="checkbox"><input type="checkbox" id="include-excerpt" checked /> 附带正文抽取</label>
 
       <button id="save" type="button">保存到碎念</button>
       <p id="status" class="status" hidden></p>
+      <p id="view-link" class="status ok" hidden><a id="open-web" href="#">在碎念中查看 →</a></p>
     </main>
     <script type="module" src="./main.ts"></script>
   </body>
