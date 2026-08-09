@@ -20,7 +20,7 @@ import {
 } from "./auth";
 import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports } from "./reports";
 import { getTodayReview, generateAllDailyReviews, readCronHeartbeats, shanghaiDate } from "./review";
-import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings } from "./semantic";
+import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings, EMBED_BACKFILL_BUDGET_MS } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteNotesGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
 import { deleteUserData } from "./account";
 import {
@@ -2093,30 +2093,62 @@ registerMcpRoute(app);
 
 export { app };
 
-/** Re-triage notes the AI failed to sort (category still NULL), oldest first. */
-export async function retriageUnsorted(env: Env, limit = 10): Promise<void> {
-  const { results } = await env.DB.prepare(
-    "SELECT id, user_id, content, content_enc FROM notes WHERE category IS NULL AND deleted_at IS NULL AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT ?"
-  )
-    .bind(limit)
-    .all<{ id: string; user_id: string; content: string; content_enc: string | null }>();
-  for (const row of results ?? []) {
-    // pre-encrypted pending notes store a placeholder: triage the plaintext
-    let content = row.content;
-    if (row.content_enc && env.SUINIAN_ENC_KEY) {
-      const plain = await decryptContent(env.SUINIAN_ENC_KEY, row.content_enc);
-      if (plain !== null) content = plain;
+/** Concurrent LLM triage calls per retriage round (IO-bound, well under provider limits). */
+const RETRIAGE_CONCURRENCY = 5;
+/** Wall-clock budget for the cron retriage sweep; must stay under the 10-min cron interval. */
+export const RETRIAGE_TIME_BUDGET_MS = 8 * 60_000;
+
+async function retriageOne(env: Env, row: { id: string; user_id: string; content: string; content_enc: string | null }): Promise<boolean> {
+  // pre-encrypted pending notes store a placeholder: triage the plaintext
+  let content = row.content;
+  if (row.content_enc && env.SUINIAN_ENC_KEY) {
+    const plain = await decryptContent(env.SUINIAN_ENC_KEY, row.content_enc);
+    if (plain !== null) content = plain;
+  }
+  const topTags = await loadTopTags(env.DB, row.user_id).catch(() => [] as string[]);
+  const triage = await triageNote(content, env, topTags);
+  if (!triage) return false;
+  await applyTriage(env, row.id, triage, content);
+  const n = await env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(row.id).first<NoteRow>();
+  if (n) {
+    await extractGraph(env, n);
+    await clusterNote(env, n).catch((err) => console.error("retriage: cluster failed", err));
+    await upsertNoteEmbedding(env, n);
+  }
+  return true;
+}
+
+/**
+ * Re-triage notes the AI failed to sort (category still NULL), oldest first.
+ * Each round pulls `limit` notes and triages them with bounded concurrency;
+ * with a time budget it keeps draining rounds until the backlog is empty, the
+ * budget is spent, or the AI stops responding — so a 3000-note import is
+ * sorted within hours instead of weeks.
+ */
+export async function retriageUnsorted(env: Env, limit = 10, timeBudgetMs = 0): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    const { results } = await env.DB.prepare(
+      "SELECT id, user_id, content, content_enc FROM notes WHERE category IS NULL AND deleted_at IS NULL AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT ?"
+    )
+      .bind(limit)
+      .all<{ id: string; user_id: string; content: string; content_enc: string | null }>();
+    const rows = results ?? [];
+    if (rows.length === 0) break;
+    let triaged = 0;
+    for (let i = 0; i < rows.length; i += RETRIAGE_CONCURRENCY) {
+      const group = rows.slice(i, i + RETRIAGE_CONCURRENCY);
+      const settled = await Promise.allSettled(group.map((row) => retriageOne(env, row)));
+      for (const s of settled) {
+        if (s.status === "fulfilled" && s.value) triaged++;
+        else if (s.status === "rejected") console.error("retriage: note failed", s.reason);
+      }
+      if (timeBudgetMs > 0 && Date.now() - started >= timeBudgetMs) break;
     }
-    const topTags = await loadTopTags(env.DB, row.user_id).catch(() => [] as string[]);
-    const triage = await triageNote(content, env, topTags);
-    if (!triage) continue;
-    await applyTriage(env, row.id, triage, content);
-    const n = await env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(row.id).first<NoteRow>();
-    if (n) {
-      await extractGraph(env, n);
-      await clusterNote(env, n).catch((err) => console.error("retriage: cluster failed", err));
-      await upsertNoteEmbedding(env, n);
-    }
+    // AI unavailable (nothing triaged): stop instead of spinning on the same rows
+    if (triaged === 0) break;
+    if (rows.length < limit) break;
+    if (Date.now() - started >= timeBudgetMs) break;
   }
 }
 
@@ -2130,12 +2162,13 @@ export default {
       // 1st of the month 08:00 Asia/Shanghai = 00:00 UTC -> last month's reports
       ctx.waitUntil(generateAllMonthlyReports(env));
     } else if (event.cron === "*/10 * * * *") {
-      // sweep notes whose async triage failed or was cancelled
-      ctx.waitUntil(retriageUnsorted(env));
+      // sweep notes whose async triage failed or was cancelled (time-budgeted:
+      // keeps draining big import backlogs until ~8 min are spent)
+      ctx.waitUntil(retriageUnsorted(env, 25, RETRIAGE_TIME_BUDGET_MS));
       // backfill article extraction for link notes (a few per run, rate-limited)
       ctx.waitUntil(backfillLinkExtracts(env));
-      // backfill embeddings for notes that predate semantic search (rate-limited)
-      ctx.waitUntil(backfillEmbeddings(env));
+      // backfill embeddings for notes that predate semantic search (batched + budgeted)
+      ctx.waitUntil(backfillEmbeddings(env, 20, EMBED_BACKFILL_BUDGET_MS));
       // backfill graph extraction for notes that predate the knowledge graph (rate-limited)
       ctx.waitUntil(backfillGraphExtracts(env));
       // hard-delete soft-deleted notes past their undo window (attachments/vectors/graph too)

@@ -131,23 +131,65 @@ export async function semanticRecall(
   }
 }
 
+/** Wall-clock budget for the cron embedding backfill (batched, so this drains thousands per run). */
+export const EMBED_BACKFILL_BUDGET_MS = 60_000;
+
+/** Batch-embed several texts in one Workers AI call; per-text null on failure. */
+export async function embedTexts(env: Env, texts: string[]): Promise<(number[] | null)[]> {
+  if (!env.AI || texts.length === 0) return texts.map(() => null);
+  try {
+    const res = (await env.AI.run(EMBED_MODEL, { text: texts.map((t) => t.slice(0, 1000)) })) as {
+      data?: number[][];
+    };
+    return texts.map((_, i) => {
+      const v = res?.data?.[i];
+      return Array.isArray(v) && v.length > 0 ? v : null;
+    });
+  } catch (err) {
+    console.error("semantic: batch embed failed", err);
+    return texts.map(() => null);
+  }
+}
+
 /**
  * Cron backfill: embed non-sensitive notes that don't have a vector yet,
- * oldest first, a few per run (rate-limited like the link-extract backfill).
+ * oldest first. Each round batch-embeds `limit` notes in a single Workers AI
+ * call and bulk-writes the vectors; with a time budget it keeps draining
+ * rounds until the backlog is empty or the budget is spent, so bulk imports
+ * become searchable within minutes instead of days.
  */
-export async function backfillEmbeddings(env: Env, limit = 20): Promise<number> {
-  const { results } = await env.DB.prepare(
-    `SELECT * FROM notes n
-     WHERE n.is_sensitive = 0 AND n.deleted_at IS NULL
-       AND NOT EXISTS (SELECT 1 FROM note_embeddings e WHERE e.note_id = n.id)
-     ORDER BY n.created_at ASC LIMIT ?`
-  )
-    .bind(limit)
-    .all<NoteRow>();
+export async function backfillEmbeddings(env: Env, limit = 20, timeBudgetMs = 0): Promise<number> {
+  const started = Date.now();
   let done = 0;
-  for (const n of results ?? []) {
-    await upsertNoteEmbedding(env, n);
-    done++;
+  for (;;) {
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM notes n
+       WHERE n.is_sensitive = 0 AND n.deleted_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM note_embeddings e WHERE e.note_id = n.id)
+       ORDER BY n.created_at ASC LIMIT ?`
+    )
+      .bind(limit)
+      .all<NoteRow>();
+    const rows = results ?? [];
+    if (rows.length === 0) break;
+    const vectors = await embedTexts(env, rows.map((n) => noteEmbedText(n)));
+    const embedded: { note: NoteRow; vector: number[] }[] = [];
+    vectors.forEach((v, i) => {
+      if (v) embedded.push({ note: rows[i], vector: v });
+    });
+    if (embedded.length === 0) break; // AI unavailable: stop instead of spinning
+    const insert = env.DB.prepare("INSERT OR REPLACE INTO note_embeddings (note_id, vector) VALUES (?, ?)");
+    for (const { note, vector } of embedded) {
+      await insert.bind(note.id, JSON.stringify(vector)).run();
+    }
+    if (env.VECTORIZE) {
+      await env.VECTORIZE.upsert(
+        embedded.map(({ note, vector }) => ({ id: note.id, values: vector, metadata: { user_id: note.user_id } }))
+      ).catch((err) => console.error("semantic: vectorize bulk upsert failed", err));
+    }
+    done += embedded.length;
+    if (rows.length < limit || embedded.length < rows.length) break;
+    if (Date.now() - started >= timeBudgetMs) break;
   }
   if (done > 0) console.log(`semantic: backfilled ${done} embeddings`);
   return done;
