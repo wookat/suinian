@@ -103,7 +103,6 @@ saveBtn.addEventListener("click", async () => {
     setStatus("✅ 已保存到碎念", "ok");
     viewLinkEl.hidden = false;
     openWebEl.href = `${webBase}/#/`;
-    setTimeout(() => window.close(), 4000);
   } catch (e) {
     setStatus(`保存失败：${e instanceof Error ? e.message : String(e)}`, "error");
     saveBtn.disabled = false;
