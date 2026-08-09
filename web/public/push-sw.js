@@ -19,15 +19,34 @@ self.addEventListener('push', (event) => {
   )
 })
 
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim())
+})
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const url = (event.notification.data && event.notification.data.url) || '/'
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (list) => {
       for (const client of list) {
         if ('focus' in client) {
-          if ('navigate' in client) client.navigate(url)
-          return client.focus()
+          const focused = await client.focus()
+          // navigate() rejects for uncontrolled clients; ask the page to route itself,
+          // and fall back to a fresh window if that fails too.
+          try {
+            if ('navigate' in client) {
+              await client.navigate(url)
+              return focused
+            }
+          } catch {
+            /* fall through */
+          }
+          try {
+            client.postMessage({ type: 'push-navigate', url })
+            return focused
+          } catch {
+            return self.clients.openWindow(url)
+          }
         }
       }
       return self.clients.openWindow(url)
