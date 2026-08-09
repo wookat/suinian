@@ -9,7 +9,7 @@
  * never used for tuning; they only appear in the final score.
  */
 
-export const PREFIX = "[QA-R54]";
+export const PREFIX = "[QA-R79]";
 
 export interface EvalNote {
   key: string;
@@ -59,7 +59,7 @@ export const NOTES: EvalNote[] = [
   // —— 图片描述（模拟 vision 提取结果） ——
   N("img1", 18, "data", "白板照片：Q3 目标", "白板照片：Q3 目标——1. 上线快闪店预约小程序 2. 跑通咖啡豆供应链 3. 做 3 场市集活动", ["咖啡馆"]),
   // —— 敏感（绝不能出现在召回/回答里） ——
-  N("sens1", 22, "data", "路由器管理密码", "家里路由器管理后台密码是 qa-r54-demo-9x7，别忘了", [], true),
+  N("sens1", 22, "data", "路由器管理密码", "家里路由器管理后台密码是 qa-r79-demo-9x7，别忘了", [], true),
   // —— 日语学习 ——
   N("jp1", 70, "idea", "开始学日语五十音", "开始学日语了，先背五十音图，用 Anki 每天 20 个假名", ["日语"]),
   N("jp2", 35, "idea", "背单词 app 不如做题", "学了一个多月日语的感受：光用背单词 app 效率低，不如直接做 N5 真题，在语境里记得牢", ["日语"]),
@@ -86,6 +86,13 @@ export const NOTES: EvalNote[] = [
   N("nz18", 2, "idea", "快闪店定价", "快闪店定价想法：手冲一律 35，套餐（咖啡+甜点）50，比市区门店便宜一点吸引尝鲜", ["咖啡馆", "创业"]),
   N("nz19", 1, "collect", "手冲滤杯测评视频", "https://example.com/v60-review V60 和折纸滤杯的对比测评，新手建议 V60", ["咖啡馆"]),
   N("nz20", 30, "expense", "买跑鞋", "买了双跑鞋 549 元，结果现在改游泳了，有点浪费", ["购物", "健身"]),
+  // —— 副业播客线索（R79：多跳/为什么/溯源难例用，与 nz4 同一演化链） ——
+  N("pod2", 32, "idea", "播客第一期嘉宾人选", "播客第一期嘉宾想好了：楼下花店老板娘，她副业做干花电商月入过万，故事很典型", ["播客"]),
+  N("pod3", 11, "idea", "播客先搁置", "播客这事先鸽了：录音设备加剪辑每期要花大半天，精力不够，等咖啡馆快闪店的事定了再重启", ["播客"]),
+  // —— 换工作线索（时间跨度 + 为什么类难例用） ——
+  N("job1", 68, "idea", "萌生换工作的念头", "最近总加班到十点，第一次认真想换工作：现在的业务方向太边缘，学不到新东西", ["职业"]),
+  N("job2", 37, "idea", "换工作的顾虑", "换工作的事又犹豫了：房贷压力在，现在行情不好，裸辞风险太大，先骑驴找马", ["职业"]),
+  N("job3", 13, "idea", "星尘让我改变了想法", "带星尘项目之后想法变了：在现公司也能磨出架构能力，暂缓换工作，先把星尘做成代表作", ["职业", "星尘"]),
 ];
 
 export type QuestionCategory =
@@ -96,7 +103,10 @@ export type QuestionCategory =
   | "否定"
   | "无答案"
   | "敏感隔离"
-  | "英文提问";
+  | "英文提问"
+  | "多跳"
+  | "演化脉络"
+  | "为什么依据";
 
 export interface EvalQuestion {
   id: string;
@@ -175,4 +185,58 @@ export const QUESTIONS: EvalQuestion[] = [
   // —— 英文提问（笔记是中文，需双语关键词抽取才能 LIKE 命中） ——
   { id: "q29", category: "英文提问", question: "What is my latest plan for the coffee shop idea?", expectAny: ["cafe3", "nz18"] },
   { id: "q30", category: "英文提问", question: "How is my running plan going?", expectAny: ["fit1", "fit2"] },
+  // —— R79 难例：跨碎片关系问句（多跳/时间跨度/为什么类/依据溯源类） ——
+  // 为什么/依据溯源：答案必须能指向作为依据的具体笔记
+  { id: "q31", category: "为什么依据", question: "我为什么想做周末快闪店？依据是哪几条笔记", expectAny: ["cafe2", "cafe3"], expectAll: ["cafe2", "cafe3"] },
+  { id: "q32", category: "为什么依据", question: "星尘为什么从方案A换到方案B？当时的理由是什么", expectAny: ["proj2", "proj3"], expectAll: ["proj2", "proj3"] },
+  { id: "q33", category: "为什么依据", question: "我为什么把跑步改成了游泳？哪条笔记记了原因", expectAny: ["fit2"], expectAll: ["fit2"] },
+  { id: "q34", category: "为什么依据", question: "播客为什么搁置了？当时怕的是什么", expectAny: ["pod3"], expectAll: ["pod3"] },
+  { id: "q35", category: "为什么依据", question: "我对「杠杆」的理解来自哪本书？具体是怎么说的", expectAny: ["naval2", "naval1"] },
+  { id: "q36", category: "为什么依据", question: "我最后为什么决定暂缓换工作？依据是哪条", expectAny: ["job3"], expectAll: ["job3"], holdout: true },
+  // 演化脉络：时间跨度上的想法变化，必须把链条上的碎片都带回来
+  { id: "q37", category: "演化脉络", question: "关于换工作这事，我这几个月的想法是怎么变化的", expectAny: ["job1", "job2", "job3"], expectAll: ["job1", "job3"] },
+  { id: "q38", category: "演化脉络", question: "播客这个想法从构思到现在经历了什么", expectAny: ["nz4", "pod2", "pod3"], expectAll: ["nz4", "pod3"] },
+  { id: "q39", category: "演化脉络", question: "我的健身计划从开始到现在怎么变的，中间出了什么问题", expectAny: ["fit1", "fit2"], expectAll: ["fit1", "fit2"] },
+  { id: "q40", category: "演化脉络", question: "学日语这两个多月我的方法和心得有什么变化", expectAny: ["jp1", "jp2"], expectAll: ["jp1", "jp2"], holdout: true },
+  { id: "q41", category: "演化脉络", question: "咖啡馆这个点子从最初到现在经历了哪几次转折，每次的原因是什么", expectAny: ["cafe1", "cafe2", "cafe3"], expectAll: ["cafe1", "cafe2", "cafe3"] },
+  // 多跳：需要沿实体关联把不同主题的碎片串起来
+  { id: "q42", category: "多跳", question: "播客搁置和咖啡馆快闪店之间有什么关系", expectAny: ["pod3"], expectAll: ["pod3"] },
+  { id: "q43", category: "多跳", question: "快闪店的豆子打算从哪里拿？这跟咖啡馆计划是怎么接上的", expectAny: ["nz12"], expectAll: ["nz12"] },
+  { id: "q44", category: "多跳", question: "我停跑步这件事和买跑鞋的支出有什么关联", expectAny: ["fit2", "nz20"], expectAll: ["nz20"] },
+  { id: "q45", category: "多跳", question: "星尘项目和我换工作的决定有什么关系", expectAny: ["job3"], expectAll: ["job3"] },
+  { id: "q46", category: "多跳", question: "白板上的 Q3 目标里哪一条和我收藏的供应商链接对得上", expectAny: ["img1", "nz12"], expectAll: ["img1", "nz12"], holdout: true },
+  { id: "q47", category: "多跳", question: "快闪店定价 35 的想法和之前担心的房租成本问题有什么关系", expectAny: ["nz18", "cafe2"], expectAll: ["nz18", "cafe2"] },
+  // 时间跨度：限定时间窗口内的跨碎片梳理
+  { id: "q48", category: "时间限定", question: "最近两周我在创业和职业上做了哪几个决定", expectAny: ["cafe3", "job3", "pod3", "nz18"] },
+  { id: "q49", category: "时间限定", question: "两个月前我在烦恼什么事", expectAny: ["job1", "jp1"], holdout: true },
+  // 口语指代 + 多跳组合：代词消解后还需图谱关联
+  {
+    id: "q50",
+    category: "多跳",
+    question: "那为什么后来又不想换了",
+    history: [
+      { role: "user", content: "我记过想换工作吗" },
+      { role: "assistant", content: "记过，你因为加班多、业务边缘想换工作 [1]。" },
+    ],
+    expectAny: ["job2", "job3"],
+    expectAll: ["job3"],
+  },
+  {
+    id: "q51",
+    category: "为什么依据",
+    question: "它被搁置的原因是什么？第一期本来打算请谁",
+    history: [
+      { role: "user", content: "我那个播客的想法还在吗" },
+      { role: "assistant", content: "在的，你想做一档聊普通人副业的播客 [1]。" },
+    ],
+    expectAny: ["pod3", "pod2"],
+    expectAll: ["pod3", "pod2"],
+    holdout: true,
+  },
+  { id: "q52", category: "演化脉络", question: "回顾一下我所有和副业相关的尝试和想法，都有哪些进展和变化", expectAny: ["nz4", "pod2", "pod3"], expectAll: ["pod3"], holdout: true },
+  // 纯图跳难例：问句与目标碎片几乎无共同关键词，必须靠图谱/语义把另一端带回来
+  { id: "q53", category: "多跳", question: "白板照片里的供应链目标后来有具体着落了吗", expectAny: ["img1", "nz12"], expectAll: ["nz12"] },
+  { id: "q54", category: "多跳", question: "那个让我暂缓换工作的项目，技术方案上最近有什么进展", expectAny: ["job3", "proj3"], expectAll: ["job3", "proj3"] },
+  { id: "q55", category: "为什么依据", question: "我说过因为精力不够先放一放的是什么事？它在等哪件事有结果", expectAny: ["pod3"], expectAll: ["pod3"] },
+  { id: "q56", category: "多跳", question: "参加市集活动这个目标和我哪个创业想法是一体的", expectAny: ["img1", "cafe3"], expectAll: ["cafe3"], holdout: true },
 ];

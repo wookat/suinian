@@ -15,6 +15,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -55,6 +62,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
@@ -69,6 +77,54 @@ import com.zalize.suinian.ui.components.FirstRunTour
 import com.zalize.suinian.ui.components.NoteCard
 import com.zalize.suinian.ui.components.NoteEditSheet
 import kotlinx.coroutines.launch
+
+/** 时间流加载骨架屏：首登/切账号时代替菜单圈，不闪任何旧数据 */
+@Composable
+private fun TimelineSkeleton(modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "skeleton")
+    val alpha by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.75f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 700),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "skeletonAlpha",
+    )
+    val barColor = MaterialTheme.colorScheme.surfaceVariant
+    Column(modifier = modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        repeat(5) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            ) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
+                        Modifier
+                            .width(88.dp)
+                            .height(12.dp)
+                            .alpha(alpha)
+                            .background(barColor, RoundedCornerShape(6.dp))
+                    )
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(14.dp)
+                            .alpha(alpha)
+                            .background(barColor, RoundedCornerShape(6.dp))
+                    )
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.62f)
+                            .height(14.dp)
+                            .alpha(alpha)
+                            .background(barColor, RoundedCornerShape(6.dp))
+                    )
+                }
+            }
+        }
+    }
+}
 
 private val categories = listOf(
     null to "全部",
@@ -459,11 +515,7 @@ fun HomeScreen(
 
         when {
             ui.loading && ui.notes.isEmpty() -> {
-                Column(
-                    Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) { CircularProgressIndicator() }
+                TimelineSkeleton()
             }
             ui.error != null -> {
                 Column(

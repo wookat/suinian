@@ -4,7 +4,7 @@
  * Usage:
  *   SUINIAN_API_BASE=https://suinian-api.zalize.com npx tsx scripts/ask-eval.ts [--keep] [--holdout] [--only=q01,q02]
  *
- * By default it registers a throwaway QA account (qa-r54-eval-*), seeds the
+ * By default it registers a throwaway QA account (qa-r79-eval-*), seeds the
  * golden dataset (scripts/ask-eval-data.ts) via /api/import (markdown with
  * backdated created_at), patches each note with its golden category/tags/title
  * (which also triggers embedding + graph extraction), waits for semantic
@@ -21,6 +21,7 @@ import { NOTES, QUESTIONS, PREFIX, type EvalNote, type EvalQuestion } from "./as
 const API = process.env.SUINIAN_API_BASE ?? "https://suinian-api.zalize.com";
 const KEEP = process.argv.includes("--keep");
 const HOLDOUT = process.argv.includes("--holdout");
+const NOGRAPH = process.argv.includes("--nograph"); // A/B：关闭 GraphRAG 扩展对比图谱贡献
 const ONLY = (process.argv.find((a) => a.startsWith("--only=")) ?? "").replace("--only=", "").split(",").filter(Boolean);
 
 let token = process.env.SUINIAN_TOKEN ?? "";
@@ -65,7 +66,7 @@ async function listAllNotes(): Promise<NoteJson[]> {
 
 async function ensureAccount(): Promise<void> {
   if (token) return;
-  const name = `qa-r54-eval-${Math.random().toString(36).slice(2, 8)}`;
+  const name = `qa-r79-eval-${Math.random().toString(36).slice(2, 8)}`;
   const password = `Eval-${crypto.randomUUID()}`;
   const res = await api<{ api_token: string; user: { id: string } }>("/api/auth/register", {
     method: "POST",
@@ -154,7 +155,7 @@ async function runQuestion(q: EvalQuestion, idByKey: Map<string, string>): Promi
   const keyById = new Map([...idByKey.entries()].map(([k, v]) => [v, k]));
   const res = await api<AskResponse>("/api/ask", {
     method: "POST",
-    body: JSON.stringify({ question: q.question, ...(q.history ? { history: q.history } : {}) }),
+    body: JSON.stringify({ question: q.question, ...(q.history ? { history: q.history } : {}), ...(NOGRAPH ? { graph: false } : {}) }),
   });
   const refKeys = res.references.map((r) => keyById.get(r.note_id) ?? `?${r.note_id.slice(0, 6)}`);
   // keys actually cited in the answer text ([n] present)
@@ -169,7 +170,7 @@ async function runQuestion(q: EvalQuestion, idByKey: Map<string, string>): Promi
   const refusalOk =
     q.expectRefusal === undefined ? null : REFUSAL_RE.test(res.answer) && res.references.length <= 3;
   const forbidden = (q.forbid ?? []).filter((k) => refKeys.includes(k));
-  const forbidOk = forbidden.length === 0 && !(q.forbid ?? []).some(() => /qa-r54-demo-9x7/.test(res.answer));
+  const forbidOk = forbidden.length === 0 && !(q.forbid ?? []).some(() => /qa-r79-demo-9x7/.test(res.answer));
   const pass = recallHit && allHit && (refusalOk ?? true) && forbidOk;
   return { q, refKeys, citedKeys, recallHit, allHit, citeHit, refusalOk, forbidOk, pass, answer: res.answer };
 }

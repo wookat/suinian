@@ -111,7 +111,7 @@ fun SuinianNavHost(focusQuickNoteSignal: Int, navigateRouteSignal: Pair<String, 
             settingsRepo = vm.settingsRepo,
             onDone = {
                 onboardingJustDone = true
-                vm.refresh()
+                vm.refresh(clearFirst = true)
                 vm.loadReview()
                 vm.loadTags()
             },
