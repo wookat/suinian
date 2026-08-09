@@ -40,6 +40,19 @@ async function embed(env: Env, text: string): Promise<number[] | null> {
   }
 }
 
+async function loadStoredEmbedding(env: Env, noteId: string): Promise<number[] | null> {
+  const row = await env.DB.prepare("SELECT vector FROM note_embeddings WHERE note_id = ?")
+    .bind(noteId)
+    .first<{ vector: string }>();
+  if (!row?.vector) return null;
+  try {
+    const v = JSON.parse(row.vector) as number[];
+    return Array.isArray(v) && v.length > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 async function saveEmbedding(env: Env, noteId: string, vector: number[]): Promise<void> {
   await env.DB.prepare(
     "INSERT OR REPLACE INTO note_embeddings (note_id, vector) VALUES (?, ?)"
@@ -191,7 +204,14 @@ async function deepseekConfirmPair(env: Env, a: string, b: string): Promise<bool
  * Falls back to a DeepSeek title-match when Workers AI is unavailable.
  * Never throws.
  */
-export async function clusterNote(env: Env, note: NoteRow, opts?: { useGraph?: boolean }): Promise<void> {
+export async function clusterNote(
+  env: Env,
+  note: NoteRow,
+  opts?: { useGraph?: boolean; deferSummaries?: boolean }
+): Promise<void> {
+  const summarize = opts?.deferSummaries
+    ? async () => {}
+    : (threadId: string, fallbackTitle?: string) => summarizeThread(env, threadId, fallbackTitle);
   try {
     if (note.category !== "idea") return;
     // graph signal first: an idea sharing entities/relations with an existing
@@ -201,8 +221,10 @@ export async function clusterNote(env: Env, note: NoteRow, opts?: { useGraph?: b
       if (mate) {
         console.log(`threads: graph mate note=${note.id} mate=${mate.note_id} shared=${mate.shared}`);
         // still store the embedding so search/ask recall keeps working
-        const v = await embed(env, `${note.title ?? ""}\n${note.content}`);
-        if (v) await saveEmbedding(env, note.id, v);
+        if (!(await loadStoredEmbedding(env, note.id))) {
+          const v = await embed(env, `${note.title ?? ""}\n${note.content}`);
+          if (v) await saveEmbedding(env, note.id, v);
+        }
         let threadId = mate.thread_id;
         if (!threadId) {
           const m = await env.DB.prepare("SELECT title, content FROM notes WHERE id = ?")
@@ -212,14 +234,17 @@ export async function clusterNote(env: Env, note: NoteRow, opts?: { useGraph?: b
           await attachNoteToThread(env, mate.note_id, threadId);
         }
         await attachNoteToThread(env, note.id, threadId);
-        await summarizeThread(env, threadId, note.title || undefined);
+        await summarize(threadId, note.title || undefined);
         return;
       }
     }
     // sensitive notes never enter the vector store (content is encrypted at rest)
-    const vector = note.is_sensitive ? null : await embed(env, `${note.title ?? ""}\n${note.content}`);
+    let vector = note.is_sensitive ? null : await loadStoredEmbedding(env, note.id);
+    if (!note.is_sensitive && !vector) {
+      vector = await embed(env, `${note.title ?? ""}\n${note.content}`);
+      if (vector) await saveEmbedding(env, note.id, vector);
+    }
     if (vector) {
-      await saveEmbedding(env, note.id, vector);
       const { results } = await env.DB.prepare(
         `SELECT n.id, n.thread_id, n.title, n.content, e.vector FROM notes n
          LEFT JOIN note_embeddings e ON e.note_id = n.id
@@ -268,7 +293,7 @@ export async function clusterNote(env: Env, note: NoteRow, opts?: { useGraph?: b
             console.log(`threads: created thread ${threadId} for notes ${best.id}, ${note.id}`);
           }
           await attachNoteToThread(env, note.id, threadId);
-          await summarizeThread(env, threadId, note.title || undefined);
+          await summarize(threadId, note.title || undefined);
           return;
         }
       } else {
@@ -278,7 +303,7 @@ export async function clusterNote(env: Env, note: NoteRow, opts?: { useGraph?: b
       const picked = await pickThreadByDeepseek(env, note);
       if (picked) {
         await attachNoteToThread(env, note.id, picked);
-        await summarizeThread(env, picked, note.title || undefined);
+        await summarize(picked, note.title || undefined);
       }
       return;
     }
@@ -287,7 +312,7 @@ export async function clusterNote(env: Env, note: NoteRow, opts?: { useGraph?: b
     const picked = await pickThreadByDeepseek(env, note);
     if (picked) {
       await attachNoteToThread(env, note.id, picked);
-      await summarizeThread(env, picked, note.title || undefined);
+      await summarize(picked, note.title || undefined);
       return;
     }
     // cold start: no thread matched (or none exist) — pair with a recent unthreaded idea
@@ -305,7 +330,7 @@ export async function clusterNote(env: Env, note: NoteRow, opts?: { useGraph?: b
       const threadId = await newThread(env, note.user_id, m.title || note.title || note.content.slice(0, 20));
       await attachNoteToThread(env, mate, threadId);
       await attachNoteToThread(env, note.id, threadId);
-      await summarizeThread(env, threadId, m.title || undefined);
+      await summarize(threadId, m.title || undefined);
       console.log(`threads: cold-start created thread ${threadId} for notes ${mate}, ${note.id}`);
     }
   } catch (err) {
@@ -353,7 +378,7 @@ export async function rebuildThreads(
     .bind(userId)
     .run();
   for (const n of rows) {
-    await clusterNote(env, { ...n, thread_id: null }, opts);
+    await clusterNote(env, { ...n, thread_id: null }, { ...opts, deferSummaries: true });
   }
   // drop threads emptied by mate-moves during clustering and dissolve 1-note
   // leftovers, freeing their notes for the second pass below
@@ -372,11 +397,19 @@ export async function rebuildThreads(
       const picked = await pickThreadByDeepseek(env, n);
       if (picked) {
         await attachNoteToThread(env, n.id, picked);
-        await summarizeThread(env, picked, n.title || undefined);
       }
     } catch (err) {
       console.error(`threads: rebuild second pass failed for note=${n.id}`, err);
     }
+  }
+  // summaries were deferred during clustering: summarize each surviving thread once
+  const { results: toSummarize } = await env.DB.prepare(
+    "SELECT id FROM threads WHERE user_id = ? AND note_count > 0"
+  )
+    .bind(userId)
+    .all<{ id: string }>();
+  for (const t of toSummarize ?? []) {
+    await summarizeThread(env, t.id);
   }
   const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM threads WHERE user_id = ? AND note_count > 0")
     .bind(userId)
