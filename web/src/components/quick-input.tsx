@@ -37,6 +37,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const length = value.length
   const overLimit = length > MAX_CONTENT_CHARS
@@ -100,8 +101,16 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
   }
 
   return (
-    <div className="rounded-xl border bg-card p-3 shadow-sm">
+    <div
+      className="rounded-xl border bg-card p-3 shadow-sm"
+      onClick={(e) => {
+        // clicks on the card's padding land in the textarea, so the first
+        // keystrokes never get swallowed by a missed tap on mobile
+        if (e.target === e.currentTarget) textareaRef.current?.focus()
+      }}
+    >
       <Textarea
+        ref={textareaRef}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onPaste={(e) => {
@@ -158,6 +167,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
           <Button
             size="sm"
             variant="outline"
+            className="h-11 min-w-11 sm:h-8 sm:min-w-0"
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
             aria-label="上传图片或文件，AI 提取内容"
@@ -177,6 +187,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
           )}
           <Button
             size="sm"
+            className="h-11 min-w-[72px] sm:h-8 sm:min-w-0"
             onClick={() => void submit()}
             disabled={
               !value.trim() ||

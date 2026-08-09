@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Search,
   Sparkles,
@@ -23,7 +23,6 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
-import { AskChat } from "@/components/ask-chat"
 import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, ApiError, NetworkError } from "@/lib/api"
 import type { BatchFilter } from "@/lib/api"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
@@ -31,6 +30,9 @@ import { loadSettings, useSettingsVersion } from "@/lib/settings"
 import { FirstRunTour } from "@/components/first-run-tour"
 import { cn } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
+
+// ask mode is opt-in: keep its chat UI out of the first-paint bundle
+const AskChat = lazy(() => import("@/components/ask-chat").then((m) => ({ default: m.AskChat })))
 
 const CATEGORY_OPTIONS: { value: NoteCategory; label: string }[] = [
   { value: "idea", label: "想法" },
@@ -783,11 +785,13 @@ export function TimelinePage() {
       )}
 
       {askMode && (
-        <AskChat
-          onTagClick={setTag}
-          initialQuestion={askPrefill}
-          onInitialQuestionConsumed={() => setAskPrefill(null)}
-        />
+        <Suspense fallback={null}>
+          <AskChat
+            onTagClick={setTag}
+            initialQuestion={askPrefill}
+            onInitialQuestionConsumed={() => setAskPrefill(null)}
+          />
+        </Suspense>
       )}
 
       <div className="flex gap-1 overflow-x-auto pb-1">

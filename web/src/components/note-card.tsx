@@ -431,7 +431,7 @@ export function NoteCard({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-          <span title={sourceMeta.label} aria-label={sourceMeta.label}>
+          <span role="img" title={sourceMeta.label} aria-label={sourceMeta.label}>
             <SourceIcon className="size-3" />
           </span>
           <time>{formatTime(note.created_at)}</time>
@@ -498,14 +498,14 @@ export function NoteCard({
       </div>
 
       {note.title && !editing && !(sensitive && !revealed) && (
-        <h3
+        <p
           className={cn(
             "mt-2 text-[15px] font-medium leading-snug",
             done && "text-muted-foreground line-through",
           )}
         >
           {note.title}
-        </h3>
+        </p>
       )}
 
       <div className={cn("flex items-start gap-2", note.title ? "mt-1" : "mt-2")}>

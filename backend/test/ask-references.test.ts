@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildAskReferences } from "../src/index";
+import { filterWeakReferences } from "../src/ask";
 
 const ids = ["n1", "n2", "n3", "n4", "n5"];
 
@@ -31,5 +32,28 @@ describe("buildAskReferences", () => {
 
   it("returns empty for empty recall", () => {
     expect(buildAskReferences("", [])).toEqual([]);
+  });
+});
+
+describe("filterWeakReferences", () => {
+  const refs = [
+    { index: 1, note_id: "n1" },
+    { index: 2, note_id: "n2" },
+    { index: 3, note_id: "n3" },
+  ];
+
+  it("drops references whose note is a weak semantic-only hit", () => {
+    expect(filterWeakReferences(refs, new Set(["n2"]))).toEqual([
+      { index: 1, note_id: "n1" },
+      { index: 3, note_id: "n3" },
+    ]);
+  });
+
+  it("returns references untouched when no weak ids", () => {
+    expect(filterWeakReferences(refs, new Set())).toEqual(refs);
+  });
+
+  it("keeps the full list rather than leaving an answer with zero references", () => {
+    expect(filterWeakReferences(refs, new Set(["n1", "n2", "n3"]))).toEqual(refs);
   });
 });

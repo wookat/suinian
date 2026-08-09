@@ -96,7 +96,7 @@ export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void
         className="flex w-full items-center gap-2 px-4 py-3 text-left"
       >
         <CalendarClock className="size-4 shrink-0 text-primary" />
-        <span className="text-sm font-medium">今日回顾</span>
+        <span role="heading" aria-level={2} className="text-sm font-medium">今日回顾</span>
         <Badge variant="outline" className="border-primary/30 text-xs text-primary">
           {item.kind_label}
         </Badge>

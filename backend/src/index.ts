@@ -49,7 +49,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type Im
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, filterWeakReferences, ASK_CITATION_MIN_SCORE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import { PIPELINE_TIMEOUT_MS, SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 import { buildStats, normalizeTzOffset, SAMPLE_TAG_LIKE } from "./stats";
@@ -1761,7 +1761,10 @@ app.post("/api/ask", async (c) => {
     );
     return c.json({ answer: noAnswer, references, notes: refNotes, no_answer: true });
   }
-  const references = buildAskReferences(answer ?? "", noteIds);
+  // semantic-only hits (never keyword-matched) below the citation threshold
+  // stay in the context but never surface as citations
+  const weakIds = new Set(extraIds.filter((id) => (semScore.get(id) ?? 0) < ASK_CITATION_MIN_SCORE));
+  const references = filterWeakReferences(buildAskReferences(answer ?? "", noteIds), weakIds);
   const byId = new Map(notes.map((n) => [n.id, n]));
   const refNotes = await Promise.all(
     references.map((r) => noteToJsonDecrypted(c.env, byId.get(r.note_id)!))

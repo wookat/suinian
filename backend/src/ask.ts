@@ -145,6 +145,24 @@ export function inTimeRange(createdAt: string, range: TimeRange): boolean {
   return true;
 }
 
+/** Cosine similarity below which a semantic-only recall hit is too weak to appear as a citation. */
+export const ASK_CITATION_MIN_SCORE = 0.55;
+
+/**
+ * Drop weakly-related semantic-only sources from the reference list: notes that
+ * entered the context purely via low-score semantic recall (never matched a
+ * keyword) shouldn't surface as citations. Keeps the full list when filtering
+ * would leave the answer with no reference at all.
+ */
+export function filterWeakReferences(
+  references: { index: number; note_id: string }[],
+  weakIds: ReadonlySet<string>
+): { index: number; note_id: string }[] {
+  if (weakIds.size === 0) return references;
+  const kept = references.filter((r) => !weakIds.has(r.note_id));
+  return kept.length > 0 ? kept : references;
+}
+
 /** The model's answer amounts to "没找到" (no [n] citations backing anything). */
 export function isRefusalAnswer(answer: string): boolean {
   const hasCitation = /[\[［]\d{1,2}[\]］]/.test(answer);
