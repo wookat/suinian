@@ -785,7 +785,10 @@ export function SettingsPage() {
             spellCheck={false}
             placeholder="https://suinian-api.example.workers.dev"
             value={settings.apiBaseUrl}
-            onChange={(e) => setSettings((s) => ({ ...s, apiBaseUrl: e.target.value }))}
+            onChange={(e) => {
+              setTestResult(null)
+              setSettings((s) => ({ ...s, apiBaseUrl: e.target.value }))
+            }}
           />
         </div>
 
@@ -798,7 +801,10 @@ export function SettingsPage() {
             type="password"
             placeholder="Bearer token"
             value={settings.apiToken}
-            onChange={(e) => setSettings((s) => ({ ...s, apiToken: e.target.value }))}
+            onChange={(e) => {
+              setTestResult(null)
+              setSettings((s) => ({ ...s, apiToken: e.target.value }))
+            }}
           />
           <p className="text-xs text-muted-foreground">仅保存在本机浏览器 localStorage</p>
           <div className="space-y-1 rounded-md bg-muted/60 p-2.5">
