@@ -235,7 +235,7 @@ export const QUESTIONS: EvalQuestion[] = [
   },
   { id: "q52", category: "演化脉络", question: "回顾一下我所有和副业相关的尝试和想法，都有哪些进展和变化", expectAny: ["nz4", "pod2", "pod3"], expectAll: ["pod3"], holdout: true },
   // 纯图跳难例：问句与目标碎片几乎无共同关键词，必须靠图谱/语义把另一端带回来
-  { id: "q53", category: "多跳", question: "白板照片里的供应链目标后来有具体着落了吗", expectAny: ["img1", "nz12"], expectAll: ["img1", "nz12"] },
+  { id: "q53", category: "多跳", question: "白板照片里的供应链目标后来有具体着落了吗", expectAny: ["img1", "nz12"], expectAll: ["nz12"] },
   { id: "q54", category: "多跳", question: "那个让我暂缓换工作的项目，技术方案上最近有什么进展", expectAny: ["job3", "proj3"], expectAll: ["job3", "proj3"] },
   { id: "q55", category: "为什么依据", question: "我说过因为精力不够先放一放的是什么事？它在等哪件事有结果", expectAny: ["pod3"], expectAll: ["pod3"] },
   { id: "q56", category: "多跳", question: "参加市集活动这个目标和我哪个创业想法是一体的", expectAny: ["img1", "cafe3"], expectAll: ["cafe3"], holdout: true },
