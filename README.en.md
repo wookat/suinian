@@ -36,7 +36,7 @@ Compared to flomo (Agent locked behind the paid MAX tier, manual tagging, no thr
 
 ## Quick Start (~3 minutes)
 
-Requirements: a Cloudflare account + a [DeepSeek API key](https://platform.deepseek.com/). Full guide: [docs/self-host.md](docs/self-host.md).
+Requirements: a Cloudflare account. For AI, use built-in Cloudflare Workers AI (no extra account) or bring a [DeepSeek API key](https://platform.deepseek.com/) / any OpenAI-compatible API. Full guide: [docs/self-host.md](docs/self-host.md).
 
 ```bash
 git clone https://github.com/wookat/suinian.git && cd suinian
@@ -45,6 +45,7 @@ git clone https://github.com/wookat/suinian.git && cd suinian
 cd backend && npm install
 npx wrangler d1 create suinian          # put the returned database_id into wrangler.toml
 npx wrangler d1 migrations apply suinian --remote
+npx wrangler r2 bucket create suinian-media
 npx wrangler secret put DEEPSEEK_API_KEY
 openssl rand -base64 32 | npx wrangler secret put SUINIAN_ENC_KEY
 npx wrangler deploy                     # remove/replace the custom-domain routes in wrangler.toml first
