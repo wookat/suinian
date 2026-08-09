@@ -85,7 +85,7 @@ const MOBILE_TOP_TAGS = 6
 const SEARCH_DEBOUNCE_MS = 300
 const POLL_INTERVAL = 2000
 const POLL_MAX = 15
-// 删除撤销：待撤销 ids 存 localStorage，刷新后窗口内仍可撤销（服务端软删约 30 分钟后真删）
+// 删除撤销：待撤销 ids 存 localStorage，刷新后窗口内仍可撤销（服务端软删进「最近删除」，30 天后真删）
 const PENDING_UNDO_KEY = "suinian:pending-undo"
 const PENDING_UNDO_TTL_MS = 5 * 60 * 1000
 

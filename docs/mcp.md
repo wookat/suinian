@@ -24,7 +24,7 @@
 | `get_weekly_report` | 最新（或指定）周报 |
 | `list_todos` / `complete_todo` | 待办列表 / 标记完成 |
 | `set_todo_due` | 设置（或传 `null` 清除）待办到期时间；手动设置后 AI 分拣不再覆盖 |
-| `delete_note` | 删除一条笔记（软删除，约 30 分钟内可撤销） |
+| `delete_note` | 删除一条笔记（软删除，进入「最近删除」，30 天内可撤销） |
 | `restore_notes` | 恢复刚软删除的笔记（批量），超过撤销窗口后无法恢复 |
 
 ## Claude Code

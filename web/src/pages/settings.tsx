@@ -1025,6 +1025,18 @@ export function SettingsPage() {
 
       <Card className="space-y-3 p-4">
         <div>
+          <h2 className="text-sm font-medium">最近删除</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            删除的笔记保留 30 天，期间可恢复或立即彻底删除，到期自动清理
+          </p>
+        </div>
+        <Button variant="outline" onClick={() => (window.location.hash = "#/trash")} className="w-full sm:w-auto">
+          <Trash2 /> 打开最近删除
+        </Button>
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <div>
           <h2 className="text-sm font-medium">导入数据</h2>
           <p className="mt-1 text-xs text-muted-foreground">
             从 Cubox / flomo / Notion / Obsidian / Apple 备忘录 / Markdown / 纯文本导出文件批量导入笔记，保留原创建时间与标签，重复内容自动跳过（单文件最大 20MB）

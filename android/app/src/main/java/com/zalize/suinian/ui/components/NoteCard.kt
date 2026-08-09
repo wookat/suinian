@@ -279,6 +279,18 @@ fun NoteCard(
                     )
                 }
                 SourceBadge(note.rawType)
+                if (note.match == "semantic") {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "语义匹配",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
                 Spacer(Modifier.width(8.dp))
                 Text(
                     formatRelativeTime(note.createdAt),

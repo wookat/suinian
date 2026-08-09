@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-/** 删除后可撤销：服务端软删约 30 分钟后真删，窗口内可恢复 */
+/** 删除后可撤销：服务端软删进「最近删除」，保留 30 天后真删，期间可恢复 */
 data class UndoDelete(
     val message: String,
     val ids: List<String>,
@@ -198,6 +198,28 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 永久注销账号：删除云端全部数据并清本机登录状态 */
     suspend fun deleteAccount() = repo.deleteAccount()
+
+    /** 最近删除列表（软删且未彻底清理，含剩余保留时间） */
+    suspend fun listTrash() = repo.listTrash()
+
+    /** 从回收站恢复；成功后刷新时间流 */
+    suspend fun restoreTrashNotes(ids: List<String>): Int {
+        val restored = repo.restoreNotes(ids)
+        if (restored > 0) refresh()
+        return restored
+    }
+
+    /** 立即彻底删除回收站里的笔记（不可恢复） */
+    suspend fun purgeNotes(ids: List<String>): Int = repo.purgeNotes(ids)
+
+    /** 清空回收站（不可恢复） */
+    suspend fun emptyTrash(): Int = repo.emptyTrash()
+
+    /** 洞察页统计（与 Web 共用 /api/stats） */
+    suspend fun getStats(days: Int = 365, tzOffsetMinutes: Int) = repo.getStats(days, tzOffsetMinutes)
+
+    /** 随机漫步：抽一条历史笔记；无可抽时返回 null */
+    suspend fun getRandomNote() = repo.getRandomNote()
 
     fun toggleTodo(note: Note) {
         val target = !(note.todoDone ?: false)

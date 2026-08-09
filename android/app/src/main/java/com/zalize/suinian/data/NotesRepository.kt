@@ -137,6 +137,43 @@ class NotesRepository(
         return restored
     }
 
+    /** 最近删除列表：软删且未彻底清理的笔记（含剩余保留时间） */
+    suspend fun listTrash(): TrashResponse {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.listTrash()
+    }
+
+    /** 立即彻底删除回收站里的笔记（不可恢复） */
+    suspend fun purgeNotes(ids: List<String>): Int {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        var purged = 0
+        for (chunk in ids.chunked(1000)) purged += client.purgeNotes(chunk).purged
+        return purged
+    }
+
+    /** 清空回收站：彻底删除全部软删笔记（不可恢复） */
+    suspend fun emptyTrash(): Int {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.emptyTrash().purged
+    }
+
+    /** 洞察页统计（与 Web 共用 /api/stats） */
+    suspend fun getStats(days: Int = 365, tzOffsetMinutes: Int): StatsResponse {
+        val (client, mock) = api()
+        if (mock) return StatsResponse()
+        return client.getStats(days, tzOffsetMinutes)
+    }
+
+    /** 随机漫步：抽一条历史笔记（后端已排除敏感/示例/软删）；无可抽时返回 null */
+    suspend fun getRandomNote(): Note? {
+        val (client, mock) = api()
+        if (mock) return null
+        return client.getRandomNote()
+    }
+
     /** 推送偏好（与 Web Push 共用） */
     suspend fun getPreferences(): PushPreferences {
         val (client, mock) = api()

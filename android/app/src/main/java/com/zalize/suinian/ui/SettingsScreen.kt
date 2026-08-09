@@ -57,6 +57,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onLogout: () -> Unit = {},
     onOpenTags: () -> Unit = {},
+    onOpenTrash: () -> Unit = {},
 ) {
     val settings by vm.settings.collectAsState()
     val scope = rememberCoroutineScope()
@@ -453,6 +454,19 @@ fun SettingsScreen(
             Spacer(Modifier.height(4.dp))
             Text(
                 "重命名/合并/删除标签，全局生效",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onOpenTrash,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !settings.mockMode,
+            ) { Text("最近删除") }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "删除的笔记保留 30 天，期间可恢复或立即彻底删除",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
