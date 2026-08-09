@@ -6,6 +6,8 @@ import { findGraphThreadMate } from "./graph";
 const SIM_JOIN = 0.76;
 /** Similarity above which DeepSeek is asked to confirm a borderline match. */
 const SIM_CANDIDATE = 0.5;
+/** Narrower confirm band for the frugal (cron backfill) path: fewer LLM calls. */
+const SIM_CANDIDATE_FRUGAL = 0.62;
 const EMBED_MODEL = "@cf/baai/bge-m3";
 
 export function cosineSim(a: number[], b: number[]): number {
@@ -118,7 +120,7 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
   }
 }
 
-async function attachNoteToThread(env: Env, noteId: string, threadId: string): Promise<void> {
+export async function attachNoteToThread(env: Env, noteId: string, threadId: string): Promise<void> {
   const prev = await env.DB.prepare("SELECT thread_id FROM notes WHERE id = ?")
     .bind(noteId)
     .first<{ thread_id: string | null }>();
@@ -199,21 +201,24 @@ async function deepseekConfirmPair(env: Env, a: string, b: string): Promise<bool
 }
 
 /**
- * Cluster a newly-saved idea note into a thread: embed it, compare with idea
- * notes from the last 90 days, and join/create a thread on high similarity.
- * Falls back to a DeepSeek title-match when Workers AI is unavailable.
- * Never throws.
+ * Cluster a newly-saved idea note into a thread: embed it, compare with the
+ * user's other idea notes (recent ones plus one representative per existing
+ * thread, so years-old threads stay joinable), and join/create a thread on
+ * high similarity. Falls back to a DeepSeek title-match when Workers AI is
+ * unavailable. `frugal` (cron backfill over large histories) narrows the
+ * LLM-confirm band and skips the DeepSeek-only fallbacks to bound cost.
+ * Never throws. Returns the thread id the note was attached to, if any.
  */
 export async function clusterNote(
   env: Env,
   note: NoteRow,
-  opts?: { useGraph?: boolean; deferSummaries?: boolean }
-): Promise<void> {
+  opts?: { useGraph?: boolean; deferSummaries?: boolean; frugal?: boolean }
+): Promise<string | null> {
   const summarize = opts?.deferSummaries
     ? async () => {}
     : (threadId: string, fallbackTitle?: string) => summarizeThread(env, threadId, fallbackTitle);
   try {
-    if (note.category !== "idea") return;
+    if (note.category !== "idea") return null;
     // graph signal first: an idea sharing entities/relations with an existing
     // idea joins its thread regardless of embedding similarity
     if (!note.is_sensitive && opts?.useGraph !== false) {
@@ -235,7 +240,7 @@ export async function clusterNote(
         }
         await attachNoteToThread(env, note.id, threadId);
         await summarize(threadId, note.title || undefined);
-        return;
+        return threadId;
       }
     }
     // sensitive notes never enter the vector store (content is encrypted at rest)
@@ -245,19 +250,39 @@ export async function clusterNote(
       if (vector) await saveEmbedding(env, note.id, vector);
     }
     if (vector) {
+      type Candidate = { id: string; thread_id: string | null; title: string | null; content: string; vector: string | null };
+      // recent ideas (any age cap removed) + one representative note per
+      // existing thread, so historical threads stay joinable beyond the window
       const { results } = await env.DB.prepare(
         `SELECT n.id, n.thread_id, n.title, n.content, e.vector FROM notes n
          LEFT JOIN note_embeddings e ON e.note_id = n.id
          WHERE n.user_id = ? AND n.category = 'idea' AND n.deleted_at IS NULL AND n.id != ?
-           AND n.created_at >= datetime('now', '-90 days')
          ORDER BY n.created_at DESC LIMIT 200`
       )
         .bind(note.user_id, note.id)
-        .all<{ id: string; thread_id: string | null; title: string | null; content: string; vector: string | null }>();
+        .all<Candidate>();
+      const candidates: Candidate[] = [...(results ?? [])];
+      try {
+        const { results: reps } = await env.DB.prepare(
+          `SELECT n.id, n.thread_id, n.title, n.content, e.vector FROM notes n
+           LEFT JOIN note_embeddings e ON e.note_id = n.id
+           WHERE n.id IN (
+             SELECT (SELECT nn.id FROM notes nn WHERE nn.thread_id = t.id AND nn.deleted_at IS NULL
+                     ORDER BY nn.created_at DESC LIMIT 1)
+             FROM threads t WHERE t.user_id = ? AND t.note_count > 0
+           ) AND n.id != ?`
+        )
+          .bind(note.user_id, note.id)
+          .all<Candidate>();
+        const seen = new Set(candidates.map((r) => r.id));
+        for (const r of reps ?? []) if (!seen.has(r.id)) candidates.push(r);
+      } catch (err) {
+        console.error("threads: thread representatives query failed", err);
+      }
       let best: { id: string; thread_id: string | null; title: string | null; content: string; sim: number } | null =
         null;
       let backfilled = 0;
-      for (const r of results ?? []) {
+      for (const r of candidates) {
         let v: number[] | null = null;
         if (r.vector) {
           try {
@@ -278,9 +303,10 @@ export async function clusterNote(
       }
       if (best) {
         const direct = best.sim >= SIM_JOIN;
+        const confirmFloor = opts?.frugal ? SIM_CANDIDATE_FRUGAL : SIM_CANDIDATE;
         const confirmed =
           !direct &&
-          best.sim >= SIM_CANDIDATE &&
+          best.sim >= confirmFloor &&
           (await deepseekConfirmPair(env, note.title || note.content, best.title || best.content));
         console.log(
           `threads: cluster note=${note.id} best=${best.id} sim=${best.sim.toFixed(3)} direct=${direct} confirmed=${confirmed}`
@@ -294,32 +320,35 @@ export async function clusterNote(
           }
           await attachNoteToThread(env, note.id, threadId);
           await summarize(threadId, note.title || undefined);
-          return;
+          return threadId;
         }
       } else {
         console.log(`threads: cluster note=${note.id} no comparable idea notes`);
       }
+      // frugal path stops here: embedding prescreen + at most one confirm call
+      if (opts?.frugal) return null;
       // borderline/no embedding match: still try DeepSeek against existing thread titles
       const picked = await pickThreadByDeepseek(env, note);
       if (picked) {
         await attachNoteToThread(env, note.id, picked);
         await summarize(picked, note.title || undefined);
+        return picked;
       }
-      return;
+      return null;
     }
+    if (opts?.frugal) return null;
     // no embedding available: DeepSeek-only fallback (existing threads, then cold-start pairing)
     console.log(`threads: no embedding for note=${note.id}, using deepseek fallback`);
     const picked = await pickThreadByDeepseek(env, note);
     if (picked) {
       await attachNoteToThread(env, note.id, picked);
       await summarize(picked, note.title || undefined);
-      return;
+      return picked;
     }
     // cold start: no thread matched (or none exist) — pair with a recent unthreaded idea
     const { results: loose } = await env.DB.prepare(
       `SELECT id, title, content FROM notes
        WHERE user_id = ? AND category = 'idea' AND deleted_at IS NULL AND thread_id IS NULL AND id != ?
-         AND created_at >= datetime('now', '-90 days')
        ORDER BY created_at DESC LIMIT 30`
     )
       .bind(note.user_id, note.id)
@@ -332,14 +361,17 @@ export async function clusterNote(
       await attachNoteToThread(env, note.id, threadId);
       await summarize(threadId, m.title || undefined);
       console.log(`threads: cold-start created thread ${threadId} for notes ${mate}, ${note.id}`);
+      return threadId;
     }
+    return null;
   } catch (err) {
     // clustering must never break note ingestion, but always leave a trace
     console.error(`threads: clusterNote failed for note=${note.id}`, err);
+    return null;
   }
 }
 
-async function pickThreadByDeepseek(env: Env, note: NoteRow): Promise<string | null> {
+export async function pickThreadByDeepseek(env: Env, note: NoteRow): Promise<string | null> {
   const { results: threads } = await env.DB.prepare(
     "SELECT id, title FROM threads WHERE user_id = ? ORDER BY updated_at DESC LIMIT 30"
   )
@@ -348,74 +380,174 @@ async function pickThreadByDeepseek(env: Env, note: NoteRow): Promise<string | n
   return deepseekPickThread(env, note.content, threads ?? []);
 }
 
+/** Resumable rebuild state, persisted as JSON in thread_jobs.state. */
+export interface RebuildState {
+  phase: "reset" | "cluster" | "second_pass" | "summarize" | "done";
+  /** (created_at, id) cursor within the current phase's chronological scan. */
+  cursorCreatedAt: string;
+  cursorId: string;
+  total: number;
+  processed: number;
+  secondPassed: number;
+  threads: number;
+  useGraph: boolean;
+}
+
+export function newRebuildState(opts?: { useGraph?: boolean }): RebuildState {
+  return {
+    phase: "reset",
+    cursorCreatedAt: "",
+    cursorId: "",
+    total: 0,
+    processed: 0,
+    secondPassed: 0,
+    threads: 0,
+    useGraph: opts?.useGraph !== false,
+  };
+}
+
+const REBUILD_BATCH = 10;
+/** Cap on the LLM-heavy second pass (leftover-to-thread matching). */
+const REBUILD_SECOND_PASS_MAX = 200;
+
 /**
- * Full re-cluster of a user's idea notes from the last 90 days: detach them
- * from threads, drop the resulting empty threads, then run clusterNote over
- * each idea in chronological order.
+ * Run one bounded slice of a full-history rebuild: detach all idea notes,
+ * re-cluster them oldest-first in batches, second-pass leftovers, then
+ * summarize surviving threads. Mutates and returns `state`; call again with
+ * the returned state (persisted between invocations) until phase === "done".
+ * Stops early once `deadline` (ms epoch) passes.
+ */
+export async function rebuildStep(env: Env, userId: string, state: RebuildState, deadline: number): Promise<RebuildState> {
+  if (state.phase === "reset") {
+    const cnt = await env.DB.prepare(
+      "SELECT COUNT(*) AS c FROM notes WHERE user_id = ? AND category = 'idea' AND deleted_at IS NULL"
+    )
+      .bind(userId)
+      .first<{ c: number }>();
+    state.total = cnt?.c ?? 0;
+    await env.DB.prepare("UPDATE notes SET thread_id = NULL WHERE user_id = ? AND category = 'idea'")
+      .bind(userId)
+      .run();
+    await env.DB.prepare(
+      "DELETE FROM threads WHERE user_id = ? AND id NOT IN (SELECT DISTINCT thread_id FROM notes WHERE thread_id IS NOT NULL)"
+    )
+      .bind(userId)
+      .run();
+    state.phase = "cluster";
+    state.cursorCreatedAt = "";
+    state.cursorId = "";
+    return state;
+  }
+  if (state.phase === "cluster") {
+    while (Date.now() < deadline) {
+      const { results } = await env.DB.prepare(
+        `SELECT * FROM notes WHERE user_id = ?1 AND category = 'idea' AND deleted_at IS NULL
+           AND (created_at > ?2 OR (created_at = ?2 AND id > ?3))
+         ORDER BY created_at ASC, id ASC LIMIT ${REBUILD_BATCH}`
+      )
+        .bind(userId, state.cursorCreatedAt, state.cursorId)
+        .all<NoteRow>();
+      const rows = results ?? [];
+      if (rows.length === 0) {
+        // drop threads emptied by mate-moves during clustering and dissolve
+        // 1-note leftovers, freeing their notes for the second pass
+        await reconcileThreads(env, userId);
+        state.phase = "second_pass";
+        state.cursorCreatedAt = "";
+        state.cursorId = "";
+        return state;
+      }
+      for (const n of rows) {
+        if (n.thread_id === null) {
+          await clusterNote(env, n, { useGraph: state.useGraph, deferSummaries: true });
+        }
+        state.processed++;
+        state.cursorCreatedAt = n.created_at;
+        state.cursorId = n.id;
+        if (Date.now() >= deadline) return state;
+      }
+    }
+    return state;
+  }
+  if (state.phase === "second_pass") {
+    // ideas that stayed unthreaded on the chronological pass (their topic-mates
+    // came later) get one more match against the full thread set
+    while (Date.now() < deadline && state.secondPassed < REBUILD_SECOND_PASS_MAX) {
+      const { results } = await env.DB.prepare(
+        `SELECT * FROM notes WHERE user_id = ?1 AND category = 'idea' AND deleted_at IS NULL AND thread_id IS NULL
+           AND (created_at > ?2 OR (created_at = ?2 AND id > ?3))
+         ORDER BY created_at ASC, id ASC LIMIT ${REBUILD_BATCH}`
+      )
+        .bind(userId, state.cursorCreatedAt, state.cursorId)
+        .all<NoteRow>();
+      const rows = results ?? [];
+      if (rows.length === 0) break;
+      for (const n of rows) {
+        try {
+          const picked = await pickThreadByDeepseek(env, n);
+          if (picked) await attachNoteToThread(env, n.id, picked);
+        } catch (err) {
+          console.error(`threads: rebuild second pass failed for note=${n.id}`, err);
+        }
+        state.secondPassed++;
+        state.cursorCreatedAt = n.created_at;
+        state.cursorId = n.id;
+        if (Date.now() >= deadline || state.secondPassed >= REBUILD_SECOND_PASS_MAX) break;
+      }
+    }
+    if (Date.now() < deadline) {
+      state.phase = "summarize";
+      state.cursorCreatedAt = "";
+      state.cursorId = "";
+    }
+    return state;
+  }
+  if (state.phase === "summarize") {
+    // summaries were deferred during clustering: summarize each surviving thread once
+    while (Date.now() < deadline) {
+      const { results } = await env.DB.prepare(
+        `SELECT id FROM threads WHERE user_id = ? AND note_count > 0 AND id > ? ORDER BY id ASC LIMIT ${REBUILD_BATCH}`
+      )
+        .bind(userId, state.cursorId)
+        .all<{ id: string }>();
+      const rows = results ?? [];
+      if (rows.length === 0) {
+        const cnt = await env.DB.prepare(
+          "SELECT COUNT(*) AS c FROM threads WHERE user_id = ? AND note_count > 0"
+        )
+          .bind(userId)
+          .first<{ c: number }>();
+        state.threads = cnt?.c ?? 0;
+        state.phase = "done";
+        console.log(`threads: rebuild for user=${userId} ideas=${state.total} threads=${state.threads}`);
+        return state;
+      }
+      for (const t of rows) {
+        await summarizeThread(env, t.id);
+        state.cursorId = t.id;
+        if (Date.now() >= deadline) return state;
+      }
+    }
+    return state;
+  }
+  return state;
+}
+
+/**
+ * Full re-cluster of ALL of a user's idea notes, synchronously to completion
+ * (tests / small accounts). Production traffic goes through thread_jobs
+ * slices instead — see thread-jobs.ts.
  */
 export async function rebuildThreads(
   env: Env,
   userId: string,
   opts?: { useGraph?: boolean }
 ): Promise<{ ideas: number; threads: number }> {
-  const { results: ideas } = await env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND category = 'idea' AND deleted_at IS NULL
-       AND created_at >= datetime('now', '-90 days')
-     ORDER BY created_at ASC LIMIT 500`
-  )
-    .bind(userId)
-    .all<NoteRow>();
-  const rows = ideas ?? [];
-  await env.DB.prepare(
-    `UPDATE notes SET thread_id = NULL WHERE user_id = ? AND category = 'idea'
-       AND created_at >= datetime('now', '-90 days')`
-  )
-    .bind(userId)
-    .run();
-  await env.DB.prepare(
-    "DELETE FROM threads WHERE user_id = ? AND id NOT IN (SELECT DISTINCT thread_id FROM notes WHERE thread_id IS NOT NULL)"
-  )
-    .bind(userId)
-    .run();
-  for (const n of rows) {
-    await clusterNote(env, { ...n, thread_id: null }, { ...opts, deferSummaries: true });
+  let state = newRebuildState(opts);
+  while (state.phase !== "done") {
+    state = await rebuildStep(env, userId, state, Number.MAX_SAFE_INTEGER);
   }
-  // drop threads emptied by mate-moves during clustering and dissolve 1-note
-  // leftovers, freeing their notes for the second pass below
-  await reconcileThreads(env, userId);
-  // second pass: ideas that stayed unthreaded on the chronological pass (their
-  // topic-mates came later) get one more match against the full thread set
-  const { results: leftovers } = await env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND category = 'idea' AND deleted_at IS NULL AND thread_id IS NULL
-       AND created_at >= datetime('now', '-90 days')
-     ORDER BY created_at ASC LIMIT 100`
-  )
-    .bind(userId)
-    .all<NoteRow>();
-  for (const n of leftovers ?? []) {
-    try {
-      const picked = await pickThreadByDeepseek(env, n);
-      if (picked) {
-        await attachNoteToThread(env, n.id, picked);
-      }
-    } catch (err) {
-      console.error(`threads: rebuild second pass failed for note=${n.id}`, err);
-    }
-  }
-  // summaries were deferred during clustering: summarize each surviving thread once
-  const { results: toSummarize } = await env.DB.prepare(
-    "SELECT id FROM threads WHERE user_id = ? AND note_count > 0"
-  )
-    .bind(userId)
-    .all<{ id: string }>();
-  for (const t of toSummarize ?? []) {
-    await summarizeThread(env, t.id);
-  }
-  const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM threads WHERE user_id = ? AND note_count > 0")
-    .bind(userId)
-    .first<{ c: number }>();
-  console.log(`threads: rebuild for user=${userId} ideas=${rows.length} threads=${cnt?.c ?? 0}`);
-  return { ideas: rows.length, threads: cnt?.c ?? 0 };
+  return { ideas: state.total, threads: state.threads };
 }
 
 /**

@@ -408,6 +408,7 @@ export async function mockGetStats(): Promise<StatsResponse> {
   return {
     total_notes: notes.length,
     thread_count: 2,
+    active_days: dailyMap.size,
     daily: [...dailyMap.entries()].sort().map(([date, count]) => ({ date, count })),
     streak: { current: dailyMap.has(today) ? 1 : 0, longest: 3 },
     categories: byCount(catMap).map(([category, count]) => ({ category, count })),

@@ -194,11 +194,23 @@ export interface StatsDaily {
 export interface StatsResponse {
   total_notes: number
   thread_count: number
+  /** 全历史按本地时区去重的记录天数 */
+  active_days: number
   daily: StatsDaily[]
   streak: { current: number; longest: number }
   categories: { category: string; count: number }[]
   sources: { source: string; count: number }[]
   top_tags: { tag: string; count: number }[]
+}
+
+export interface ThreadJob {
+  job_id: string
+  status: "queued" | "running" | "done" | "error"
+  phase: "reset" | "cluster" | "second_pass" | "summarize" | "done"
+  total: number
+  processed: number
+  threads: number | null
+  error: string | null
 }
 
 export type ReviewKind = "year_ago" | "month_ago" | "revisit"

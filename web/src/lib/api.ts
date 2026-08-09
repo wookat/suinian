@@ -28,6 +28,7 @@ import type {
   StatsResponse,
   ReportsResponse,
   ThreadDetail,
+  ThreadJob,
   ThreadsResponse,
   TrashResponse,
   TodayReviewResponse,
@@ -637,6 +638,19 @@ export async function importData(
   handleLine(buffer)
   if (!final) throw new Error("导入未返回结果，请刷新时间流确认后重试")
   return final
+}
+
+/** 发起后台重建线索（异步）；若已有进行中任务则返回该任务 */
+export async function startThreadRebuild(mode?: "similarity"): Promise<ThreadJob> {
+  return realFetch<ThreadJob>("/api/threads/rebuild", {
+    method: "POST",
+    body: JSON.stringify(mode ? { mode } : {}),
+  })
+}
+
+/** 查询后台重建任务进度 */
+export async function getThreadRebuildJob(jobId: string): Promise<ThreadJob> {
+  return realFetch<ThreadJob>(`/api/threads/rebuild/${encodeURIComponent(jobId)}`)
 }
 
 export async function getThreads(): Promise<ThreadsResponse> {

@@ -1,15 +1,25 @@
-import { useCallback, useEffect, useState } from "react"
-import { GitBranch, ChevronLeft, RefreshCw, Network } from "lucide-react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { GitBranch, ChevronLeft, RefreshCw, Network, Loader2 } from "lucide-react"
 import { ThreadGraphView } from "@/components/thread-graph"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { NoteCard } from "@/components/note-card"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
-import { getThreads, getThread } from "@/lib/api"
-import { useSettingsVersion } from "@/lib/settings"
+import { getThreads, getThread, startThreadRebuild, getThreadRebuildJob } from "@/lib/api"
+import { loadSettings, useSettingsVersion } from "@/lib/settings"
 import { formatTime } from "@/lib/utils"
-import type { Thread, ThreadDetail } from "@/lib/types"
+import type { Thread, ThreadDetail, ThreadJob } from "@/lib/types"
+
+const JOB_POLL_MS = 3000
+
+const PHASE_LABEL: Record<ThreadJob["phase"], string> = {
+  reset: "准备中",
+  cluster: "聚类中",
+  second_pass: "补充归类",
+  summarize: "生成摘要",
+  done: "完成",
+}
 
 function timelineDate(iso: string): string {
   const d = new Date(iso)
@@ -29,6 +39,9 @@ export function ThreadsPage() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [highlightedNoteIds, setHighlightedNoteIds] = useState<Set<string>>(new Set())
+  const [job, setJob] = useState<ThreadJob | null>(null)
+  const [rebuildStarting, setRebuildStarting] = useState(false)
+  const jobTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const settingsVersion = useSettingsVersion()
 
   const load = useCallback(async () => {
@@ -47,6 +60,59 @@ export function ThreadsPage() {
   useEffect(() => {
     void load()
   }, [load, settingsVersion])
+
+  // poll the background rebuild job; refresh the list once it completes
+  useEffect(() => {
+    if (!job || job.status === "done" || job.status === "error") return
+    let cancelled = false
+    jobTimer.current = setTimeout(async () => {
+      try {
+        const next = await getThreadRebuildJob(job.job_id)
+        if (cancelled) return
+        setJob(next)
+        if (next.status === "done") void load()
+      } catch {
+        if (!cancelled) setJob(null)
+      }
+    }, JOB_POLL_MS)
+    return () => {
+      cancelled = true
+      if (jobTimer.current) clearTimeout(jobTimer.current)
+    }
+  }, [job, load])
+
+  const onRebuild = useCallback(async () => {
+    setRebuildStarting(true)
+    try {
+      setJob(await startThreadRebuild())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRebuildStarting(false)
+    }
+  }, [])
+
+  const jobBanner =
+    job && job.status !== "done" && job.status !== "error" ? (
+      <Card className="flex items-center gap-3 p-3">
+        <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm">后台重建线索中……{PHASE_LABEL[job.phase]}</p>
+          <p className="text-xs text-muted-foreground">
+            {job.total > 0 ? `已处理 ${Math.min(job.processed, job.total)} / ${job.total} 条想法` : "正在统计待处理的想法……"}
+          </p>
+        </div>
+        {job.total > 0 && (
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {Math.floor((Math.min(job.processed, job.total) / job.total) * 100)}%
+          </span>
+        )}
+      </Card>
+    ) : job?.status === "error" ? (
+      <Card className="p-3">
+        <p className="text-sm text-destructive">线索重建失败{job.error ? `：${job.error}` : ""}</p>
+      </Card>
+    ) : null
 
   useEffect(() => {
     const applyHashId = () => {
@@ -193,6 +259,8 @@ export function ThreadsPage() {
       </Card>
     )
 
+  if (threads.length === 0 && jobBanner) return <div className="space-y-3">{jobBanner}</div>
+
   if (threads.length === 0)
     return (
       <EmptyState
@@ -206,11 +274,27 @@ export function ThreadsPage() {
       />
     )
 
+  const rebuildRunning = !!job && job.status !== "done" && job.status !== "error"
+
   return (
     <div className="space-y-3">
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        「线索」= AI 把你不同时间记下的同一主题碎念自动串成的合集，方便回看一个想法是如何演化的。
-      </p>
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          「线索」= AI 把你不同时间记下的同一主题碎念自动串成的合集，方便回看一个想法是如何演化的。
+        </p>
+        {!loadSettings().useMock && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            disabled={rebuildStarting || rebuildRunning}
+            onClick={() => void onRebuild()}
+          >
+            <RefreshCw className="size-3.5" /> 重建线索
+          </Button>
+        )}
+      </div>
+      {jobBanner}
       {threads.map((t) => (
         <Card
           key={t.id}
