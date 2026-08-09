@@ -85,8 +85,10 @@ export function TodosPage() {
     try {
       const fresh = await patchNote(note.id, patch)
       setNotes((ns) => ns.map((n) => (n.id === note.id ? fresh : n)))
-    } catch {
+      setError(null)
+    } catch (e) {
       setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
+      setError(`保存失败：${e instanceof Error ? e.message : String(e)}，请重试`)
     }
   }
 

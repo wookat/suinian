@@ -149,12 +149,12 @@ export function TimelinePage() {
   const [catPanelOpen, setCatPanelOpen] = useState(false)
   const [batchTagInput, setBatchTagInput] = useState("")
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
-  const [toast, setToast] = useState<{ message: string; undo?: () => void } | null>(null)
+  const [toast, setToast] = useState<{ message: string; undo?: () => void; undoLabel?: string } | null>(null)
   const toastTimerRef = useRef<number | null>(null)
 
-  const showToast = useCallback((message: string, undo?: () => void, ms = 6000) => {
+  const showToast = useCallback((message: string, undo?: () => void, ms = 6000, undoLabel?: string) => {
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
-    setToast({ message, undo })
+    setToast({ message, undo, undoLabel })
     toastTimerRef.current = window.setTimeout(() => setToast(null), ms)
   }, [])
 
@@ -567,8 +567,17 @@ export function TimelinePage() {
     try {
       const fresh = await patchNote(note.id, patch)
       setNotes((ns) => ns.map((n) => (n.id === note.id ? fresh : n)))
-    } catch {
+    } catch (e) {
       setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
+      showToast(
+        `保存失败：${e instanceof Error ? e.message : String(e)}`,
+        () => {
+          setToast(null)
+          void handleEdit(note, patch)
+        },
+        10000,
+        "重试",
+      )
     }
   }
 
@@ -1022,7 +1031,7 @@ export function TimelinePage() {
             <span>{toast.message}</span>
             {toast.undo && (
               <button onClick={toast.undo} className="font-medium text-primary hover:underline">
-                撤销
+                {toast.undoLabel ?? "撤销"}
               </button>
             )}
           </div>
