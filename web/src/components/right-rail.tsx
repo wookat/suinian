@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { Hash, BarChart3, GitBranch } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { getNotes, getThreads } from "@/lib/api"
+import { getNotes, getStats, getThreads } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
 import type { Note, Thread } from "@/lib/types"
 
@@ -13,6 +13,7 @@ const MAX_RAIL_TAGS = 20
 export function RightRail() {
   const [notes, setNotes] = useState<Note[] | null>(null)
   const [threads, setThreads] = useState<Thread[]>([])
+  const [globalStats, setGlobalStats] = useState<{ total: number; days: number } | null>(null)
   const settingsVersion = useSettingsVersion()
 
   useEffect(() => {
@@ -23,6 +24,17 @@ export function RightRail() {
       })
       .catch(() => {
         if (!cancelled) setNotes([])
+      })
+    getStats()
+      .then((res) => {
+        if (!cancelled)
+          setGlobalStats({
+            total: res.total_notes,
+            days: res.daily.filter((d) => d.count > 0).length,
+          })
+      })
+      .catch(() => {
+        if (!cancelled) setGlobalStats(null)
       })
     getThreads()
       .then((res) => {
@@ -44,10 +56,11 @@ export function RightRail() {
   }, [notes])
 
   const stats = useMemo(() => {
+    if (globalStats) return globalStats
     if (!notes) return null
     const days = new Set(notes.map((n) => n.created_at.slice(0, 10)))
     return { total: notes.length, days: days.size }
-  }, [notes])
+  }, [globalStats, notes])
 
   if (!notes || notes.length === 0) return null
 

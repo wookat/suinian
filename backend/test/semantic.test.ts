@@ -74,7 +74,10 @@ function envWith(db: ReturnType<typeof fakeDb>, vec: number[] | null, vectorize?
   return {
     DB: db as unknown as D1Database,
     AI: {
-      run: vi.fn(async () => ({ data: vec ? [vec] : [] })),
+      // one vector per input text, mirroring the real batch embedding API
+      run: vi.fn(async (_model: string, input: { text: string[] }) => ({
+        data: vec ? input.text.map(() => vec) : [],
+      })),
     } as unknown as Ai,
     VECTORIZE: vectorize as unknown as VectorizeIndex | undefined,
     DEEPSEEK_API_KEY: "",

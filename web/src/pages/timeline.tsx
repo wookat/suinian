@@ -110,6 +110,8 @@ function dayLabel(iso: string): string {
 
 export function TimelinePage() {
   const [notes, setNotes] = useState<Note[]>([])
+  const [cursor, setCursor] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<LoadError | null>(null)
   const [category, setCategory] = useState("")
@@ -458,6 +460,7 @@ export function TimelinePage() {
       )
       if (controller.signal.aborted) return
       setNotes(res.notes)
+      setCursor(res.cursor)
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return
       if (controller.signal.aborted) return
@@ -473,6 +476,47 @@ export function TimelinePage() {
   useEffect(() => {
     void load()
   }, [load, settingsVersion])
+
+  const loadMore = useCallback(async () => {
+    if (!cursor || loadingMore || loading) return
+    setLoadingMore(true)
+    try {
+      const res = await getNotes({
+        category: category || undefined,
+        tag: tag || undefined,
+        q: search || undefined,
+        source: sourceFilter || undefined,
+        from: fromDate ? localDateToUtcSql(fromDate, false) : undefined,
+        to: toDate ? localDateToUtcSql(toDate, true) : undefined,
+        cursor,
+      })
+      setNotes((ns) => {
+        const seen = new Set(ns.map((n) => n.id))
+        return [...ns, ...res.notes.filter((n) => !seen.has(n.id))]
+      })
+      setCursor(res.cursor)
+    } catch {
+      // 滚动加载失败静默处理，下次进入视口重试
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [cursor, loadingMore, loading, category, tag, search, sourceFilter, fromDate, toDate])
+
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+  const loadMoreRef = useRef(loadMore)
+  loadMoreRef.current = loadMore
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) void loadMoreRef.current()
+      },
+      { rootMargin: "400px" },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [loading])
 
   useEffect(() => {
     const applyHashTag = () => {
@@ -924,6 +968,12 @@ export function TimelinePage() {
               </div>
             </section>
           ))}
+          <div ref={sentinelRef} className="h-px" />
+          {loadingMore && (
+            <div className="flex justify-center py-3">
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            </div>
+          )}
         </div>
       )}
 
