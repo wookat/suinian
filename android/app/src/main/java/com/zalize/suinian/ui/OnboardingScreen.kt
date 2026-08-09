@@ -29,7 +29,9 @@ import androidx.compose.ui.unit.dp
 import com.zalize.suinian.data.SettingsRepository
 import com.zalize.suinian.data.api.ApiClient
 import com.zalize.suinian.data.api.ApiException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val DEFAULT_BASE_URL = "https://suinian-api.zalize.com"
 
@@ -52,7 +54,10 @@ fun OnboardingScreen(
 
     fun finish(savedToken: String, savedName: String?, showTour: Boolean = false) {
         scope.launch {
-            settingsRepo.completeOnboarding(baseUrl, savedToken, savedName, showTour)
+            // 落库写入不可取消：避免引导页退出组合时 UI 作用域被取消、token 未持久化
+            withContext(NonCancellable) {
+                settingsRepo.completeOnboarding(baseUrl, savedToken, savedName, showTour)
+            }
             onDone()
         }
     }
@@ -65,7 +70,20 @@ fun OnboardingScreen(
                     error = "请填写 API Token"
                     return
                 }
-                finish(token.trim(), null)
+                busy = true
+                scope.launch {
+                    try {
+                        // 先验证 token 可用再落库，避免带着无效 token 进入主界面
+                        ApiClient(baseUrl.trim().trimEnd('/'), token.trim()).getPreferences()
+                        finish(token.trim(), null)
+                    } catch (e: ApiException) {
+                        error = e.message
+                        busy = false
+                    } catch (e: Exception) {
+                        error = "无法连接服务器，请检查 API 地址和网络"
+                        busy = false
+                    }
+                }
             }
             OnboardingMode.Register, OnboardingMode.Login -> {
                 if (name.isBlank() || password.isBlank()) {

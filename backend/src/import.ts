@@ -336,7 +336,9 @@ function blocksToItems(blocks: string[]): ImportItem[] {
       }
     }
     const content = clip(lines.join("\n").replace(/^#{1,6} /, "").trim());
-    if (!content) continue;
+    // blocks that are only horizontal rules / separator punctuation (a `---`
+    // line the block-splitting fallback didn't consume) are not notes
+    if (!content || /^[-—–_*=~\s]+$/.test(content)) continue;
     items.push({ content, created_at: created, tags: extractHashTags(content), url: firstUrl(content) });
   }
   return items;

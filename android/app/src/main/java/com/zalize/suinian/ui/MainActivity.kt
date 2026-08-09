@@ -112,6 +112,8 @@ fun SuinianNavHost(focusQuickNoteSignal: Int, navigateRouteSignal: Pair<String, 
             onDone = {
                 onboardingJustDone = true
                 vm.refresh()
+                vm.loadReview()
+                vm.loadTags()
             },
         )
         return

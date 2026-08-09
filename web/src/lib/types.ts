@@ -209,6 +209,8 @@ export interface ThreadJob {
   phase: "reset" | "cluster" | "second_pass" | "summarize" | "done"
   total: number
   processed: number
+  summarized: number
+  summarize_total: number
   threads: number | null
   error: string | null
 }

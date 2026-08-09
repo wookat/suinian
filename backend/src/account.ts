@@ -17,6 +17,8 @@ export const USER_ID_TABLES = [
   "user_preferences",
   "push_subscriptions",
   "push_daily_log",
+  "thread_jobs",
+  "thread_backfill",
 ] as const;
 
 /** Tables keyed by a note_id foreign key; cleared before their parent notes. */
