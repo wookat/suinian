@@ -167,7 +167,10 @@ describe("injection payloads", () => {
     const listQuery = seen.find((s) => s.sql.includes("FROM notes WHERE user_id = ?"));
     expect(listQuery).toBeDefined();
     expect(listQuery!.sql).not.toContain("DROP TABLE");
-    expect(listQuery!.binds.some((b) => typeof b === "string" && b.includes(SQLI))).toBe(true);
+    // multi-word q is split into per-term binds; every token must arrive as a bind
+    for (const term of SQLI.split(/\s+/)) {
+      expect(listQuery!.binds.some((b) => typeof b === "string" && b.includes(term))).toBe(true);
+    }
   });
 });
 

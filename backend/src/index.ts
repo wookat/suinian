@@ -6,7 +6,17 @@ import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
-import { clusterNote, refreshThreads, rebuildThreads, reconcileThreads } from "./threads";
+import { clusterNote, refreshThreads, reconcileThreads } from "./threads";
+import {
+  createRebuildJob,
+  getActiveThreadJob,
+  getThreadJob,
+  runRebuildJobSlice,
+  resumeThreadJobs,
+  backfillThreadClusters,
+  resetThreadBackfill,
+  REBUILD_SLICE_BUDGET_MS,
+} from "./thread-jobs";
 import { chatComplete } from "./ai";
 import {
   hashPassword,
@@ -532,6 +542,29 @@ app.post("/api/notes", async (c) => {
 // tag / keyword / source / created_at range, all combinable.
 const DATETIME_RE = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$/;
 
+/** Split a keyword query into up to 5 whitespace-separated terms. */
+export function searchTerms(q: string): string[] {
+  return q.split(/\s+/).filter(Boolean).slice(0, 5);
+}
+
+const KEYWORD_FIELDS = ["content", "title", "url_title", "url_summary"] as const;
+
+function termCond(): string {
+  return `(${KEYWORD_FIELDS.map((f) => `${f} LIKE ?`).join(" OR ")})`;
+}
+
+/** How many of the query terms a note matches across the searchable fields. */
+export function matchedTermCount(
+  note: { content: string; title: string | null; url_title: string | null; url_summary: string | null },
+  terms: string[]
+): number {
+  const hay = [note.content, note.title, note.url_title, note.url_summary]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+  return terms.filter((t) => hay.includes(t.toLowerCase())).length;
+}
+
 function noteFilterConds(filter: {
   category?: unknown;
   tag?: unknown;
@@ -550,10 +583,14 @@ function noteFilterConds(filter: {
     conds.push("tags LIKE ?");
     binds.push(`%"${filter.tag}"%`);
   }
-  if (typeof filter.q === "string" && filter.q) {
-    conds.push("(content LIKE ? OR title LIKE ? OR url_title LIKE ? OR url_summary LIKE ?)");
-    const like = `%${filter.q}%`;
-    binds.push(like, like, like, like);
+  if (typeof filter.q === "string" && filter.q.trim()) {
+    // multi-word queries match notes containing every term (in any field, any
+    // order) instead of requiring the words as one contiguous substring
+    for (const term of searchTerms(filter.q)) {
+      conds.push(termCond());
+      const like = `%${term}%`;
+      binds.push(like, like, like, like);
+    }
   }
   if (typeof filter.source === "string" && filter.source) {
     conds.push("source = ?");
@@ -599,10 +636,27 @@ app.get("/api/notes", async (c) => {
   // hits (Vectorize/D1 vectors), deduped and ranked by relevance; any semantic
   // failure leaves the pure keyword results untouched
   if (q && !cursor) {
+    const terms = searchTerms(q);
     const hits = await semanticRecall(c.env, userId, q, 10);
     const kwIds = new Set(page.map((n) => n.id));
     const semScore = new Map(hits.map((h) => [h.note_id, h.score]));
-    const extraIds = hits.filter((h) => !kwIds.has(h.note_id)).map((h) => h.note_id);
+    // multi-word relevance: notes hitting only SOME terms still surface,
+    // ranked below full hits (all-term matches first, partial next)
+    let partial: NoteRow[] = [];
+    if (terms.length > 1) {
+      const pf = noteFilterConds({ category, tag, source, from, to });
+      const orTerms = terms.map(() => termCond()).join(" OR ");
+      const termBinds = terms.flatMap((t) => Array(4).fill(`%${t}%`) as string[]);
+      const where = [`user_id = ?`, ...pf.conds, `(${orTerms})`].join(" AND ");
+      const r = await c.env.DB.prepare(
+        `SELECT * FROM notes WHERE ${where} ORDER BY created_at DESC LIMIT 30`
+      )
+        .bind(userId, ...pf.binds, ...termBinds)
+        .all<NoteRow>();
+      partial = (r.results ?? []).filter((n) => !kwIds.has(n.id));
+    }
+    const partialIds = new Set(partial.map((n) => n.id));
+    const extraIds = hits.filter((h) => !kwIds.has(h.note_id) && !partialIds.has(h.note_id)).map((h) => h.note_id);
     let extra: NoteRow[] = [];
     if (extraIds.length > 0) {
       // semantic extras must satisfy the same structured filters (minus keyword)
@@ -614,13 +668,16 @@ app.get("/api/notes", async (c) => {
         .all<NoteRow>();
       extra = r.results ?? [];
     }
-    const merged = [...page, ...extra];
-    const relevance = (n: NoteRow) => (semScore.get(n.id) ?? 0) + (kwIds.has(n.id) ? 0.75 : 0);
+    const merged = [...page, ...partial, ...extra];
+    const relevance = (n: NoteRow) =>
+      (semScore.get(n.id) ?? 0) +
+      (kwIds.has(n.id) ? 0.75 : partialIds.has(n.id) ? 0.75 * (matchedTermCount(n, terms) / terms.length) : 0);
     merged.sort((a, b) => relevance(b) - relevance(a));
     const notes = await Promise.all(
       merged.map(async (n) => ({
         ...(await noteToJsonDecrypted(c.env, n)),
-        match: kwIds.has(n.id) ? (semScore.has(n.id) ? "both" : "keyword") : "semantic",
+        match:
+          kwIds.has(n.id) || partialIds.has(n.id) ? (semScore.has(n.id) ? "both" : "keyword") : "semantic",
       }))
     );
     return c.json({ notes, next_cursor: next });
@@ -1724,17 +1781,47 @@ app.get("/api/threads", async (c) => {
   return c.json({ threads: results ?? [] });
 });
 
+/** Public job shape for the rebuild progress endpoints. */
+function threadJobJson(job: {
+  id: string;
+  status: string;
+  phase: string;
+  total: number;
+  processed: number;
+  threads: number | null;
+  error: string | null;
+}) {
+  return {
+    job_id: job.id,
+    status: job.status,
+    phase: job.phase,
+    total: job.total,
+    processed: job.processed,
+    threads: job.threads,
+    error: job.error,
+  };
+}
+
 // ---- POST /api/threads/rebuild ----
+// Async: enqueues a full-history rebuild job and returns its id immediately.
+// The first slice runs in this request's waitUntil; the 10-minute cron picks
+// up whatever is left, so 20-minute rebuilds survive the request lifetime.
 app.post("/api/threads/rebuild", async (c) => {
+  const userId = c.get("userId");
   // mode=similarity re-clusters with the pre-graph embedding-only algorithm (A/B comparison & debugging)
   const body = await c.req.json<{ mode?: string }>().catch(() => null);
-  const result = await rebuildThreads(c.env, c.get("userId"), { useGraph: body?.mode !== "similarity" });
-  const { results } = await c.env.DB.prepare(
-    "SELECT * FROM threads WHERE user_id = ? AND note_count > 0 ORDER BY updated_at DESC LIMIT 100"
-  )
-    .bind(c.get("userId"))
-    .all<ThreadRow>();
-  return c.json({ ...result, threads: results ?? [] });
+  const existing = await getActiveThreadJob(c.env, userId);
+  if (existing) return c.json(threadJobJson(existing), 200);
+  const job = await createRebuildJob(c.env, userId, { useGraph: body?.mode !== "similarity" });
+  c.executionCtx.waitUntil(runRebuildJobSlice(c.env, job.id, REBUILD_SLICE_BUDGET_MS));
+  return c.json(threadJobJson(job), 202);
+});
+
+// ---- GET /api/threads/rebuild/:jobId ----
+app.get("/api/threads/rebuild/:jobId", async (c) => {
+  const job = await getThreadJob(c.env, c.get("userId"), c.req.param("jobId"));
+  if (!job) return c.json({ error: "not found" }, 404);
+  return c.json(threadJobJson(job));
 });
 
 // ---- GET /api/threads/:id ----
@@ -1983,6 +2070,9 @@ app.post("/api/import", async (c) => {
         const result = await runImport(c.env, userId, source as ImportSource, items, {
           onProgress: (done, total) => void writeLine({ done, total }),
         });
+        // imported notes carry historical created_at behind the backfill
+        // cursor, so rewind it to let cron clustering pick them up
+        if (result.stats.imported > 0) await resetThreadBackfill(c.env, userId);
         await writeLine({ stats: result.stats, failed_items: [...parseFailures, ...result.failures] });
       } catch (e) {
         await writeLine({ error: e instanceof Error ? e.message : "导入失败" });
@@ -2001,6 +2091,7 @@ app.post("/api/import", async (c) => {
   }
 
   const result = await runImport(c.env, userId, source as ImportSource, items);
+  if (result.stats.imported > 0) await resetThreadBackfill(c.env, userId);
   return c.json({ ...result.stats, failed_items: [...parseFailures, ...result.failures] }, 201);
 });
 
@@ -2085,6 +2176,7 @@ app.post("/api/backup/restore", async (c) => {
   if (!stream) return c.json({ error: "file required" }, 400);
   const result = await restoreBackup(c.env, c.get("userId"), stream, (p) => c.executionCtx.waitUntil(p));
   if ("error" in result) return c.json({ error: result.error }, result.status);
+  await resetThreadBackfill(c.env, c.get("userId"));
   return c.json(result, 201);
 });
 
@@ -2173,6 +2265,10 @@ export default {
       ctx.waitUntil(backfillGraphExtracts(env));
       // hard-delete soft-deleted notes past their undo window (attachments/vectors/graph too)
       ctx.waitUntil(purgeExpiredSoftDeletes(env, ctx));
+      // full-history thread clustering: advance each user's cursor over old ideas
+      ctx.waitUntil(backfillThreadClusters(env));
+      // resume queued/stale async rebuild jobs (survives the request-side slice dying)
+      ctx.waitUntil(resumeThreadJobs(env));
       // web push: todo due reminders (at most once per todo) + daily review push (once per user per local day)
       ctx.waitUntil(sweepTodoReminders(env));
       ctx.waitUntil(sweepDailyReviewPush(env));

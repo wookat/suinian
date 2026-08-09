@@ -31,6 +31,17 @@ function fakeDb() {
             for (const t of threads.values()) if (t.user_id === binds[0] && t.note_count > 0) c++;
             return { c };
           }
+          if (sql.includes("COUNT(*) AS c FROM notes WHERE thread_id")) {
+            let c = 0;
+            for (const n of notes.values()) if (n.thread_id === binds[0] && n.deleted_at === null) c++;
+            return { c };
+          }
+          if (sql.includes("COUNT(*) AS c FROM notes WHERE user_id")) {
+            let c = 0;
+            for (const n of notes.values())
+              if (n.user_id === binds[0] && n.category === "idea" && n.deleted_at === null) c++;
+            return { c };
+          }
           return null;
         },
         async all() {
@@ -47,8 +58,31 @@ function fakeDb() {
               }));
             return { results: rows };
           }
+          if (sql.includes("SELECT id FROM threads WHERE user_id")) {
+            const rows = [...threads.values()]
+              .filter((t) => t.user_id === binds[0] && t.note_count > 0 && t.id > (binds[1] as string))
+              .sort((a, b) => (a.id < b.id ? -1 : 1))
+              .map((t) => ({ id: t.id }));
+            return { results: rows.slice(0, 10) };
+          }
           if (sql.includes("FROM threads WHERE user_id")) {
             return { results: [...threads.values()].filter((t) => t.user_id === binds[0]) };
+          }
+          if (sql.includes("SELECT * FROM notes WHERE user_id")) {
+            let rows = [...notes.values()].filter(
+              (n) => n.user_id === binds[0] && n.category === "idea" && n.deleted_at === null
+            );
+            if (sql.includes("thread_id IS NULL")) rows = rows.filter((n) => n.thread_id === null);
+            if (sql.includes("created_at > ?2")) {
+              const ca = binds[1] as string;
+              const id = binds[2] as string;
+              rows = rows.filter((n) => n.created_at > ca || (n.created_at === ca && n.id > id));
+            }
+            rows.sort((a, b) =>
+              a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.id < b.id ? -1 : 1
+            );
+            const m = sql.match(/LIMIT (\d+)/);
+            return { results: m ? rows.slice(0, Number(m[1])) : rows };
           }
           if (sql.includes("thread_id IS NULL")) {
             const rows = [...notes.values()]
@@ -58,10 +92,7 @@ function fakeDb() {
               .map((n) => ({ id: n.id, title: n.title, content: n.content }));
             return { results: rows };
           }
-          if (sql.includes("SELECT * FROM notes WHERE user_id")) {
-            const rows = [...notes.values()].filter((n) => n.user_id === binds[0] && n.category === "idea");
-            return { results: rows };
-          }
+
           return { results: [] };
         },
         async run() {
@@ -78,10 +109,19 @@ function fakeDb() {
             const n = notes.get(binds[1] as string);
             if (n) n.thread_id = binds[0] as string;
           } else if (sql.includes("UPDATE notes SET thread_id = NULL")) {
-            for (const n of notes.values()) if (n.user_id === binds[0] && n.category === "idea") n.thread_id = null;
+            if (sql.includes("WHERE thread_id = ?")) {
+              for (const n of notes.values()) if (n.thread_id === binds[0]) n.thread_id = null;
+            } else {
+              for (const n of notes.values()) if (n.user_id === binds[0] && n.category === "idea") n.thread_id = null;
+            }
+          } else if (sql.includes("UPDATE threads SET note_count = ?")) {
+            const t = threads.get(binds[1] as string);
+            if (t) t.note_count = binds[0] as number;
           } else if (sql.includes("UPDATE threads SET note_count")) {
             const t = threads.get(binds[1] as string);
             if (t) t.note_count = threadNoteCount(binds[0] as string);
+          } else if (sql.includes("DELETE FROM threads WHERE id")) {
+            threads.delete(binds[0] as string);
           } else if (sql.includes("DELETE FROM threads WHERE user_id")) {
             const referenced = new Set([...notes.values()].map((n) => n.thread_id).filter(Boolean));
             for (const [id, t] of threads) if (t.user_id === binds[0] && !referenced.has(id)) threads.delete(id);

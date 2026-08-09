@@ -30,7 +30,7 @@ export function RightRail() {
         if (!cancelled)
           setGlobalStats({
             total: res.total_notes,
-            days: res.daily.filter((d) => d.count > 0).length,
+            days: res.active_days ?? res.daily.filter((d) => d.count > 0).length,
           })
       })
       .catch(() => {

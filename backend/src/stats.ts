@@ -12,6 +12,8 @@ export interface DailyCount {
 export interface StatsResponse {
   total_notes: number;
   thread_count: number;
+  /** Distinct local-tz days with at least one note, across all history (not windowed). */
+  active_days: number;
   daily: DailyCount[];
   streak: { current: number; longest: number };
   categories: { category: string; count: number }[];
@@ -123,6 +125,7 @@ export function aggregateStats(
   return {
     total_notes: rows.length,
     thread_count: threadCount,
+    active_days: allDays.size,
     daily: [...dailyMap.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, count]) => ({ date, count })),
     streak: computeStreaks(allDays, today),
     categories: byCount(catMap, "category"),
