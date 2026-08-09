@@ -48,7 +48,7 @@ export default defineConfig({
         screenshots: [
           {
             src: '/screenshot-wide.png',
-            sizes: '1280x800',
+            sizes: '640x400',
             type: 'image/png',
             form_factor: 'wide',
             label: '碎念时间流（桌面）',
