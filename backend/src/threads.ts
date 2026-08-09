@@ -389,6 +389,9 @@ export interface RebuildState {
   total: number;
   processed: number;
   secondPassed: number;
+  /** summarize-phase progress: threads summarized so far / to summarize. */
+  summarized?: number;
+  summarizeTotal?: number;
   threads: number;
   useGraph: boolean;
 }
@@ -401,6 +404,8 @@ export function newRebuildState(opts?: { useGraph?: boolean }): RebuildState {
     total: 0,
     processed: 0,
     secondPassed: 0,
+    summarized: 0,
+    summarizeTotal: 0,
     threads: 0,
     useGraph: opts?.useGraph !== false,
   };
@@ -499,6 +504,11 @@ export async function rebuildStep(env: Env, userId: string, state: RebuildState,
       state.phase = "summarize";
       state.cursorCreatedAt = "";
       state.cursorId = "";
+      const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM threads WHERE user_id = ? AND note_count > 0")
+        .bind(userId)
+        .first<{ c: number }>();
+      state.summarizeTotal = cnt?.c ?? 0;
+      state.summarized = 0;
     }
     return state;
   }
@@ -524,6 +534,7 @@ export async function rebuildStep(env: Env, userId: string, state: RebuildState,
       }
       for (const t of rows) {
         await summarizeThread(env, t.id);
+        state.summarized = (state.summarized ?? 0) + 1;
         state.cursorId = t.id;
         if (Date.now() >= deadline) return state;
       }

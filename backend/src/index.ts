@@ -16,6 +16,7 @@ import {
   backfillThreadClusters,
   resetThreadBackfill,
   REBUILD_SLICE_BUDGET_MS,
+  type ThreadJobRow,
 } from "./thread-jobs";
 import { chatComplete } from "./ai";
 import {
@@ -1789,14 +1790,26 @@ function threadJobJson(job: {
   total: number;
   processed: number;
   threads: number | null;
+  state: string | null;
   error: string | null;
 }) {
+  let summarized = 0;
+  let summarizeTotal = 0;
+  try {
+    const s = job.state ? (JSON.parse(job.state) as { summarized?: number; summarizeTotal?: number }) : null;
+    summarized = s?.summarized ?? 0;
+    summarizeTotal = s?.summarizeTotal ?? 0;
+  } catch {
+    /* older jobs have no summarize counters */
+  }
   return {
     job_id: job.id,
     status: job.status,
     phase: job.phase,
     total: job.total,
     processed: job.processed,
+    summarized,
+    summarize_total: summarizeTotal,
     threads: job.threads,
     error: job.error,
   };
@@ -1817,10 +1830,35 @@ app.post("/api/threads/rebuild", async (c) => {
   return c.json(threadJobJson(job), 202);
 });
 
+/** A running job whose slice died (stale heartbeat) gets resumed opportunistically on poll. */
+function kickStaleJob(c: { env: Env; executionCtx: { waitUntil(p: Promise<unknown>): void } }, job: { id: string; status: string; updated_at: string }) {
+  if (job.status !== "running" && job.status !== "queued") return;
+  const ageMs = Date.now() - new Date(job.updated_at.replace(" ", "T") + "Z").getTime();
+  if (job.status === "queued" || ageMs > 2 * 60_000) {
+    c.executionCtx.waitUntil(runRebuildJobSlice(c.env, job.id, REBUILD_SLICE_BUDGET_MS));
+  }
+}
+
+// ---- GET /api/threads/rebuild/latest ----
+// The user's most recent rebuild job (active first), so a page refresh can
+// restore the progress banner. 404 when the user never ran a rebuild.
+app.get("/api/threads/rebuild/latest", async (c) => {
+  const userId = c.get("userId");
+  const job =
+    (await getActiveThreadJob(c.env, userId)) ??
+    (await c.env.DB.prepare("SELECT * FROM thread_jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
+      .bind(userId)
+      .first<ThreadJobRow>());
+  if (!job) return c.json({ error: "not found" }, 404);
+  kickStaleJob(c, job);
+  return c.json(threadJobJson(job));
+});
+
 // ---- GET /api/threads/rebuild/:jobId ----
 app.get("/api/threads/rebuild/:jobId", async (c) => {
   const job = await getThreadJob(c.env, c.get("userId"), c.req.param("jobId"));
   if (!job) return c.json({ error: "not found" }, 404);
+  kickStaleJob(c, job);
   return c.json(threadJobJson(job));
 });
 

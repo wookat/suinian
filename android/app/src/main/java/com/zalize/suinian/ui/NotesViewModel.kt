@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** 删除后可撤销：服务端软删进「最近删除」，保留 30 天后真删，期间可恢复 */
@@ -112,10 +113,14 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private var refreshJob: Job? = null
+
     fun refresh() {
         val s = _ui.value
         _ui.value = s.copy(loading = true, error = null)
-        viewModelScope.launch {
+        // 取消未完成的上一次刷新，避免陆续完成时旧结果（如首启 Mock 数据）覆盖新结果
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
             try {
                 val page = repo.list(
                     category = s.category,
@@ -125,6 +130,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                     from = s.filterTime?.fromParam(),
                 )
                 _ui.value = _ui.value.copy(notes = page.notes, loading = false, cursor = page.cursor)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(loading = false, error = e.message ?: "加载失败")
             }

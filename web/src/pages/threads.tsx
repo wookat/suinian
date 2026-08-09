@@ -6,7 +6,14 @@ import { Button } from "@/components/ui/button"
 import { NoteCard } from "@/components/note-card"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
-import { getThreads, getThread, startThreadRebuild, getThreadRebuildJob } from "@/lib/api"
+import {
+  getThreads,
+  getThread,
+  startThreadRebuild,
+  getThreadRebuildJob,
+  getLatestThreadRebuildJob,
+  getNotes,
+} from "@/lib/api"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
 import { formatTime } from "@/lib/utils"
 import type { Thread, ThreadDetail, ThreadJob } from "@/lib/types"
@@ -41,6 +48,7 @@ export function ThreadsPage() {
   const [highlightedNoteIds, setHighlightedNoteIds] = useState<Set<string>>(new Set())
   const [job, setJob] = useState<ThreadJob | null>(null)
   const [rebuildStarting, setRebuildStarting] = useState(false)
+  const [hasIdeaNotes, setHasIdeaNotes] = useState(false)
   const jobTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const settingsVersion = useSettingsVersion()
 
@@ -60,6 +68,38 @@ export function ThreadsPage() {
   useEffect(() => {
     void load()
   }, [load, settingsVersion])
+
+  // restore an in-flight rebuild job after a page refresh
+  useEffect(() => {
+    if (loadSettings().useMock) return
+    let cancelled = false
+    void getLatestThreadRebuildJob().then((j) => {
+      if (cancelled || !j) return
+      if (j.status === "queued" || j.status === "running") setJob(j)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [settingsVersion])
+
+  // empty state: only offer the rebuild entry when there are idea notes to cluster
+  useEffect(() => {
+    if (loading || threads.length > 0 || loadSettings().useMock) {
+      setHasIdeaNotes(false)
+      return
+    }
+    let cancelled = false
+    getNotes({ category: "idea", limit: 1 })
+      .then((res) => {
+        if (!cancelled) setHasIdeaNotes(res.notes.length > 0)
+      })
+      .catch(() => {
+        if (!cancelled) setHasIdeaNotes(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [loading, threads.length, settingsVersion])
 
   // poll the background rebuild job; refresh the list once it completes
   useEffect(() => {
@@ -99,14 +139,22 @@ export function ThreadsPage() {
         <div className="min-w-0 flex-1">
           <p className="text-sm">后台重建线索中……{PHASE_LABEL[job.phase]}</p>
           <p className="text-xs text-muted-foreground">
-            {job.total > 0 ? `已处理 ${Math.min(job.processed, job.total)} / ${job.total} 条想法` : "正在统计待处理的想法……"}
+            {job.phase === "summarize" && job.summarize_total > 0
+              ? `已生成摘要 ${Math.min(job.summarized, job.summarize_total)} / ${job.summarize_total} 条线索`
+              : job.total > 0
+                ? `已处理 ${Math.min(job.processed, job.total)} / ${job.total} 条想法`
+                : "正在统计待处理的想法……"}
           </p>
         </div>
-        {job.total > 0 && (
+        {job.phase === "summarize" && job.summarize_total > 0 ? (
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {Math.floor((Math.min(job.summarized, job.summarize_total) / job.summarize_total) * 100)}%
+          </span>
+        ) : job.total > 0 ? (
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
             {Math.floor((Math.min(job.processed, job.total) / job.total) * 100)}%
           </span>
-        )}
+        ) : null}
       </Card>
     ) : job?.status === "error" ? (
       <Card className="p-3">
@@ -262,7 +310,15 @@ export function ThreadsPage() {
   if (threads.length === 0 && jobBanner) return <div className="space-y-3">{jobBanner}</div>
 
   if (threads.length === 0)
-    return (
+    return hasIdeaNotes ? (
+      <EmptyState
+        icon={GitBranch}
+        title="线索还在酝酿"
+        description="你已经记了一些想法，但还没有串成线索。可以手动触发一次重建，让 AI 立即把同主题的想法串起来。"
+        actionLabel="重建线索"
+        onAction={() => void onRebuild()}
+      />
+    ) : (
       <EmptyState
         icon={GitBranch}
         title="线索还在酝酿"

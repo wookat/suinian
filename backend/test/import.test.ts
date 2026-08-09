@@ -166,6 +166,14 @@ describe("parseMarkdown / parsePlainText", () => {
     const items = parsePlainText("一\n\n二\n\n三");
     expect(items.map((i) => i.content)).toEqual(["一", "二", "三"]);
   });
+  it("separator-only blocks are never imported as notes (R77 P2-3)", () => {
+    // plain-text fallback: `---` lines between blank lines became fake notes
+    const txt = "第一条\n\n---\n\n第二条\n\n***\n\n———";
+    expect(parsePlainText(txt).map((i) => i.content)).toEqual(["第一条", "第二条"]);
+    // markdown --- path with a rule-only section between two rules
+    const md = "第一条\n---\n***\n---\n第二条";
+    expect(parseMarkdown(md).map((i) => i.content)).toEqual(["第一条", "第二条"]);
+  });
   it("empty input yields no items", () => {
     expect(parsePlainText("  \n ")).toEqual([]);
     expect(parseMarkdown("")).toEqual([]);

@@ -653,6 +653,15 @@ export async function getThreadRebuildJob(jobId: string): Promise<ThreadJob> {
   return realFetch<ThreadJob>(`/api/threads/rebuild/${encodeURIComponent(jobId)}`)
 }
 
+/** 查询最近一次重建任务（用于刷新页面后恢复进度条）；没有任务时返回 null */
+export async function getLatestThreadRebuildJob(): Promise<ThreadJob | null> {
+  try {
+    return await realFetch<ThreadJob>("/api/threads/rebuild/latest")
+  } catch {
+    return null
+  }
+}
+
 export async function getThreads(): Promise<ThreadsResponse> {
   if (loadSettings().useMock) return mockGetThreads()
   return realFetch<ThreadsResponse>("/api/threads")
