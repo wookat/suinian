@@ -93,7 +93,7 @@ export interface NoteMeta {
   /** Merchant / purpose of an expense/income note. */
   finance_merchant?: string;
   /** Fields the user set by hand; AI triage / cron sweeps must not overwrite them. */
-  manual_override?: { category?: boolean; tags?: boolean };
+  manual_override?: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean };
   /** Note saved from an AI Q&A round (问答写回闭环). */
   from_ask?: boolean;
 }

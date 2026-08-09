@@ -335,20 +335,27 @@ const CATEGORY_LABEL: Record<string, string> = {
 export async function applyTriage(env: Env, noteId: string, triage: TriageResult, content: string): Promise<void> {
   // imported notes carry their original tags in meta.import_tags: keep them
   // first and union in the AI-suggested ones
-  const row = await env.DB.prepare("SELECT meta FROM notes WHERE id = ?").bind(noteId).first<{ meta: string | null }>();
+  const row = await env.DB.prepare("SELECT meta, todo_due FROM notes WHERE id = ?")
+    .bind(noteId)
+    .first<{ meta: string | null; todo_due: string | null }>();
   const meta = parseNoteMeta(row?.meta ?? null);
   const override = meta?.manual_override;
   const importTags = meta?.import_tags;
   const tags = Array.isArray(importTags)
     ? [...new Set([...importTags, ...triage.tags])].slice(0, 6)
     : triage.tags;
-  const sets = ["title = ?", "is_sensitive = ?", "todo_due = ?"];
-  const binds: unknown[] = [
-    triage.title || null,
-    triage.is_sensitive ? 1 : 0,
-    triage.todo_due ?? null,
-  ];
+  const sets = ["is_sensitive = ?"];
+  const binds: unknown[] = [triage.is_sensitive ? 1 : 0];
   // fields the user set by hand stay untouched
+  if (!override?.title) {
+    sets.push("title = ?");
+    binds.push(triage.title || null);
+  }
+  if (!override?.todo_due) {
+    // AI only fills a missing due; an already-set due is never cleared or replaced
+    sets.push("todo_due = ?");
+    binds.push(row?.todo_due ?? triage.todo_due ?? null);
+  }
   if (!override?.category) {
     sets.push("category = ?", "amount = ?", "currency = ?");
     binds.push(triage.category, triage.amount ?? null, triage.currency ?? null);
@@ -677,7 +684,7 @@ app.patch("/api/notes/:id", async (c) => {
     sets.push("todo_done = ?", "done_at = ?");
     binds.push(body.todo_done ? 1 : 0, body.todo_done ? new Date().toISOString() : null);
   }
-  const override: { category?: boolean; tags?: boolean } = {};
+  const override: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean } = {};
   if (typeof body.category === "string" && ["idea", "todo", "collect", "data", "expense", "income"].includes(body.category)) {
     sets.push("category = ?");
     binds.push(body.category);
@@ -688,20 +695,22 @@ app.patch("/api/notes/:id", async (c) => {
     binds.push(JSON.stringify(body.tags.filter((t) => typeof t === "string")));
     override.tags = true;
   }
-  if (override.category || override.tags) {
+  if (typeof body.title === "string") {
+    sets.push("title = ?");
+    binds.push(body.title);
+    override.title = true;
+  }
+  if (typeof body.todo_due === "string" || body.todo_due === null) {
+    sets.push("todo_due = ?");
+    binds.push(normalizeTodoDue(body.todo_due));
+    override.todo_due = true;
+  }
+  if (Object.keys(override).length > 0) {
     // remember the user's hand-set values so AI triage / cron never overwrites them
     const meta = parseNoteMeta(existing.meta) ?? {};
     meta.manual_override = { ...meta.manual_override, ...override };
     sets.push("meta = ?");
     binds.push(JSON.stringify(meta));
-  }
-  if (typeof body.title === "string") {
-    sets.push("title = ?");
-    binds.push(body.title);
-  }
-  if (typeof body.todo_due === "string" || body.todo_due === null) {
-    sets.push("todo_due = ?");
-    binds.push(normalizeTodoDue(body.todo_due));
   }
   if (sets.length === 0) return c.json({ error: "no updatable fields" }, 400);
   sets.push("updated_at = datetime('now')");
@@ -726,6 +735,8 @@ app.patch("/api/notes/:id", async (c) => {
 
 /** Regenerate only the AI title after a content edit (never touches category/tags/due). */
 export async function recomputeTitle(env: Env, noteId: string, content: string): Promise<void> {
+  const row = await env.DB.prepare("SELECT meta FROM notes WHERE id = ?").bind(noteId).first<{ meta: string | null }>();
+  if (parseNoteMeta(row?.meta ?? null)?.manual_override?.title) return;
   const triage = await triageNote(content, env);
   if (!triage || !triage.title) return;
   await env.DB.prepare("UPDATE notes SET title = ? WHERE id = ?").bind(triage.title, noteId).run();

@@ -201,6 +201,27 @@ export async function downloadNoteFile(noteId: string, fileName: string): Promis
   URL.revokeObjectURL(url)
 }
 
+function dueEqual(a: string | null | undefined, b: string | null): boolean {
+  if (!a && !b) return true
+  if (!a || !b) return false
+  if (a === b) return true
+  const ta = Date.parse(a)
+  const tb = Date.parse(b)
+  return Number.isFinite(ta) && Number.isFinite(tb) && ta === tb
+}
+
+/** 服务端返回的笔记是否已体现补丁字段（防「返回成功但未持久化」的静默失败） */
+export function patchPersisted(fresh: Note, patch: NotePatch): boolean {
+  if (patch.content !== undefined && fresh.content !== patch.content) return false
+  if (patch.title !== undefined && (fresh.title ?? "") !== patch.title) return false
+  if (patch.category !== undefined && fresh.category !== patch.category) return false
+  if (patch.tags !== undefined && JSON.stringify(fresh.tags) !== JSON.stringify(patch.tags)) return false
+  if (patch.todo_due !== undefined && !dueEqual(patch.todo_due, fresh.todo_due)) return false
+  if (patch.todo_done !== undefined && (fresh.todo_done ?? 0) !== patch.todo_done) return false
+  if (patch.is_sensitive !== undefined && fresh.is_sensitive !== patch.is_sensitive) return false
+  return true
+}
+
 export async function patchNote(id: string, patch: NotePatch): Promise<Note> {
   if (loadSettings().useMock) return mockPatchNote(id, patch)
   const body: Record<string, unknown> = { ...patch }
@@ -210,7 +231,9 @@ export async function patchNote(id: string, patch: NotePatch): Promise<Note> {
     method: "PATCH",
     body: JSON.stringify(body),
   })
-  return normalizeNote((res.note ?? res) as Record<string, unknown>)
+  const fresh = normalizeNote((res.note ?? res) as Record<string, unknown>)
+  if (!patchPersisted(fresh, patch)) throw new Error("保存未生效，请重试")
+  return fresh
 }
 
 /** 手动重试链接标题/正文抓取，返回更新后的笔记 */
