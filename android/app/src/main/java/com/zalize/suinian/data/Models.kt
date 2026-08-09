@@ -242,11 +242,34 @@ data class TagCount(
 @Serializable
 data class TagsPage(val tags: List<TagCount> = emptyList())
 
-/** POST /api/notes/batch 响应 */
+/** POST /api/notes/batch 响应（delete 时回传 ids 供撤销，remaining 为超出单批上限的剩余匹配数） */
 @Serializable
 data class BatchResponse(
     val ok: Boolean = false,
     val affected: Int = 0,
+    val remaining: Int = 0,
+    val ids: List<String> = emptyList(),
+)
+
+/** POST /api/notes/restore 响应 */
+@Serializable
+data class RestoreResponse(
+    val ok: Boolean = false,
+    val restored: Int = 0,
+)
+
+/** GET /api/preferences：推送偏好（每日回顾 / 待办提醒），与 Web Push 共用 */
+@Serializable
+data class PushPreferences(
+    @SerialName("daily_review_push") val dailyReviewPush: Boolean = true,
+    @SerialName("todo_reminder_push") val todoReminderPush: Boolean = true,
+)
+
+/** GET /api/todos/today：当天到期 + 已过期的未完成待办 */
+@Serializable
+data class TodosTodayResponse(
+    val date: String = "",
+    val items: List<Note> = emptyList(),
 )
 
 /** POST /api/backup/restore 响应：恢复统计 */

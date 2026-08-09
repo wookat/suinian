@@ -43,6 +43,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import com.zalize.suinian.data.PushPreferences
 import com.zalize.suinian.notif.QuickNoteNotification
 import kotlinx.coroutines.launch
 
@@ -74,6 +78,18 @@ fun SettingsScreen(
     var backupMessage by remember { mutableStateOf<String?>(null) }
     var restoring by remember { mutableStateOf(false) }
     var restoreMessage by remember { mutableStateOf<String?>(null) }
+    var pushPrefs by remember { mutableStateOf<PushPreferences?>(null) }
+    var pushPrefsMessage by remember { mutableStateOf<String?>(null) }
+
+    // 推送偏好（与 Web Push 共用，存后端）
+    LaunchedEffect(settings.mockMode, settings.token) {
+        if (!settings.mockMode && settings.token.isNotBlank()) {
+            try {
+                pushPrefs = vm.getPushPreferences()
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     val restorePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -326,6 +342,104 @@ fun SettingsScreen(
                         }
                     },
                 )
+            }
+
+            Spacer(Modifier.height(24.dp))
+            Text("提醒", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(8.dp))
+            val reminderPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { }
+            val prefs = pushPrefs
+            if (settings.mockMode || settings.token.isBlank()) {
+                Text(
+                    "提醒需要连接真实后端（关闭 Mock 并配置 Token）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("待办到点提醒", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "待办到期时发通知（后台每 15 分钟检查一次）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = prefs?.todoReminderPush ?: true,
+                        enabled = prefs != null,
+                        onCheckedChange = { v ->
+                            scope.launch {
+                                try {
+                                    pushPrefs = vm.updatePushPreferences(todoReminderPush = v)
+                                    if (v && Build.VERSION.SDK_INT >= 33 &&
+                                        context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                                    ) {
+                                        reminderPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                } catch (e: Exception) {
+                                    pushPrefsMessage = e.message ?: "保存失败"
+                                }
+                            }
+                        },
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("每日回顾推送", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "每天推送一条往日碎念回顾",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = prefs?.dailyReviewPush ?: true,
+                        enabled = prefs != null,
+                        onCheckedChange = { v ->
+                            scope.launch {
+                                try {
+                                    pushPrefs = vm.updatePushPreferences(dailyReviewPush = v)
+                                    if (v && Build.VERSION.SDK_INT >= 33 &&
+                                        context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                                    ) {
+                                        reminderPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                } catch (e: Exception) {
+                                    pushPrefsMessage = e.message ?: "保存失败"
+                                }
+                            }
+                        },
+                    )
+                }
+                pushPrefsMessage?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "提醒靠后台周期任务拉取，部分机型的省电策略会推迟或拦截后台任务。若提醒不及时，建议在系统设置中将碎念设为「不限制电池用量」。两类通知可在系统通知设置中分渠道单独关闭。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        try {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.fromParts("package", context.packageName, null),
+                                )
+                            )
+                        } catch (_: Exception) {
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("去系统设置调整电池/通知") }
             }
 
             Spacer(Modifier.height(24.dp))

@@ -55,10 +55,18 @@ class NotesRepository(
         }
     }
 
-    suspend fun list(category: String?, tag: String?, q: String?, cursor: String? = null): NotesPage {
+    suspend fun list(
+        category: String?,
+        tag: String?,
+        q: String?,
+        source: String? = null,
+        from: String? = null,
+        to: String? = null,
+        cursor: String? = null,
+    ): NotesPage {
         val (client, mock) = api()
         if (mock) return MockStore.list(category, tag, q)
-        return client.listNotes(category = category, tag = tag, q = q, cursor = cursor)
+        return client.listNotes(category = category, tag = tag, q = q, source = source, from = from, to = to, cursor = cursor)
     }
 
     suspend fun setTodoDone(id: String, done: Boolean): Note? {
@@ -106,12 +114,47 @@ class NotesRepository(
         action: String,
         filterCategory: String? = null,
         filterQuery: String? = null,
+        filterTag: String? = null,
+        filterSource: String? = null,
+        filterFrom: String? = null,
+        filterTo: String? = null,
         tags: List<String>? = null,
         setCategory: String? = null,
     ): BatchResponse {
         val (client, mock) = api()
         if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
-        return client.batchNotesByFilter(action, filterCategory, filterQuery, tags, setCategory)
+        return client.batchNotesByFilter(
+            action, filterCategory, filterQuery, filterTag, filterSource, filterFrom, filterTo, tags, setCategory,
+        )
+    }
+
+    /** 撤销软删：恢复未过期的已删笔记，返回恢复条数（自动分批，每批≤1000） */
+    suspend fun restoreNotes(ids: List<String>): Int {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        var restored = 0
+        for (chunk in ids.chunked(1000)) restored += client.restoreNotes(chunk).restored
+        return restored
+    }
+
+    /** 推送偏好（与 Web Push 共用） */
+    suspend fun getPreferences(): PushPreferences {
+        val (client, mock) = api()
+        if (mock) return PushPreferences()
+        return client.getPreferences()
+    }
+
+    suspend fun updatePreferences(dailyReviewPush: Boolean? = null, todoReminderPush: Boolean? = null): PushPreferences {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.updatePreferences(dailyReviewPush, todoReminderPush)
+    }
+
+    /** 当天到期 + 已过期的未完成待办 */
+    suspend fun getTodosToday(): TodosTodayResponse {
+        val (client, mock) = api()
+        if (mock) return TodosTodayResponse()
+        return client.getTodosToday()
     }
 
     /** 标签列表（含使用次数） */

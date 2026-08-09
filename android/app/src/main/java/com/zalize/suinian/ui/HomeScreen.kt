@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.material3.AlertDialog
@@ -150,7 +151,7 @@ fun HomeScreen(
         AlertDialog(
             onDismissRequest = { confirmBatchDelete = false },
             title = { Text(if (ui.allMatching) "删除当前筛选下的全部匹配笔记？" else "删除选中的 ${ui.selectedIds.size} 条笔记？") },
-            text = { Text(if (ui.allMatching) "将删除全部匹配结果（不限已加载项），删除后不可恢复" else "删除后不可恢复") },
+            text = { Text(if (ui.allMatching) "将删除全部匹配结果（不限已加载项），删除后可在提示条内撤销" else "删除后可在提示条内撤销") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmBatchDelete = false
@@ -251,7 +252,17 @@ fun HomeScreen(
                 )
                 AssistChip(
                     onClick = { confirmBatchDelete = true },
-                    label = { Text(if (ui.batchBusy) "处理中…" else "删除", color = MaterialTheme.colorScheme.error) },
+                    label = {
+                        val progress = ui.batchProgress
+                        Text(
+                            when {
+                                progress != null -> "删除中 ${progress.first}/${progress.second}…"
+                                ui.batchBusy -> "处理中…"
+                                else -> "删除"
+                            },
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    },
                     enabled = hasSelection,
                 )
             }
@@ -348,19 +359,82 @@ fun HomeScreen(
         Spacer(Modifier.height(8.dp))
         }
 
-        // 分类筛选
+        // 分类筛选 + 组合筛选入口（标签/时间/来源，与关键词搜索叠加）
+        val activeFilterCount = listOfNotNull(ui.filterTag, ui.filterSource, ui.filterTime).size
+        var filtersExpanded by rememberSaveable { mutableStateOf(false) }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            FilterChip(
+                selected = filtersExpanded || activeFilterCount > 0,
+                onClick = { filtersExpanded = !filtersExpanded },
+                label = { Text(if (activeFilterCount > 0) "筛选 $activeFilterCount" else "筛选") },
+                leadingIcon = { Icon(Icons.Outlined.Tune, contentDescription = "组合筛选") },
+            )
             categories.forEach { (value, label) ->
                 FilterChip(
                     selected = ui.category == value,
                     onClick = { vm.setCategory(value) },
                     label = { Text(label) },
                 )
+            }
+        }
+
+        if (filtersExpanded) {
+            Spacer(Modifier.height(4.dp))
+            // 时间范围
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("时间", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TimeRange.entries.forEach { range ->
+                    FilterChip(
+                        selected = ui.filterTime == range,
+                        onClick = { vm.setFilterTime(if (ui.filterTime == range) null else range) },
+                        label = { Text(range.label) },
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            // 来源
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("来源", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SOURCE_OPTIONS.forEach { (value, label) ->
+                    FilterChip(
+                        selected = ui.filterSource == value,
+                        onClick = { vm.setFilterSource(if (ui.filterSource == value) null else value) },
+                        label = { Text(label) },
+                    )
+                }
+            }
+            if (ui.availableTags.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("标签", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    ui.availableTags.forEach { tag ->
+                        FilterChip(
+                            selected = ui.filterTag == tag,
+                            onClick = { vm.setFilterTag(if (ui.filterTag == tag) null else tag) },
+                            label = { Text("#$tag") },
+                        )
+                    }
+                }
+            }
+            if (activeFilterCount > 0) {
+                TextButton(onClick = { vm.clearFilters() }) { Text("清除筛选") }
             }
         }
 
