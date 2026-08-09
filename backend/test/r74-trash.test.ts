@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { app, purgeAtOf, SOFT_DELETE_RETENTION_DAYS } from "../src/index";
+import { app, purgeAtOf } from "../src/index";
+import { SOFT_DELETE_RETENTION_DAYS } from "../src/constants";
 import type { Env } from "../src/types";
 
 type Row = Record<string, unknown>;

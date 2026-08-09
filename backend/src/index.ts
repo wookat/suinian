@@ -51,7 +51,12 @@ import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
 import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, filterWeakReferences, ASK_CITATION_MIN_SCORE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
-import { PIPELINE_TIMEOUT_MS, SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
+import {
+  PIPELINE_TIMEOUT_MS,
+  SENSITIVE_EXPORT_PLACEHOLDER,
+  SOFT_DELETE_RETENTION_DAYS,
+  RETRIAGE_TIME_BUDGET_MS,
+} from "./constants";
 import { buildStats, normalizeTzOffset, SAMPLE_TAG_LIKE } from "./stats";
 
 type Vars = { userId: string };
@@ -830,8 +835,6 @@ async function deleteNoteRecord(
   return true;
 }
 
-/** Retention window (最近删除) before a soft-deleted note is hard-deleted by the cron sweep. */
-export const SOFT_DELETE_RETENTION_DAYS = 30;
 const PURGE_BATCH = 200;
 /** Wall-clock budget per cron run; keeps well under the 30s cron CPU/duration limits. */
 const PURGE_TIME_BUDGET_MS = 20_000;
@@ -2233,8 +2236,7 @@ export { app };
 
 /** Concurrent LLM triage calls per retriage round (IO-bound, well under provider limits). */
 const RETRIAGE_CONCURRENCY = 5;
-/** Wall-clock budget for the cron retriage sweep; must stay under the 10-min cron interval. */
-export const RETRIAGE_TIME_BUDGET_MS = 8 * 60_000;
+
 
 async function retriageOne(env: Env, row: { id: string; user_id: string; content: string; content_enc: string | null }): Promise<boolean> {
   // pre-encrypted pending notes store a placeholder: triage the plaintext
