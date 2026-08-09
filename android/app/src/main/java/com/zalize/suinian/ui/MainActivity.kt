@@ -60,18 +60,23 @@ class MainActivity : ComponentActivity() {
     companion object {
         /** widget/通知点开时聚焦速记框 */
         const val EXTRA_FOCUS_QUICK_NOTE = "focus_quick_note"
+
+        /** 提醒通知点开时跳到指定 tab（待办提醒→todos，每日回顾→home） */
+        const val EXTRA_NAVIGATE_ROUTE = "navigate_route"
     }
 
     private var focusQuickNoteSignal by mutableStateOf(0)
+    private var navigateRouteSignal by mutableStateOf<Pair<String, Int>?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         if (intent?.getBooleanExtra(EXTRA_FOCUS_QUICK_NOTE, false) == true) focusQuickNoteSignal++
+        intent?.getStringExtra(EXTRA_NAVIGATE_ROUTE)?.let { navigateRouteSignal = it to ((navigateRouteSignal?.second ?: 0) + 1) }
         // 通知权限不在首启请求，改为设置里打开「通知栏速记入口」时再请求
         setContent {
             com.zalize.suinian.ui.theme.SuinianTheme {
-                SuinianNavHost(focusQuickNoteSignal)
+                SuinianNavHost(focusQuickNoteSignal, navigateRouteSignal)
             }
         }
     }
@@ -79,12 +84,13 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra(EXTRA_FOCUS_QUICK_NOTE, false)) focusQuickNoteSignal++
+        intent.getStringExtra(EXTRA_NAVIGATE_ROUTE)?.let { navigateRouteSignal = it to ((navigateRouteSignal?.second ?: 0) + 1) }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @androidx.compose.runtime.Composable
-fun SuinianNavHost(focusQuickNoteSignal: Int) {
+fun SuinianNavHost(focusQuickNoteSignal: Int, navigateRouteSignal: Pair<String, Int>? = null) {
     val navController = rememberNavController()
     val vm: NotesViewModel = viewModel()
     val askVm: AskViewModel = viewModel()
@@ -118,6 +124,32 @@ fun SuinianNavHost(focusQuickNoteSignal: Int) {
         ui.toast?.let {
             snackbarHostState.showSnackbar(it)
             vm.consumeToast()
+        }
+    }
+
+    // 删除撤销 Snackbar：点「撤销」调后端恢复接口
+    LaunchedEffect(ui.undo) {
+        val undo = ui.undo ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = undo.message,
+            actionLabel = "撤销",
+            duration = androidx.compose.material3.SnackbarDuration.Long,
+        )
+        vm.consumeUndo()
+        if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+            vm.undoDelete(undo)
+        }
+    }
+
+    // 提醒通知点开：跳到对应 tab
+    LaunchedEffect(navigateRouteSignal) {
+        val route = navigateRouteSignal?.first ?: return@LaunchedEffect
+        if (route in tabs.map { it.route }) {
+            navController.navigate(route) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
         }
     }
 

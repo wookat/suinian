@@ -14,7 +14,10 @@ import com.zalize.suinian.data.ReportDetail
 import com.zalize.suinian.data.ReportsPage
 import com.zalize.suinian.data.ReportSummary
 import com.zalize.suinian.data.ThreadDetail
+import com.zalize.suinian.data.PushPreferences
+import com.zalize.suinian.data.RestoreResponse
 import com.zalize.suinian.data.RestoreStats
+import com.zalize.suinian.data.TodosTodayResponse
 import com.zalize.suinian.data.RotateTokenResponse
 import com.zalize.suinian.data.TagCount
 import com.zalize.suinian.data.TagsPage
@@ -116,17 +119,23 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
     }
 
-    /** GET /api/notes?category=&tag=&q=&cursor= */
+    /** GET /api/notes?category=&tag=&q=&source=&from=&to=&cursor= */
     suspend fun listNotes(
         category: String? = null,
         tag: String? = null,
         q: String? = null,
+        source: String? = null,
+        from: String? = null,
+        to: String? = null,
         cursor: String? = null,
     ): NotesPage = withContext(Dispatchers.IO) {
         val url = "$baseUrl/api/notes".toHttpUrl().newBuilder().apply {
             if (!category.isNullOrBlank()) addQueryParameter("category", category)
             if (!tag.isNullOrBlank()) addQueryParameter("tag", tag)
             if (!q.isNullOrBlank()) addQueryParameter("q", q)
+            if (!source.isNullOrBlank()) addQueryParameter("source", source)
+            if (!from.isNullOrBlank()) addQueryParameter("from", from)
+            if (!to.isNullOrBlank()) addQueryParameter("to", to)
             if (!cursor.isNullOrBlank()) addQueryParameter("cursor", cursor)
         }.build()
         val req = Request.Builder()
@@ -183,6 +192,10 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         action: String,
         category: String? = null,
         q: String? = null,
+        tag: String? = null,
+        source: String? = null,
+        from: String? = null,
+        to: String? = null,
         tags: List<String>? = null,
         setCategory: String? = null,
     ): BatchResponse = withContext(Dispatchers.IO) {
@@ -191,6 +204,10 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             put("filter", buildJsonObject {
                 if (!category.isNullOrBlank()) put("category", category)
                 if (!q.isNullOrBlank()) put("q", q)
+                if (!tag.isNullOrBlank()) put("tag", tag)
+                if (!source.isNullOrBlank()) put("source", source)
+                if (!from.isNullOrBlank()) put("from", from)
+                if (!to.isNullOrBlank()) put("to", to)
             })
             if (tags != null) putJsonArray("tags") { tags.forEach { add(JsonPrimitive(it)) } }
             if (setCategory != null) put("category", setCategory)
@@ -328,6 +345,34 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             val mime = it.header("Content-Type") ?: "application/octet-stream"
             bytes to mime
         }
+    }
+
+    /** POST /api/notes/restore：撤销软删（单次最多 1000 条，调用方已分批） */
+    suspend fun restoreNotes(ids: List<String>): RestoreResponse = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            putJsonArray("ids") { ids.forEach { add(JsonPrimitive(it)) } }
+        }.toString().toRequestBody(jsonMedia)
+        execute(request("/api/notes/restore").post(body).build(), RestoreResponse.serializer())
+    }
+
+    /** GET /api/preferences：推送偏好 */
+    suspend fun getPreferences(): PushPreferences = withContext(Dispatchers.IO) {
+        execute(request("/api/preferences").get().build(), PushPreferences.serializer())
+    }
+
+    /** PATCH /api/preferences：更新推送偏好 */
+    suspend fun updatePreferences(dailyReviewPush: Boolean? = null, todoReminderPush: Boolean? = null): PushPreferences =
+        withContext(Dispatchers.IO) {
+            val body = buildJsonObject {
+                if (dailyReviewPush != null) put("daily_review_push", dailyReviewPush)
+                if (todoReminderPush != null) put("todo_reminder_push", todoReminderPush)
+            }.toString().toRequestBody(jsonMedia)
+            execute(request("/api/preferences").patch(body).build(), PushPreferences.serializer())
+        }
+
+    /** GET /api/todos/today：当天到期 + 已过期的未完成待办 */
+    suspend fun getTodosToday(): TodosTodayResponse = withContext(Dispatchers.IO) {
+        execute(request("/api/todos/today").get().build(), TodosTodayResponse.serializer())
     }
 
     /** DELETE /api/notes/:id */

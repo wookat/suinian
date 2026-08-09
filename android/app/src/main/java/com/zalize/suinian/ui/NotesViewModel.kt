@@ -23,12 +23,25 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+/** 删除后可撤销：服务端软删约 30 分钟后真删，窗口内可恢复 */
+data class UndoDelete(
+    val message: String,
+    val ids: List<String>,
+)
+
 data class NotesUiState(
     val notes: List<Note> = emptyList(),
     val loading: Boolean = false,
     val error: String? = null,
     val category: String? = null,
     val query: String = "",
+    val filterTag: String? = null,
+    val filterSource: String? = null,
+    val filterTime: TimeRange? = null,
+    val availableTags: List<String> = emptyList(),
+    val undo: UndoDelete? = null,
+    /** 批量删除进度（done/total） */
+    val batchProgress: Pair<Int, Int>? = null,
     val sending: Boolean = false,
     val toast: String? = null,
     val cursor: String? = null,
@@ -71,6 +84,17 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     init {
         refresh()
         loadReview()
+        loadTags()
+    }
+
+    /** 筛选用标签列表：锦上添花，失败静默隐藏 */
+    fun loadTags() {
+        viewModelScope.launch {
+            try {
+                _ui.value = _ui.value.copy(availableTags = repo.listTags().take(12).map { it.tag })
+            } catch (_: Exception) {
+            }
+        }
     }
 
     /** 今日回顾：锦上添花，失败静默隐藏 */
@@ -88,7 +112,13 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value = s.copy(loading = true, error = null)
         viewModelScope.launch {
             try {
-                val page = repo.list(category = s.category, tag = null, q = s.query.ifBlank { null })
+                val page = repo.list(
+                    category = s.category,
+                    tag = s.filterTag,
+                    q = s.query.ifBlank { null },
+                    source = s.filterSource,
+                    from = s.filterTime?.fromParam(),
+                )
                 _ui.value = _ui.value.copy(notes = page.notes, loading = false, cursor = page.cursor)
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(loading = false, error = e.message ?: "加载失败")
@@ -105,8 +135,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val page = repo.list(
                     category = s.category,
-                    tag = null,
+                    tag = s.filterTag,
                     q = s.query.ifBlank { null },
+                    source = s.filterSource,
+                    from = s.filterTime?.fromParam(),
                     cursor = cursor,
                 )
                 val existing = _ui.value.notes
@@ -130,8 +162,34 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun search() = refresh()
 
+    fun setFilterTag(tag: String?) {
+        _ui.value = _ui.value.copy(filterTag = tag)
+        refresh()
+    }
+
+    fun setFilterSource(source: String?) {
+        _ui.value = _ui.value.copy(filterSource = source)
+        refresh()
+    }
+
+    fun setFilterTime(range: TimeRange?) {
+        _ui.value = _ui.value.copy(filterTime = range)
+        refresh()
+    }
+
+    fun clearFilters() {
+        _ui.value = _ui.value.copy(filterTag = null, filterSource = null, filterTime = null)
+        refresh()
+    }
+
     /** 设置页轮换 API token（成功后新 token 已保存到本机） */
     suspend fun rotateApiToken(): String = repo.rotateToken()
+
+    /** 推送偏好（与 Web Push 共用，存后端） */
+    suspend fun getPushPreferences() = repo.getPreferences()
+
+    suspend fun updatePushPreferences(dailyReviewPush: Boolean? = null, todoReminderPush: Boolean? = null) =
+        repo.updatePreferences(dailyReviewPush, todoReminderPush)
 
     /** 永久注销账号：删除云端全部数据并清本机登录状态 */
     suspend fun deleteAccount() = repo.deleteAccount()
@@ -256,11 +314,28 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 repo.delete(note.id)
-                _ui.value = _ui.value.copy(toast = "已删除")
+                _ui.value = _ui.value.copy(undo = UndoDelete("已删除", listOf(note.id)))
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(notes = prev, toast = e.message ?: "删除失败")
             }
         }
+    }
+
+    /** 撤销删除：调后端恢复接口（服务端软删窗口内有效） */
+    fun undoDelete(undo: UndoDelete) {
+        viewModelScope.launch {
+            try {
+                val restored = repo.restoreNotes(undo.ids)
+                _ui.value = _ui.value.copy(toast = if (restored > 0) "已恢复 $restored 条" else "已超出可撤销时间，无法恢复")
+                refresh()
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(toast = e.message ?: "撤销失败")
+            }
+        }
+    }
+
+    fun consumeUndo() {
+        _ui.value = _ui.value.copy(undo = null)
     }
 
     /** 速记发送；内联指令 ?问题 由 onAsk 路由到问答 tab，!内容 原样保存，#标签 内容 手动打标 */
@@ -409,39 +484,63 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     fun batchDelete() {
         val s = _ui.value
         if (s.allMatching) {
-            _ui.value = s.copy(batchBusy = true)
+            _ui.value = s.copy(batchBusy = true, batchProgress = null)
             viewModelScope.launch {
                 try {
-                    val res = repo.batchNotesByFilter("delete", s.category, s.query.ifBlank { null })
+                    // 全部匹配：单批上限 1000 条，remaining > 0 时自动续删直到清空
+                    val deletedIds = mutableListOf<String>()
+                    var affected = 0
+                    var total = -1
+                    while (true) {
+                        val res = repo.batchNotesByFilter(
+                            "delete", s.category, s.query.ifBlank { null },
+                            s.filterTag, s.filterSource, s.filterTime?.fromParam(),
+                        )
+                        affected += res.affected
+                        deletedIds += res.ids
+                        if (total < 0) total = res.affected + res.remaining
+                        _ui.value = _ui.value.copy(batchProgress = affected to total)
+                        if (res.remaining <= 0 || res.affected == 0) break
+                    }
                     _ui.value = _ui.value.copy(
                         batchBusy = false,
+                        batchProgress = null,
                         selectionMode = false,
                         selectedIds = emptySet(),
                         allMatching = false,
-                        toast = "已删除全部匹配的 ${res.affected} 条",
+                        undo = UndoDelete("已删除全部匹配的 $affected 条", deletedIds),
                     )
                     refresh()
                 } catch (e: Exception) {
-                    _ui.value = _ui.value.copy(batchBusy = false, toast = e.message ?: "批量删除失败")
+                    _ui.value = _ui.value.copy(batchBusy = false, batchProgress = null, toast = e.message ?: "批量删除失败")
                 }
             }
             return
         }
         val ids = s.selectedIds.toList()
         if (ids.isEmpty()) return
-        _ui.value = _ui.value.copy(batchBusy = true)
+        _ui.value = _ui.value.copy(batchBusy = true, batchProgress = 0 to ids.size)
         viewModelScope.launch {
             try {
-                val res = repo.batchNotes("delete", ids)
+                // 分块提交，每块完成后更新进度
+                var affected = 0
+                var done = 0
+                for (chunk in ids.chunked(100)) {
+                    affected += repo.batchNotes("delete", chunk).affected
+                    done += chunk.size
+                    _ui.value = _ui.value.copy(batchProgress = done to ids.size)
+                }
                 _ui.value = _ui.value.copy(
                     batchBusy = false,
+                    batchProgress = null,
                     selectionMode = false,
                     selectedIds = emptySet(),
                     notes = _ui.value.notes.filter { it.id !in ids },
-                    toast = "已删除 ${res.affected} 条",
+                    undo = UndoDelete("已删除 $affected 条", ids),
                 )
             } catch (e: Exception) {
-                _ui.value = _ui.value.copy(batchBusy = false, toast = e.message ?: "批量删除失败")
+                _ui.value = _ui.value.copy(batchBusy = false, batchProgress = null, toast = e.message ?: "批量删除失败")
+                refresh()
             }
         }
     }
@@ -454,7 +553,11 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             _ui.value = s.copy(batchBusy = true)
             viewModelScope.launch {
                 try {
-                    val res = repo.batchNotesByFilter("add_tags", s.category, s.query.ifBlank { null }, tags = listOf(t))
+                    val res = repo.batchNotesByFilter(
+                        "add_tags", s.category, s.query.ifBlank { null },
+                        s.filterTag, s.filterSource, s.filterTime?.fromParam(),
+                        tags = listOf(t),
+                    )
                     _ui.value = _ui.value.copy(
                         batchBusy = false,
                         selectionMode = false,
@@ -494,7 +597,11 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             _ui.value = s.copy(batchBusy = true)
             viewModelScope.launch {
                 try {
-                    val res = repo.batchNotesByFilter("set_category", s.category, s.query.ifBlank { null }, setCategory = category)
+                    val res = repo.batchNotesByFilter(
+                        "set_category", s.category, s.query.ifBlank { null },
+                        s.filterTag, s.filterSource, s.filterTime?.fromParam(),
+                        setCategory = category,
+                    )
                     _ui.value = _ui.value.copy(
                         batchBusy = false,
                         selectionMode = false,

@@ -5,4 +5,11 @@
     <string name="notif_channel_name">速记快捷入口</string>
     <string name="notif_title">碎念速记</string>
     <string name="notif_text">点按快速记录一条碎念</string>
+    <string name="notif_channel_todo">待办提醒</string>
+    <string name="notif_channel_todo_desc">待办到期时提醒，可单独关闭</string>
+    <string name="notif_channel_review">每日回顾</string>
+    <string name="notif_channel_review_desc">每天推送往日碎念回顾，可单独关闭</string>
+    <string name="notif_todo_title">待办到点了</string>
+    <string name="notif_review_title">今日回顾</string>
+    <string name="notif_review_text">%1$d 条往日碎念等你回看</string>
 </resources>

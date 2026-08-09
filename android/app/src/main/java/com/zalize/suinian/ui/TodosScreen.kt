@@ -2,6 +2,7 @@ package com.zalize.suinian.ui
 
 import android.app.Application
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,11 +13,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -64,6 +70,7 @@ data class TodosUiState(
     val error: String? = null,
     val notes: List<Note> = emptyList(),
     val toast: String? = null,
+    val undo: UndoDelete? = null,
 )
 
 class TodosViewModel(app: Application) : AndroidViewModel(app) {
@@ -102,10 +109,28 @@ class TodosViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 repo.delete(note.id)
+                _ui.value = _ui.value.copy(undo = UndoDelete("已删除", listOf(note.id)))
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(notes = prev, toast = e.message ?: "删除失败")
             }
         }
+    }
+
+    /** 撤销删除：调后端恢复接口 */
+    fun undoDelete(undo: UndoDelete) {
+        viewModelScope.launch {
+            try {
+                val restored = repo.restoreNotes(undo.ids)
+                _ui.value = _ui.value.copy(toast = if (restored > 0) "已恢复 $restored 条" else "已超出可撤销时间，无法恢复")
+                refresh()
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(toast = e.message ?: "撤销失败")
+            }
+        }
+    }
+
+    fun consumeUndo() {
+        _ui.value = _ui.value.copy(undo = null)
     }
 
     fun consumeToast() {
@@ -133,6 +158,7 @@ class TodosViewModel(app: Application) : AndroidViewModel(app) {
 fun TodosScreen(modifier: Modifier = Modifier, vm: TodosViewModel = viewModel()) {
     val ui by vm.ui.collectAsState()
     val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // 切回该页时刷新，避免新建待办看不到
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
@@ -146,14 +172,29 @@ fun TodosScreen(modifier: Modifier = Modifier, vm: TodosViewModel = viewModel())
         }
     }
 
+    // 删除撤销 Snackbar
+    LaunchedEffect(ui.undo) {
+        val undo = ui.undo ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = undo.message,
+            actionLabel = "撤销",
+            duration = SnackbarDuration.Long,
+        )
+        vm.consumeUndo()
+        if (result == SnackbarResult.ActionPerformed) {
+            vm.undoDelete(undo)
+        }
+    }
+
+    Box(modifier.fillMaxSize()) {
     when {
         ui.loading && ui.notes.isEmpty() -> Column(
-            modifier.fillMaxSize(),
+            Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) { CircularProgressIndicator() }
         ui.error != null -> Column(
-            modifier.fillMaxSize(),
+            Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
@@ -162,7 +203,7 @@ fun TodosScreen(modifier: Modifier = Modifier, vm: TodosViewModel = viewModel())
             AssistChip(onClick = { vm.refresh() }, label = { Text("重试") })
         }
         ui.notes.isEmpty() -> Column(
-            modifier.fillMaxSize(),
+            Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) { Text("没有待办，轻松！", color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -175,7 +216,7 @@ fun TodosScreen(modifier: Modifier = Modifier, vm: TodosViewModel = viewModel())
                 if (list.isEmpty()) null else g to list
             }
             LazyColumn(
-                modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 groups.forEach { (group, list) ->
@@ -210,5 +251,7 @@ fun TodosScreen(modifier: Modifier = Modifier, vm: TodosViewModel = viewModel())
                 item { Spacer(Modifier.height(24.dp)) }
             }
         }
+    }
+    SnackbarHost(snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))
     }
 }
