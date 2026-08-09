@@ -1,16 +1,20 @@
-import { saveNote, selectionContent, pageContent } from "@/utils/api";
+import { saveNote, selectionContent, pageContent, loadSettings } from "@/utils/api";
 import type { ExtractResult } from "@/entrypoints/extract";
 
 const MENU_SAVE_SELECTION = "suinian-save-selection";
 const MENU_SAVE_PAGE = "suinian-save-page";
 
-function notify(title: string, message: string) {
-  void browser.notifications.create({
-    type: "basic",
+const SAVED_NOTIFICATION_PREFIX = "suinian-saved-";
+
+function notify(title: string, message: string, opts?: { openWebOnClick?: boolean }) {
+  const options = {
+    type: "basic" as const,
     iconUrl: browser.runtime.getURL("/icon/128.png"),
     title,
-    message,
-  });
+    message: opts?.openWebOnClick ? `${message}\n点击打开碎念查看` : message,
+  };
+  if (opts?.openWebOnClick) void browser.notifications.create(`${SAVED_NOTIFICATION_PREFIX}${Date.now()}`, options);
+  else void browser.notifications.create(options);
 }
 
 async function runExtract(tabId: number): Promise<ExtractResult | null> {
@@ -42,7 +46,7 @@ async function saveSelection(tab: { id?: number; url?: string; title?: string },
       return;
     }
     await saveNote({ content: selectionContent(selection, tab.title, tab.url), url: tab.url });
-    notify("已保存到碎念", `划词内容已保存：${selection.trim().slice(0, 50)}`);
+    notify("已保存到碎念", `划词内容已保存：${selection.trim().slice(0, 50)}`, { openWebOnClick: true });
   } catch (e) {
     notify("保存失败", e instanceof Error ? e.message : String(e));
   }
@@ -59,13 +63,20 @@ async function savePage(tab: { id?: number; url?: string; title?: string }) {
       content: pageContent({ title: r?.title || tab.title || tab.url, url: tab.url, excerpt: r?.excerpt }),
       url: tab.url,
     });
-    notify("已保存到碎念", `已剪藏：${r?.title || tab.title || tab.url}`);
+    notify("已保存到碎念", `已剪藏：${r?.title || tab.title || tab.url}`, { openWebOnClick: true });
   } catch (e) {
     notify("保存失败", e instanceof Error ? e.message : String(e));
   }
 }
 
 export default defineBackground(() => {
+  browser.notifications.onClicked.addListener(async (id) => {
+    if (!id.startsWith(SAVED_NOTIFICATION_PREFIX)) return;
+    const { webBaseUrl } = await loadSettings();
+    void browser.tabs.create({ url: `${webBaseUrl}/#/` });
+    void browser.notifications.clear(id);
+  });
+
   browser.runtime.onInstalled.addListener(() => {
     browser.contextMenus.create({
       id: MENU_SAVE_SELECTION,

@@ -65,8 +65,8 @@ export function buildTriagePrompt(now: Date = new Date(), existingTags: string[]
   - 「报销到账 1200」→ income，amount=1200，currency="CNY"
   - 「今天买了杯咖啡，没看多少钱」→ expense，amount=null（金额不确定绝不要猜）
   - 「周末记得去买猫粮」→ todo（还没花钱，不是 expense）
-- tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）。标签必须是内容的主题词，不得照抄内容开头的括号前缀/标记/序号（如「[xxx]」「【xxx】」「1.」之类）${tagHint}
-- title: 一句话短标题（<=20字），同样不要把括号前缀/序号抄进标题
+- tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）。标签必须是内容的主题词。内容开头的方括号前缀标记（如「[QA-123]」「[P0]」「【草稿】」）和序号（「1.」）是元数据记号，不是主题：既不能整个照抄进标签，也不能把括号里的词抽出来当标签${tagHint}
+- title: 一句话短标题（<=20字），同样要忽略开头的方括号前缀/序号，不要抄进标题。判例：「[P0] 修复登录超时」→ title="修复登录超时"，tags 不含 "P0"；「[QA-TEST] 周五交报告」→ title="周五交报告"，tags 不含 "QA-TEST"、"QA"、"TEST"
 - is_sensitive: 是否含真实机密 (boolean)。仅当内容中出现真实可用的机密「具体值」时才为 true：密码/口令/密钥/API key/token 的具体值、完整身份证号、银行卡号、手机号+姓名组合、账号+密码组合。以下情况必须为 false：技术文档/教程/笔记只是讨论密码、token、密钥等概念而未出现具体秘密值；代码片段中的变量名/占位符（如 <token>、your-api-key、xxx）；普通长文、文件内容中的 ID/哈希/版本号等非机密长字符串。判例：
   - 「服务器 root 密码是 P@ssw0rd123」→ true（出现密码具体值）
   - 「OpenAI key: sk-abc123def456…」→ true（出现密钥具体值）
@@ -106,6 +106,38 @@ const TAG_SECRET_RE = /^(?=.*\d)[A-Za-z0-9_\-@#$%.]{6,}$|^\d{6,}$|^sk-/i;
 /** Drop tags that look like sensitive values (long alnum strings, digit runs, key prefixes). */
 export function sanitizeTags(tags: string[]): string[] {
   return tags.filter((t) => !TAG_SECRET_RE.test(t.trim())).slice(0, 3);
+}
+
+// Leading [xxx] / 【xxx】 marker prefixes (issue keys, QA markers, 【草稿】-style
+// labels) are metadata, never topics: they must not leak into tags or the title.
+const LEADING_MARKERS_RE = /^\s*(?:[[【][^\]】\n]{1,24}[\]】]\s*)+/;
+
+/** Extract the texts of leading bracket markers, e.g. "[QA-1]【草稿】xx" → ["QA-1","草稿"]. */
+export function leadingMarkers(content: string): string[] {
+  const m = content.match(LEADING_MARKERS_RE);
+  if (!m) return [];
+  return [...m[0].matchAll(/[[【]([^\]】\n]{1,24})[\]】]/g)]
+    .map((x) => x[1].trim())
+    .filter((t) => t.length >= 2);
+}
+
+/** Deterministic backstop after the LLM: drop tags that copy a leading bracket
+ * marker (whole or部分) and strip the markers from the title. Normal #tags and
+ * body-derived tags are untouched. */
+export function stripMarkerNoise(content: string, triage: TriageResult): TriageResult {
+  const markers = leadingMarkers(content);
+  if (markers.length === 0) return triage;
+  const lower = markers.map((m) => m.toLowerCase());
+  const tags = triage.tags.filter((t) => {
+    const tl = t.trim().toLowerCase();
+    return !lower.some((m) => tl.includes(m) || m.includes(tl));
+  });
+  let title = triage.title;
+  for (const m of markers) {
+    title = title.split(`[${m}]`).join("").split(`【${m}】`).join("");
+  }
+  title = title.replace(/^[\s\-—:：]+/, "").trim();
+  return { ...triage, tags, title };
 }
 
 const TODO_DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::\d{2})?\s*(Z|[+-]\d{2}:?\d{2})?)?/;
@@ -200,6 +232,7 @@ export async function triageNote(
     ],
   });
   let result = (text && parseTriageJson(text)) || null;
+  if (result) result = stripMarkerNoise(content, result);
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {
     result = result

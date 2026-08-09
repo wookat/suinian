@@ -70,6 +70,9 @@ const CASES: EvalCase[] = [
   { content: `${PREFIX} https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API 讲 Service Worker 的文档`, category: "collect" },
   { content: `${PREFIX} 突然想到：碎念的周报可以做成邮件推送，让用户被动回顾`, category: "idea" },
   { content: `${PREFIX} 【灵感】给时间流加一个按月折叠的视图`, category: "idea", forbiddenTagParts: ["灵感】", "【"] },
+  // R71：[xxx] 样式的前缀标记不得进标签/标题（模拟 issue key / QA 标记等元数据前缀）
+  { content: `${PREFIX} [P0] 明天上午修复登录超时的 bug`, category: "todo", due: shanghaiIso(1), forbiddenTagParts: ["P0", "[", "]"] },
+  { content: `${PREFIX} 【草稿】重写落地页首屏文案，突出 AI 分拣`, category: "idea", forbiddenTagParts: ["草稿", "【", "】"] },
   { content: `${PREFIX} 家里 Wi-Fi 密码改成了 hunter2-demo`, category: "data", sensitive: true },
   // R22：技术文档/长文不得误判敏感（模拟文件入库的技术 txt 内容）
   {

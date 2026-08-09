@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { redactNote, redactNotes, jsonResult, errorResult, SENSITIVE_PLACEHOLDER } from "./lib.js";
+import { redactNote, redactNotes, redactPendingNote, jsonResult, errorResult, SENSITIVE_PLACEHOLDER, PENDING_PLACEHOLDER } from "./lib.js";
 
 describe("redactNote", () => {
   it("redacts content, title and tags of sensitive notes", () => {
@@ -21,11 +21,17 @@ describe("redactNotes", () => {
     expect(redactNotes(null)).toEqual([]);
     expect(redactNotes(undefined)).toEqual([]);
     const out = redactNotes([
-      { is_sensitive: 1, content: "secret" },
-      { is_sensitive: 0, content: "plain" },
+      { is_sensitive: 1, content: "secret", category: "data" },
+      { is_sensitive: 0, content: "plain", category: "idea" },
     ]);
     expect(out[0].content).toBe(SENSITIVE_PLACEHOLDER);
     expect(out[1].content).toBe("plain");
+  });
+
+  it("withholds content of notes still pending triage", () => {
+    const out = redactNotes([{ is_sensitive: 0, content: "未分拣", category: null }]);
+    expect(out[0].content).toBe(PENDING_PLACEHOLDER);
+    expect(redactPendingNote({ is_sensitive: 0, content: "已分拣", category: "idea" }).content).toBe("已分拣");
   });
 });
 

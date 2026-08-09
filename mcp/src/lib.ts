@@ -8,8 +8,18 @@ export function redactNote<T extends NoteLike>(note: T): T {
   return note;
 }
 
-export function redactNotes<T extends NoteLike>(notes: T[] | undefined | null): T[] {
-  return (notes ?? []).map(redactNote);
+export const PENDING_PLACEHOLDER = "[待分拣，内容暂不返回]";
+
+/** Notes still waiting for AI triage may turn out sensitive: list/search-style
+ * outputs treat them conservatively and withhold the content until sorted. */
+export function redactPendingNote<T extends NoteLike & { category?: unknown }>(note: T): T {
+  if (note && !note.is_sensitive && (note.category ?? null) === null)
+    return { ...note, content: PENDING_PLACEHOLDER, title: PENDING_PLACEHOLDER, tags: [] };
+  return note;
+}
+
+export function redactNotes<T extends NoteLike & { category?: unknown }>(notes: T[] | undefined | null): T[] {
+  return (notes ?? []).map((n) => redactPendingNote(redactNote(n)));
 }
 
 export function jsonResult(data: unknown): { content: { type: "text"; text: string }[] } {
