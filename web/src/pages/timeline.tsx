@@ -478,11 +478,16 @@ export function TimelinePage() {
     const applyHashTag = () => {
       const query = window.location.hash.split("?")[1]
       if (!query) return
-      const t = new URLSearchParams(query).get("tag")
-      if (t) {
-        setTag(t)
-        history.replaceState(null, "", `${window.location.pathname}#/`)
+      const params = new URLSearchParams(query)
+      const t = params.get("tag")
+      const d = params.get("date")
+      if (t) setTag(t)
+      if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+        setFromDate(d)
+        setToDate(d)
+        setFiltersOpen(true)
       }
+      if (t || d) history.replaceState(null, "", `${window.location.pathname}#/`)
     }
     applyHashTag()
     window.addEventListener("hashchange", applyHashTag)

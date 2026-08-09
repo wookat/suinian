@@ -9,6 +9,7 @@ import type {
   Thread,
   ThreadDetail,
   ThreadsResponse,
+  StatsResponse,
   TodayReviewResponse,
   WeeklyReport,
 } from "./types"
@@ -385,6 +386,43 @@ export async function mockGetReport(id: string): Promise<WeeklyReport> {
 export async function mockGenerateReport(): Promise<WeeklyReport> {
   await delay(600)
   return seedReports[0]
+}
+
+export async function mockGetStats(): Promise<StatsResponse> {
+  await delay(120)
+  const notes = loadMockNotes().filter((n) => !n.tags.includes("示例"))
+  const dailyMap = new Map<string, number>()
+  const catMap = new Map<string, number>()
+  const srcMap = new Map<string, number>()
+  const tagMap = new Map<string, number>()
+  for (const n of notes) {
+    const d = n.created_at.slice(0, 10)
+    dailyMap.set(d, (dailyMap.get(d) ?? 0) + 1)
+    catMap.set(n.category ?? "pending", (catMap.get(n.category ?? "pending") ?? 0) + 1)
+    srcMap.set(n.source, (srcMap.get(n.source) ?? 0) + 1)
+    if (n.is_sensitive !== 1) for (const t of n.tags) tagMap.set(t, (tagMap.get(t) ?? 0) + 1)
+  }
+  const byCount = (m: Map<string, number>) =>
+    [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  const today = new Date().toISOString().slice(0, 10)
+  return {
+    total_notes: notes.length,
+    thread_count: 2,
+    daily: [...dailyMap.entries()].sort().map(([date, count]) => ({ date, count })),
+    streak: { current: dailyMap.has(today) ? 1 : 0, longest: 3 },
+    categories: byCount(catMap).map(([category, count]) => ({ category, count })),
+    sources: byCount(srcMap).map(([source, count]) => ({ source, count })),
+    top_tags: byCount(tagMap)
+      .slice(0, 12)
+      .map(([tag, count]) => ({ tag, count })),
+  }
+}
+
+export async function mockGetRandomNote(): Promise<Note | null> {
+  await delay(120)
+  const notes = loadMockNotes().filter((n) => n.is_sensitive !== 1 && !n.tags.includes("示例"))
+  if (notes.length === 0) return null
+  return notes[Math.floor(Math.random() * notes.length)]
 }
 
 export async function mockGetTodayReview(): Promise<TodayReviewResponse> {

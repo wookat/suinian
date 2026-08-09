@@ -12,6 +12,8 @@ import {
   mockGetThread,
   mockGetThreads,
   mockPatchNote,
+  mockGetStats,
+  mockGetRandomNote,
 } from "./mock"
 import type {
   AskHistoryMessage,
@@ -23,6 +25,7 @@ import type {
   NotesQuery,
   NotesResponse,
   TagCount,
+  StatsResponse,
   ReportsResponse,
   ThreadDetail,
   ThreadsResponse,
@@ -363,6 +366,24 @@ export async function batchNotesByFilter(
 }
 
 /** 全部标签 + 使用次数（按次数降序） */
+export async function getStats(days = 365): Promise<StatsResponse> {
+  if (loadSettings().useMock) return mockGetStats()
+  const tz = -new Date().getTimezoneOffset()
+  return realFetch<StatsResponse>(`/api/stats?days=${days}&tz_offset=${tz}`)
+}
+
+/** 随机漫步：抽一条历史笔记（后端已排除敏感/示例/软删）；无可抽时返回 null */
+export async function getRandomNote(): Promise<Note | null> {
+  if (loadSettings().useMock) return mockGetRandomNote()
+  try {
+    const res = await realFetch<{ note: Record<string, unknown> }>("/api/notes/random")
+    return normalizeNote(res.note)
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null
+    throw e
+  }
+}
+
 export async function getTags(): Promise<TagCount[]> {
   if (loadSettings().useMock) throw new Error("演示模式不支持标签管理，请先配置真实 API")
   const res = await realFetch<{ tags: TagCount[] }>("/api/tags")

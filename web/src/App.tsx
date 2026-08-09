@@ -4,6 +4,7 @@ import {
   CheckSquare,
   GitBranch,
   FileText,
+  BarChart3,
   Settings as SettingsIcon,
   Info,
   X,
@@ -20,6 +21,7 @@ import { cn } from "@/lib/utils"
 const TodosPage = lazy(() => import("@/pages/todos").then((m) => ({ default: m.TodosPage })))
 const ThreadsPage = lazy(() => import("@/pages/threads").then((m) => ({ default: m.ThreadsPage })))
 const ReportsPage = lazy(() => import("@/pages/reports").then((m) => ({ default: m.ReportsPage })))
+const InsightsPage = lazy(() => import("@/pages/insights").then((m) => ({ default: m.InsightsPage })))
 const SettingsPage = lazy(() => import("@/pages/settings").then((m) => ({ default: m.SettingsPage })))
 const AuthPage = lazy(() => import("@/pages/auth").then((m) => ({ default: m.AuthPage })))
 
@@ -55,6 +57,14 @@ const ROUTES = [
     page: ReportsPage,
     title: "每周思考报告",
     description: "每周一自动生成，回顾「本周你在想什么」",
+  },
+  {
+    path: "insights",
+    label: "洞察",
+    icon: BarChart3,
+    page: InsightsPage,
+    title: "洞察",
+    description: "记录热力图、连续天数与全部笔记的统计全貌，随机漫步重遇旧想法",
   },
   {
     path: "settings",

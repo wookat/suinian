@@ -175,6 +175,21 @@ export interface ReportsResponse {
   reports: WeeklyReport[]
 }
 
+export interface StatsDaily {
+  date: string
+  count: number
+}
+
+export interface StatsResponse {
+  total_notes: number
+  thread_count: number
+  daily: StatsDaily[]
+  streak: { current: number; longest: number }
+  categories: { category: string; count: number }[]
+  sources: { source: string; count: number }[]
+  top_tags: { tag: string; count: number }[]
+}
+
 export type ReviewKind = "year_ago" | "month_ago" | "revisit"
 
 export interface DailyReviewItem {

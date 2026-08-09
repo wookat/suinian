@@ -41,6 +41,7 @@ import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
 import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import { PIPELINE_TIMEOUT_MS, SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
+import { buildStats, normalizeTzOffset, SAMPLE_TAG_LIKE } from "./stats";
 
 type Vars = { userId: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -1059,6 +1060,28 @@ app.post("/api/notes/batch", async (c) => {
 
 // ---- GET /api/tags ----
 // All tags of the current user with usage counts, most used first.
+// ---- GET /api/stats ----
+// One-shot dashboard stats: heatmap daily counts, totals, distributions,
+// streaks, top tags, thread count. tz_offset = minutes east of UTC (default +480).
+app.get("/api/stats", async (c) => {
+  const days = Math.max(1, Math.min(730, parseInt(c.req.query("days") ?? "", 10) || 365));
+  const tzOffset = normalizeTzOffset(c.req.query("tz_offset"));
+  const stats = await buildStats(c.env, c.get("userId"), { days, tzOffset });
+  return c.json(stats);
+});
+
+// ---- GET /api/notes/random ----
+// 随机漫步: one random historical note, never sensitive/sample/soft-deleted.
+app.get("/api/notes/random", async (c) => {
+  const note = await c.env.DB.prepare(
+    `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND is_sensitive = 0 AND tags NOT LIKE '${SAMPLE_TAG_LIKE}' ORDER BY RANDOM() LIMIT 1`
+  )
+    .bind(c.get("userId"))
+    .first<NoteRow>();
+  if (!note) return c.json({ error: "暂无可回看的笔记" }, 404);
+  return c.json({ note: noteToJson(note) });
+});
+
 app.get("/api/tags", async (c) => {
   const userId = c.get("userId");
   const { results } = await c.env.DB.prepare("SELECT tags FROM notes WHERE user_id = ? AND deleted_at IS NULL")
