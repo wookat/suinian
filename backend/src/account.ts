@@ -21,6 +21,7 @@ export const USER_ID_TABLES = [
   "thread_backfill",
   "wechat_mp_bindings",
   "wechat_mp_bind_codes",
+  "wecom_kf_bindings",
 ] as const;
 
 /** Tables keyed by a note_id foreign key; cleared before their parent notes. */
