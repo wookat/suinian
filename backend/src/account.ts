@@ -19,6 +19,8 @@ export const USER_ID_TABLES = [
   "push_daily_log",
   "thread_jobs",
   "thread_backfill",
+  "wechat_mp_bindings",
+  "wechat_mp_bind_codes",
 ] as const;
 
 /** Tables keyed by a note_id foreign key; cleared before their parent notes. */

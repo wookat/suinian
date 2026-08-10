@@ -58,6 +58,21 @@ import {
   RETRIAGE_TIME_BUDGET_MS,
 } from "./constants";
 import { buildStats, normalizeTzOffset, SAMPLE_TAG_LIKE } from "./stats";
+import {
+  verifySignature,
+  verifyMsgSignature,
+  decryptWechatMessage,
+  encryptWechatMessage,
+  buildEncryptedReply,
+  parseWechatXml,
+  buildTextReply,
+  createBindCode,
+  consumeBindCode,
+  lookupBinding,
+  extractBindCode,
+  downloadMpMedia,
+  BIND_CODE_TTL_MINUTES,
+} from "./wechat-mp";
 
 type Vars = { userId: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -226,6 +241,212 @@ app.post("/api/admin/run-daily-reviews", async (c) => {
     heartbeats: heartbeats.map((h) => ({ ...h, stats: h.stats ? JSON.parse(h.stats) : null })),
   });
 });
+
+// ---- WeChat Official Account callback (公众号, public; guarded by WECHAT_MP_TOKEN) ----
+// GET = URL 验证 (echostr); POST = 消息推送. Disabled (404) unless the token is set.
+
+app.get("/wechat/mp", async (c) => {
+  const token = c.env.WECHAT_MP_TOKEN;
+  if (!token) return c.json({ error: "not found" }, 404);
+  const q = c.req.query();
+  if (!(await verifySignature(token, q.timestamp ?? "", q.nonce ?? "", q.signature ?? ""))) {
+    return c.text("invalid signature", 403);
+  }
+  return c.text(q.echostr ?? "");
+});
+
+const WECHAT_BIND_HELP =
+  "还未绑定碎念账号。请打开碎念 Web 端「设置 → 微信绑定」生成 6 位绑定码，然后把绑定码发给我（10 分钟内有效）。";
+
+app.post("/wechat/mp", async (c) => {
+  const token = c.env.WECHAT_MP_TOKEN;
+  if (!token) return c.json({ error: "not found" }, 404);
+  const q = c.req.query();
+  const rawBody = await c.req.text();
+  const aesMode = q.encrypt_type === "aes";
+
+  let xml = rawBody;
+  if (aesMode) {
+    const aesKey = c.env.WECHAT_MP_AES_KEY;
+    if (!aesKey) return c.text("aes mode not configured", 403);
+    const outer = parseWechatXmlEncrypt(rawBody);
+    if (!outer) return c.text("bad request", 400);
+    if (!(await verifyMsgSignature(token, q.timestamp ?? "", q.nonce ?? "", outer, q.msg_signature ?? ""))) {
+      return c.text("invalid signature", 403);
+    }
+    const decrypted = await decryptWechatMessage(aesKey, outer, c.env.WECHAT_MP_APPID);
+    if (!decrypted) return c.text("decrypt failed", 400);
+    xml = decrypted;
+  } else if (!(await verifySignature(token, q.timestamp ?? "", q.nonce ?? "", q.signature ?? ""))) {
+    return c.text("invalid signature", 403);
+  }
+
+  const msg = parseWechatXml(xml);
+  if (!msg) return c.text("success");
+
+  const reply = async (content: string): Promise<Response> => {
+    const plain = buildTextReply(msg.fromUserName, msg.toUserName, content);
+    if (aesMode && c.env.WECHAT_MP_AES_KEY && c.env.WECHAT_MP_APPID) {
+      const enc = await encryptWechatMessage(c.env.WECHAT_MP_AES_KEY, plain, c.env.WECHAT_MP_APPID);
+      if (enc) return c.text(await buildEncryptedReply(token, enc), 200, { "Content-Type": "application/xml" });
+    }
+    return c.text(plain, 200, { "Content-Type": "application/xml" });
+  };
+
+  // events: welcome on subscribe (with binding instructions), ack the rest
+  if (msg.msgType === "event") {
+    if ((msg.event ?? "").toLowerCase() === "subscribe") {
+      return reply(`欢迎使用碎念！给我发消息就能记录一切。\n\n${WECHAT_BIND_HELP}`);
+    }
+    return c.text("success");
+  }
+
+  const openid = msg.fromUserName;
+  const boundUserId = await lookupBinding(c.env.DB, openid);
+
+  // unbound: only accept a bind code
+  if (!boundUserId) {
+    const code = msg.msgType === "text" && msg.content ? extractBindCode(msg.content) : null;
+    if (code) {
+      const userId = await consumeBindCode(c.env.DB, code, openid);
+      if (userId) return reply("绑定成功 ✓ 现在直接发消息即可记录（文字/链接/图片/语音）。发送「解绑」可解除绑定。");
+      return reply("绑定码无效或已过期，请回到碎念 Web 端「设置 → 微信绑定」重新生成。");
+    }
+    return reply(WECHAT_BIND_HELP);
+  }
+
+  // bound: route by message type
+  if (msg.msgType === "text" && msg.content) {
+    const text = msg.content.trim();
+    if (text === "解绑" || text.toLowerCase() === "unbind") {
+      await c.env.DB.prepare("DELETE FROM wechat_mp_bindings WHERE openid = ?").bind(openid).run();
+      return reply("已解绑。需要时可在 Web 端设置页重新生成绑定码。");
+    }
+    if (/^[?？]/.test(text)) {
+      return reply("公众号被动回复限时 5 秒，暂不支持问答检索；请到 Web 端「问一问」提问。消息不以 ? 开头即为正常记录。");
+    }
+    const tooLong = contentTooLong(c, text);
+    if (tooLong) return reply(`内容过长：最多 ${MAX_CONTENT_CHARS} 字符，请拆成多条再发。`);
+    await createNote(c, boundUserId, { content: text, source: "wechat" }, (p) => c.executionCtx.waitUntil(p), {
+      syncTriage: false,
+    });
+    return reply("已存 ✓ AI 分拣中，稍后可在时间流查看。");
+  }
+
+  if (msg.msgType === "link" && msg.url) {
+    const content = [msg.title, msg.description, msg.url].filter(Boolean).join("\n");
+    await createNote(
+      c,
+      boundUserId,
+      { content, url: msg.url, source: "wechat", raw_type: "link" },
+      (p) => c.executionCtx.waitUntil(p),
+      { syncTriage: false }
+    );
+    return reply("链接已存 ✓ 正在抓取摘要与分拣。");
+  }
+
+  if (msg.msgType === "image" && msg.picUrl) {
+    const picUrl = msg.picUrl;
+    c.executionCtx.waitUntil(
+      capped(ingestWechatImage(c.env, boundUserId, picUrl, (p) => c.executionCtx.waitUntil(p)), PIPELINE_TIMEOUT_MS, `wechat image ${openid}`)
+    );
+    return reply("图片已收到 ✓ 正在提取文字并入库。");
+  }
+
+  if (msg.msgType === "voice") {
+    // 开通了语音识别的公众号直接推 Recognition 文本；否则下载原始语音转写
+    if (msg.recognition) {
+      await createNote(
+        c,
+        boundUserId,
+        { content: msg.recognition, source: "wechat", raw_type: "voice" },
+        (p) => c.executionCtx.waitUntil(p),
+        { syncTriage: false }
+      );
+      return reply("语音已存 ✓（微信识别文本）AI 分拣中。");
+    }
+    if (msg.mediaId && c.env.WECHAT_MP_APPID && c.env.WECHAT_MP_APPSECRET) {
+      const mediaId = msg.mediaId;
+      c.executionCtx.waitUntil(
+        capped(ingestWechatVoice(c.env, boundUserId, mediaId, (p) => c.executionCtx.waitUntil(p)), PIPELINE_TIMEOUT_MS, `wechat voice ${openid}`)
+      );
+      return reply("语音已收到 ✓ 正在转写并入库。");
+    }
+    return reply("语音已收到，但当前公众号未开通语音识别、也未配置 AppSecret，暂无法转写。可发文字或图片。");
+  }
+
+  return reply("暂不支持该消息类型，目前支持：文字 / 链接 / 图片 / 语音。");
+});
+
+/** Background: download a WeChat image by PicUrl, run vision extraction, save as a note. */
+async function ingestWechatImage(env: Env, userId: string, picUrl: string, waitUntil: (p: Promise<unknown>) => void): Promise<void> {
+  let content: string | null = null;
+  let meta: NoteMeta | null = null;
+  try {
+    const res = await fetch(picUrl);
+    if (res.ok) {
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      const extraction = await describeImage(env, bytes);
+      if (extraction) {
+        content = extraction.content;
+        if (extraction.description && extraction.description !== extraction.content) {
+          meta = { image_description: extraction.description };
+        }
+      }
+      const { note } = await createNote(
+        { env },
+        userId,
+        { content: content ?? IMAGE_FAILED_PLACEHOLDER, source: "wechat", raw_type: "image", meta },
+        waitUntil,
+        { syncTriage: false }
+      );
+      await storeOriginal(env, userId, note.id, { type: "image", bytes, mime: res.headers.get("content-type") || "image/jpeg" });
+      return;
+    }
+  } catch (e) {
+    console.error("wechat image ingest failed", e);
+  }
+  await createNote({ env }, userId, { content: IMAGE_FAILED_PLACEHOLDER, source: "wechat", raw_type: "image" }, waitUntil, {
+    syncTriage: false,
+  });
+}
+
+/** Background: download a WeChat voice media, transcribe, save as a note. */
+async function ingestWechatVoice(env: Env, userId: string, mediaId: string, waitUntil: (p: Promise<unknown>) => void): Promise<void> {
+  let content: string | null = null;
+  let meta: NoteMeta | null = null;
+  let bytes: Uint8Array | null = null;
+  let mime = "audio/amr";
+  try {
+    const media = await downloadMpMedia(env, mediaId);
+    if (media) {
+      bytes = media.bytes;
+      mime = media.mime;
+      const raw = await transcribeAudio(env, media.bytes);
+      if (raw !== null) {
+        const corrected = await correctTranscript(env, raw);
+        content = corrected;
+        if (corrected !== raw) meta = { raw_transcript: raw };
+      }
+    }
+  } catch (e) {
+    console.error("wechat voice ingest failed", e);
+  }
+  const { note } = await createNote(
+    { env },
+    userId,
+    { content: content ?? AUDIO_FAILED_PLACEHOLDER, source: "wechat", raw_type: "voice", meta },
+    waitUntil,
+    { syncTriage: false }
+  );
+  if (bytes) await storeOriginal(env, userId, note.id, { type: "audio", bytes, mime });
+}
+
+/** Extract the <Encrypt> field from a safe-mode envelope. */
+function parseWechatXmlEncrypt(xml: string): string | null {
+  const m = xml.match(/<Encrypt>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([^<]*))<\/Encrypt>/);
+  return m ? (m[1] ?? m[2] ?? "").trim() || null : null;
+}
 
 // ---- auth ----
 app.use("/api/*", async (c, next) => {
@@ -1362,6 +1583,37 @@ app.post("/api/ingest/wechat", async (c) => {
     reply = `已存 · ${label}${tagStr ? " " + tagStr : ""}`;
   }
   return c.json({ note: await noteToJsonDecrypted(c.env, note), reply }, 201);
+});
+
+// ---- WeChat Official Account binding (authed) ----
+// POST /api/wechat/bind-code: generate a fresh 6-digit binding code
+app.post("/api/wechat/bind-code", async (c) => {
+  if (!c.env.WECHAT_MP_TOKEN) return c.json({ error: "微信公众号未配置" , code: "MP_NOT_CONFIGURED" }, 404);
+  const { code, expires_at } = await createBindCode(c.env.DB, c.get("userId"));
+  return c.json({ code, expires_at, ttl_minutes: BIND_CODE_TTL_MINUTES }, 201);
+});
+
+// GET /api/wechat/binding: current binding status
+app.get("/api/wechat/binding", async (c) => {
+  const configured = !!c.env.WECHAT_MP_TOKEN;
+  const rows = await c.env.DB.prepare(
+    "SELECT openid, created_at FROM wechat_mp_bindings WHERE user_id = ? ORDER BY created_at DESC"
+  )
+    .bind(c.get("userId"))
+    .all<{ openid: string; created_at: string }>();
+  // openid is an opaque WeChat identifier but still masked to avoid leaking it wholesale
+  const bindings = (rows.results ?? []).map((r) => ({
+    openid_masked: r.openid.length > 8 ? `${r.openid.slice(0, 4)}…${r.openid.slice(-4)}` : r.openid,
+    created_at: r.created_at,
+  }));
+  return c.json({ configured, bound: bindings.length > 0, bindings });
+});
+
+// DELETE /api/wechat/binding: unbind all WeChat accounts for this user
+app.delete("/api/wechat/binding", async (c) => {
+  await c.env.DB.prepare("DELETE FROM wechat_mp_bindings WHERE user_id = ?").bind(c.get("userId")).run();
+  await c.env.DB.prepare("DELETE FROM wechat_mp_bind_codes WHERE user_id = ?").bind(c.get("userId")).run();
+  return c.json({ ok: true });
 });
 
 // ---- POST /api/ingest/media ----
