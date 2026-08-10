@@ -774,6 +774,10 @@ export interface WechatBindingStatus {
   configured: boolean
   bound: boolean
   bindings: { openid_masked: string; created_at: string }[]
+  /** 企微微信客服通道（R86）；旧后端可能不返回这些字段 */
+  kf_configured?: boolean
+  kf_bound?: boolean
+  kf_bindings?: { openid_masked: string; created_at: string }[]
 }
 
 /** 微信公众号绑定状态（configured=false 表示服务端未配置公众号） */

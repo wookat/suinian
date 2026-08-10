@@ -28,6 +28,14 @@ export type Env = {
   WECHAT_MP_APPSECRET?: string;
   /** 43-char EncodingAESKey enabling safe (encrypted) callback mode. */
   WECHAT_MP_AES_KEY?: string;
+  /** WeCom 微信客服 callback token; with AES key + corp id enables /wechat/kf. */
+  WECOM_KF_TOKEN?: string;
+  /** 43-char EncodingAESKey for the 微信客服 callback (always encrypted). */
+  WECOM_KF_AES_KEY?: string;
+  /** WeCom corp id (the AES envelope receiver id and gettoken corpid). */
+  WECOM_CORP_ID?: string;
+  /** 微信客服 secret (access_token for sync_msg / send_msg / media). */
+  WECOM_KF_SECRET?: string;
 };
 
 export interface ThreadRow {

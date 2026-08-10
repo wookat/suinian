@@ -579,9 +579,9 @@ function WechatBindingCard() {
   return (
     <Card className="space-y-3 p-4">
       <div>
-        <h2 className="text-sm font-medium">微信绑定（公众号）</h2>
+        <h2 className="text-sm font-medium">微信绑定</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          关注碎念公众号后，把下方绑定码发给公众号即可绑定；之后直接发消息就是记录（文字/链接/图片/语音），无需自建 bot
+          两条官方通道共用同一个绑定码：公众号适合随手输入（文字/链接/图片/语音）；企微微信客服还能接住微信内转发的文章链接、文件与小程序卡片（合并转发的聊天记录官方接口暂不支持）。把绑定码发给任一通道即可绑定，发「解绑」解除。
         </p>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
@@ -589,17 +589,26 @@ function WechatBindingCard() {
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" /> 加载中…
         </p>
-      ) : status && !status.configured ? (
+      ) : status && !status.configured && !status.kf_configured ? (
         <p className="text-sm text-muted-foreground">
-          服务端未配置公众号（WECHAT_MP_TOKEN）。自部署用户参考仓库 docs/wechat-integration.md 配置；极客也可继续使用 skill/bridge 自建微信 bot。
+          服务端未配置微信通道（公众号 WECHAT_MP_TOKEN / 企微客服 WECOM_KF_*）。自部署用户参考仓库 docs/wechat-integration.md 配置；极客也可继续使用 skill/bridge 自建微信 bot。
         </p>
       ) : status ? (
         <div className="space-y-3">
-          {status.bound ? (
+          <div className="space-y-1 text-xs text-muted-foreground">
+            <p>公众号通道：{status.configured ? "已开通 — 关注碎念公众号后发绑定码" : "服务端未配置"}</p>
+            <p>企微微信客服通道：{status.kf_configured ? "已开通 — 添加客服会话后发绑定码，可接收转发文章/文件" : "服务端未配置（需企业主体，见 docs/wechat-integration.md）"}</p>
+          </div>
+          {status.bound || status.kf_bound ? (
             <div className="space-y-2">
               {status.bindings.map((b) => (
                 <p key={b.openid_masked} className="flex items-center gap-1.5 text-sm">
-                  <CircleCheck className="size-4 text-green-600" /> 已绑定微信 {b.openid_masked}（{b.created_at}）
+                  <CircleCheck className="size-4 text-green-600" /> 已绑定公众号微信 {b.openid_masked}（{b.created_at}）
+                </p>
+              ))}
+              {(status.kf_bindings ?? []).map((b) => (
+                <p key={`kf-${b.openid_masked}`} className="flex items-center gap-1.5 text-sm">
+                  <CircleCheck className="size-4 text-green-600" /> 已绑定企微客服微信 {b.openid_masked}（{b.created_at}）
                 </p>
               ))}
               <Button variant="outline" size="sm" disabled={busy} onClick={() => void unbind()}>
@@ -612,7 +621,7 @@ function WechatBindingCard() {
                 <div className="space-y-1">
                   <p className="font-mono text-2xl tracking-widest">{bindCode.code}</p>
                   <p className="text-xs text-muted-foreground">
-                    把这个 6 位码发给公众号（{bindCode.ttl_minutes} 分钟内有效），收到「绑定成功」回复后刷新本页
+                    把这个 6 位码发给公众号或企微客服（{bindCode.ttl_minutes} 分钟内有效），收到「绑定成功」回复后刷新本页
                   </p>
                 </div>
               ) : null}

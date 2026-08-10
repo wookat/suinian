@@ -44,7 +44,7 @@ import {
   AUDIO_FAILED_PLACEHOLDER,
   IMAGE_FAILED_PLACEHOLDER,
 } from "./media";
-import { detectFileKind, buildFileNote, buildFileReply } from "./files";
+import { detectFileKind, buildFileNote, buildFileReply, FILE_FAILED_PLACEHOLDER } from "./files";
 import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type ImportSource, type ImportItem, type ImportFailure } from "./import";
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
@@ -73,6 +73,16 @@ import {
   downloadMpMedia,
   BIND_CODE_TTL_MINUTES,
 } from "./wechat-mp";
+import {
+  wecomKfConfigured,
+  parseWecomKfCallback,
+  syncKfMessages,
+  sendKfText,
+  downloadWecomMedia,
+  consumeBindCodeKf,
+  lookupKfBinding,
+  type KfMessage,
+} from "./wecom-kf";
 
 type Vars = { userId: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -446,6 +456,283 @@ async function ingestWechatVoice(env: Env, userId: string, mediaId: string, wait
 function parseWechatXmlEncrypt(xml: string): string | null {
   const m = xml.match(/<Encrypt>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([^<]*))<\/Encrypt>/);
   return m ? (m[1] ?? m[2] ?? "").trim() || null : null;
+}
+
+// ---- WeCom 微信客服 callback (public; guarded by WECOM_KF_* secrets) ----
+// GET = URL 验证 (解密 echostr); POST = 事件回调 → sync_msg 拉取消息.
+// Disabled (404) unless WECOM_KF_TOKEN + WECOM_KF_AES_KEY + WECOM_CORP_ID are set.
+
+app.get("/wechat/kf", async (c) => {
+  if (!wecomKfConfigured(c.env)) return c.json({ error: "not found" }, 404);
+  const q = c.req.query();
+  const echostr = q.echostr ?? "";
+  if (!(await verifyMsgSignature(c.env.WECOM_KF_TOKEN!, q.timestamp ?? "", q.nonce ?? "", echostr, q.msg_signature ?? ""))) {
+    return c.text("invalid signature", 403);
+  }
+  const plain = await decryptWechatMessage(c.env.WECOM_KF_AES_KEY!, echostr, c.env.WECOM_CORP_ID);
+  if (plain === null) return c.text("decrypt failed", 400);
+  return c.text(plain);
+});
+
+app.post("/wechat/kf", async (c) => {
+  if (!wecomKfConfigured(c.env)) return c.json({ error: "not found" }, 404);
+  const q = c.req.query();
+  const rawBody = await c.req.text();
+  const outer = parseWechatXmlEncrypt(rawBody);
+  if (!outer) return c.text("bad request", 400);
+  if (!(await verifyMsgSignature(c.env.WECOM_KF_TOKEN!, q.timestamp ?? "", q.nonce ?? "", outer, q.msg_signature ?? ""))) {
+    return c.text("invalid signature", 403);
+  }
+  const xml = await decryptWechatMessage(c.env.WECOM_KF_AES_KEY!, outer, c.env.WECOM_CORP_ID);
+  if (xml === null) return c.text("decrypt failed", 400);
+  const cb = parseWecomKfCallback(xml);
+  // ack fast; the actual message pull + ingest runs in the background
+  if (cb && (cb.event ?? "") === "kf_msg_or_event") {
+    const env = c.env;
+    const waitUntil = (p: Promise<unknown>) => c.executionCtx.waitUntil(p);
+    c.executionCtx.waitUntil(
+      capped(processKfSync(env, cb.token, cb.openKfId, waitUntil), PIPELINE_TIMEOUT_MS, "wecom kf sync")
+    );
+  }
+  return c.text("success");
+});
+
+const WECOM_KF_BIND_HELP =
+  "还未绑定碎念账号。请打开碎念 Web 端「设置 → 微信绑定」生成 6 位绑定码，然后把绑定码发给我（10 分钟内有效）。";
+
+/** Pull new kf messages and ingest each customer message. */
+async function processKfSync(
+  env: Env,
+  syncToken: string | undefined,
+  openKfId: string | undefined,
+  waitUntil: (p: Promise<unknown>) => void
+): Promise<void> {
+  const messages = await syncKfMessages(env, syncToken, openKfId);
+  for (const msg of messages) {
+    try {
+      await handleKfMessage(env, msg, waitUntil);
+    } catch (e) {
+      console.error("wecom kf: message handling failed", msg.msgid, e);
+    }
+  }
+}
+
+/** Route a single 微信客服 message through binding / ingest, replying via send_msg. */
+async function handleKfMessage(env: Env, msg: KfMessage, waitUntil: (p: Promise<unknown>) => void): Promise<void> {
+  const externalUserid = msg.external_userid || msg.event?.external_userid || "";
+  const openKfId = msg.open_kfid || msg.event?.open_kfid || "";
+  if (!externalUserid || !openKfId) return;
+  const reply = (content: string) => sendKfText(env, openKfId, externalUserid, content);
+
+  if (msg.msgtype === "event") {
+    if ((msg.event?.event_type ?? "") === "enter_session") {
+      const bound = await lookupKfBinding(env.DB, externalUserid);
+      if (!bound) await reply(`欢迎使用碎念！发消息、转发文章/文件给我就能记录。\n\n${WECOM_KF_BIND_HELP}`);
+    }
+    return;
+  }
+
+  // only ingest messages sent by the WeChat customer (origin 3)
+  if (msg.origin !== 3) return;
+
+  const boundUserId = await lookupKfBinding(env.DB, externalUserid);
+
+  if (!boundUserId) {
+    const code = msg.msgtype === "text" && msg.text?.content ? extractBindCode(msg.text.content) : null;
+    if (code) {
+      const userId = await consumeBindCodeKf(env.DB, code, externalUserid);
+      if (userId) {
+        await reply("绑定成功 ✓ 现在直接发消息即可记录（文字/链接/图片/语音/文件/小程序）。发送「解绑」可解除绑定。");
+        return;
+      }
+      await reply("绑定码无效或已过期，请回到碎念 Web 端「设置 → 微信绑定」重新生成。");
+      return;
+    }
+    await reply(WECOM_KF_BIND_HELP);
+    return;
+  }
+
+  if (msg.msgtype === "text" && msg.text?.content) {
+    const text = msg.text.content.trim();
+    if (text === "解绑" || text.toLowerCase() === "unbind") {
+      await env.DB.prepare("DELETE FROM wecom_kf_bindings WHERE external_userid = ?").bind(externalUserid).run();
+      await reply("已解绑。需要时可在 Web 端设置页重新生成绑定码。");
+      return;
+    }
+    if (/^[?？]/.test(text)) {
+      await reply("客服通道暂不支持问答检索，请到 Web 端「问一问」提问。消息不以 ? 开头即为正常记录。");
+      return;
+    }
+    if (text.length > MAX_CONTENT_CHARS) {
+      await reply(`内容过长：最多 ${MAX_CONTENT_CHARS} 字符，请拆成多条再发。`);
+      return;
+    }
+    await createNote({ env }, boundUserId, { content: text, source: "wechat" }, waitUntil, { syncTriage: false });
+    await reply("已存 ✓ AI 分拣中，稍后可在时间流查看。");
+    return;
+  }
+
+  if (msg.msgtype === "link" && msg.link?.url) {
+    const content = [msg.link.title, msg.link.desc, msg.link.url].filter(Boolean).join("\n");
+    await createNote(
+      { env },
+      boundUserId,
+      { content, url: msg.link.url, source: "wechat", raw_type: "link" },
+      waitUntil,
+      { syncTriage: false }
+    );
+    await reply("链接已存 ✓ 正在抓取摘要与分拣。");
+    return;
+  }
+
+  if (msg.msgtype === "image" && msg.image?.media_id) {
+    const mediaId = msg.image.media_id;
+    waitUntil(capped(ingestKfImage(env, boundUserId, mediaId, waitUntil), PIPELINE_TIMEOUT_MS, `wecom image ${externalUserid}`));
+    await reply("图片已收到 ✓ 正在提取文字并入库。");
+    return;
+  }
+
+  if (msg.msgtype === "voice" && msg.voice?.media_id) {
+    const mediaId = msg.voice.media_id;
+    waitUntil(capped(ingestKfVoice(env, boundUserId, mediaId, waitUntil), PIPELINE_TIMEOUT_MS, `wecom voice ${externalUserid}`));
+    await reply("语音已收到 ✓ 正在转写并入库。");
+    return;
+  }
+
+  if (msg.msgtype === "file" && msg.file?.media_id) {
+    const mediaId = msg.file.media_id;
+    const filename = msg.file.filename;
+    waitUntil(
+      capped(
+        ingestKfFile(env, boundUserId, mediaId, filename, openKfId, externalUserid),
+        PIPELINE_TIMEOUT_MS,
+        `wecom file ${externalUserid}`
+      )
+    );
+    await reply("文件已收到 ✓ 正在提取文本并入库。");
+    return;
+  }
+
+  if (msg.msgtype === "miniprogram" && (msg.miniprogram?.title || msg.miniprogram?.appid)) {
+    const mp = msg.miniprogram!;
+    const content = [`【小程序】${mp.title ?? ""}`.trim(), mp.appid ? `appid: ${mp.appid}` : null, mp.pagepath ? `页面: ${mp.pagepath}` : null]
+      .filter(Boolean)
+      .join("\n");
+    await createNote({ env }, boundUserId, { content, source: "wechat", raw_type: "text" }, waitUntil, { syncTriage: false });
+    await reply("小程序卡片已存 ✓（标题与页面路径）。");
+    return;
+  }
+
+  await reply("暂不支持该消息类型，目前支持：文字 / 链接 / 图片 / 语音 / 文件 / 小程序卡片。（合并转发的聊天记录官方接口暂不支持）");
+}
+
+/** Background: download a kf image, run vision extraction, save as a note. */
+async function ingestKfImage(env: Env, userId: string, mediaId: string, waitUntil: (p: Promise<unknown>) => void): Promise<void> {
+  let content: string | null = null;
+  let meta: NoteMeta | null = null;
+  let bytes: Uint8Array | null = null;
+  let mime = "image/jpeg";
+  try {
+    const media = await downloadWecomMedia(env, mediaId);
+    if (media) {
+      bytes = media.bytes;
+      mime = media.mime;
+      const extraction = await describeImage(env, media.bytes);
+      if (extraction) {
+        content = extraction.content;
+        if (extraction.description && extraction.description !== extraction.content) {
+          meta = { image_description: extraction.description };
+        }
+      }
+    }
+  } catch (e) {
+    console.error("wecom kf image ingest failed", e);
+  }
+  const { note } = await createNote(
+    { env },
+    userId,
+    { content: content ?? IMAGE_FAILED_PLACEHOLDER, source: "wechat", raw_type: "image", meta },
+    waitUntil,
+    { syncTriage: false }
+  );
+  if (bytes) await storeOriginal(env, userId, note.id, { type: "image", bytes, mime });
+}
+
+/** Background: download a kf voice media, transcribe, save as a note. */
+async function ingestKfVoice(env: Env, userId: string, mediaId: string, waitUntil: (p: Promise<unknown>) => void): Promise<void> {
+  let content: string | null = null;
+  let meta: NoteMeta | null = null;
+  let bytes: Uint8Array | null = null;
+  let mime = "audio/amr";
+  try {
+    const media = await downloadWecomMedia(env, mediaId);
+    if (media) {
+      bytes = media.bytes;
+      mime = media.mime;
+      const raw = await transcribeAudio(env, media.bytes);
+      if (raw !== null) {
+        const corrected = await correctTranscript(env, raw);
+        content = corrected;
+        if (corrected !== raw) meta = { raw_transcript: raw };
+      }
+    }
+  } catch (e) {
+    console.error("wecom kf voice ingest failed", e);
+  }
+  const { note } = await createNote(
+    { env },
+    userId,
+    { content: content ?? AUDIO_FAILED_PLACEHOLDER, source: "wechat", raw_type: "voice", meta },
+    waitUntil,
+    { syncTriage: false }
+  );
+  if (bytes) await storeOriginal(env, userId, note.id, { type: "audio", bytes, mime });
+}
+
+/** Background: download a kf file, extract text (PDF/txt/md/docx), save as a note + archive the original. */
+async function ingestKfFile(
+  env: Env,
+  userId: string,
+  mediaId: string,
+  filenameHint: string | undefined,
+  openKfId: string,
+  externalUserid: string
+): Promise<void> {
+  const waitUntil = (p: Promise<unknown>) => void p.catch((e) => console.error("wecom kf file bg", e));
+  try {
+    const media = await downloadWecomMedia(env, mediaId);
+    if (!media) {
+      await sendKfText(env, openKfId, externalUserid, "文件下载失败，请稍后重发。");
+      return;
+    }
+    const fileName = filenameHint || media.filename || "file";
+    const kind = detectFileKind(fileName, media.mime);
+    const meta: NoteMeta = {
+      file_name: fileName,
+      file_mime: media.mime,
+      file_size: media.bytes.length,
+    };
+    let content: string;
+    let extracted = false;
+    if (kind) {
+      const result = await buildFileNote(env, kind, fileName, media.bytes);
+      content = result.content.length > MAX_CONTENT_CHARS ? result.content.slice(0, MAX_CONTENT_CHARS) : result.content;
+      extracted = result.extracted;
+      meta.file_kind = kind;
+      if (result.excerpt) meta.file_excerpt = result.excerpt;
+      meta.file_status = result.extracted ? "ok" : "extract_failed";
+    } else {
+      content = `${FILE_FAILED_PLACEHOLDER}：${fileName}`;
+      meta.file_status = "extract_failed";
+    }
+    const { note } = await createNote({ env }, userId, { content, source: "wechat", raw_type: "file", meta }, waitUntil, {
+      syncTriage: false,
+    });
+    await storeOriginal(env, userId, note.id, { type: "file", bytes: media.bytes, mime: media.mime, fileName });
+    await sendKfText(env, openKfId, externalUserid, buildFileReply(fileName, content, extracted));
+  } catch (e) {
+    console.error("wecom kf file ingest failed", e);
+  }
 }
 
 // ---- auth ----
@@ -1585,10 +1872,10 @@ app.post("/api/ingest/wechat", async (c) => {
   return c.json({ note: await noteToJsonDecrypted(c.env, note), reply }, 201);
 });
 
-// ---- WeChat Official Account binding (authed) ----
+// ---- WeChat binding (authed; shared by 公众号 and 企微客服 channels) ----
 // POST /api/wechat/bind-code: generate a fresh 6-digit binding code
 app.post("/api/wechat/bind-code", async (c) => {
-  if (!c.env.WECHAT_MP_TOKEN) return c.json({ error: "微信公众号未配置" , code: "MP_NOT_CONFIGURED" }, 404);
+  if (!c.env.WECHAT_MP_TOKEN && !wecomKfConfigured(c.env)) return c.json({ error: "微信通道未配置" , code: "MP_NOT_CONFIGURED" }, 404);
   const { code, expires_at } = await createBindCode(c.env.DB, c.get("userId"));
   return c.json({ code, expires_at, ttl_minutes: BIND_CODE_TTL_MINUTES }, 201);
 });
@@ -1596,6 +1883,8 @@ app.post("/api/wechat/bind-code", async (c) => {
 // GET /api/wechat/binding: current binding status
 app.get("/api/wechat/binding", async (c) => {
   const configured = !!c.env.WECHAT_MP_TOKEN;
+  const kfConfigured = wecomKfConfigured(c.env);
+  const mask = (id: string) => (id.length > 8 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id);
   const rows = await c.env.DB.prepare(
     "SELECT openid, created_at FROM wechat_mp_bindings WHERE user_id = ? ORDER BY created_at DESC"
   )
@@ -1603,15 +1892,32 @@ app.get("/api/wechat/binding", async (c) => {
     .all<{ openid: string; created_at: string }>();
   // openid is an opaque WeChat identifier but still masked to avoid leaking it wholesale
   const bindings = (rows.results ?? []).map((r) => ({
-    openid_masked: r.openid.length > 8 ? `${r.openid.slice(0, 4)}…${r.openid.slice(-4)}` : r.openid,
+    openid_masked: mask(r.openid),
     created_at: r.created_at,
   }));
-  return c.json({ configured, bound: bindings.length > 0, bindings });
+  const kfRows = await c.env.DB.prepare(
+    "SELECT external_userid, created_at FROM wecom_kf_bindings WHERE user_id = ? ORDER BY created_at DESC"
+  )
+    .bind(c.get("userId"))
+    .all<{ external_userid: string; created_at: string }>();
+  const kfBindings = (kfRows.results ?? []).map((r) => ({
+    openid_masked: mask(r.external_userid),
+    created_at: r.created_at,
+  }));
+  return c.json({
+    configured,
+    bound: bindings.length > 0,
+    bindings,
+    kf_configured: kfConfigured,
+    kf_bound: kfBindings.length > 0,
+    kf_bindings: kfBindings,
+  });
 });
 
-// DELETE /api/wechat/binding: unbind all WeChat accounts for this user
+// DELETE /api/wechat/binding: unbind all WeChat accounts (公众号 + 客服) for this user
 app.delete("/api/wechat/binding", async (c) => {
   await c.env.DB.prepare("DELETE FROM wechat_mp_bindings WHERE user_id = ?").bind(c.get("userId")).run();
+  await c.env.DB.prepare("DELETE FROM wecom_kf_bindings WHERE user_id = ?").bind(c.get("userId")).run();
   await c.env.DB.prepare("DELETE FROM wechat_mp_bind_codes WHERE user_id = ?").bind(c.get("userId")).run();
   return c.json({ ok: true });
 });

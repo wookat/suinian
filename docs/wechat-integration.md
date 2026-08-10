@@ -1,4 +1,4 @@
-# 微信接入：路线对比与公众号配置指南（R85）
+# 微信接入：路线对比与配置指南（R85 公众号 + R86 企微微信客服）
 
 > 背景：碎念最初的微信入口是 `skill/bridge`（基于个人微信 iLink SDK 的常驻 bot 桥），需要 VPS 常驻 + 扫码绑定，只适合极客自部署。**普通用户无法接入微信**是产品最大卖点的落地障碍。本文档给出三条路线的调研结论，以及选定的公众号路线的部署配置指南。
 
@@ -32,7 +32,7 @@ flomo 的「微信输入」即公众号路线（[官方帮助](https://help.flom
 
 - **主轨（普通用户零门槛随手记）：A 公众号**。个人订阅号即可起步（收文字/图片/链接全通，语音配 AppSecret 可通），后续企业认证服务号可解锁客服消息（异步补发结果）、模板消息（周报/回顾推送）、自定义菜单。**局限：接不了转发**。
 - **另一轨（需要转发能力的重度用户）：C iLink bridge** 保留，`skill/` 目录原样，文档标注适用人群（自部署极客 + 转发重度用户）。
-- **B 微信客服列为中期候选**：它是唯一可能兼顾「官方合规」与「接转发（文章/文件）」的路线，但需企业主体；待有企业主体后真机实测转发选择器行为再立项，作为 A 的补充而非替代。
+- **B 微信客服已实现（R86）**：它是唯一可能兼顾「官方合规」与「接转发（文章/文件）」的路线。代码已就绪（见下文「六、企微微信客服路线」），配置留 worker secrets 位；待老板提供企业主体凭据后配置上线并真机实测转发行为。定位为 A 的补充（接转发）而非替代（A 仍是零门槛随手记主轨）。
 
 ## 二、公众号路线架构（已实现）
 
@@ -99,11 +99,11 @@ npx wrangler deploy
 | 图片 → 视觉提取 + 原图入 R2 | ✅（PicUrl 公开可抓，无需 access_token） |
 | 语音 → 转写入库 | ✅ 认证号（Recognition 直推文本）；未认证号需配 AppSecret 走媒体下载+Whisper；两者都没有则降级提示 |
 | 文件 | ❌ 公众号消息接口不支持文件类型（flomo 同样不支持）；请走 Web / API / bridge |
-| 微信内转发（文章/文件/聊天记录） | ❌ 公众号会话不在转发选择器里；需要转发能力请用 iLink bridge（双轨定位），中期候选为企微微信客服（见上文专项结论） |
+| 微信内转发（文章/文件/聊天记录） | ❌ 公众号会话不在转发选择器里；需要转发能力请用企微微信客服通道（R86，见下文第六节）或 iLink bridge |
 | `?` 问答 | ⚠️ 被动回复 5s 限制放不下 LLM 推理，提示去 Web 端；认证服务号接入客服消息接口后可异步补发答案（TODO） |
 | 主动推送（周报/回顾） | ⚠️ 需认证服务号模板消息（TODO；当前走 Web Push / bridge） |
 
-## 五、需要老板提供的资源
+## 五、需要老板提供的资源（公众号）
 
 | 资源 | 用途 | 获取方式 |
 |---|---|---|
@@ -111,3 +111,80 @@ npx wrangler deploy
 | AppID / AppSecret | 安全模式校验 + 语音媒体下载 | 公众号后台「基本配置」 |
 | 服务器配置回填 | Token/EncodingAESKey 与 worker secrets 一致并启用 | 公众号后台「服务器配置」，按上文第 3 步 |
 | （开发验证用）测试号扫码 | 端到端真机验证 | 微信扫码 [测试号页面](https://mp.weixin.qq.com/debug/cgi-bin/sandboxinfo?action=showinfo&t=sandbox/index)，把 appID/appsecret/接口配置权限给到会话 |
+
+## 六、企微微信客服路线（R86，代码已就绪，待凭据配置上线）
+
+### 1. 架构
+
+```
+微信用户 → 微信客服会话 → 企微服务器 --POST 加密XML--> /wechat/kf (worker)
+                                                    ├─ msg_signature 验签 + AES 解密（企微 callback 协议）
+                                                    ├─ kf_msg_or_event 事件 → 后台 sync_msg 拉取消息（cursor 持久化在 D1）
+                                                    └─ 每条消息：
+                                                        未绑定：提示发绑定码；6 位码 → external_userid↔user 绑定（复用 R85 绑定码）
+                                                        text/link → createNote 入库
+                                                        image/voice/file → 下载媒体 → 视觉提取/转写/文件解析 → 入库 + R2 存原件
+                                                        miniprogram → 存卡片标题+appid
+                                                        不支持类型（video 等）→ 友好提示
+                                                    回复走客服消息发送接口 send_msg（48h 会话窗口内有效，无 5s 限制）
+```
+
+- **access_token**：`gettoken(corpid, 客服secret)` 获取，缓存在 D1 `wecom_kf_state` 表（Workers 无常驻内存），有效期内复用。
+- **默认关闭**：`WECOM_KF_TOKEN`/`WECOM_KF_AES_KEY`/`WECOM_CORP_ID` 任一未配置时 `/wechat/kf` 返回 404，零影响现有功能。
+- **绑定模型**：与公众号共用同一个 6 位绑定码（Web 设置页生成）；企微侧绑定记录存独立表 `wecom_kf_bindings`（external_userid ↔ user）。发「解绑」解除。
+
+### 2. 开通步骤（老板操作）
+
+1. **注册企业微信**：[work.weixin.qq.com](https://work.weixin.qq.com) 注册企业（需企业主体；个体工商户也可）。
+2. **开通微信客服**：企业微信管理后台 →「应用管理 → 微信客服」开通（部分能力需企业认证）。
+3. **创建客服账号**：微信客服管理页新建客服账号，记录其 `open_kfid`（接口 `kf/account/list` 可查）。
+4. **获取凭据**：企业 ID（`corp_id`，我的企业页）；微信客服 Secret（微信客服应用页「API」区域）。
+5. **配置回调**：微信客服 API「回调配置」：URL 填 `https://suinian-api.zalize.com/wechat/kf`，Token/EncodingAESKey 随机生成并与 worker secrets 一致，保存（企微会 GET 验证 echostr）。
+
+### 3. worker secrets 清单
+
+```bash
+cd backend
+npx wrangler secret put WECOM_KF_TOKEN     # 回调 Token（与企微后台一致）
+npx wrangler secret put WECOM_KF_AES_KEY   # 43 位 EncodingAESKey（与企微后台一致）
+npx wrangler secret put WECOM_CORP_ID      # 企业 ID（ww 开头）
+npx wrangler secret put WECOM_KF_SECRET    # 微信客服应用 Secret（sync_msg/send_msg/媒体下载必需）
+npx wrangler deploy
+```
+
+### 4. 用户侧使用
+
+1. 通过客服链接/二维码进入微信客服会话（普通微信即可，无需装企业微信）
+2. 碎念 Web 端 → 设置 → 微信绑定 → 生成绑定码 → 发给客服会话
+3. 之后发文字/链接/图片/语音/文件即记录；**转发文章/文件给客服会话**（核心增量能力）；发「解绑」解除
+
+### 5. 转发实测清单（待老板凭据到位后真机验证）
+
+| 转发内容 | 官方接口类型 | 预期 | 实测结果 |
+|---|---|---|---|
+| 公众号文章（转发到客服会话） | link | ✅ 应可接收并抓取摘要 | 待实测 |
+| 普通链接卡片 | link | ✅ 应可接收 | 待实测 |
+| 文件（PDF/Word 等） | file | ✅ 应可下载解析入库 | 待实测 |
+| 图片 / 语音 | image / voice | ✅ 应可接收 | 待实测 |
+| 小程序卡片 | miniprogram | ✅ 存标题+appid | 待实测 |
+| 合并转发的聊天记录 | 无对应类型 | ❌ 官方 sync_msg 无此类型，判定不支持 | 待实测确认 |
+| 转发选择器能否选中客服会话 | — | ⚠️ 文档未说明，需真机确认 | 待实测 |
+
+### 6. 三路线分工定位
+
+| 通道 | 定位 | 适用人群 |
+|---|---|---|
+| 公众号（R85） | 零门槛随手记（文字/链接/图片/语音） | 所有用户 |
+| 企微微信客服（R86） | 接转发（文章/链接/文件/小程序卡片）+ 全类型输入，48h 窗口内可主动回复 | 需要「转发收藏」的用户 |
+| iLink bridge | 全能力兜底（唯一能接聊天记录转发），非官方、需自部署 | 极客/重度用户 |
+
+## 七、需要老板提供的资源（企微微信客服）
+
+| 资源 | 用途 | 获取方式 |
+|---|---|---|
+| 企业微信主体（corp_id） | 通道主体 | work.weixin.qq.com 注册企业，「我的企业」页查看企业 ID |
+| 微信客服 Secret | access_token（sync_msg/send_msg/媒体下载） | 管理后台「微信客服」应用 API 区域 |
+| 客服账号 open_kfid | 标识接收消息的客服账号 | 新建客服账号后经 `kf/account/list` 查询 |
+| 回调 Token + EncodingAESKey | 验签与解密 | 回调配置页随机生成，同步写入 worker secrets |
+| 回调 URL 配置权限 | 指向 `https://suinian-api.zalize.com/wechat/kf` | 管理后台微信客服 API 回调配置 |
+| 真机微信账号 | 转发实测清单验证 | 任意普通微信 |
