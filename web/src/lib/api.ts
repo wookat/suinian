@@ -770,6 +770,25 @@ export async function sendTestPush(): Promise<number> {
   return res.delivered
 }
 
+export interface WechatBindingStatus {
+  configured: boolean
+  bound: boolean
+  bindings: { openid_masked: string; created_at: string }[]
+}
+
+/** 微信公众号绑定状态（configured=false 表示服务端未配置公众号） */
+export async function getWechatBinding(): Promise<WechatBindingStatus> {
+  return realFetch<WechatBindingStatus>("/api/wechat/binding")
+}
+
+export async function createWechatBindCode(): Promise<{ code: string; expires_at: string; ttl_minutes: number }> {
+  return realFetch<{ code: string; expires_at: string; ttl_minutes: number }>("/api/wechat/bind-code", { method: "POST" })
+}
+
+export async function unbindWechat(): Promise<void> {
+  await realFetch<{ ok: boolean }>("/api/wechat/binding", { method: "DELETE" })
+}
+
 export interface AuthResult {
   user: { id: string; name: string }
   api_token: string

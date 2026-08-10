@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-08-08（R55）
+> 最后更新：2026-08-10（R85）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -41,6 +41,7 @@
 - R51：390px 图谱标签避让（fitView 计入标签宽度）、剪藏快捷键实测、Android 今日回顾有内容态实测、标签改名/删除后首页自动刷新、心跳闭环证据、本文档
 - R53：敏感笔记界面侧遮罩全覆盖、Chrome Issues 面板告警根因修复
 - R54：ask 评测集（backend/scripts/ask-eval.ts，golden+holdout）、时间范围召回过滤、诚实「没找到」带相近建议
+- R85：微信接入普通用户化——公众号官方回调 `/wechat/mp`（验签+AES 安全模式）、6 位绑定码流程（设置页「微信绑定」）、文字/链接/图片/语音入库走现有管线；`WECHAT_MP_TOKEN` 未配置时整体关闭；路线对比与配置指南 docs/wechat-integration.md；iLink bridge 保留给自部署极客
 - R55：CJK 长问句 LLM 关键词抽取（extractAskKeywords，eval 28/28 全过）、ask 召回排除敏感笔记（含标题）、新手引导 4 步 tour（settings.tourSeen，仅新注册）、空态一键丢入 #示例 笔记+一键清除、周报提示词升级（主线/想法关联/悬而未决）
 
 ## 已知问题 / 观察项
@@ -53,6 +54,7 @@
 - GitHub Actions 付款问题（恢复后 CI 才会跑）
 - 扩展是否上架 Chrome Web Store（需开发者账号 $5）
 - 微信 bot 实例长期托管方式（当前 skill/bridge 自托管）
+- 【R85】公众号资源：注册公众号（个人订阅号即可起步）、提供 AppID/AppSecret、在公众号后台回填服务器配置（URL/Token/EncodingAESKey）；开发验证可微信扫码领测试号。清单见 docs/wechat-integration.md 第五节
 
 ## 测试约定
 - 测试数据一律 `[QA-R55]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**

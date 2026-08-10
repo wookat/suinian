@@ -47,7 +47,8 @@ Cubox 已官宣 **2027-05 停止速记/文件功能**，正在找新家？碎念
 
 | 入口 | 一句话 | 去哪里 |
 |---|---|---|
-| 微信 bot | 给 bot 发消息就是记录，`?` 开头即问答 | [skill/](skill/) |
+| 微信公众号 | 关注 + 发绑定码即接入，发消息就是记录（普通用户零门槛） | [docs/wechat-integration.md](docs/wechat-integration.md) |
+| 微信 bot（自托管） | 个人微信 bridge，`?` 开头即问答（极客自部署） | [skill/](skill/) |
 | 浏览器剪藏扩展 | 网页选中右键一键收进碎念 | [extension/](extension/) |
 | Android | 系统分享面板 + 桌面小组件速记 | [android/](android/) |
 | Web · PWA | 手机桌面装成 App，离线可用 | [suinian.zalize.com](https://suinian.zalize.com) |

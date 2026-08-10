@@ -16,3 +16,10 @@ AI_MODEL=mock
 # Optional: 32-byte base64 key for AES-256-GCM encryption of sensitive notes.
 # Generate: openssl rand -base64 32
 # SUINIAN_ENC_KEY=
+
+# Optional: WeChat Official Account (公众号) callback. Unset = /wechat/mp
+# disabled (404). See docs/wechat-integration.md.
+# WECHAT_MP_TOKEN=your-callback-token
+# WECHAT_MP_APPID=wx...
+# WECHAT_MP_APPSECRET=...
+# WECHAT_MP_AES_KEY=43charEncodingAESKey...

@@ -20,6 +20,14 @@ export type Env = {
   VAPID_PRIVATE_KEY?: string;
   /** VAPID subject (mailto: or https:), defaults to mailto:admin@zalize.com. */
   VAPID_SUBJECT?: string;
+  /** WeChat Official Account callback token; unset = /wechat/mp disabled (404). */
+  WECHAT_MP_TOKEN?: string;
+  /** WeChat Official Account AppID (safe-mode appid check + media download). */
+  WECHAT_MP_APPID?: string;
+  /** WeChat Official Account AppSecret (access_token for voice-media download). */
+  WECHAT_MP_APPSECRET?: string;
+  /** 43-char EncodingAESKey enabling safe (encrypted) callback mode. */
+  WECHAT_MP_AES_KEY?: string;
 };
 
 export interface ThreadRow {

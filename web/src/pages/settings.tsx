@@ -43,6 +43,10 @@ import {
   type RestoreStats,
   getPushConfig,
   sendTestPush,
+  getWechatBinding,
+  createWechatBindCode,
+  unbindWechat,
+  type WechatBindingStatus,
   type PushPreferences,
   type TestConnectionResult,
 } from "@/lib/api"
@@ -510,6 +514,114 @@ function PushPreferencesCard() {
               <span className="text-xs text-muted-foreground">{opt.hint}</span>
             </label>
           ))}
+        </div>
+      ) : null}
+    </Card>
+  )
+}
+
+function WechatBindingCard() {
+  const [status, setStatus] = useState<WechatBindingStatus | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [bindCode, setBindCode] = useState<{ code: string; ttl_minutes: number } | null>(null)
+  const settingsVersion = useSettingsVersion()
+
+  useEffect(() => {
+    let cancelled = false
+    const s = loadSettings()
+    if (s.useMock || !s.apiBaseUrl || !s.apiToken) return
+    setError(null)
+    getWechatBinding()
+      .then((st) => {
+        if (!cancelled) setStatus(st)
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [settingsVersion])
+
+  const s = loadSettings()
+  if (s.useMock || !s.apiBaseUrl || !s.apiToken) return null
+
+  async function generate() {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const r = await createWechatBindCode()
+      setBindCode({ code: r.code, ttl_minutes: r.ttl_minutes })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function unbind() {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await unbindWechat()
+      setBindCode(null)
+      setStatus(await getWechatBinding())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className="space-y-3 p-4">
+      <div>
+        <h2 className="text-sm font-medium">微信绑定（公众号）</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          关注碎念公众号后，把下方绑定码发给公众号即可绑定；之后直接发消息就是记录（文字/链接/图片/语音），无需自建 bot
+        </p>
+      </div>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {status === null && !error ? (
+        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" /> 加载中…
+        </p>
+      ) : status && !status.configured ? (
+        <p className="text-sm text-muted-foreground">
+          服务端未配置公众号（WECHAT_MP_TOKEN）。自部署用户参考仓库 docs/wechat-integration.md 配置；极客也可继续使用 skill/bridge 自建微信 bot。
+        </p>
+      ) : status ? (
+        <div className="space-y-3">
+          {status.bound ? (
+            <div className="space-y-2">
+              {status.bindings.map((b) => (
+                <p key={b.openid_masked} className="flex items-center gap-1.5 text-sm">
+                  <CircleCheck className="size-4 text-green-600" /> 已绑定微信 {b.openid_masked}（{b.created_at}）
+                </p>
+              ))}
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => void unbind()}>
+                解除绑定
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {bindCode ? (
+                <div className="space-y-1">
+                  <p className="font-mono text-2xl tracking-widest">{bindCode.code}</p>
+                  <p className="text-xs text-muted-foreground">
+                    把这个 6 位码发给公众号（{bindCode.ttl_minutes} 分钟内有效），收到「绑定成功」回复后刷新本页
+                  </p>
+                </div>
+              ) : null}
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => void generate()}>
+                {busy ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                {bindCode ? "重新生成绑定码" : "生成绑定码"}
+              </Button>
+            </div>
+          )}
         </div>
       ) : null}
     </Card>
@@ -1022,6 +1134,8 @@ export function SettingsPage() {
           </p>
         )}
       </Card>
+
+      <WechatBindingCard />
 
       <BrowserNotificationsCard />
 
