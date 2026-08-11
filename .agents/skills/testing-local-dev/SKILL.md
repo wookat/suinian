@@ -38,5 +38,13 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - R90 persistent undo bar: after batch tag/untag a bar docks at the top of the timeline, does NOT auto-dismiss and survives F5 (localStorage `suinian:pending-undo`, 5 min TTL) — no need for the old setTimeout-stretch hack when testing undo.
 - Lighthouse: `npx -y lighthouse https://suinian.zalize.com --preset=desktop --quiet --chrome-flags="--headless --no-sandbox" --output=json` (R91 scored 100/100/100/100 desktop).
 
+## Production testing tips (learned R92)
+- Native `window.confirm`/`window.prompt` dialogs (account-deletion flow) are auto-dismissed by the browser automation layer — they never appear on screen and the handler silently cancels. Workaround: stub them in the console before clicking (`window.confirm=()=>true; window.prompt=()=>"注销"`) then trigger the button (computer-use click may also not register on that button; `btn.click()` via console works).
+- The settings 「下载完整备份」 button may not save a file to ~/Downloads under automation; use the same endpoint directly: `curl https://suinian-api.zalize.com/api/backup -H "Authorization: Bearer $TOKEN" -o backup.zip` (default = sensitive redacted; add `?include_sensitive=true` for plaintext).
+- `/api/graph` and `/api/insights` do NOT exist (404) — graph data is served inside thread-detail responses; insights UI uses `/api/stats`.
+- Sensitive redaction placeholders differ by layer: D1 `notes.content` at rest = `[加密内容]` (crypto.ts ENC_PLACEHOLDER); backup export uses `[已加密内容]`. Grep for both.
+- Prod graph tables are `entities`/`edges` (not graph_*); `edges` cols: src_type,src_id,dst_type,dst_id,relation,note_id; `daily_reviews` cols include note_id,kind,comment; `weekly_reports` has `content_md`. Check `sqlite_master` before writing queries.
+- Admin endpoints for forcing derivations: `POST /api/admin/reconcile-threads`, `POST /api/admin/run-daily-reviews` with `Authorization: Bearer <ADMIN_TOKEN>` (worker secret; lead can rotate via `wrangler secret put`).
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.
