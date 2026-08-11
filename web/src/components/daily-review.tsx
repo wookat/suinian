@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { getTodayReview } from "@/lib/api"
 import { onReviewNotesChanged } from "@/lib/review-bus"
 import { useSettingsVersion } from "@/lib/settings"
-import { cn } from "@/lib/utils"
+import { cn, parseServerTime } from "@/lib/utils"
 import type { DailyReviewItem } from "@/lib/types"
 
 const COLLAPSE_KEY = "suinian.review.collapsed"
@@ -19,7 +19,7 @@ function loadCollapsed(): boolean {
 }
 
 function noteDateLabel(iso: string): string {
-  const d = new Date(iso)
+  const d = parseServerTime(iso)
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
 }
 

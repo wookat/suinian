@@ -11,6 +11,7 @@ import {
   CheckSquare,
   Trash2,
   Tag,
+  Eraser,
   FolderInput,
   SlidersHorizontal,
 } from "lucide-react"
@@ -28,7 +29,7 @@ import type { BatchFilter } from "@/lib/api"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
 import { FirstRunTour } from "@/components/first-run-tour"
-import { cn } from "@/lib/utils"
+import { cn, parseServerTime } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
 
 // ask mode is opt-in: keep its chat UI out of the first-paint bundle
@@ -97,7 +98,7 @@ type LoadError =
   | { kind: "other"; message: string }
 
 function dayLabel(iso: string): string {
-  const d = new Date(iso)
+  const d = parseServerTime(iso)
   const now = new Date()
   const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate())
   const diffDays = Math.round(
@@ -150,6 +151,7 @@ export function TimelinePage() {
   const [allMatching, setAllMatching] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
   const [tagPanelOpen, setTagPanelOpen] = useState(false)
+  const [tagPanelMode, setTagPanelMode] = useState<"add" | "remove">("add")
   const [catPanelOpen, setCatPanelOpen] = useState(false)
   const [batchTagInput, setBatchTagInput] = useState("")
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
@@ -255,6 +257,19 @@ export function TimelinePage() {
     })
   }
 
+  // 移除标签面板的候选：选中笔记里出现过的标签（按出现次数降序）
+  const selectedTags = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const n of notes) {
+      if (!selectedIds.has(n.id)) continue
+      for (const t of n.tags) counts.set(t, (counts.get(t) ?? 0) + 1)
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([t]) => t)
+      .slice(0, 12)
+  }, [notes, selectedIds])
+
   function batchDelete() {
     const onProgress = (done: number, total: number) => setBatchProgress({ done, total })
     if (allMatching) {
@@ -352,6 +367,55 @@ export function TimelinePage() {
       exitSelectMode()
       showToast(`已为 ${ids.length} 条加上 #${tag}`, () => {
         void batchNotes("remove_tags", ids, { tags: [tag] }).then(() => void load())
+        setToast(null)
+      })
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBatchBusy(false)
+      setBatchProgress(null)
+    }
+  }
+
+  async function batchRemoveTag(tagName?: string) {
+    const tag = (tagName ?? batchTagInput).trim().replace(/^#/, "")
+    const ids = [...selectedIds]
+    if (!tag || (!allMatching && ids.length === 0)) return
+    setBatchBusy(true)
+    if (allMatching) {
+      try {
+        const res = await batchNotesByFilter("remove_tags", currentFilter(), { tags: [tag] }, (done, total) =>
+          setBatchProgress({ done, total }),
+        )
+        setBatchTagInput("")
+        setTagPanelOpen(false)
+        exitSelectMode()
+        showToast(
+          res.remaining > 0
+            ? `已从前 ${res.affected} 条移除 #${tag}，剩余 ${res.remaining} 条请再次执行`
+            : `已从全部匹配的 ${res.affected} 条移除 #${tag}`,
+        )
+        void load()
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : String(e))
+      } finally {
+        setBatchBusy(false)
+        setBatchProgress(null)
+      }
+      return
+    }
+    // 撤销只补回原本就有该标签的那些笔记
+    const hadTagIds = notes.filter((n) => selectedIds.has(n.id) && n.tags.includes(tag)).map((n) => n.id)
+    try {
+      await batchNotes("remove_tags", ids, { tags: [tag] }, (done, total) => setBatchProgress({ done, total }))
+      setNotes((ns) =>
+        ns.map((n) => (selectedIds.has(n.id) ? { ...n, tags: n.tags.filter((t) => t !== tag) } : n)),
+      )
+      setBatchTagInput("")
+      setTagPanelOpen(false)
+      exitSelectMode()
+      showToast(`已从 ${hadTagIds.length} 条移除 #${tag}`, () => {
+        void batchNotes("add_tags", hadTagIds, { tags: [tag] }).then(() => void load())
         setToast(null)
       })
     } catch (e) {
@@ -986,20 +1050,42 @@ export function TimelinePage() {
         <div className="fixed inset-x-0 bottom-14 z-30 px-4 md:bottom-4 md:pl-56">
           <div className="mx-auto max-w-2xl rounded-xl border bg-card p-3 shadow-lg lg:max-w-3xl">
             {tagPanelOpen && (
-              <div className="mb-2 flex items-center gap-2">
-                <Input
-                  value={batchTagInput}
-                  onChange={(e) => setBatchTagInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.nativeEvent.isComposing) void batchAddTag()
-                  }}
-                  placeholder="输入标签名…"
-                  className="h-8 flex-1"
-                  autoFocus
-                />
-                <Button size="sm" disabled={batchBusy || !batchTagInput.trim()} onClick={() => void batchAddTag()}>
-                  {batchBusy ? <Loader2 className="animate-spin" /> : "确定"}
-                </Button>
+              <div className="mb-2 space-y-2">
+                {tagPanelMode === "remove" && !allMatching && selectedTags.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {selectedTags.map((t) => (
+                      <Button
+                        key={t}
+                        size="sm"
+                        variant="outline"
+                        disabled={batchBusy}
+                        onClick={() => void batchRemoveTag(t)}
+                      >
+                        #{t}
+                      </Button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={batchTagInput}
+                    onChange={(e) => setBatchTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.nativeEvent.isComposing)
+                        void (tagPanelMode === "add" ? batchAddTag() : batchRemoveTag())
+                    }}
+                    placeholder={tagPanelMode === "add" ? "输入要加的标签名…" : "输入要移除的标签名…"}
+                    className="h-8 flex-1"
+                    autoFocus
+                  />
+                  <Button
+                    size="sm"
+                    disabled={batchBusy || !batchTagInput.trim()}
+                    onClick={() => void (tagPanelMode === "add" ? batchAddTag() : batchRemoveTag())}
+                  >
+                    {batchBusy ? <Loader2 className="animate-spin" /> : tagPanelMode === "add" ? "确定" : "移除"}
+                  </Button>
+                </div>
               </div>
             )}
             {catPanelOpen && (
@@ -1052,11 +1138,24 @@ export function TimelinePage() {
                   variant="outline"
                   disabled={(!allMatching && selectedIds.size === 0) || batchBusy}
                   onClick={() => {
-                    setTagPanelOpen((x) => !x)
+                    setTagPanelOpen((x) => !(x && tagPanelMode === "add"))
+                    setTagPanelMode("add")
                     setCatPanelOpen(false)
                   }}
                 >
                   <Tag /> 打标签
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={(!allMatching && selectedIds.size === 0) || batchBusy}
+                  onClick={() => {
+                    setTagPanelOpen((x) => !(x && tagPanelMode === "remove"))
+                    setTagPanelMode("remove")
+                    setCatPanelOpen(false)
+                  }}
+                >
+                  <Eraser /> 移除标签
                 </Button>
                 <Button
                   size="sm"
