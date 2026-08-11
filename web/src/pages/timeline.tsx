@@ -88,9 +88,18 @@ const MOBILE_TOP_TAGS = 6
 const SEARCH_DEBOUNCE_MS = 300
 const POLL_INTERVAL = 2000
 const POLL_MAX = 15
-// 删除撤销：待撤销 ids 存 localStorage，刷新后窗口内仍可撤销（服务端软删进「最近删除」，30 天后真删）
+// 批量撤销：待撤销操作存 localStorage + 时间流顶部驻留撤销条，慢返回/刷新后窗口内仍可撤销
+// （删除走服务端软删进「最近删除」，30 天后真删；标签操作记录实际变更的 ids 做逆操作）
 const PENDING_UNDO_KEY = "suinian:pending-undo"
 const PENDING_UNDO_TTL_MS = 5 * 60 * 1000
+
+type PendingUndo = {
+  kind: "restore" | "add_tags" | "remove_tags"
+  ids: string[]
+  tag?: string
+  message: string
+  expires: number
+}
 
 type LoadError =
   | { kind: "auth" }
@@ -157,6 +166,9 @@ export function TimelinePage() {
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
   const [toast, setToast] = useState<{ message: string; undo?: () => void; undoLabel?: string } | null>(null)
   const toastTimerRef = useRef<number | null>(null)
+  // 驻留撤销条：不随 toast 自动消失，撤销/关闭/过期才走
+  const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null)
+  const pendingUndoTimerRef = useRef<number | null>(null)
 
   const showToast = useCallback((message: string, undo?: () => void, ms = 6000, undoLabel?: string) => {
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
@@ -164,53 +176,82 @@ export function TimelinePage() {
     toastTimerRef.current = window.setTimeout(() => setToast(null), ms)
   }, [])
 
-  // 删除已在服务端软删，撤销要在窗口内可用（含刷新后）：把待撤销 ids 存 localStorage
-  const showUndoDeleteToast = useCallback(
-    (ids: string[], message: string) => {
-      const expires = Date.now() + PENDING_UNDO_TTL_MS
+  const clearPendingUndo = useCallback(() => {
+    if (pendingUndoTimerRef.current !== null) window.clearTimeout(pendingUndoTimerRef.current)
+    pendingUndoTimerRef.current = null
+    setPendingUndo(null)
+    try {
+      localStorage.removeItem(PENDING_UNDO_KEY)
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  // 批量操作后驻留撤销条并写 localStorage：慢返回、刷新后窗口内仍可撤销
+  const showPendingUndo = useCallback((p: Omit<PendingUndo, "expires"> & { expires?: number }) => {
+    const undo: PendingUndo = { ...p, expires: p.expires ?? Date.now() + PENDING_UNDO_TTL_MS }
+    try {
+      localStorage.setItem(PENDING_UNDO_KEY, JSON.stringify(undo))
+    } catch {
+      // storage full/unavailable: undo still works until the bar expires
+    }
+    setPendingUndo(undo)
+    if (pendingUndoTimerRef.current !== null) window.clearTimeout(pendingUndoTimerRef.current)
+    pendingUndoTimerRef.current = window.setTimeout(() => {
+      pendingUndoTimerRef.current = null
+      setPendingUndo(null)
       try {
-        localStorage.setItem(PENDING_UNDO_KEY, JSON.stringify({ ids, message, expires }))
+        localStorage.removeItem(PENDING_UNDO_KEY)
       } catch {
-        // storage full/unavailable: undo still works until the toast times out
+        // ignore
       }
-      showToast(
-        message,
-        () => {
-          try {
-            localStorage.removeItem(PENDING_UNDO_KEY)
-          } catch {
-            // ignore
-          }
-          setToast(null)
-          void restoreNotes(ids)
-            .then((n) => {
-              showToast(`已恢复 ${n} 条`)
-              void load()
-              notifyReviewRefresh()
-            })
-            .catch((e) => showToast(e instanceof Error ? e.message : String(e)))
-        },
-        PENDING_UNDO_TTL_MS,
-      )
+    }, Math.max(0, undo.expires - Date.now()))
+  }, [])
+
+  const performUndo = useCallback(
+    (p: PendingUndo) => {
+      clearPendingUndo()
+      void (async () => {
+        if (p.kind === "restore") {
+          const n = await restoreNotes(p.ids)
+          showToast(`已恢复 ${n} 条`)
+        } else if (p.kind === "add_tags") {
+          await batchNotes("remove_tags", p.ids, { tags: [p.tag ?? ""] })
+          showToast(`已撤销：从 ${p.ids.length} 条移除 #${p.tag}`)
+        } else {
+          await batchNotes("add_tags", p.ids, { tags: [p.tag ?? ""] })
+          showToast(`已撤销：为 ${p.ids.length} 条补回 #${p.tag}`)
+        }
+        void load()
+        notifyReviewRefresh()
+      })().catch((e) => showToast(e instanceof Error ? e.message : String(e)))
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [showToast],
+    [clearPendingUndo, showToast],
   )
 
-  // 刷新后恢复未过期的撤销提示（删除→刷新→撤销仍可用）
+  const showUndoDeleteToast = useCallback(
+    (ids: string[], message: string) => showPendingUndo({ kind: "restore", ids, message }),
+    [showPendingUndo],
+  )
+
+  // 刷新后恢复未过期的撤销条（批量操作→刷新→撤销仍可用）
   useEffect(() => {
-    type PendingUndo = { ids?: unknown; message?: unknown; expires?: unknown }
-    let saved: PendingUndo | null = null
+    type Saved = { kind?: unknown; ids?: unknown; tag?: unknown; message?: unknown; expires?: unknown }
+    let saved: Saved | null = null
     try {
       const raw = localStorage.getItem(PENDING_UNDO_KEY)
-      if (raw) saved = JSON.parse(raw) as PendingUndo
+      if (raw) saved = JSON.parse(raw) as Saved
     } catch {
       saved = null
     }
     if (!saved) return
     const ids = Array.isArray(saved.ids) ? saved.ids.filter((v): v is string => typeof v === "string") : []
     const expires = typeof saved.expires === "number" ? saved.expires : 0
-    if (ids.length === 0 || expires <= Date.now()) {
+    const kind =
+      saved.kind === "add_tags" || saved.kind === "remove_tags" ? saved.kind : "restore"
+    const tag = typeof saved.tag === "string" ? saved.tag : undefined
+    if (ids.length === 0 || expires <= Date.now() || (kind !== "restore" && !tag)) {
       try {
         localStorage.removeItem(PENDING_UNDO_KEY)
       } catch {
@@ -218,13 +259,20 @@ export function TimelinePage() {
       }
       return
     }
-    showUndoDeleteToast(ids, typeof saved.message === "string" ? saved.message : `已删除 ${ids.length} 条`)
+    showPendingUndo({
+      kind,
+      ids,
+      tag,
+      message: typeof saved.message === "string" ? saved.message : `已删除 ${ids.length} 条`,
+      expires,
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     return () => {
       if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
+      if (pendingUndoTimerRef.current !== null) window.clearTimeout(pendingUndoTimerRef.current)
     }
   }, [])
 
@@ -314,11 +362,11 @@ export function TimelinePage() {
     setBatchBusy(true)
     setBatchProgress(null)
     void batchNotes("delete", ids, undefined, onProgress)
-      .then((n) => {
+      .then((res) => {
         setNotes((ns) => ns.filter((n2) => !selectedIds.has(n2.id)))
         exitSelectMode()
         notifyNotesDeleted(ids)
-        showUndoDeleteToast(ids, `已删除 ${n} 条`)
+        showUndoDeleteToast(ids, `已删除 ${res.affected} 条`)
       })
       .catch((e) => {
         showToast(e instanceof Error ? e.message : String(e))
@@ -343,11 +391,12 @@ export function TimelinePage() {
         setBatchTagInput("")
         setTagPanelOpen(false)
         exitSelectMode()
-        showToast(
+        const msg =
           res.remaining > 0
             ? `已为前 ${res.affected} 条加上 #${tag}，剩余 ${res.remaining} 条请再次执行`
-            : `已为全部匹配的 ${res.affected} 条加上 #${tag}`,
-        )
+            : `已为全部匹配的 ${res.affected} 条加上 #${tag}`
+        if (res.ids.length > 0) showPendingUndo({ kind: "add_tags", ids: res.ids, tag, message: msg })
+        else showToast(msg)
         void load()
       } catch (e) {
         showToast(e instanceof Error ? e.message : String(e))
@@ -358,17 +407,15 @@ export function TimelinePage() {
       return
     }
     try {
-      await batchNotes("add_tags", ids, { tags: [tag] }, (done, total) => setBatchProgress({ done, total }))
+      const res = await batchNotes("add_tags", ids, { tags: [tag] }, (done, total) => setBatchProgress({ done, total }))
       setNotes((ns) =>
         ns.map((n) => (selectedIds.has(n.id) && !n.tags.includes(tag) ? { ...n, tags: [...n.tags, tag] } : n)),
       )
       setBatchTagInput("")
       setTagPanelOpen(false)
       exitSelectMode()
-      showToast(`已为 ${ids.length} 条加上 #${tag}`, () => {
-        void batchNotes("remove_tags", ids, { tags: [tag] }).then(() => void load())
-        setToast(null)
-      })
+      const changed = res.ids.length > 0 ? res.ids : ids
+      showPendingUndo({ kind: "add_tags", ids: changed, tag, message: `已为 ${ids.length} 条加上 #${tag}` })
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e))
     } finally {
@@ -390,11 +437,12 @@ export function TimelinePage() {
         setBatchTagInput("")
         setTagPanelOpen(false)
         exitSelectMode()
-        showToast(
+        const msg =
           res.remaining > 0
             ? `已从前 ${res.affected} 条移除 #${tag}，剩余 ${res.remaining} 条请再次执行`
-            : `已从全部匹配的 ${res.affected} 条移除 #${tag}`,
-        )
+            : `已从全部匹配的 ${res.affected} 条移除 #${tag}`
+        if (res.ids.length > 0) showPendingUndo({ kind: "remove_tags", ids: res.ids, tag, message: msg })
+        else showToast(msg)
         void load()
       } catch (e) {
         showToast(e instanceof Error ? e.message : String(e))
@@ -404,20 +452,20 @@ export function TimelinePage() {
       }
       return
     }
-    // 撤销只补回原本就有该标签的那些笔记
+    // 撤销只补回原本就有该标签的那些笔记（服务端回传实际变更的 ids）
     const hadTagIds = notes.filter((n) => selectedIds.has(n.id) && n.tags.includes(tag)).map((n) => n.id)
     try {
-      await batchNotes("remove_tags", ids, { tags: [tag] }, (done, total) => setBatchProgress({ done, total }))
+      const res = await batchNotes("remove_tags", ids, { tags: [tag] }, (done, total) => setBatchProgress({ done, total }))
       setNotes((ns) =>
         ns.map((n) => (selectedIds.has(n.id) ? { ...n, tags: n.tags.filter((t) => t !== tag) } : n)),
       )
       setBatchTagInput("")
       setTagPanelOpen(false)
       exitSelectMode()
-      showToast(`已从 ${hadTagIds.length} 条移除 #${tag}`, () => {
-        void batchNotes("add_tags", hadTagIds, { tags: [tag] }).then(() => void load())
-        setToast(null)
-      })
+      const changed = res.ids.length > 0 ? res.ids : hadTagIds
+      if (changed.length > 0)
+        showPendingUndo({ kind: "remove_tags", ids: changed, tag, message: `已从 ${changed.length} 条移除 #${tag}` })
+      else showToast(`选中笔记都没有 #${tag}`)
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e))
     } finally {
@@ -725,6 +773,31 @@ export function TimelinePage() {
   return (
     <div className="space-y-4">
       {showTour && <FirstRunTour onDone={() => setShowTour(false)} />}
+
+      {/* 驻留撤销条：批量操作后顶部常驻（5 分钟），慢返回/刷新后仍可撤销 */}
+      {pendingUndo && (
+        <div className="sticky top-2 z-30">
+          <div className="flex items-center justify-between gap-3 rounded-lg border bg-popover px-4 py-2.5 text-sm shadow-md animate-in fade-in slide-in-from-top-2">
+            <span className="min-w-0 truncate">{pendingUndo.message}</span>
+            <div className="flex shrink-0 items-center gap-3">
+              <button
+                onClick={() => performUndo(pendingUndo)}
+                className="font-medium text-primary hover:underline"
+              >
+                撤销
+              </button>
+              <button
+                onClick={clearPendingUndo}
+                aria-label="关闭撤销提示"
+                className="text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <DailyReview onTagClick={setTag} />
 
       <div ref={quickInputRef}>

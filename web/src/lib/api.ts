@@ -370,14 +370,14 @@ async function batchStream(
   return result
 }
 
-/** 批量操作：删除 / 加标签 / 去标签 / 改分类（进度经 onProgress 回调） */
+/** 批量操作：删除 / 加标签 / 去标签 / 改分类（进度经 onProgress 回调）。ids=实际变更的笔记 id（供撤销） */
 export async function batchNotes(
   action: BatchAction,
   ids: string[],
   opts?: { tags?: string[]; category?: string },
   onProgress?: (done: number, total: number) => void,
-): Promise<number> {
-  return (await batchStream({ action, ids, ...opts }, onProgress)).affected
+): Promise<BatchResult> {
+  return batchStream({ action, ids, ...opts }, onProgress)
 }
 
 export interface BatchFilter {
