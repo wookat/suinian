@@ -42,6 +42,7 @@
 - R53：敏感笔记界面侧遮罩全覆盖、Chrome Issues 面板告警根因修复
 - R54：ask 评测集（backend/scripts/ask-eval.ts，golden+holdout）、时间范围召回过滤、诚实「没找到」带相近建议
 - R85：微信接入普通用户化——公众号官方回调 `/wechat/mp`（验签+AES 安全模式）、6 位绑定码流程（设置页「微信绑定」）、文字/链接/图片/语音入库走现有管线；`WECHAT_MP_TOKEN` 未配置时整体关闭；路线对比与配置指南 docs/wechat-integration.md；iLink bridge 保留给自部署极客
+- R88：用户研究（R87）6 角色发现的 P0/P1 修复——①待办时区：`user_preferences.tz`（migration 0019）+ web 自动 syncTimezone，分拣按用户时区理解相对时间（跨时区回归 backend/test/r88-timezone.test.ts）；②问答可靠性：chatComplete 对 429/5xx/网络错误重试一次，/api/ask 失败返回 503+可读中文+retryable，web ask 自动重试+重试按钮；③冷启动：交互式 embed 8s 超时降级关键词召回；④连发：速记框提交即清空+并发保存计数，失败内容退回；⑤标签污染：分拣 prompt 不硬套已有标签；⑥数字召回：关键词/答案 prompt 保留并直给原始数字（禁 hedge），eval 新增 num1+q57-59；⑦微信设置未配置显示「即将开放」。线上回归 8/8 过，ask-eval 57/59 (97%)（PR #103）
 - R55：CJK 长问句 LLM 关键词抽取（extractAskKeywords，eval 28/28 全过）、ask 召回排除敏感笔记（含标题）、新手引导 4 步 tour（settings.tourSeen，仅新注册）、空态一键丢入 #示例 笔记+一键清除、周报提示词升级（主线/想法关联/悬而未决）
 
 ## 已知问题 / 观察项
@@ -49,6 +50,7 @@
 - `daily_review:cron` 心跳：cron_heartbeats 表 2026-08-07 23:54 UTC 才在生产建表，首个常规 20:00 UTC 跑批在 2026-08-08；R51 已用一次性 cron 在生产验证写入正常
 - Vectorize 未启用（个人量级 D1 余弦够用）；公众号/小红书正文抓取受反爬限制，有兜底
 - 扩展未上架商店，开发者模式加载（extension/README.md）
+- 【R88 遗留观察】时间流卡片 created_at 仍按 UTC 显示（待办 due 已按用户时区）；问答对话历史存 localStorage 跨账号残留；多选操作栏无「移除标签」按钮（现有路径：设置→标签管理→删除）
 
 ## 等老板事项
 - GitHub Actions 付款问题（恢复后 CI 才会跑）
@@ -57,7 +59,7 @@
 - 【R85】公众号资源：注册公众号（个人订阅号即可起步）、提供 AppID/AppSecret、在公众号后台回填服务器配置（URL/Token/EncodingAESKey）；开发验证可微信扫码领测试号。清单见 docs/wechat-integration.md 第五节
 
 ## 测试约定
-- 测试数据一律 `[QA-R55]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
+- 测试数据一律 `[QA-R88]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
 - QA 账号命名建议：用户名允许字符为中英文、数字、`._-[]`（2-32 字符，R60 起支持 `[]`）。建议 QA 账号命名 `[QA-R<轮次>]-<用途>`（如 `[QA-R60]-migrate-a`），**务必记录密码**，测完自助注销；若密码遗失需手动用 wrangler d1 按 `backend/src/account.ts` 的级联口径清理（children 先删，附前后 SQL 证据）
 - 老板测试 token 由老板在会话中提供附件，勿写入仓库/日志
 - admin 端点：`POST /api/admin/run-daily-reviews`、`POST /api/admin/reconcile-threads`（Bearer `ADMIN_TOKEN`）
