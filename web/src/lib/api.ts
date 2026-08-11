@@ -447,10 +447,21 @@ export async function ask(
   history: AskHistoryMessage[] = [],
 ): Promise<AskResponse> {
   if (loadSettings().useMock) return mockAsk(question)
-  const res = await realFetch<AskResponse>("/api/ask", {
-    method: "POST",
-    body: JSON.stringify(history.length > 0 ? { question, history } : { question }),
-  })
+  const doAsk = () =>
+    realFetch<AskResponse>("/api/ask", {
+      method: "POST",
+      body: JSON.stringify(history.length > 0 ? { question, history } : { question }),
+    })
+  let res: AskResponse
+  try {
+    res = await doAsk()
+  } catch (e) {
+    // 服务端瞬时故障/网络抖动自动重试一次，避免偶发失败直接糊到用户脸上
+    const transient = e instanceof NetworkError || (e instanceof ApiError && (e.status === 503 || e.status >= 500))
+    if (!transient) throw e
+    await new Promise((r) => setTimeout(r, 1200))
+    res = await doAsk()
+  }
   return {
     ...res,
     notes: (res.notes ?? []).map((n) => normalizeNote(n as unknown as Record<string, unknown>)),
@@ -721,6 +732,7 @@ export async function getReport(id: string): Promise<WeeklyReport> {
 export interface PushPreferences {
   daily_review_push: boolean
   todo_reminder_push: boolean
+  tz?: string | null
 }
 
 /** 推送偏好（每日回顾 / 待办提醒开关，默认全开） */
@@ -733,6 +745,33 @@ export async function updatePreferences(patch: Partial<PushPreferences>): Promis
     method: "PATCH",
     body: JSON.stringify(patch),
   })
+}
+
+const TZ_SYNC_KEY = "suinian-tz-synced"
+
+/** 把浏览器时区同步到服务端偏好（AI 分拣按用户时区理解“明天上午10点”）；只在变化时发请求 */
+export async function syncTimezone(): Promise<void> {
+  const { useMock, apiBaseUrl, apiToken } = loadSettings()
+  if (useMock || !apiBaseUrl || !apiToken) return
+  let tz: string
+  try {
+    tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+  } catch {
+    return
+  }
+  if (!tz) return
+  const marker = `${apiToken.slice(0, 8)}:${tz}`
+  try {
+    if (localStorage.getItem(TZ_SYNC_KEY) === marker) return
+  } catch {
+    /* storage unavailable: sync every load */
+  }
+  try {
+    await updatePreferences({ tz })
+    localStorage.setItem(TZ_SYNC_KEY, marker)
+  } catch {
+    /* non-fatal: retried on next load */
+  }
 }
 
 export interface PushConfig {

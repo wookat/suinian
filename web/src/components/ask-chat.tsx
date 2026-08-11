@@ -156,12 +156,15 @@ export function AskChat({
         { id: crypto.randomUUID(), role: "assistant", content: res.answer, refs, question: q },
       ])
     } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e)
+      const friendly = /internal error|^5\d\d$|failed to fetch/i.test(raw) ? "问答服务暂时不可用，请稍后重试" : raw
       setMessages((ms) => [
         ...ms,
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          content: e instanceof Error ? e.message : String(e),
+          content: friendly,
+          question: q,
           error: true,
         },
       ])
@@ -259,7 +262,20 @@ export function AskChat({
                 )}
               >
                 {m.error ? (
-                  <p className="text-sm text-destructive">{m.content}</p>
+                  <div className="space-y-2">
+                    <p className="text-sm text-destructive">{m.content}</p>
+                    {m.question && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs"
+                        disabled={asking}
+                        onClick={() => void send(m.question)}
+                      >
+                        重试
+                      </Button>
+                    )}
+                  </div>
                 ) : (
                   <AnswerText
                     msgId={m.id}

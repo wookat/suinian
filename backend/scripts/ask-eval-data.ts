@@ -86,6 +86,8 @@ export const NOTES: EvalNote[] = [
   N("nz18", 2, "idea", "快闪店定价", "快闪店定价想法：手冲一律 35，套餐（咖啡+甜点）50，比市区门店便宜一点吸引尝鲜", ["咖啡馆", "创业"]),
   N("nz19", 1, "collect", "手冲滤杯测评视频", "https://example.com/v60-review V60 和折纸滤杯的对比测评，新手建议 V60", ["咖啡馆"]),
   N("nz20", 30, "expense", "买跑鞋", "买了双跑鞋 549 元，结果现在改游泳了，有点浪费", ["购物", "健身"]),
+  // —— R88 badcase：具体数字细节的召回（土鸡蛋报价类） ——
+  N("num1", 6, "data", "土鸡蛋团购报价", "供应商老王的土鸡蛋报价：每斤 8.5 元，30 枚礼盒装 25.5 元，周三前下单周五提货", ["团购"]),
   // —— 副业播客线索（R79：多跳/为什么/溯源难例用，与 nz4 同一演化链） ——
   N("pod2", 32, "idea", "播客第一期嘉宾人选", "播客第一期嘉宾想好了：楼下花店老板娘，她副业做干花电商月入过万，故事很典型", ["播客"]),
   N("pod3", 11, "idea", "播客先搁置", "播客这事先鸽了：录音设备加剪辑每期要花大半天，精力不够，等咖啡馆快闪店的事定了再重启", ["播客"]),
@@ -106,7 +108,8 @@ export type QuestionCategory =
   | "英文提问"
   | "多跳"
   | "演化脉络"
-  | "为什么依据";
+  | "为什么依据"
+  | "数字细节";
 
 export interface EvalQuestion {
   id: string;
@@ -239,4 +242,8 @@ export const QUESTIONS: EvalQuestion[] = [
   { id: "q54", category: "多跳", question: "那个让我暂缓换工作的项目，技术方案上最近有什么进展", expectAny: ["job3", "proj3"], expectAll: ["job3", "proj3"] },
   { id: "q55", category: "为什么依据", question: "我说过因为精力不够先放一放的是什么事？它在等哪件事有结果", expectAny: ["pod3"], expectAll: ["pod3"] },
   { id: "q56", category: "多跳", question: "参加市集活动这个目标和我哪个创业想法是一体的", expectAny: ["img1", "cafe3"], expectAll: ["cafe3"], holdout: true },
+  // —— R88 badcase：数字细节召回（用户研究中「土鸡蛋报价」类问题问不到） ——
+  { id: "q57", category: "数字细节", question: "土鸡蛋报价是多少", expectAny: ["num1"], expectAll: ["num1"] },
+  { id: "q58", category: "数字细节", question: "土鸡蛋礼盒装多少钱一盒，什么时候提货", expectAny: ["num1"], expectAll: ["num1"] },
+  { id: "q59", category: "数字细节", question: "上次那个鸡蛋供应商的报价是每斤多少元来着", expectAny: ["num1"], expectAll: ["num1"], holdout: true },
 ];

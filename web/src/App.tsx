@@ -15,6 +15,7 @@ import { ReloadPrompt } from "@/components/reload-prompt"
 import { PageHeader } from "@/components/page-header"
 import { RightRail } from "@/components/right-rail"
 import { loadSettings, saveSettings, SETTINGS_CHANGED_EVENT } from "@/lib/settings"
+import { syncTimezone } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 // non-home pages are code-split: keeps the first-paint bundle to the timeline
@@ -150,6 +151,14 @@ export default function App() {
   const Page = active.page
   const isMock = useMockMode()
   const onboarded = useOnboarded()
+
+  // 浏览器时区同步到服务端偏好：首次加载 + 注册/登录（settings 变更）后
+  useEffect(() => {
+    void syncTimezone()
+    const onChange = () => void syncTimezone()
+    window.addEventListener(SETTINGS_CHANGED_EVENT, onChange)
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, onChange)
+  }, [])
 
   return (
     <div className="min-h-dvh">

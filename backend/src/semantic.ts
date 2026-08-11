@@ -6,12 +6,25 @@ const EMBED_MODEL = "@cf/baai/bge-m3";
 /** Cosine similarity above which a note counts as a semantic match for search/ask recall. */
 export const SEMANTIC_MIN_SCORE = 0.45;
 
-export async function embedText(env: Env, text: string): Promise<number[] | null> {
+// Workers AI cold starts can hang tens of seconds; interactive search/ask
+// must degrade to keyword recall instead of blocking on the embedding
+const EMBED_TIMEOUT_MS = 8_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ]);
+}
+
+export async function embedText(env: Env, text: string, timeoutMs = EMBED_TIMEOUT_MS): Promise<number[] | null> {
   if (!env.AI) return null;
   try {
-    const res = (await env.AI.run(EMBED_MODEL, { text: [text.slice(0, 1000)] })) as {
-      data?: number[][];
-    };
+    const res = (await withTimeout(
+      env.AI.run(EMBED_MODEL, { text: [text.slice(0, 1000)] }) as Promise<{ data?: number[][] }>,
+      timeoutMs,
+      "embed"
+    )) as { data?: number[][] };
     const v = res?.data?.[0];
     return Array.isArray(v) && v.length > 0 ? v : null;
   } catch (err) {
@@ -37,7 +50,8 @@ export async function upsertNoteEmbedding(env: Env, note: NoteRow): Promise<void
       await deleteNoteEmbedding(env, note.id);
       return;
     }
-    const vector = await embedText(env, noteEmbedText(note));
+    // background pipeline: allow a longer window than interactive queries
+    const vector = await embedText(env, noteEmbedText(note), 30_000);
     if (!vector) return;
     await env.DB.prepare("INSERT OR REPLACE INTO note_embeddings (note_id, vector) VALUES (?, ?)")
       .bind(note.id, JSON.stringify(vector))

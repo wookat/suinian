@@ -125,7 +125,7 @@ describe("relative date grounding (R9)", () => {
   it("prompt includes 北京时间, today's weekday and worked 明天/下周一 examples", () => {
     const p = buildTriagePrompt(friday);
     expect(p).toContain("今天是 2026-08-07（周五）");
-    expect(p).toContain("北京时间");
+    expect(p).toContain("Asia/Shanghai");
     expect(p).toContain("「明天」= 2026-08-08（周六）");
     expect(p).toContain("「下周一」= 2026-08-10");
     expect(p).toContain("2026-08-10T20:00:00+08:00");

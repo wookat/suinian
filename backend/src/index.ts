@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
-import { triageNote, loadTopTags, normalizeTodoDue, detectSensitive, FALLBACK_TRIAGE } from "./triage";
+import { triageNote, loadTopTags, normalizeTodoDue, detectSensitive, isValidTimezone, DEFAULT_TZ, FALLBACK_TRIAGE } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
@@ -129,7 +129,10 @@ app.use("*", async (c, next) => {
 });
 
 app.onError((err, c) => {
-  console.error("unhandled error:", err);
+  console.error("unhandled error:", c.req.method, c.req.path, err instanceof Error ? (err.stack ?? err.message) : err);
+  // ask failures get a readable, retryable message instead of a bare "internal error"
+  if (c.req.path === "/api/ask")
+    return c.json({ error: "问答服务暂时不可用，请稍后重试", retryable: true }, 503);
   return c.json({ error: "internal error" }, 500);
 });
 
@@ -805,6 +808,18 @@ app.delete("/api/auth/me", async (c) => {
   return c.json({ ok: true });
 });
 
+/** The user's IANA timezone (browser-reported, stored in preferences); Asia/Shanghai when unset. */
+async function loadUserTz(env: Env, userId: string): Promise<string> {
+  try {
+    const row = await env.DB.prepare("SELECT tz FROM user_preferences WHERE user_id = ?")
+      .bind(userId)
+      .first<{ tz: string | null }>();
+    return row?.tz && isValidTimezone(row.tz) ? row.tz : DEFAULT_TZ;
+  } catch {
+    return DEFAULT_TZ;
+  }
+}
+
 // Legacy rows stored todo_due without a UTC offset; those values are Asia/Shanghai local times.
 export function normalizeStoredTodoDue(v: string | null): string | null {
   if (!v) return v;
@@ -1002,7 +1017,8 @@ async function createNote(
 
   const runTriage = async (): Promise<TriageResult | null> => {
     const topTags = await loadTopTags(c.env.DB, userId).catch(() => [] as string[]);
-    const triage = await triageNote(content, c.env, topTags);
+    const tz = await loadUserTz(c.env, userId);
+    const triage = await triageNote(content, c.env, topTags, tz);
     // null = AI unavailable: keep category NULL so the cron sweep retries later
     if (triage) await applyTriage(c.env, id, triage, content);
     return triage;
@@ -2090,7 +2106,7 @@ export function needsBilingualKeywordExtraction(question: string): boolean {
 }
 
 const ASK_KEYWORDS_SYSTEM =
-  "你是检索关键词抽取器。从问题中抽取 2-6 个最能定位相关笔记的关键词（具体的名词、动词或专有名词，每个 2-6 个字），用空格分隔输出，不要任何标点、解释或前缀。忽略疑问词（什么/哪个/怎么/是啥/what/which/how）、时间词（今天/最近几天/上个月/去年/recently/last week）、代词和语气助词。若问题含英文词，除英文关键词外还要同时输出其中文对应词（因为笔记多为中文）。例如「最近几天收藏的那个咖啡视频讲什么」输出「咖啡 视频 收藏」；「What did I note about the coffee shop idea」输出「coffee shop 咖啡馆 点子」。";
+  "你是检索关键词抽取器。从问题中抽取 2-6 个最能定位相关笔记的关键词（具体的名词、动词或专有名词，每个 2-6 个字），用空格分隔输出，不要任何标点、解释或前缀。问题里的具体数字/金额/价格/型号/电话等细节词（如「8.5元」「iPhone 15」）也是关键词，要保留其核心词（如「报价」「8.5」）。忽略疑问词（什么/哪个/怎么/是啥/what/which/how）、时间词（今天/最近几天/上个月/去年/recently/last week）、代词和语气助词。若问题含英文词，除英文关键词外还要同时输出其中文对应词（因为笔记多为中文）。例如「最近几天收藏的那个咖啡视频讲什么」输出「咖啡 视频 收藏」；「What did I note about the coffee shop idea」输出「coffee shop 咖啡馆 点子」。";
 
 /**
  * LLM keyword extraction for unsegmented CJK questions (query-rewrite stage):
@@ -2297,7 +2313,7 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。若笔记中没有能回答问题的信息，直接说没找到，绝不要编造或强行凑答案。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位。若笔记中没有能回答问题的信息，直接说没找到，绝不要编造或强行凑答案。回答用中文，简洁。",
       },
       ...history,
       {
@@ -2468,35 +2484,41 @@ app.get("/api/review/today", async (c) => {
 // ---- GET /api/preferences ----
 // 推送偏好（每日回顾 / 待办提醒），无记录时默认全开
 app.get("/api/preferences", async (c) => {
-  const row = await c.env.DB.prepare("SELECT daily_review_push, todo_reminder_push FROM user_preferences WHERE user_id = ?")
+  const row = await c.env.DB.prepare("SELECT daily_review_push, todo_reminder_push, tz FROM user_preferences WHERE user_id = ?")
     .bind(c.get("userId"))
-    .first<{ daily_review_push: number; todo_reminder_push: number }>();
+    .first<{ daily_review_push: number; todo_reminder_push: number; tz: string | null }>();
   return c.json({
     daily_review_push: row ? row.daily_review_push === 1 : true,
     todo_reminder_push: row ? row.todo_reminder_push === 1 : true,
+    tz: row?.tz ?? null,
   });
 });
 
 // ---- PATCH /api/preferences ----
 app.patch("/api/preferences", async (c) => {
-  const body = await c.req.json<{ daily_review_push?: boolean; todo_reminder_push?: boolean }>().catch(() => null);
-  if (!body || (typeof body.daily_review_push !== "boolean" && typeof body.todo_reminder_push !== "boolean"))
+  const body = await c.req
+    .json<{ daily_review_push?: boolean; todo_reminder_push?: boolean; tz?: string }>()
+    .catch(() => null);
+  const hasTz = typeof body?.tz === "string";
+  if (!body || (typeof body.daily_review_push !== "boolean" && typeof body.todo_reminder_push !== "boolean" && !hasTz))
     return c.json({ error: "nothing to update" }, 400);
+  if (hasTz && !isValidTimezone(body.tz as string)) return c.json({ error: "invalid tz" }, 400);
   const userId = c.get("userId");
-  const cur = await c.env.DB.prepare("SELECT daily_review_push, todo_reminder_push FROM user_preferences WHERE user_id = ?")
+  const cur = await c.env.DB.prepare("SELECT daily_review_push, todo_reminder_push, tz FROM user_preferences WHERE user_id = ?")
     .bind(userId)
-    .first<{ daily_review_push: number; todo_reminder_push: number }>();
+    .first<{ daily_review_push: number; todo_reminder_push: number; tz: string | null }>();
   const next = {
     daily_review_push: body.daily_review_push ?? (cur ? cur.daily_review_push === 1 : true),
     todo_reminder_push: body.todo_reminder_push ?? (cur ? cur.todo_reminder_push === 1 : true),
+    tz: hasTz ? (body.tz as string) : (cur?.tz ?? null),
   };
   await c.env.DB.prepare(
-    `INSERT INTO user_preferences (user_id, daily_review_push, todo_reminder_push, updated_at)
-     VALUES (?, ?, ?, datetime('now'))
+    `INSERT INTO user_preferences (user_id, daily_review_push, todo_reminder_push, tz, updated_at)
+     VALUES (?, ?, ?, ?, datetime('now'))
      ON CONFLICT (user_id) DO UPDATE SET daily_review_push = excluded.daily_review_push,
-       todo_reminder_push = excluded.todo_reminder_push, updated_at = excluded.updated_at`
+       todo_reminder_push = excluded.todo_reminder_push, tz = excluded.tz, updated_at = excluded.updated_at`
   )
-    .bind(userId, next.daily_review_push ? 1 : 0, next.todo_reminder_push ? 1 : 0)
+    .bind(userId, next.daily_review_push ? 1 : 0, next.todo_reminder_push ? 1 : 0, next.tz)
     .run();
   return c.json(next);
 });
@@ -2804,7 +2826,8 @@ async function retriageOne(env: Env, row: { id: string; user_id: string; content
     if (plain !== null) content = plain;
   }
   const topTags = await loadTopTags(env.DB, row.user_id).catch(() => [] as string[]);
-  const triage = await triageNote(content, env, topTags);
+  const tz = await loadUserTz(env, row.user_id);
+  const triage = await triageNote(content, env, topTags, tz);
   if (!triage) return false;
   await applyTriage(env, row.id, triage, content);
   const n = await env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(row.id).first<NoteRow>();
