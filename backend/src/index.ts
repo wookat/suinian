@@ -1577,7 +1577,18 @@ export async function resolveBatchFilter(
   return { ids, total: count?.n ?? ids.length };
 }
 
-/** Run a batch action over id chunks, reporting progress after each chunk. Returns affected count. */
+/** Max statements per D1 batch() call in bulk mutations. */
+const BATCH_STMTS_PER_CALL = 100;
+
+/**
+ * Run a batch action, reporting progress as work completes. Returns the
+ * affected count plus the ids of notes actually changed (tag actions), so
+ * clients can offer precise undo.
+ *
+ * D1 roundtrips dominate wall time (each can intermittently take seconds), so
+ * reads run in parallel and mutations go through few large batch() calls
+ * instead of 2 sequential roundtrips per 80-id chunk.
+ */
 async function runBatchAction(
   env: Env,
   userId: string,
@@ -1585,28 +1596,42 @@ async function runBatchAction(
   ids: string[],
   opts: { tags: string[]; category: string },
   onProgress?: (done: number, total: number) => void
-): Promise<number> {
+): Promise<{ affected: number; changedIds: string[] }> {
+  const started = Date.now();
+  const chunks = chunkIds(ids);
   let affected = 0;
-  let done = 0;
-  for (const chunk of chunkIds(ids)) {
-    const ph = chunk.map(() => "?").join(",");
-    if (action === "delete") {
-      // soft delete: one UPDATE per chunk; the cron sweep hard-deletes (and
-      // cleans attachments/vectors/graph) after the undo window
-      const res = await env.DB.prepare(
-        `UPDATE notes SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE user_id = ? AND deleted_at IS NULL AND id IN (${ph})`
+  const changedIds: string[] = [];
+  if (action === "delete") {
+    // soft delete: all chunk UPDATEs in one batch() roundtrip; the cron sweep
+    // hard-deletes (and cleans attachments/vectors/graph) after the undo window
+    const stmts = chunks.map((chunk) =>
+      env.DB.prepare(
+        `UPDATE notes SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE user_id = ? AND deleted_at IS NULL AND id IN (${chunk.map(() => "?").join(",")})`
+      ).bind(userId, ...chunk)
+    );
+    for (const res of await env.DB.batch(stmts)) affected += (res.meta as { changes?: number })?.changes ?? 0;
+    onProgress?.(ids.length, ids.length);
+  } else if (action === "add_tags" || action === "remove_tags" || action === "set_category") {
+    const selected = await Promise.all(
+      chunks.map((chunk) =>
+        env.DB.prepare(
+          `SELECT id, tags, meta FROM notes WHERE user_id = ? AND deleted_at IS NULL AND id IN (${chunk.map(() => "?").join(",")})`
+        )
+          .bind(userId, ...chunk)
+          .all<{ id: string; tags: string; meta: string | null }>()
       )
-        .bind(userId, ...chunk)
-        .run();
-      affected += res.meta.changes ?? 0;
-    } else if (action === "add_tags" || action === "remove_tags") {
-      const r = await env.DB.prepare(
-        `SELECT id, tags, meta FROM notes WHERE user_id = ? AND deleted_at IS NULL AND id IN (${ph})`
-      )
-        .bind(userId, ...chunk)
-        .all<{ id: string; tags: string; meta: string | null }>();
-      const stmts: D1PreparedStatement[] = [];
-      for (const row of r.results ?? []) {
+    );
+    const stmts: D1PreparedStatement[] = [];
+    for (const row of selected.flatMap((r) => r.results ?? [])) {
+      const meta = parseNoteMeta(row.meta) ?? {};
+      if (action === "set_category") {
+        meta.manual_override = { ...meta.manual_override, category: true };
+        stmts.push(
+          env.DB.prepare(
+            "UPDATE notes SET category = ?, meta = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?"
+          ).bind(opts.category, JSON.stringify(meta), row.id, userId)
+        );
+      } else {
         let current: string[] = [];
         try {
           current = JSON.parse(row.tags || "[]") as string[];
@@ -1618,7 +1643,6 @@ async function runBatchAction(
             ? [...new Set([...current, ...opts.tags])]
             : current.filter((t) => !opts.tags.includes(t));
         if (next.length === current.length && next.every((t, i) => t === current[i])) continue;
-        const meta = parseNoteMeta(row.meta) ?? {};
         meta.manual_override = { ...meta.manual_override, tags: true };
         stmts.push(
           env.DB.prepare(
@@ -1626,31 +1650,21 @@ async function runBatchAction(
           ).bind(JSON.stringify(next), JSON.stringify(meta), row.id, userId)
         );
       }
-      if (stmts.length > 0) await env.DB.batch(stmts);
-      affected += stmts.length;
-    } else if (action === "set_category") {
-      const r = await env.DB.prepare(
-        `SELECT id, meta FROM notes WHERE user_id = ? AND deleted_at IS NULL AND id IN (${ph})`
-      )
-        .bind(userId, ...chunk)
-        .all<{ id: string; meta: string | null }>();
-      const stmts: D1PreparedStatement[] = [];
-      for (const row of r.results ?? []) {
-        const meta = parseNoteMeta(row.meta) ?? {};
-        meta.manual_override = { ...meta.manual_override, category: true };
-        stmts.push(
-          env.DB.prepare(
-            "UPDATE notes SET category = ?, meta = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?"
-          ).bind(opts.category, JSON.stringify(meta), row.id, userId)
-        );
-      }
-      if (stmts.length > 0) await env.DB.batch(stmts);
-      affected += stmts.length;
+      changedIds.push(row.id);
     }
-    done += chunk.length;
+    // untouched notes (missing / already in target state) count as processed
+    let done = ids.length - stmts.length;
     onProgress?.(done, ids.length);
+    for (let i = 0; i < stmts.length; i += BATCH_STMTS_PER_CALL) {
+      const slice = stmts.slice(i, i + BATCH_STMTS_PER_CALL);
+      await env.DB.batch(slice);
+      affected += slice.length;
+      done += slice.length;
+      onProgress?.(done, ids.length);
+    }
   }
-  return affected;
+  console.log(`notes/batch ${action}: ids=${ids.length} affected=${affected} ${Date.now() - started}ms`);
+  return { affected, changedIds };
 }
 
 app.post("/api/notes/batch", async (c) => {
@@ -1696,10 +1710,18 @@ app.post("/api/notes/batch", async (c) => {
     const run = (async () => {
       try {
         await writeLine({ done: 0, total: ids.length });
-        const affected = await runBatchAction(c.env, userId, action, ids, opts, (done, total) =>
+        const { affected, changedIds } = await runBatchAction(c.env, userId, action, ids, opts, (done, total) =>
           void writeLine({ done, total })
         );
-        await writeLine(action === "delete" ? { ok: true, affected, remaining, ids } : { ok: true, affected, remaining });
+        // delete echoes the targeted ids, tag actions the actually-changed ids,
+        // so the client can offer undo (restore / inverse tag op)
+        await writeLine(
+          action === "delete"
+            ? { ok: true, affected, remaining, ids }
+            : action === "add_tags" || action === "remove_tags"
+              ? { ok: true, affected, remaining, ids: changedIds }
+              : { ok: true, affected, remaining }
+        );
       } catch (e) {
         console.error("batch stream failed", e);
         await writeLine({ error: e instanceof Error ? e.message : "批量操作失败" });
@@ -1715,9 +1737,15 @@ app.post("/api/notes/batch", async (c) => {
     });
   }
 
-  const affected = await runBatchAction(c.env, userId, action, ids, opts);
-  // delete responses echo the targeted ids so the client can offer undo (restore)
-  return c.json(action === "delete" ? { ok: true, affected, remaining, ids } : { ok: true, affected, remaining });
+  const { affected, changedIds } = await runBatchAction(c.env, userId, action, ids, opts);
+  // delete echoes the targeted ids, tag actions the actually-changed ids, for undo
+  return c.json(
+    action === "delete"
+      ? { ok: true, affected, remaining, ids }
+      : action === "add_tags" || action === "remove_tags"
+        ? { ok: true, affected, remaining, ids: changedIds }
+        : { ok: true, affected, remaining }
+  );
 });
 
 // ---- GET /api/tags ----
