@@ -33,7 +33,9 @@ export function parseInlineCommand(value: string): InlineCommand {
 
 export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => void; onAsk?: (question: string) => void }) {
   const [value, setValue] = useState("")
-  const [saving, setSaving] = useState(false)
+  // 并发保存计数：输入框提交后立即清空，保存在后台进行，连发多条互不阻塞
+  const [savingCount, setSavingCount] = useState(0)
+  const saving = savingCount > 0
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -45,34 +47,38 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
 
   async function submit() {
     const content = value.trim()
-    if (!content || saving || overLimit) return
-    if (command?.kind === "ask") {
-      if (!command.question) return
+    if (!content || overLimit) return
+    const cmd = parseInlineCommand(content)
+    if (cmd?.kind === "ask") {
+      if (!cmd.question) return
       setValue("")
       setError(null)
-      onAsk?.(command.question)
+      onAsk?.(cmd.question)
       return
     }
-    if ((command?.kind === "raw" || command?.kind === "tags") && !command.content) return
-    setSaving(true)
+    if ((cmd?.kind === "raw" || cmd?.kind === "tags") && !cmd.content) return
+    // 立即清空输入框再后台保存：快速连发时，新输入的内容绝不会被上一条保存完成后的清空操作吞掉
+    setValue("")
     setError(null)
+    setSavingCount((n) => n + 1)
     try {
       const note =
-        command?.kind === "raw"
-          ? await createNote({ source: "web", raw_type: "text", content: command.content, skip_triage: true })
-          : command?.kind === "tags" && command.content
-            ? await createNote({ source: "web", raw_type: "text", content: command.content, tags: command.tags })
+        cmd?.kind === "raw"
+          ? await createNote({ source: "web", raw_type: "text", content: cmd.content, skip_triage: true })
+          : cmd?.kind === "tags" && cmd.content
+            ? await createNote({ source: "web", raw_type: "text", content: cmd.content, tags: cmd.tags })
             : await createNote({ source: "web", raw_type: "text", content })
-      setValue("")
       onCreated(note)
     } catch (e) {
+      // 保存失败：把内容退回输入框，不丢一个字
+      setValue((v) => (v.trim() ? `${content}\n${v}` : content))
       if (e instanceof ApiError && e.status === 413) {
         setError(e.message || `内容过长：最多 ${MAX_CONTENT_CHARS} 字符，请拆成多条或精简后再发。`)
       } else {
         setError(e instanceof Error ? e.message : String(e))
       }
     } finally {
-      setSaving(false)
+      setSavingCount((n) => n - 1)
     }
   }
 
@@ -191,7 +197,6 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
             onClick={() => void submit()}
             disabled={
               !value.trim() ||
-              saving ||
               overLimit ||
               (command?.kind === "ask" && !command.question) ||
               (command?.kind === "raw" && !command.content) ||

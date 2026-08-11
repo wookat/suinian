@@ -16,10 +16,43 @@ export const FALLBACK_TRIAGE: TriageResult = {
 
 const WEEKDAYS_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
+export const DEFAULT_TZ = "Asia/Shanghai";
+
+/** True when `tz` is a valid IANA timezone identifier. */
+export function isValidTimezone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** UTC offset of `tz` at instant `now`, as "+HH:mm" / "-HH:mm". */
+export function tzOffsetString(now: Date, tz: string): string {
+  const dtf = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "longOffset" });
+  const name = dtf.formatToParts(now).find((p) => p.type === "timeZoneName")?.value ?? "GMT+08:00";
+  const m = name.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+  if (!m) return "+08:00";
+  return `${m[1]}${m[2].padStart(2, "0")}:${m[3] ?? "00"}`;
+}
+
+function tzOffsetMs(now: Date, tz: string): number {
+  const off = tzOffsetString(now, tz);
+  const sign = off.startsWith("-") ? -1 : 1;
+  const [h, min] = off.slice(1).split(":").map(Number);
+  return sign * (h * 60 + min) * 60_000;
+}
+
+/** Date in timezone `tz` (offset by `offsetDays`) as { iso: "YYYY-MM-DD", weekday: "周X" }. */
+export function zonedDate(now: Date, tz: string, offsetDays = 0): { iso: string; weekday: string } {
+  const local = new Date(now.getTime() + tzOffsetMs(now, tz) + offsetDays * 86400_000);
+  return { iso: local.toISOString().slice(0, 10), weekday: WEEKDAYS_ZH[local.getUTCDay()] };
+}
+
 /** Date in Asia/Shanghai (offset by `offsetDays`) as { iso: "YYYY-MM-DD", weekday: "周X" }. */
 export function shanghaiDate(now: Date = new Date(), offsetDays = 0): { iso: string; weekday: string } {
-  const sh = new Date(now.getTime() + 8 * 3600 * 1000 + offsetDays * 86400_000);
-  return { iso: sh.toISOString().slice(0, 10), weekday: WEEKDAYS_ZH[sh.getUTCDay()] };
+  return zonedDate(now, DEFAULT_TZ, offsetDays);
 }
 
 /** Current date in Asia/Shanghai as { iso: "YYYY-MM-DD", weekday: "周X" }. */
@@ -27,22 +60,28 @@ export function todayInShanghai(now: Date = new Date()): { iso: string; weekday:
   return shanghaiDate(now, 0);
 }
 
+/** Date of 下周一 (next week's Monday) in timezone `tz`. */
+export function nextMondayIn(now: Date, tz: string): { iso: string; weekday: string } {
+  const dow = new Date(now.getTime() + tzOffsetMs(now, tz)).getUTCDay();
+  const days = (8 - dow) % 7 || 7;
+  return zonedDate(now, tz, days);
+}
+
 /** Date of 下周一 (next week's Monday) in Asia/Shanghai. */
 export function nextMondayInShanghai(now: Date = new Date()): { iso: string; weekday: string } {
-  const dow = new Date(now.getTime() + 8 * 3600 * 1000).getUTCDay();
-  const days = (8 - dow) % 7 || 7;
-  return shanghaiDate(now, days);
+  return nextMondayIn(now, DEFAULT_TZ);
 }
 
 /** Build the triage system prompt. Exported for testing. */
-export function buildTriagePrompt(now: Date = new Date(), existingTags: string[] = []): string {
-  const { iso, weekday } = todayInShanghai(now);
-  const tomorrow = shanghaiDate(now, 1);
-  const nextMon = nextMondayInShanghai(now);
+export function buildTriagePrompt(now: Date = new Date(), existingTags: string[] = [], tz: string = DEFAULT_TZ): string {
+  const { iso, weekday } = zonedDate(now, tz, 0);
+  const tomorrow = zonedDate(now, tz, 1);
+  const nextMon = nextMondayIn(now, tz);
+  const off = tzOffsetString(now, tz);
   const tagHint = existingTags.length
-    ? `\n用户已有标签（优先复用其中的词，不要新造近义词）：${existingTags.slice(0, 50).join("、")}`
+    ? `\n用户已有标签（仅当内容确实属于该标签主题时才复用；不相关时宁可新造贴切标签，绝不要硬套已有标签）：${existingTags.slice(0, 50).join("、")}`
     : "";
-  return `你是「碎念」笔记分拣助手。今天是 ${iso}（${weekday}），北京时间（Asia/Shanghai）。相对日期一律基于今天换算，例如：「明天」= ${tomorrow.iso}（${tomorrow.weekday}）；「下周一」= ${nextMon.iso}（下一个周一，注意不是周二）。用户会丢来一条碎片信息，你输出严格 JSON（不要 markdown 代码块），字段：
+  return `你是「碎念」笔记分拣助手。今天是 ${iso}（${weekday}），用户时区 ${tz}（UTC${off}）。相对日期一律基于今天换算，例如：「明天」= ${tomorrow.iso}（${tomorrow.weekday}）；「下周一」= ${nextMon.iso}（下一个周一，注意不是周二）。用户会丢来一条碎片信息，你输出严格 JSON（不要 markdown 代码块），字段：
 - category，六选一：
   - "idea"：自己的想法/思考/灵感/感受，既不需要去做，也不是外部资源
   - "todo"：需要用户去做的事，通常有动作（买/交/回/约/换/提醒我）；没写时间也可以是待办
@@ -57,8 +96,8 @@ export function buildTriagePrompt(now: Date = new Date(), existingTags: string[]
   - 「9月1号起预算表改用新模板，找行政领新版」→ todo（制度/流程变更但含需要本人去做的动作，如“找…领”“去…办”，以动作为准归 todo）
   - 「回头把冰箱滤芯换了」→ todo（无时间也是待办，todo_due=null）
   - 「https://example.com/abc 一篇讲向量检索的文章」→ collect（纯链接即收藏）
-  - 「明天下午3点和设计师对稿」→ todo，todo_due=${tomorrow.iso}T15:00:00+08:00
-  - 「下周一晚上8点提醒我给客户回邮件」→ todo，todo_due=${nextMon.iso}T20:00:00+08:00
+  - 「明天下午3点和设计师对稿」→ todo，todo_due=${tomorrow.iso}T15:00:00${off}
+  - 「下周一晚上8点提醒我给客户回邮件」→ todo，todo_due=${nextMon.iso}T20:00:00${off}
   - 「Wi-Fi 密码是 hunter2-demo」→ data，且 is_sensitive=true
   - 「感觉周报功能可以做成邮件推送」→ idea
   - 「午饭黄焖鸡 23 块」→ expense，amount=23，currency="CNY"，merchant="午饭黄焖鸡"
@@ -76,7 +115,7 @@ export function buildTriagePrompt(now: Date = new Date(), existingTags: string[]
 - amount: 仅 expense/income 时输出的金额数字（不带单位，如 23 或 12.5）；内容里没有明确金额时必须为 null，绝不要猜测。其它类别一律 null
 - currency: 仅 expense/income 且 amount 非 null 时输出 ISO 4217 代码（人民币/块/元默认 "CNY"，美元 "USD"），否则 null
 - merchant: 仅 expense/income 时输出的商家或用途短语（<=12字），推断不出则 null
-- todo_due: 若是待办且能推断截止时间，基于上面给出的今天日期与星期换算（如"周五之前"= 从今天起最近的周五）。内容中有具体时刻（如"下午三点半""晚上8点"）时输出带时刻和时区偏移的 ISO 8601 "YYYY-MM-DDTHH:mm:00+08:00"（24 小时制，Asia/Shanghai 固定 +08:00，如 "2026-08-07T15:30:00+08:00"）；只有日期没有时刻时仅输出 "YYYY-MM-DD"；无法推断则 null。绝不要输出早于今天的日期
+- todo_due: 若是待办且能推断截止时间，基于上面给出的今天日期与星期换算（如"周五之前"= 从今天起最近的周五）。内容中有具体时刻（如"下午三点半""晚上8点"）时输出带时刻和时区偏移的 ISO 8601 "YYYY-MM-DDTHH:mm:00${off}"（24 小时制，时刻按用户时区 ${tz} 理解，偏移固定写 ${off}，如 "${tomorrow.iso}T15:30:00${off}"）；只有日期没有时刻时仅输出 "YYYY-MM-DD"；无法推断则 null。绝不要输出早于今天的日期
 只输出 JSON。标签禁止包含密码、密钥、卡号等敏感值本身。`;
 }
 
@@ -142,25 +181,27 @@ export function stripMarkerNoise(content: string, triage: TriageResult): TriageR
 
 const TODO_DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::\d{2})?\s*(Z|[+-]\d{2}:?\d{2})?)?/;
 
-function normalizeOffset(raw: string | undefined): string {
-  if (!raw || raw === "Z") return raw === "Z" ? "+00:00" : "+08:00";
+function normalizeOffset(raw: string | undefined, defaultOffset: string): string {
+  if (!raw) return defaultOffset;
+  if (raw === "Z") return "+00:00";
   return raw.includes(":") ? raw : `${raw.slice(0, 3)}:${raw.slice(3)}`;
 }
 
 /**
  * Normalize a todo_due into "YYYY-MM-DD" (date-only) or offset ISO 8601
- * "YYYY-MM-DDTHH:mm:00+08:00" (timed; bare local times are Asia/Shanghai).
+ * "YYYY-MM-DDTHH:mm:00+HH:mm" (timed; bare local times take `defaultOffset`,
+ * the user's timezone offset, Asia/Shanghai by default).
  */
-export function normalizeTodoDue(v: unknown): string | null {
+export function normalizeTodoDue(v: unknown, defaultOffset = "+08:00"): string | null {
   if (typeof v !== "string") return null;
   const m = v.trim().match(TODO_DUE_RE);
   if (!m) return null;
   if (!m[2]) return m[1];
-  return `${m[1]}T${m[2]}:00${normalizeOffset(m[3])}`;
+  return `${m[1]}T${m[2]}:00${normalizeOffset(m[3], defaultOffset)}`;
 }
 
 /** Parse the LLM output into a TriageResult; returns null when invalid. */
-export function parseTriageJson(text: string): TriageResult | null {
+export function parseTriageJson(text: string, defaultOffset = "+08:00"): TriageResult | null {
   let raw = text.trim();
   const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) raw = fence[1].trim();
@@ -182,7 +223,7 @@ export function parseTriageJson(text: string): TriageResult | null {
     : [];
   const title = typeof o.title === "string" ? o.title : "";
   const is_sensitive = o.is_sensitive === true;
-  const todo_due = normalizeTodoDue(o.todo_due);
+  const todo_due = normalizeTodoDue(o.todo_due, defaultOffset);
   const isFinance = category === "expense" || category === "income";
   const amount =
     isFinance && typeof o.amount === "number" && Number.isFinite(o.amount) && o.amount > 0
@@ -221,17 +262,19 @@ export async function loadTopTags(db: D1Database, userId: string): Promise<strin
 export async function triageNote(
   content: string,
   env: Parameters<typeof chatComplete>[0],
-  existingTags: string[] = []
+  existingTags: string[] = [],
+  tz: string = DEFAULT_TZ
 ): Promise<TriageResult | null> {
+  const now = new Date();
   const text = await chatComplete(env, {
     temperature: 0.2,
     max_tokens: 300,
     messages: [
-      { role: "system", content: buildTriagePrompt(new Date(), existingTags) },
+      { role: "system", content: buildTriagePrompt(now, existingTags, tz) },
       { role: "user", content: content.slice(0, 4000) },
     ],
   });
-  let result = (text && parseTriageJson(text)) || null;
+  let result = (text && parseTriageJson(text, tzOffsetString(now, tz))) || null;
   if (result) result = stripMarkerNoise(content, result);
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {

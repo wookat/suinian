@@ -469,7 +469,7 @@ function PushPreferencesCard() {
   const s = loadSettings()
   if (s.useMock || !s.apiBaseUrl || !s.apiToken) return null
 
-  async function toggle(key: keyof PushPreferences) {
+  async function toggle(key: "daily_review_push" | "todo_reminder_push") {
     if (!prefs || busy) return
     const next = { ...prefs, [key]: !prefs[key] }
     setPrefs(next)
@@ -485,7 +485,7 @@ function PushPreferencesCard() {
     }
   }
 
-  const OPTIONS: { key: keyof PushPreferences; label: string; hint: string }[] = [
+  const OPTIONS: { key: "daily_review_push" | "todo_reminder_push"; label: string; hint: string }[] = [
     { key: "daily_review_push", label: "每日回顾推送", hint: "每天早上把「今日回顾」推到浏览器通知/微信" },
     { key: "todo_reminder_push", label: "待办提醒推送", hint: "待办到点推浏览器通知；微信上午推当天清单" },
   ]
@@ -591,13 +591,13 @@ function WechatBindingCard() {
         </p>
       ) : status && !status.configured && !status.kf_configured ? (
         <p className="text-sm text-muted-foreground">
-          服务端未配置微信通道（公众号 WECHAT_MP_TOKEN / 企微客服 WECOM_KF_*）。自部署用户参考仓库 docs/wechat-integration.md 配置；极客也可继续使用 skill/bridge 自建微信 bot。
+          微信绑定即将开放，敬请期待。自部署用户可参考仓库 docs/wechat-integration.md 提前开通。
         </p>
       ) : status ? (
         <div className="space-y-3">
           <div className="space-y-1 text-xs text-muted-foreground">
-            <p>公众号通道：{status.configured ? "已开通 — 关注碎念公众号后发绑定码" : "服务端未配置"}</p>
-            <p>企微微信客服通道：{status.kf_configured ? "已开通 — 添加客服会话后发绑定码，可接收转发文章/文件" : "服务端未配置（需企业主体，见 docs/wechat-integration.md）"}</p>
+            <p>公众号通道：{status.configured ? "已开通 — 关注碎念公众号后发绑定码" : "即将开放"}</p>
+            <p>企微微信客服通道：{status.kf_configured ? "已开通 — 添加客服会话后发绑定码，可接收转发文章/文件" : "即将开放"}</p>
           </div>
           {status.bound || status.kf_bound ? (
             <div className="space-y-2">
