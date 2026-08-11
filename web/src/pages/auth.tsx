@@ -20,16 +20,21 @@ export function AuthPage() {
   const [busy, setBusy] = useState(false)
   const [slow, setSlow] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [mismatch, setMismatch] = useState(false)
 
   async function submit() {
     if (busy) return
     setError(null)
+    setMismatch(false)
     setSlow(false)
     const base = apiBaseUrl.trim()
     if (!base) return setError("请填写 API 地址")
     if (name.trim().length < 2) return setError("用户名至少 2 个字符")
     if (password.length < 8) return setError("密码至少 8 个字符")
-    if (mode === "register" && password !== password2) return setError("两次输入的密码不一致")
+    if (mode === "register" && password !== password2) {
+      setMismatch(true)
+      return setError("两次输入的密码不一致")
+    }
     setBusy(true)
     const slowTimer = window.setTimeout(() => setSlow(true), 4000)
     try {
@@ -74,6 +79,7 @@ export function AuthPage() {
                 onClick={() => {
                   setMode(opt.value)
                   setError(null)
+                  setMismatch(false)
                 }}
                 className={cn(
                   "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
@@ -133,8 +139,13 @@ export function AuthPage() {
             type="password"
             autoComplete={mode === "register" ? "new-password" : "current-password"}
             placeholder="至少 8 个字符"
+            aria-invalid={mismatch || undefined}
+            className={cn(mismatch && "border-destructive focus-visible:ring-destructive/40")}
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => {
+              setPassword(e.target.value)
+              setMismatch(false)
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && mode === "login") void submit()
             }}
@@ -151,12 +162,23 @@ export function AuthPage() {
               type="password"
               autoComplete="new-password"
               placeholder="再输入一次"
+              aria-invalid={mismatch || undefined}
+              className={cn(mismatch && "border-destructive focus-visible:ring-destructive/40")}
               value={password2}
-              onChange={(e) => setPassword2(e.target.value)}
+              onChange={(e) => {
+                setPassword2(e.target.value)
+                setMismatch(false)
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") void submit()
               }}
             />
+            {mismatch && (
+              <p className="flex items-center gap-1 text-xs text-destructive">
+                <CircleAlert className="size-3.5 shrink-0" />
+                两次输入的密码不一致，请重新输入
+              </p>
+            )}
           </div>
         )}
 
