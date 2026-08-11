@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-08-10（R85）
+> 最后更新：2026-08-11（R89）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -43,6 +43,7 @@
 - R54：ask 评测集（backend/scripts/ask-eval.ts，golden+holdout）、时间范围召回过滤、诚实「没找到」带相近建议
 - R85：微信接入普通用户化——公众号官方回调 `/wechat/mp`（验签+AES 安全模式）、6 位绑定码流程（设置页「微信绑定」）、文字/链接/图片/语音入库走现有管线；`WECHAT_MP_TOKEN` 未配置时整体关闭；路线对比与配置指南 docs/wechat-integration.md；iLink bridge 保留给自部署极客
 - R88：用户研究（R87）6 角色发现的 P0/P1 修复——①待办时区：`user_preferences.tz`（migration 0019）+ web 自动 syncTimezone，分拣按用户时区理解相对时间（跨时区回归 backend/test/r88-timezone.test.ts）；②问答可靠性：chatComplete 对 429/5xx/网络错误重试一次，/api/ask 失败返回 503+可读中文+retryable，web ask 自动重试+重试按钮；③冷启动：交互式 embed 8s 超时降级关键词召回；④连发：速记框提交即清空+并发保存计数，失败内容退回；⑤标签污染：分拣 prompt 不硬套已有标签；⑥数字召回：关键词/答案 prompt 保留并直给原始数字（禁 hedge），eval 新增 num1+q57-59；⑦微信设置未配置显示「即将开放」。线上回归 8/8 过，ask-eval 57/59 (97%)（PR #103）
+- R89：R88 遗留清理——①全站时间戳按本地时区显示：web `parseServerTime`（lib/utils.ts，无偏移 SQL 时间一律按 UTC 解析），formatTime/时间流 dayLabel/线索 timelineDate/今日回顾 noteDateLabel 均改用（周报/月报/回收站/设置页本就正确）；②问答历史按账号隔离：localStorage key `suinian-ask-chat-v2:<apiBase|token FNV 指纹>`，旧 v1 共享 key 读到即删；③多选栏新增「移除标签」（chip 选已有标签或手输，支持全部匹配，带撤销只补回原有该标签的笔记）。线上回归（Asia/Shanghai）全过，ask-eval 57/59 (97%)
 - R55：CJK 长问句 LLM 关键词抽取（extractAskKeywords，eval 28/28 全过）、ask 召回排除敏感笔记（含标题）、新手引导 4 步 tour（settings.tourSeen，仅新注册）、空态一键丢入 #示例 笔记+一键清除、周报提示词升级（主线/想法关联/悬而未决）
 
 ## 已知问题 / 观察项
@@ -50,7 +51,7 @@
 - `daily_review:cron` 心跳：cron_heartbeats 表 2026-08-07 23:54 UTC 才在生产建表，首个常规 20:00 UTC 跑批在 2026-08-08；R51 已用一次性 cron 在生产验证写入正常
 - Vectorize 未启用（个人量级 D1 余弦够用）；公众号/小红书正文抓取受反爬限制，有兜底
 - 扩展未上架商店，开发者模式加载（extension/README.md）
-- 【R88 遗留观察】时间流卡片 created_at 仍按 UTC 显示（待办 due 已按用户时区）；问答对话历史存 localStorage 跨账号残留；多选操作栏无「移除标签」按钮（现有路径：设置→标签管理→删除）
+- 【R89 观察】生产 `/api/notes/batch?stream=1` 偶发 40-60s 才返回，而撤销 toast 只停留 6s，慢请求时用户来不及点撤销——建议撤销入口持久化（同删除的 pending-undo 方案）并排查 batch 慢的原因；内联 #tag 打标非 100% 保真（AI 分拣偶改标签）
 
 ## 等老板事项
 - GitHub Actions 付款问题（恢复后 CI 才会跑）

@@ -15,7 +15,7 @@ import {
   getNotes,
 } from "@/lib/api"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
-import { formatTime } from "@/lib/utils"
+import { formatTime, parseServerTime } from "@/lib/utils"
 import type { Thread, ThreadDetail, ThreadJob } from "@/lib/types"
 
 const JOB_POLL_MS = 3000
@@ -29,7 +29,7 @@ const PHASE_LABEL: Record<ThreadJob["phase"], string> = {
 }
 
 function timelineDate(iso: string): string {
-  const d = new Date(iso)
+  const d = parseServerTime(iso)
   const pad = (n: number) => String(n).padStart(2, "0")
   const date = `${pad(d.getMonth() + 1)}月${pad(d.getDate())}日`
   return d.getFullYear() === new Date().getFullYear()

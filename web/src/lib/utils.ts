@@ -27,8 +27,21 @@ export function dueHasTime(due: string): boolean {
   return /[T ]\d{2}:\d{2}/.test(due)
 }
 
+const NO_OFFSET_SQL_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/
+
+/**
+ * Parse a server timestamp into a local Date. The API stores UTC
+ * `datetime('now')` values ("YYYY-MM-DD HH:MM:SS", no offset), which
+ * `new Date()` would misread as local time.
+ */
+export function parseServerTime(iso: string): Date {
+  const v = iso.trim()
+  if (NO_OFFSET_SQL_RE.test(v)) return new Date(`${v.replace(" ", "T")}Z`)
+  return new Date(v)
+}
+
 export function formatTime(iso: string): string {
-  const d = new Date(iso)
+  const d = parseServerTime(iso)
   const now = new Date()
   const diff = now.getTime() - d.getTime()
   const min = Math.floor(diff / 60000)

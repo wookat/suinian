@@ -4,11 +4,26 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { NoteCard } from "@/components/note-card"
 import { ask, createNote } from "@/lib/api"
+import { loadSettings, useSettingsVersion } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import type { AskHistoryMessage, Note } from "@/lib/types"
 
-const STORAGE_KEY = "suinian-ask-chat-v1"
+const LEGACY_STORAGE_KEY = "suinian-ask-chat-v1" // 旧版全局共享 key，会跨账号泄露，读到即删
+const STORAGE_PREFIX = "suinian-ask-chat-v2:"
 const HISTORY_MAX_MESSAGES = 6 // 最近 3 轮
+
+/** 问答历史按账号隔离：key 携带当前 API 地址 + token 的指纹 */
+function storageKey(): string {
+  const s = loadSettings()
+  if (s.useMock || !s.apiToken) return `${STORAGE_PREFIX}anon`
+  const str = `${s.apiBaseUrl}|${s.apiToken}`
+  let h = 0x811c9dc5
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return `${STORAGE_PREFIX}${(h >>> 0).toString(36)}`
+}
 
 export const HELP_TEXT = [
   "碎念能帮你：",
@@ -49,7 +64,8 @@ export function buildAskNoteContent(question: string, answer: string, refs: { in
 
 function loadMessages(): AskChatMessage[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    localStorage.removeItem(LEGACY_STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey())
     if (!raw) return []
     const parsed = JSON.parse(raw) as unknown
     return Array.isArray(parsed) ? (parsed as AskChatMessage[]) : []
@@ -60,7 +76,7 @@ function loadMessages(): AskChatMessage[] {
 
 function saveMessages(messages: AskChatMessage[]) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-50)))
+    localStorage.setItem(storageKey(), JSON.stringify(messages.slice(-50)))
   } catch {
     // storage full / unavailable: chat still works in-memory
   }
@@ -113,6 +129,17 @@ export function AskChat({
   const [saveStates, setSaveStates] = useState<Record<string, "saving" | "saved" | "error">>({})
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+
+  // 账号切换（token 变化）时切到对应账号的历史，绝不把上个账号的对话带过去
+  const settingsVersion = useSettingsVersion()
+  const keyRef = useRef(storageKey())
+  useEffect(() => {
+    const k = storageKey()
+    if (k !== keyRef.current) {
+      keyRef.current = k
+      setMessages(loadMessages())
+    }
+  }, [settingsVersion])
 
   useEffect(() => {
     saveMessages(messages)
