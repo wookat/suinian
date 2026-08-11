@@ -22,4 +22,11 @@ description: How to run and test suinian (backend Worker + web SPA) fully locall
 - web: `npm run lint` (oxlint, warnings ok), `npm run build` (tsc + vite)
 
 ## Production caution
-Never test against https://suinian-api.zalize.com unless explicitly allowed; if unavoidable, use a `[QA-...]`-prefixed account and delete it after.
+Never test against https://suinian-api.zalize.com unless explicitly allowed; if unavoidable, use a `[QA-...]`-prefixed account and delete it after (设置页 → 危险操作 → 注销账号, confirm prompt requires typing 「注销」 — CJK typing into native prompts drops characters; put 注销 on the clipboard via `xclip` and Ctrl+V instead).
+
+## Production testing tips (learned R89)
+- Timezone-sensitive tests: set the OS timezone before launching Chrome (`sudo timedatectl set-timezone Asia/Shanghai`), then restart Chrome so `Intl` picks it up; verify with `Intl.DateTimeFormat().resolvedOptions().timeZone`. Restore UTC afterwards.
+- Prod `/api/notes/batch?stream=1` (add_tags/remove_tags) is intermittently slow — anywhere from ~1s to 60s+. UI toasts (incl. the 撤销 undo button) auto-dismiss after 6s, so an agent's click roundtrip often misses the undo window. Workaround for testing undo: in the console stretch the timeout (`const ost=setTimeout; window.setTimeout=(fn,ms,...r)=>ost(fn, ms===6000?90000:ms, ...r)`), or click undo within the same computer-use action batch.
+- Inline `#tag content` quick-capture: only some notes keep the literal tag — AI triage may strip/replace it; verify each note's chips before relying on them for batch-tag tests.
+- Login against prod can time out once with 「请求超时，请用相同用户名密码重试一次」; simply retry.
+- Repeatable evals: `cd backend && npx tsx scripts/ask-eval.ts` (registers + deletes its own qa-r79-eval-* prod account, ~5 min, prints per-category recall score); `scripts/triage-eval.ts` needs `SUINIAN_TOKEN`.
