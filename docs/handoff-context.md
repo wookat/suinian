@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-08-12（R91）
+> 最后更新：2026-08-12（R92）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -45,6 +45,7 @@
 - R88：用户研究（R87）6 角色发现的 P0/P1 修复——①待办时区：`user_preferences.tz`（migration 0019）+ web 自动 syncTimezone，分拣按用户时区理解相对时间（跨时区回归 backend/test/r88-timezone.test.ts）；②问答可靠性：chatComplete 对 429/5xx/网络错误重试一次，/api/ask 失败返回 503+可读中文+retryable，web ask 自动重试+重试按钮；③冷启动：交互式 embed 8s 超时降级关键词召回；④连发：速记框提交即清空+并发保存计数，失败内容退回；⑤标签污染：分拣 prompt 不硬套已有标签；⑥数字召回：关键词/答案 prompt 保留并直给原始数字（禁 hedge），eval 新增 num1+q57-59；⑦微信设置未配置显示「即将开放」。线上回归 8/8 过，ask-eval 57/59 (97%)（PR #103）
 - R89：R88 遗留清理——①全站时间戳按本地时区显示：web `parseServerTime`（lib/utils.ts，无偏移 SQL 时间一律按 UTC 解析），formatTime/时间流 dayLabel/线索 timelineDate/今日回顾 noteDateLabel 均改用（周报/月报/回收站/设置页本就正确）；②问答历史按账号隔离：localStorage key `suinian-ask-chat-v2:<apiBase|token FNV 指纹>`，旧 v1 共享 key 读到即删；③多选栏新增「移除标签」（chip 选已有标签或手输，支持全部匹配，带撤销只补回原有该标签的笔记）。线上回归（Asia/Shanghai）全过，ask-eval 57/59 (97%)
 - R91：全量线上评审（只测不改）——R88–R90 全部回归 PASS、安全抽查过、注销级联 14 表清零、Lighthouse 桌面 100/100/100/100、体验评分 记录4.9/整理4.9/找回4.9/首次4.8；无 P0/P1，P2 观察见 qa-report-r91.md；顺手清理了上轮遗留账号 `[QA-R88]-repro`
+- R92：大语料敏感隔离专项验证（生产 102 条语料含 12 条敏感，8 个隔离面——图谱/线索/回顾/周报/洞察/问答/嵌入/默认导出——全部 0 泄漏且阳性对照成立，报告 qa-report-r92.md；月报未覆盖）+ 注册页密码不一致字段级红框/内联提示 + 【排查】[QA-R88]-repro 残留系会话未执行注销非接口缺陷；生产 ADMIN_TOKEN 已轮换
 - R55：CJK 长问句 LLM 关键词抽取（extractAskKeywords，eval 28/28 全过）、ask 召回排除敏感笔记（含标题）、新手引导 4 步 tour（settings.tourSeen，仅新注册）、空态一键丢入 #示例 笔记+一键清除、周报提示词升级（主线/想法关联/悬而未决）
 
 ## 已知问题 / 观察项
@@ -53,7 +54,7 @@
 - Vectorize 未启用（个人量级 D1 余弦够用）；公众号/小红书正文抓取受反爬限制，有兜底
 - 扩展未上架商店，开发者模式加载（extension/README.md）
 - 【R89 观察】生产 `/api/notes/batch?stream=1` 偶发 40-60s 才返回——R90 已做撤销入口持久化覆盖慢请求场景；R91 回归未复现慢请求（10 条 ~2s），继续观察；内联 #tag 打标非 100% 保真（AI 分拣偶改标签）
-- 【R91 观察】敏感笔记在图谱/线索派生中的隔离尚未构造出可断言场景（QA 语料小，图谱未生成），下轮大语料专项验证；注册页密码不一致仅顶部红条、无字段级高亮（P2）；QA 收尾务必核查 users 表防遗留账号
+- 【R92】敏感隔离大语料专项已验证全过（见 qa-report-r92.md）；月报隔离未覆盖（生产尚无月报周期数据），待有月报后抽查；`/api/graph`、`/api/insights` 非实际路由，图谱/洞察数据经线索详情与 /api/stats 验证
 
 ## 等老板事项
 - GitHub Actions 付款问题（恢复后 CI 才会跑）
@@ -64,5 +65,6 @@
 ## 测试约定
 - 测试数据一律 `[QA-R88]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
 - QA 账号命名建议：用户名允许字符为中英文、数字、`._-[]`（2-32 字符，R60 起支持 `[]`）。建议 QA 账号命名 `[QA-R<轮次>]-<用途>`（如 `[QA-R60]-migrate-a`），**务必记录密码**，测完自助注销；若密码遗失需手动用 wrangler d1 按 `backend/src/account.ts` 的级联口径清理（children 先删，附前后 SQL 证据）
+- **QA 账号清单核对（收尾强制步骤）**：每轮 QA 收尾时，除逐表验证自己账号级联清零外，必须再跑一次 `SELECT id, name FROM users` 全量核对，确认只剩 `u_boss / Thomas`；发现任何 `[QA-*]` 残留账号（如 R91 发现的 `[QA-R88]-repro`，系该轮会话未执行注销、非注销接口缺陷——账号所有 children 与 users 行均完整保留，说明 `DELETE /api/auth/me` 从未被调用），按 account.ts 级联口径手动清理（children 先删，附前后 SQL 证据）并在报告中注明
 - 老板测试 token 由老板在会话中提供附件，勿写入仓库/日志
 - admin 端点：`POST /api/admin/run-daily-reviews`、`POST /api/admin/reconcile-threads`（Bearer `ADMIN_TOKEN`）
