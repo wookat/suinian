@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-08-12（R92）
+> 最后更新：2026-08-13（R94）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -46,6 +46,7 @@
 - R89：R88 遗留清理——①全站时间戳按本地时区显示：web `parseServerTime`（lib/utils.ts，无偏移 SQL 时间一律按 UTC 解析），formatTime/时间流 dayLabel/线索 timelineDate/今日回顾 noteDateLabel 均改用（周报/月报/回收站/设置页本就正确）；②问答历史按账号隔离：localStorage key `suinian-ask-chat-v2:<apiBase|token FNV 指纹>`，旧 v1 共享 key 读到即删；③多选栏新增「移除标签」（chip 选已有标签或手输，支持全部匹配，带撤销只补回原有该标签的笔记）。线上回归（Asia/Shanghai）全过，ask-eval 57/59 (97%)
 - R91：全量线上评审（只测不改）——R88–R90 全部回归 PASS、安全抽查过、注销级联 14 表清零、Lighthouse 桌面 100/100/100/100、体验评分 记录4.9/整理4.9/找回4.9/首次4.8；无 P0/P1，P2 观察见 qa-report-r91.md；顺手清理了上轮遗留账号 `[QA-R88]-repro`
 - R92：大语料敏感隔离专项验证（生产 102 条语料含 12 条敏感，8 个隔离面——图谱/线索/回顾/周报/洞察/问答/嵌入/默认导出——全部 0 泄漏且阳性对照成立，报告 qa-report-r92.md；月报未覆盖）+ 注册页密码不一致字段级红框/内联提示 + 【排查】[QA-R88]-repro 残留系会话未执行注销非接口缺陷；生产 ADMIN_TOKEN 已轮换
+- R94：AI 多 provider 降级链（R93 P0 DeepSeek 余额耗尽应对）——chatComplete 主模型失败自动 fallback 到 Workers AI llama-3.3-70b（`AI_FALLBACK_MODEL` 可换/`none` 关闭，每次先试主模型→充值后自动回主）；`GET /health?probe=ai` 探针（primary/fallback/503）；兑底 cron 扫 `needs_retriage`，pending 超 1h 落 FALLBACK_TRIAGE+标记；前端 pending 超 10min 显示「分拣延迟」；删除文案修正；注销改应用内确认（弃 window.prompt）。生产已删 AI_MODEL 手工覆盖，当前 provider=fallback；线上回归全过，ask-eval 42/44 (95%)、triage-eval category 21/21（todo_due 3/5，fallback 模型时区语义偏差）（PR #110）
 - R55：CJK 长问句 LLM 关键词抽取（extractAskKeywords，eval 28/28 全过）、ask 召回排除敏感笔记（含标题）、新手引导 4 步 tour（settings.tourSeen，仅新注册）、空态一键丢入 #示例 笔记+一键清除、周报提示词升级（主线/想法关联/悬而未决）
 
 ## 已知问题 / 观察项
@@ -56,8 +57,11 @@
 - 【R89 观察】生产 `/api/notes/batch?stream=1` 偶发 40-60s 才返回——R90 已做撤销入口持久化覆盖慢请求场景；R91 回归未复现慢请求（10 条 ~2s），继续观察；内联 #tag 打标非 100% 保真（AI 分拣偶改标签）
 - 【R92】敏感隔离大语料专项已验证全过（见 qa-report-r92.md）；月报隔离未覆盖（生产尚无月报周期数据），待有月报后抽查；`/api/graph`、`/api/insights` 非实际路由，图谱/洞察数据经线索详情与 /api/stats 验证
 
+- 【R94】DeepSeek 仍欠费，生产跑 Workers AI fallback；充值后无需改配置自动回主，可用 `/health?probe=ai` 确认 provider 回到 primary；todo_due 在 fallback 下偶有时区语义偏差（回主后应消失，观察）
+
 ## 等老板事项
 - GitHub Actions 付款问题（恢复后 CI 才会跑）
+- DeepSeek 账户充值（R94 已用 Workers AI fallback 恢复服务不阻塞；充值后自动回主）
 - 扩展是否上架 Chrome Web Store（需开发者账号 $5）
 - 微信 bot 实例长期托管方式（当前 skill/bridge 自托管）
 - 【R85】公众号资源：注册公众号（个人订阅号即可起步）、提供 AppID/AppSecret、在公众号后台回填服务器配置（URL/Token/EncodingAESKey）；开发验证可微信扫码领测试号。清单见 docs/wechat-integration.md 第五节

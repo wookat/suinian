@@ -46,5 +46,11 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - Prod graph tables are `entities`/`edges` (not graph_*); `edges` cols: src_type,src_id,dst_type,dst_id,relation,note_id; `daily_reviews` cols include note_id,kind,comment; `weekly_reports` has `content_md`. Check `sqlite_master` before writing queries.
 - Admin endpoints for forcing derivations: `POST /api/admin/reconcile-threads`, `POST /api/admin/run-daily-reviews` with `Authorization: Bearer <ADMIN_TOKEN>` (worker secret; lead can rotate via `wrangler secret put`).
 
+## Production testing tips (learned R94)
+- Fastest way to get a QA account token for triage-eval / API tests: 设置页「复制我的 API token」button + `DISPLAY=:0 xclip -selection clipboard -o` (48-char token). Read the clipboard in the same `exec` call that uses it — shell variables don't survive across calls.
+- Voice-note path without a mic: `espeak-ng` to wav → `ffmpeg` to mp3 → `curl -F type=audio -F file=@x.mp3 https://suinian-api.zalize.com/api/ingest/media -H "Authorization: Bearer $TOKEN"` (omitting `type` fails with "type must be audio, image or file"). Whisper transcribes, correctTranscript may normalize to Chinese.
+- Note-card 「⋯」 menu button is `md:opacity-0` (visible only on hover) but always clickable — click just right of the timestamp (~x=694).
+- AI health probe: `GET /health?probe=ai` → `{ok, ai:{provider: "primary"|"fallback", model}}`, 503 when the whole chain is down. Account deletion now uses an in-app confirm (type 「注销」 via clipboard paste) — no more native prompt stubbing needed.
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.
