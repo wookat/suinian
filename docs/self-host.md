@@ -61,6 +61,8 @@ npx wrangler secret put DEEPSEEK_API_KEY
 # printf 'https://your-provider.com/v1' | npx wrangler secret put AI_BASE_URL
 ```
 
+外部供应商失败（余额耗尽/超时/宕机）时，worker 会自动降级到 Workers AI（默认 `workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast`），恢复后自动回主。可用 `AI_FALLBACK_MODEL` 换兜底模型，设为 `none` 关闭降级链。`GET /health?probe=ai` 可探测当前 AI 供给状态（`provider: primary/fallback`），适合接外部监控。
+
 其余密钥：
 
 ```bash

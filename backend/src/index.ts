@@ -18,7 +18,7 @@ import {
   REBUILD_SLICE_BUDGET_MS,
   type ThreadJobRow,
 } from "./thread-jobs";
-import { chatComplete } from "./ai";
+import { chatComplete, aiProbe } from "./ai";
 import {
   hashPassword,
   verifyPassword,
@@ -56,6 +56,7 @@ import {
   SENSITIVE_EXPORT_PLACEHOLDER,
   SOFT_DELETE_RETENTION_DAYS,
   RETRIAGE_TIME_BUDGET_MS,
+  TRIAGE_DEGRADE_AFTER_MS,
 } from "./constants";
 import { buildStats, normalizeTzOffset, SAMPLE_TAG_LIKE } from "./stats";
 import {
@@ -149,7 +150,15 @@ function contentTooLong(c: { json: (o: object, s: 413) => Response }, content: s
 }
 
 app.get("/", (c) => c.json({ name: "suinian-api", status: "ok" }));
-app.get("/health", (c) => c.json({ ok: true }));
+app.get("/health", async (c) => {
+  // ?probe=ai runs one tiny completion through the degradation chain so external
+  // monitoring can distinguish healthy / degraded (fallback) / AI down
+  if (c.req.query("probe") === "ai") {
+    const ai = await aiProbe(c.env);
+    return c.json({ ok: true, ai }, ai.ok ? 200 : 503);
+  }
+  return c.json({ ok: true });
+});
 
 // ---- public auth: register / login (mounted before the bearer middleware) ----
 app.post("/api/auth/register", async (c) => {
@@ -881,6 +890,12 @@ export async function applyTriage(env: Env, noteId: string, triage: TriageResult
   const meta = parseNoteMeta(row?.meta ?? null);
   const override = meta?.manual_override;
   const importTags = meta?.import_tags;
+  const newMeta: NoteMeta = { ...(meta ?? {}) };
+  let metaChanged = false;
+  if (newMeta.needs_retriage) {
+    delete newMeta.needs_retriage;
+    metaChanged = true;
+  }
   const tags = Array.isArray(importTags)
     ? [...new Set([...importTags, ...triage.tags])].slice(0, 6)
     : triage.tags;
@@ -900,9 +915,13 @@ export async function applyTriage(env: Env, noteId: string, triage: TriageResult
     sets.push("category = ?", "amount = ?", "currency = ?");
     binds.push(triage.category, triage.amount ?? null, triage.currency ?? null);
     if (triage.merchant) {
-      sets.push("meta = ?");
-      binds.push(JSON.stringify({ ...(meta ?? {}), finance_merchant: triage.merchant }));
+      newMeta.finance_merchant = triage.merchant;
+      metaChanged = true;
     }
+  }
+  if (metaChanged) {
+    sets.push("meta = ?");
+    binds.push(JSON.stringify(newMeta));
   }
   if (!override?.tags) {
     sets.push("tags = ?");
@@ -2846,7 +2865,10 @@ export { app };
 const RETRIAGE_CONCURRENCY = 5;
 
 
-async function retriageOne(env: Env, row: { id: string; user_id: string; content: string; content_enc: string | null }): Promise<boolean> {
+async function retriageOne(
+  env: Env,
+  row: { id: string; user_id: string; content: string; content_enc: string | null; created_at: string }
+): Promise<boolean> {
   // pre-encrypted pending notes store a placeholder: triage the plaintext
   let content = row.content;
   if (row.content_enc && env.SUINIAN_ENC_KEY) {
@@ -2856,7 +2878,19 @@ async function retriageOne(env: Env, row: { id: string; user_id: string; content
   const topTags = await loadTopTags(env.DB, row.user_id).catch(() => [] as string[]);
   const tz = await loadUserTz(env, row.user_id);
   const triage = await triageNote(content, env, topTags, tz);
-  if (!triage) return false;
+  if (!triage) {
+    // the whole AI chain is down: after a grace period stop showing the user a
+    // spinner forever — give the note the fallback category and mark it so the
+    // sweep re-triages it (WHERE below matches it again) once AI recovers
+    if (Date.now() - Date.parse(`${row.created_at.replace(" ", "T")}Z`) > TRIAGE_DEGRADE_AFTER_MS) {
+      await env.DB.prepare(
+        "UPDATE notes SET category = ?, meta = json_set(coalesce(meta, '{}'), '$.needs_retriage', json('true')), updated_at = datetime('now') WHERE id = ? AND category IS NULL"
+      )
+        .bind(FALLBACK_TRIAGE.category, row.id)
+        .run();
+    }
+    return false;
+  }
   await applyTriage(env, row.id, triage, content);
   const n = await env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(row.id).first<NoteRow>();
   if (n) {
@@ -2878,10 +2912,10 @@ export async function retriageUnsorted(env: Env, limit = 10, timeBudgetMs = 0): 
   const started = Date.now();
   for (;;) {
     const { results } = await env.DB.prepare(
-      "SELECT id, user_id, content, content_enc FROM notes WHERE category IS NULL AND deleted_at IS NULL AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT ?"
+      "SELECT id, user_id, content, content_enc, created_at FROM notes WHERE (category IS NULL OR json_extract(meta, '$.needs_retriage') = 1) AND deleted_at IS NULL AND created_at < datetime('now', '-2 minutes') ORDER BY (category IS NULL) DESC, created_at ASC LIMIT ?"
     )
       .bind(limit)
-      .all<{ id: string; user_id: string; content: string; content_enc: string | null }>();
+      .all<{ id: string; user_id: string; content: string; content_enc: string | null; created_at: string }>();
     const rows = results ?? [];
     if (rows.length === 0) break;
     let triaged = 0;

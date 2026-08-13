@@ -40,7 +40,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { downloadNoteFile, refetchLink } from "@/lib/api"
-import { cn, formatTime, parseDue, dueHasTime } from "@/lib/utils"
+import { cn, formatTime, parseServerTime, parseDue, dueHasTime } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
 
 const CATEGORY_META: Record<
@@ -208,6 +208,8 @@ function formatDue(due: string): string {
 
 const MAX_TAGS = 3
 const CLAMP_THRESHOLD = 180
+/** 未分拣笔记超过这个时长仍无分类时，从「分拣中」转为诚实的延迟提示（后端 cron 会自动补拣）。 */
+const PENDING_LATE_MS = 10 * 60_000
 const MAX_LINK_CARDS = 3
 const MAX_EDIT_TAGS = 6
 
@@ -287,6 +289,8 @@ export function NoteCard({
   const isLink = note.url != null
   const done = note.todo_done === 1
   const pending = note.category === null
+  // 分拣正常几秒内完成；超过阈值说明 AI 侧出了问题，诚实告知而不是永久转圈
+  const pendingLate = pending && Date.now() - parseServerTime(note.created_at).getTime() > PENDING_LATE_MS
   const sensitive = note.is_sensitive === 1
 
   const [menuOpen, setMenuOpen] = useState(false)
@@ -364,7 +368,7 @@ export function NoteCard({
 
   function handleDelete() {
     setMenuOpen(false)
-    if (window.confirm("确定删除这条碎念吗？删除后无法恢复。")) onDelete?.(note)
+    if (window.confirm("确定删除这条碎念吗？将移入「最近删除」，30 天内可恢复。")) onDelete?.(note)
   }
 
   const extraTags = note.tags.length - MAX_TAGS
@@ -392,10 +396,20 @@ export function NoteCard({
             />
           )}
           {pending ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" />
-              AI 分拣中…
-            </span>
+            pendingLate ? (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"
+                title="AI 分拣暂时不可用，内容已安全保存，服务恢复后会自动补分拣"
+              >
+                <CircleAlert className="size-3" />
+                分拣延迟，将自动重试
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                <Loader2 className="size-3 animate-spin" />
+                AI 分拣中…
+              </span>
+            )
           ) : (
             <CategoryBadge category={note.category} active={categoryFilterActive} />
           )}

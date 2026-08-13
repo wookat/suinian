@@ -8,6 +8,8 @@ export type Env = {
   DEEPSEEK_BASE_URL: string;
   AI_MODEL?: string;
   AI_BASE_URL?: string;
+  /** Fallback model when the primary provider fails (default: Workers AI llama-3.3-70b); "none" disables the chain. */
+  AI_FALLBACK_MODEL?: string;
   SUINIAN_ENC_KEY?: string;
   /** "false"/"0"/"off" disables /api/auth/register (default: enabled). */
   REGISTRATION_ENABLED?: string;
@@ -112,6 +114,8 @@ export interface NoteMeta {
   manual_override?: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean };
   /** Note saved from an AI Q&A round (问答写回闭环). */
   from_ask?: boolean;
+  /** Triage kept failing and the note got a fallback category; the cron sweep re-triages it once AI recovers. */
+  needs_retriage?: boolean;
 }
 
 export interface NoteRow {
