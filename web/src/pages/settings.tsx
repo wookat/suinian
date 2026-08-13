@@ -656,6 +656,8 @@ export function SettingsPage() {
   const [rotating, setRotating] = useState(false)
   const [accountMsg, setAccountMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleteConfirmText, setDeleteConfirmText] = useState("")
   const [includeSensitive, setIncludeSensitive] = useState(false)
   const [exporting, setExporting] = useState<"json" | "markdown" | "backup" | null>(null)
   const [exportMsg, setExportMsg] = useState<{ ok: boolean; text: string } | null>(null)
@@ -818,13 +820,7 @@ export function SettingsPage() {
   }
 
   async function handleDeleteAccount() {
-    if (deleting) return
-    if (!window.confirm("注销将永久删除账号及全部笔记/线索/周报，无法恢复。确定继续？")) return
-    const typed = window.prompt('最后确认：请输入「注销」两个字以永久删除账号和全部数据')
-    if (typed !== "注销") {
-      if (typed !== null) setAccountMsg({ ok: false, text: "输入不匹配，已取消注销" })
-      return
-    }
+    if (deleting || deleteConfirmText !== "注销") return
     setDeleting(true)
     setAccountMsg(null)
     try {
@@ -1343,22 +1339,55 @@ export function SettingsPage() {
             注销会永久删除账号及全部笔记/线索/周报，不可恢复。若只想在本机退出，请使用上方「退出登录」
           </p>
         </div>
-        <Button
-          variant="destructive"
-          onClick={() => void handleDeleteAccount()}
-          disabled={deleting}
-          className="w-full sm:w-auto"
-        >
-          {deleting ? (
-            <>
-              <Loader2 className="animate-spin" /> 注销中…
-            </>
-          ) : (
-            <>
-              <Trash2 /> 注销账号（删除全部数据）
-            </>
-          )}
-        </Button>
+        {deleteConfirmOpen ? (
+          <div className="space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+            <p className="text-sm text-destructive">
+              注销将永久删除账号及全部笔记/线索/周报，无法恢复。请输入「注销」两个字确认：
+            </p>
+            <Input
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+              placeholder="注销"
+              className="max-w-xs"
+              aria-label="输入注销以确认"
+            />
+            <div className="flex gap-2">
+              <Button
+                variant="destructive"
+                onClick={() => void handleDeleteAccount()}
+                disabled={deleting || deleteConfirmText !== "注销"}
+              >
+                {deleting ? (
+                  <>
+                    <Loader2 className="animate-spin" /> 注销中…
+                  </>
+                ) : (
+                  <>
+                    <Trash2 /> 永久注销
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setDeleteConfirmOpen(false)
+                  setDeleteConfirmText("")
+                }}
+                disabled={deleting}
+              >
+                取消
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button
+            variant="destructive"
+            onClick={() => setDeleteConfirmOpen(true)}
+            className="w-full sm:w-auto"
+          >
+            <Trash2 /> 注销账号（删除全部数据）
+          </Button>
+        )}
       </Card>
 
       <SwStatusCard />

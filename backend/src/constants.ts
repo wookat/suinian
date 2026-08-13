@@ -19,3 +19,9 @@ export const SOFT_DELETE_RETENTION_DAYS = 30;
 
 /** Wall-clock budget for the cron retriage sweep; must stay under the 10-min cron interval. */
 export const RETRIAGE_TIME_BUDGET_MS = 8 * 60_000;
+
+/**
+ * How long a note may stay unsorted before the sweep gives it the fallback
+ * category (+ needs_retriage marker) instead of leaving an endless spinner.
+ */
+export const TRIAGE_DEGRADE_AFTER_MS = 60 * 60_000;

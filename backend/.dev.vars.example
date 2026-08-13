@@ -13,6 +13,10 @@ AI_MODEL=mock
 # Optional: override the OpenAI-compatible endpoint (defaults to DeepSeek).
 # AI_BASE_URL=https://api.deepseek.com
 
+# Optional: fallback model when the primary provider fails (defaults to
+# workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast; `none` disables it).
+# AI_FALLBACK_MODEL=none
+
 # Optional: 32-byte base64 key for AES-256-GCM encryption of sensitive notes.
 # Generate: openssl rand -base64 32
 # SUINIAN_ENC_KEY=
