@@ -15,7 +15,8 @@ description: How to run and test suinian (backend Worker + web SPA) fully locall
 ## UI flow
 - First visit shows onboarding modal → choose「注册新账号」→ #/auth with API 地址 prefilled to http://127.0.0.1:8787; register username + password (≥8 chars); app auto-configures token and enters real mode.
 - Dump a note in the quick-capture textarea (Enter to save); mock triage badge (想法 + #本地开发) appears within seconds.
-- Note: typing CJK text via computer-use `type` into the textarea may drop characters; use ASCII text for reliability.
+- Note: typing CJK text via computer-use `type` into the textarea may drop characters (xdotool cannot type CJK); to enter Chinese, put it on the clipboard (`printf '中文' | xclip -selection clipboard -d :0`) and paste with Ctrl+V, verifying the text landed before pressing Enter.
+- Mobile-viewport testing: Chrome's minimum window width (~500px) prevents resizing the window to 375px; use DevTools device toolbar (F12 → Ctrl+Shift+M) and set dimensions to 375×667 instead.
 
 ## Repo checks
 - backend: `npm test` (vitest), `npm run typecheck`
