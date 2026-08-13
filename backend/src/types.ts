@@ -49,6 +49,10 @@ export interface ThreadRow {
   updated_at: string;
   /** Newest fragment's created_at (list endpoint only). */
   last_note_at?: string | null;
+  /** Oldest fragment's created_at (list endpoint only). */
+  first_note_at?: string | null;
+  /** Fragments added in the last 7 days (list endpoint only). */
+  week_new_count?: number;
 }
 
 export type ReportPeriod = "week" | "month";

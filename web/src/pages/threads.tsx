@@ -28,6 +28,18 @@ const PHASE_LABEL: Record<ThreadJob["phase"], string> = {
   done: "完成",
 }
 
+/** 线索时间跨度：首条→最新条相隔天数，体现想法陈酿了多久 */
+function spanLabel(first?: string | null, last?: string | null): string | null {
+  if (!first || !last) return null
+  const days = Math.round(
+    (parseServerTime(last).getTime() - parseServerTime(first).getTime()) / 86400_000,
+  )
+  if (days < 1) return null
+  if (days < 30) return `跨越 ${days} 天`
+  if (days < 365) return `跨越 ${Math.round(days / 30)} 个月`
+  return `跨越 ${(days / 365).toFixed(1)} 年`
+}
+
 function timelineDate(iso: string): string {
   const d = parseServerTime(iso)
   const pad = (n: number) => String(n).padStart(2, "0")
@@ -359,13 +371,21 @@ export function ThreadsPage() {
         >
           <div className="flex items-center gap-2">
             <GitBranch className="size-4 shrink-0 text-muted-foreground" />
-            <h3 className="text-[15px] font-medium">{t.title}</h3>
+            <h3 className="min-w-0 flex-1 text-[15px] font-medium">{t.title}</h3>
+            {(t.week_new_count ?? 0) > 0 && (
+              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                本周 +{t.week_new_count}
+              </span>
+            )}
           </div>
           {t.summary && (
             <p className="mt-1.5 line-clamp-2 text-sm text-muted-foreground">{t.summary}</p>
           )}
           <p className="mt-2 text-xs text-muted-foreground">
-            {t.note_count} 条碎片 · 最近记录 {formatTime(t.last_note_at ?? t.updated_at)}
+            {t.note_count} 条碎片
+            {spanLabel(t.first_note_at, t.last_note_at) && ` · ${spanLabel(t.first_note_at, t.last_note_at)}`}
+            {" · 最近记录 "}
+            {formatTime(t.last_note_at ?? t.updated_at)}
           </p>
         </Card>
       ))}

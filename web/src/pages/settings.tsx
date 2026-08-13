@@ -504,14 +504,17 @@ function PushPreferencesCard() {
       ) : prefs ? (
         <div className="space-y-2">
           {OPTIONS.map((opt) => (
-            <label key={opt.key} className="flex cursor-pointer items-center gap-2.5">
+            <label key={opt.key} className="flex cursor-pointer items-start gap-2.5">
               <Checkbox
                 checked={prefs[opt.key]}
                 disabled={busy}
                 onCheckedChange={() => void toggle(opt.key)}
+                className="mt-0.5"
               />
-              <span className="text-sm">{opt.label}</span>
-              <span className="text-xs text-muted-foreground">{opt.hint}</span>
+              <span className="min-w-0">
+                <span className="text-sm">{opt.label}</span>
+                <span className="ml-2 text-xs text-muted-foreground">{opt.hint}</span>
+              </span>
             </label>
           ))}
         </div>

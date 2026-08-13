@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { QuickInput } from "@/components/quick-input"
 import { DailyReview } from "@/components/daily-review"
 import { NoteCard } from "@/components/note-card"
@@ -164,6 +165,7 @@ export function TimelinePage() {
   const [catPanelOpen, setCatPanelOpen] = useState(false)
   const [batchTagInput, setBatchTagInput] = useState("")
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<"all" | "selected" | null>(null)
   const [toast, setToast] = useState<{ message: string; undo?: () => void; undoLabel?: string } | null>(null)
   const toastTimerRef = useRef<number | null>(null)
   // 驻留撤销条：不随 toast 自动消失，撤销/关闭/过期才走
@@ -319,9 +321,17 @@ export function TimelinePage() {
   }, [notes, selectedIds])
 
   function batchDelete() {
-    const onProgress = (done: number, total: number) => setBatchProgress({ done, total })
     if (allMatching) {
-      if (!window.confirm("确定删除当前筛选条件下的全部匹配碎念吗？")) return
+      setConfirmDelete("all")
+      return
+    }
+    if (selectedIds.size === 0) return
+    setConfirmDelete("selected")
+  }
+
+  function runBatchDelete(kind: "all" | "selected") {
+    const onProgress = (done: number, total: number) => setBatchProgress({ done, total })
+    if (kind === "all") {
       setBatchBusy(true)
       setBatchProgress(null)
       // 服务端单次上限 1000 条：自动续删到全部匹配清完，累计 ids 供一次性撤销
@@ -358,7 +368,6 @@ export function TimelinePage() {
     }
     const ids = [...selectedIds]
     if (ids.length === 0) return
-    if (!window.confirm(`确定删除选中的 ${ids.length} 条碎念吗？`)) return
     setBatchBusy(true)
     setBatchProgress(null)
     void batchNotes("delete", ids, undefined, onProgress)
@@ -1041,6 +1050,16 @@ export function TimelinePage() {
               setSearchInput("")
               setSearch("")
             }}
+            secondaryActionLabel={search ? "用 AI 问问看" : undefined}
+            onSecondaryAction={
+              search
+                ? () => {
+                    setAskMode(true)
+                    setAskPrefill(search)
+                    window.scrollTo({ top: 0, behavior: "smooth" })
+                  }
+                : undefined
+            }
           />
         ) : (
           <Card className="flex flex-col items-center gap-3 p-10 text-center animate-in fade-in duration-300">
@@ -1205,7 +1224,7 @@ export function TimelinePage() {
                   选中全部匹配结果
                 </button>
               )}
-              <div className="ml-auto flex items-center gap-1.5">
+              <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
                 <Button
                   size="sm"
                   variant="outline"
@@ -1254,6 +1273,19 @@ export function TimelinePage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title={confirmDelete === "all" ? "删除全部匹配碎念？" : `删除选中的 ${selectedIds.size} 条碎念？`}
+        description="将移入「最近删除」，30 天内可恢复。"
+        confirmLabel="删除"
+        onConfirm={() => {
+          const kind = confirmDelete
+          setConfirmDelete(null)
+          if (kind) runBatchDelete(kind)
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
 
       {/* 撤销提示 */}
       {toast && (

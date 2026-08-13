@@ -72,8 +72,16 @@ export function nextMondayInShanghai(now: Date = new Date()): { iso: string; wee
   return nextMondayIn(now, DEFAULT_TZ);
 }
 
+/** A past note whose category the user set or corrected by hand. */
+export type CategoryCorrection = { content: string; category: Category };
+
 /** Build the triage system prompt. Exported for testing. */
-export function buildTriagePrompt(now: Date = new Date(), existingTags: string[] = [], tz: string = DEFAULT_TZ): string {
+export function buildTriagePrompt(
+  now: Date = new Date(),
+  existingTags: string[] = [],
+  tz: string = DEFAULT_TZ,
+  corrections: CategoryCorrection[] = []
+): string {
   const { iso, weekday } = zonedDate(now, tz, 0);
   const tomorrow = zonedDate(now, tz, 1);
   const nextMon = nextMondayIn(now, tz);
@@ -104,7 +112,7 @@ export function buildTriagePrompt(now: Date = new Date(), existingTags: string[]
   - 「报销到账 1200」→ income，amount=1200，currency="CNY"
   - 「今天买了杯咖啡，没看多少钱」→ expense，amount=null（金额不确定绝不要猜）
   - 「周末记得去买猫粮」→ todo（还没花钱，不是 expense）
-- tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）。标签必须是内容的主题词。内容开头的方括号前缀标记（如「[QA-123]」「[P0]」「【草稿】」）和序号（「1.」）是元数据记号，不是主题：既不能整个照抄进标签，也不能把括号里的词抽出来当标签${tagHint}
+- tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）。标签必须是内容的主题词，用能概括这条内容的具体场景词（如打车→「交通」、午饭→「餐饮」、买咖啡→「咖啡」），不要一律套「购物」这类宽泛词。内容开头的方括号前缀标记（如「[QA-123]」「[P0]」「【草稿】」）和序号（「1.」）是元数据记号，不是主题：既不能整个照抄进标签，也不能把括号里的词抽出来当标签${tagHint}
 - title: 一句话短标题（<=20字），同样要忽略开头的方括号前缀/序号，不要抄进标题。判例：「[P0] 修复登录超时」→ title="修复登录超时"，tags 不含 "P0"；「[QA-TEST] 周五交报告」→ title="周五交报告"，tags 不含 "QA-TEST"、"QA"、"TEST"
 - is_sensitive: 是否含真实机密 (boolean)。仅当内容中出现真实可用的机密「具体值」时才为 true：密码/口令/密钥/API key/token 的具体值、完整身份证号、银行卡号、手机号+姓名组合、账号+密码组合。以下情况必须为 false：技术文档/教程/笔记只是讨论密码、token、密钥等概念而未出现具体秘密值；代码片段中的变量名/占位符（如 <token>、your-api-key、xxx）；普通长文、文件内容中的 ID/哈希/版本号等非机密长字符串。判例：
   - 「服务器 root 密码是 P@ssw0rd123」→ true（出现密码具体值）
@@ -116,6 +124,13 @@ export function buildTriagePrompt(now: Date = new Date(), existingTags: string[]
 - currency: 仅 expense/income 且 amount 非 null 时输出 ISO 4217 代码（人民币/块/元默认 "CNY"，美元 "USD"），否则 null
 - merchant: 仅 expense/income 时输出的商家或用途短语（<=12字），推断不出则 null
 - todo_due: 若是待办且能推断截止时间，基于上面给出的今天日期与星期换算（如"周五之前"= 从今天起最近的周五）。内容中有具体时刻（如"下午三点半""晚上8点"）时输出带时刻和时区偏移的 ISO 8601 "YYYY-MM-DDTHH:mm:00${off}"（24 小时制，时刻按用户时区 ${tz} 理解，偏移固定写 ${off}，如 "${tomorrow.iso}T15:30:00${off}"）；只有日期没有时刻时仅输出 "YYYY-MM-DD"；无法推断则 null。绝不要输出早于今天的日期
+${
+    corrections.length
+      ? `\n用户此前手动指定过下列内容的分类（这是该用户的既定偏好，遇到同类内容优先照此归类）：\n${corrections
+          .map((c) => `- 「${c.content}」→ "${c.category}"`)
+          .join("\n")}`
+      : ""
+  }
 只输出 JSON。标签禁止包含密码、密钥、卡号等敏感值本身。`;
 }
 
@@ -259,18 +274,51 @@ export async function loadTopTags(db: D1Database, userId: string): Promise<strin
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 50).map(([t]) => t);
 }
 
+/**
+ * The user's recent manual category choices (edits and explicit-category
+ * creates set meta.manual_override.category), fed to the triage prompt as
+ * few-shot preferences so the AI stops repeating the same misfiles.
+ */
+export async function loadCategoryCorrections(db: D1Database, userId: string): Promise<CategoryCorrection[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT content, category, meta FROM notes
+        WHERE user_id = ? AND deleted_at IS NULL AND is_sensitive = 0 AND category IS NOT NULL
+          AND meta LIKE '%"category":true%'
+        ORDER BY updated_at DESC LIMIT 10`
+    )
+    .bind(userId)
+    .all<{ content: string; category: string; meta: string | null }>();
+  const out: CategoryCorrection[] = [];
+  for (const r of results ?? []) {
+    try {
+      const meta = JSON.parse(r.meta || "{}") as { manual_override?: { category?: boolean } };
+      if (!meta.manual_override?.category) continue;
+    } catch {
+      continue;
+    }
+    if (!CATEGORIES.includes(r.category as Category)) continue;
+    const content = r.content.replace(/\s+/g, " ").trim().slice(0, 60);
+    if (!content) continue;
+    out.push({ content, category: r.category as Category });
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
 export async function triageNote(
   content: string,
   env: Parameters<typeof chatComplete>[0],
   existingTags: string[] = [],
-  tz: string = DEFAULT_TZ
+  tz: string = DEFAULT_TZ,
+  corrections: CategoryCorrection[] = []
 ): Promise<TriageResult | null> {
   const now = new Date();
   const text = await chatComplete(env, {
     temperature: 0.2,
     max_tokens: 300,
     messages: [
-      { role: "system", content: buildTriagePrompt(now, existingTags, tz) },
+      { role: "system", content: buildTriagePrompt(now, existingTags, tz, corrections) },
       { role: "user", content: content.slice(0, 4000) },
     ],
   });
