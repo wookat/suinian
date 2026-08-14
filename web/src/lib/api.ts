@@ -35,6 +35,11 @@ import type {
   WeeklyReport,
 } from "./types"
 
+/** 请求兜底超时：任何 GET/写请求悬挂（SW/网络中途卡住）都会转成可重试的
+ * NetworkError，而不是让页面 skeleton 永远转下去。问答链路服务端上限 40s，
+ * 这里取 60s 只兜真正的悬挂。 */
+const REQUEST_TIMEOUT_MS = 60_000
+
 async function realFetch<T>(
   path: string,
   init?: RequestInit,
@@ -42,9 +47,11 @@ async function realFetch<T>(
   const { apiBaseUrl, apiToken } = loadSettings()
   if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
   let res: Response
+  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   try {
     res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}${path}`, {
       ...init,
+      signal: init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiToken}`,
@@ -52,7 +59,14 @@ async function realFetch<T>(
       },
     })
   } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") throw e
+    if (e instanceof DOMException && e.name === "TimeoutError")
+      throw new NetworkError("请求超时，请重试")
+    if (e instanceof DOMException && e.name === "AbortError") {
+      // AbortSignal.any 可能把超时也包装成 AbortError：调用方没主动取消时按超时处理
+      if (init?.signal?.aborted) throw e
+      if (timeoutSignal.aborted) throw new NetworkError("请求超时，请重试")
+      throw e
+    }
     throw new NetworkError("网络连接失败，请检查网络或 API 地址")
   }
   if (!res.ok) {

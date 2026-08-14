@@ -102,6 +102,21 @@ export function todoDueEpochMs(due: string | null): number | null {
 
 const REMINDER_LOOKBACK_MS = 24 * 3600 * 1000;
 
+/** Lead time before a timed due at which the reminder fires. */
+export const REMINDER_LEAD_MS = 30 * 60_000;
+
+/**
+ * When to remind for a todo: 30 minutes before a timed due, or 08:00
+ * Asia/Shanghai on the due day for bare dates (before the day's implicit
+ * 09:00 due). Reminders are useful before the deadline, not after it.
+ */
+export function todoReminderEpochMs(due: string | null): number | null {
+  if (!due) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(due)) return Date.parse(`${due}T08:00:00+08:00`);
+  const t = todoDueEpochMs(due);
+  return t === null ? null : t - REMINDER_LEAD_MS;
+}
+
 export interface TodoReminderStats {
   candidates: number;
   reminded: number;
@@ -111,10 +126,11 @@ export interface TodoReminderStats {
 }
 
 /**
- * Cron sweep: push a reminder for todos whose due time has just passed
- * (within the last 24h) and which are unfinished and not yet reminded.
- * Each todo is marked reminded exactly once, before delivery is attempted,
- * so a flaky push service can never cause duplicate reminders.
+ * Cron sweep: push a reminder for todos whose reminder time (ahead of the
+ * due — see todoReminderEpochMs) has been reached within the last 24h and
+ * which are unfinished and not yet reminded. Each todo is marked reminded
+ * exactly once, before delivery is attempted, so a flaky push service can
+ * never cause duplicate reminders.
  */
 export async function sweepTodoReminders(env: Env, now: Date = new Date()): Promise<TodoReminderStats> {
   const stats: TodoReminderStats = { candidates: 0, reminded: 0, delivered: 0, skipped_pref: 0, skipped_no_sub: 0 };
@@ -128,7 +144,7 @@ export async function sweepTodoReminders(env: Env, now: Date = new Date()): Prom
   ).all<NoteRow>();
   const nowMs = now.getTime();
   const dueRows = (results ?? []).filter((n) => {
-    const t = todoDueEpochMs(n.todo_due);
+    const t = todoReminderEpochMs(n.todo_due);
     return t !== null && t <= nowMs && t >= nowMs - REMINDER_LOOKBACK_MS;
   });
   stats.candidates = dueRows.length;
@@ -156,9 +172,16 @@ export async function sweepTodoReminders(env: Env, now: Date = new Date()): Prom
       continue;
     }
     const label = n.is_sensitive ? "一条待办" : (n.title || n.content || "待办").slice(0, 60);
+    const dueMs = todoDueEpochMs(n.todo_due);
+    const timing =
+      dueMs !== null && dueMs <= nowMs
+        ? "已到期"
+        : /^\d{4}-\d{2}-\d{2}$/.test(n.todo_due ?? "")
+          ? "今天到期"
+          : "30 分钟后到期";
     const payload: PushPayload = {
-      title: "⏰ 待办到期提醒",
-      body: label,
+      title: "⏰ 待办提醒",
+      body: `${timing}：${label}`,
       url: "/#/todos",
       tag: `todo-${n.id}`,
     };

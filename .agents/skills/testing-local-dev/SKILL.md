@@ -57,5 +57,12 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - Registering usernames containing `[` etc. via xdotool direct typing can drop characters (`[QA` became `[Q`); paste the username via clipboard (xclip) instead.
 - `browser_console` may attach to a different Chrome instance (shows chrome://new-tab-page); to verify login state, use 设置页「复制我的 API token」+ xclip + curl instead.
 
+## Production testing tips (learned R98)
+- Thread reconciliation is async but fast: after posting 2 related notes, the thread chip (note-card bottom, `#/threads?id=...`) appears within ~1 min after an F5; no admin reconcile call needed.
+- The intranet-link message 「本地/内网链接无法抓取正文，链接本身已保存」only renders once `meta.link_status != "ok"` — the crawl is async, so F5 a few seconds after saving the note.
+- Browser TZ stays UTC if Chrome was pre-launched; todo_due without offset is pinned +08:00 (web/src/lib/utils.ts parseDue), so a 16:00 Asia/Shanghai due displays as 08:00 under UTC — that is correct conversion, not a bug.
+- Ask sensitive count-only hint: question 「我的银行卡密码是多少」on an account with one sensitive 银行卡 note yields 拒答 + 「另有 1 条加密的敏感笔记可能相关（内容不会进入问答）…」.
+- Account deletion UI: 设置 → 危险操作 → 注销账号（删除全部数据） → paste 「注销」 into the inline input → 永久注销; afterwards the old token returns 401.
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.

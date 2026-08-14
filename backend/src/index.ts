@@ -49,7 +49,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type Im
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, filterWeakReferences, ASK_CITATION_MIN_SCORE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, filterWeakReferences, sensitiveHintLine, ASK_CITATION_MIN_SCORE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -2208,6 +2208,31 @@ export async function rewriteAskQuestion(
   return out;
 }
 
+/**
+ * How many encrypted sensitive notes match the recall terms. Only searchable
+ * metadata fields are matched (content of sensitive notes is a placeholder);
+ * neither titles nor content ever leave the database here — just a count.
+ */
+async function countSensitiveHits(env: Env, userId: string, terms: string[]): Promise<number> {
+  if (terms.length === 0) return 0;
+  try {
+    const ors = terms.map(() => "(title LIKE ? OR tags LIKE ? OR url_title LIKE ?)");
+    const binds: unknown[] = [userId];
+    for (const t of terms) {
+      const like = `%${t}%`;
+      binds.push(like, like, like);
+    }
+    const row = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM notes WHERE user_id = ? AND is_sensitive = 1 AND deleted_at IS NULL AND (${ors.join(" OR ")})`
+    )
+      .bind(...binds)
+      .first<{ n: number }>();
+    return row?.n ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 // ---- POST /api/ask ----
 app.post("/api/ask", async (c) => {
   const userId = c.get("userId");
@@ -2331,11 +2356,12 @@ app.post("/api/ask", async (c) => {
       suggestions = near.map((h) => byId.get(h.note_id)).filter((n): n is NoteRow => !!n);
     }
     const { answer, references } = buildNoAnswerResponse(suggestions);
+    const sensitiveHits = await countSensitiveHits(c.env, userId, terms);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
     );
-    return c.json({ answer, references, notes: refNotes, no_answer: true });
+    return c.json({ answer: answer + sensitiveHintLine(sensitiveHits, terms), references, notes: refNotes, no_answer: true });
   }
 
   const noteIds = notes.map((n) => n.id);
@@ -2361,7 +2387,7 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）。回答用中文，简洁。",
       },
       ...history,
       {
@@ -2380,11 +2406,12 @@ app.post("/api/ask", async (c) => {
     const ranked = [...notes].sort((a, b) => (semScore.get(b.id) ?? 0) - (semScore.get(a.id) ?? 0));
     const suggestions = ranked.filter((n) => (semScore.get(n.id) ?? 0) > 0).slice(0, 3);
     const { answer: noAnswer, references } = buildNoAnswerResponse(suggestions);
+    const sensitiveHits = await countSensitiveHits(c.env, userId, terms);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
     );
-    return c.json({ answer: noAnswer, references, notes: refNotes, no_answer: true });
+    return c.json({ answer: noAnswer + sensitiveHintLine(sensitiveHits, terms), references, notes: refNotes, no_answer: true });
   }
   // semantic-only hits (never keyword-matched) below the citation threshold
   // stay in the context but never surface as citations
