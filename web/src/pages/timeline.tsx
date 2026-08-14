@@ -25,7 +25,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
-import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, ApiError, NetworkError } from "@/lib/api"
+import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, getThreads, ApiError, NetworkError } from "@/lib/api"
 import type { BatchFilter } from "@/lib/api"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
@@ -704,6 +704,20 @@ export function TimelinePage() {
     [pollTriage],
   )
 
+  // 线索标题映射：整个时间流只拉一次 /api/threads，卡片只消费映射结果
+  const [threadTitles, setThreadTitles] = useState<Map<string, string>>(() => new Map())
+  const threadsFetchedRef = useRef(false)
+  useEffect(() => {
+    if (threadsFetchedRef.current) return
+    if (!notes.some((n) => n.thread_id)) return
+    threadsFetchedRef.current = true
+    void getThreads()
+      .then((res) => setThreadTitles(new Map(res.threads.map((t) => [t.id, t.title]))))
+      .catch(() => {
+        threadsFetchedRef.current = false // 失败不影响时间流，下次有机会再试
+      })
+  }, [notes])
+
   const allTags = useMemo(() => {
     const count = new Map<string, number>()
     for (const n of notes)
@@ -1123,6 +1137,7 @@ export function TimelinePage() {
                     selectable={selectMode}
                     selected={selectedIds.has(n.id)}
                     onSelectToggle={toggleSelected}
+                    threadTitle={n.thread_id ? threadTitles.get(n.thread_id) : undefined}
                   />
                 ))}
               </div>

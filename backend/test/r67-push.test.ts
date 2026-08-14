@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { todoDueEpochMs, localDateHour, sweepTodoReminders, sweepDailyReviewPush, DAILY_PUSH_HOUR } from "../src/push";
+import { todoDueEpochMs, todoReminderEpochMs, REMINDER_LEAD_MS, localDateHour, sweepTodoReminders, sweepDailyReviewPush, DAILY_PUSH_HOUR } from "../src/push";
 import type { Env } from "../src/types";
 
 describe("todoDueEpochMs", () => {
@@ -17,6 +17,20 @@ describe("todoDueEpochMs", () => {
   it("returns null for empty/invalid", () => {
     expect(todoDueEpochMs(null)).toBeNull();
     expect(todoDueEpochMs("soon")).toBeNull();
+  });
+});
+
+describe("todoReminderEpochMs", () => {
+  it("fires 30 minutes before a timed due", () => {
+    expect(todoReminderEpochMs("2026-08-08T14:30:00+08:00")).toBe(Date.parse("2026-08-08T14:00:00+08:00"));
+    expect(REMINDER_LEAD_MS).toBe(30 * 60_000);
+  });
+  it("fires at 08:00 Asia/Shanghai for bare dates (due is 09:00)", () => {
+    expect(todoReminderEpochMs("2026-08-08")).toBe(Date.parse("2026-08-08T08:00:00+08:00"));
+  });
+  it("returns null for empty/invalid", () => {
+    expect(todoReminderEpochMs(null)).toBeNull();
+    expect(todoReminderEpochMs("soon")).toBeNull();
   });
 });
 
@@ -231,6 +245,26 @@ describe("sweepTodoReminders", () => {
     const again = await sweepTodoReminders(env, now);
     expect(again.reminded).toBe(0);
     expect(pushCalls.length).toBe(1);
+  });
+
+  it("reminds a timed todo 30 minutes before its due", async () => {
+    const now = new Date("2026-08-08T02:00:00Z"); // 10:00 Shanghai
+    const state = makeState({ notes: [todoNote("pre", "u1", "2026-08-08T10:25:00+08:00")] }); // reminder at 09:55
+    const stats = await sweepTodoReminders(fakeEnv(state, vapid), now);
+    expect(stats.reminded).toBe(1);
+    expect(stats.delivered).toBe(1);
+    expect(state.notes[0].todo_reminded_at).not.toBeNull();
+  });
+
+  it("reminds a bare-date todo from 08:00 local, not before", async () => {
+    const early = new Date("2026-08-07T23:30:00Z"); // 07:30 Shanghai
+    const state = makeState({ notes: [todoNote("d1", "u1", "2026-08-08")] });
+    const env = fakeEnv(state, vapid);
+    const before = await sweepTodoReminders(env, early);
+    expect(before.candidates).toBe(0);
+    const at8 = new Date("2026-08-08T00:05:00Z"); // 08:05 Shanghai
+    const stats = await sweepTodoReminders(env, at8);
+    expect(stats.reminded).toBe(1);
   });
 
   it("skips todos due in the future or overdue beyond the 24h lookback", async () => {

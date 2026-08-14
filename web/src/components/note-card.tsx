@@ -32,6 +32,7 @@ import {
   Coins,
   Puzzle,
   FolderInput,
+  GitBranch,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -255,6 +256,28 @@ const LINK_STATUS_TEXT: Record<string, string> = {
   no_content: "未能抓取正文，已保存链接",
 }
 
+/** 本地/内网地址服务端天然抓不到正文，属预期而非失败，文案要区分 */
+function isPrivateHost(url: string): boolean {
+  try {
+    const h = new URL(url).hostname
+    return (
+      h === "localhost" ||
+      h.endsWith(".local") ||
+      /^127\./.test(h) ||
+      /^10\./.test(h) ||
+      /^192\.168\./.test(h) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(h)
+    )
+  } catch {
+    return false
+  }
+}
+
+function linkStatusText(status: string, url: string): string {
+  if (isPrivateHost(url)) return "本地/内网链接无法抓取正文，链接本身已保存"
+  return LINK_STATUS_TEXT[status] ?? "未能抓取正文，已保存链接"
+}
+
 interface NoteCardProps {
   note: Note
   onToggleTodo?: (note: Note) => void
@@ -267,6 +290,8 @@ interface NoteCardProps {
   selectable?: boolean
   selected?: boolean
   onSelectToggle?: (note: Note) => void
+  /** 所属线索标题：提供时在卡片底部显示可点击的线索入口 */
+  threadTitle?: string | null
   className?: string
 }
 
@@ -281,6 +306,7 @@ export function NoteCard({
   selectable = false,
   selected = false,
   onSelectToggle,
+  threadTitle,
   className,
 }: NoteCardProps) {
   const [localNote, setLocalNote] = useState<Note | null>(null)
@@ -707,7 +733,7 @@ export function NoteCard({
                 {i === 0 && note.meta?.link_status && note.meta.link_status !== "ok" && (
                   <div className="flex items-center gap-2 px-3 pb-2 text-xs text-muted-foreground">
                     <CircleAlert className="size-3.5 shrink-0" />
-                    <span>{LINK_STATUS_TEXT[note.meta.link_status] ?? "未能抓取正文，已保存链接"}</span>
+                    <span>{linkStatusText(note.meta.link_status, card.url)}</span>
                     <button
                       onClick={(e) => {
                         e.preventDefault()
@@ -851,6 +877,17 @@ export function NoteCard({
           </div>
         )}
       </div>
+      {note.thread_id && threadTitle && !editing && (
+        <a
+          href={`#/threads?id=${encodeURIComponent(note.thread_id)}`}
+          onClick={(e) => e.stopPropagation()}
+          className="mt-2 inline-flex max-w-full items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title={`查看线索：${threadTitle}`}
+        >
+          <GitBranch className="size-3 shrink-0" />
+          <span className="truncate">{threadTitle}</span>
+        </a>
+      )}
       <ConfirmDialog
         open={confirmDeleteOpen}
         title="删除这条碎念？"

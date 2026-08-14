@@ -172,6 +172,18 @@ export function isRefusalAnswer(answer: string): boolean {
 export const NO_ANSWER_TEXT = "没找到相关笔记。";
 
 /**
+ * Honest pointer for encrypted sensitive notes that matched the recall terms:
+ * only a count and a search entry point — never titles or content. The same
+ * information (masked hits) is already public on the search page.
+ */
+export function sensitiveHintLine(count: number, terms: string[]): string {
+  if (count <= 0) return "";
+  const kw = terms.filter((t) => t.length <= 20).slice(0, 2).join(" ");
+  const where = kw ? `搜索「${kw}」` : "搜索相关关键词";
+  return `\n\n另有 ${count} 条加密的敏感笔记可能相关（内容不会进入问答），可到时间流${where}后点击解锁查看。`;
+}
+
+/**
  * Build the explicit "没找到" answer, with up to 3 nearby notes as suggestions
  * ("相近的记录" the user might have meant). Suggestions map to references so
  * the client renders them as cards.

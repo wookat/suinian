@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse } from "../src/ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, sensitiveHintLine } from "../src/ask";
 
 // 2026-08-08 07:00 UTC = 2026-08-08 15:00 Asia/Shanghai (Saturday)
 const NOW = new Date("2026-08-08T07:00:00Z");
@@ -123,5 +123,21 @@ describe("buildNoAnswerResponse", () => {
     expect(answer).toContain("没找到相关笔记");
     expect(answer).toContain("换个说法");
     expect(references).toEqual([]);
+  });
+});
+
+describe("sensitiveHintLine", () => {
+  it("is empty when there are no sensitive hits", () => {
+    expect(sensitiveHintLine(0, ["密码"])).toBe("");
+    expect(sensitiveHintLine(-1, ["密码"])).toBe("");
+  });
+  it("points to timeline search with the query keywords, exposing only a count", () => {
+    const hint = sensitiveHintLine(2, ["银行卡", "密码"]);
+    expect(hint).toContain("2 条加密的敏感笔记");
+    expect(hint).toContain("搜索「银行卡 密码」");
+    expect(hint).toContain("解锁");
+  });
+  it("falls back to generic wording when no usable keyword", () => {
+    expect(sensitiveHintLine(1, [])).toContain("搜索相关关键词");
   });
 });
