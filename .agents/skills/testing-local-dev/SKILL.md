@@ -71,5 +71,12 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - Markdown import with historical created_at: sections split by `---`, and the FIRST line of each section must be a bare date `YYYY-MM-DD HH:MM` (backend/src/import.ts LEADING_DATE_RE); dates embedded mid-line are ignored.
 - Ask eval: `cd backend && npx tsx scripts/ask-eval.ts` runs ~10 min against prod, self-registers and self-deletes its account; R100 scored 43/44 (98%).
 
+## Production testing tips (learned R103)
+- Threads cluster ONLY `category='idea'` notes (backend/src/threads.ts). Two "same-topic" notes may triage as 想法+收藏 and never form a thread — post 2+ notes that clearly read as 想法 (e.g. 「…想法：想…」). To force clustering: `POST /api/threads/rebuild` (body `{}`) then poll `GET /api/threads/rebuild/:job_id` until `status:"done"`; the threads-page 重建线索 button does the same but gives little feedback. There is no `/api/threads/reconcile` (admin-only `/api/admin/reconcile-threads`).
+- Re-show the first-run tour: set `tourSeen:false` inside localStorage key `suinian.settings` and reload (only shows right after registration otherwise).
+- `browser_console` may attach to the wrong Chrome; direct CDP works: `requests.get('http://127.0.0.1:9222/json')` + `websocket.create_connection(url, suppress_origin=True)` (plain origin gets 403) then `Runtime.evaluate`.
+- 409 conflict UI (R102+): after a stale save the editor stays open with your input, plus an amber 「最新版本：…」 panel and a 「放弃我的输入，改用最新版本」 button that backfills the textarea; manual merge + re-save then succeeds. Same component on timeline and todos pages.
+- DevTools device toolbar width also serves for ≥1280px checks (set 1280×800) since the physical screen is 1024 wide.
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.
