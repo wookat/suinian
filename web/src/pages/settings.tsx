@@ -752,7 +752,7 @@ export function SettingsPage() {
       const stats: RestoreStats = await restoreBackup(file)
       setRestoreMsg({
         ok: true,
-        text: `恢复完成：笔记 ${stats.notes_imported}/${stats.notes_total} 条（跳过重复 ${stats.notes_skipped} 条）${(stats.sensitive_skipped ?? 0) > 0 ? `，跳过脱敏占位的敏感笔记 ${stats.sensitive_skipped} 条（迁移敏感内容请用勾选「包含敏感内容」的完整备份）` : ""}，媒体 ${stats.media_imported} 个${stats.media_failed > 0 ? `，失败 ${stats.media_failed} 个` : ""}。AI 分拣/线索/图谱会在后台陆续补全`,
+        text: `恢复完成：笔记 ${stats.notes_imported}/${stats.notes_total} 条（跳过重复 ${stats.notes_skipped} 条）${(stats.sensitive_skipped ?? 0) > 0 ? `，跳过脱敏占位的敏感笔记 ${stats.sensitive_skipped} 条（迁移敏感内容请用勾选「包含敏感内容」的完整备份）` : ""}，媒体 ${stats.media_imported} 个${(stats.media_oversized ?? 0) > 0 ? `，超过大小上限跳过 ${stats.media_oversized} 个` : ""}${stats.media_failed > 0 ? `，导入失败 ${stats.media_failed} 个` : ""}。AI 分拣/线索/图谱会在后台陆续补全`,
       })
     } catch (e) {
       setRestoreMsg({ ok: false, text: e instanceof Error ? e.message : "恢复失败，请稍后重试" })

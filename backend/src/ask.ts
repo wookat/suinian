@@ -224,19 +224,33 @@ export const MULTI_HOP_RE = /关系|关联|依据|后来|进展|着落|落地|�
 /** Cosine similarity below which a semantic-only recall hit is too weak to appear as a citation. */
 export const ASK_CITATION_MIN_SCORE = 0.55;
 
+/**
+ * Cosine similarity floor for the "相近的记录" suggestions attached to a 没找到
+ * answer: below this the note is essentially unrelated (宁缺毋滥) and only
+ * erodes trust when suggested.
+ */
+export const ASK_SUGGESTION_MIN_SCORE = 0.4;
+
 const CITE_RE = /[\[［](\d{1,2})[\]］]/g;
 
 // 引用导言后面的 [n] 被剔除后会留下「参见 ，」这种空位；把悬空的导言词、
 // 空括号和叠在一起的标点一并清掉，保证答案文本不出现断尾引用格式。
-const DANGLING_LEADIN_RE = /(?:另?可?参见|详见)[\s　]*(?=$|[，。；、！？,.;!?)）\]】])/g;
+const DANGLING_LEADIN_RE = /(?:另?可?参见|详见|根据|结合)[\s　]*(?=$|[，。；、！？,.;!?)）\]】])/g;
 function cleanDanglingCitations(s: string): string {
   return s
+    // orphan 「和/及/以及/与」 left between a removed marker and punctuation
+    // (「根据 [1]、[2]、 和 ，」→「根据 [1]、[2]，」)
+    .replace(/[、，]?[\s　]*(?:和|及|以及|与)[\s　]*(?=$|[，。；、！？,.;!?)）\]】])/g, "")
     .replace(DANGLING_LEADIN_RE, "")
     // orphan 、/， left where a removed marker preceded a surviving one
     .replace(/(^|[\s　（(：:])[、，][\s　]*(?=[\[［])/g, "$1")
     .replace(/（[\s　]*）|\([\s　]*\)/g, "")
     .replace(/[\s　]*([，。；、！？])[\s　]*(?=[，。；、！？])/g, "")
-    .replace(/^[\s　]*[，、；][\s　]*/, "");
+    .replace(/^[\s　]*[，、；][\s　]*/, "")
+    // a citation verb stranded at the start by a removed leading marker
+    // (「[2] 提到医生开的降压药」→「 提到医生开的降压药」)
+    .replace(/^[\s　]+/, "")
+    .replace(/^(?:中|里)?(提到|写道|记录了|显示)/, "笔记里$1");
 }
 
 /**
@@ -305,11 +319,19 @@ export function sensitiveHintLine(count: number, terms: string[]): string {
 }
 
 /**
- * Build the explicit "没找到" answer, with up to 3 nearby notes as suggestions
+ * Build the explicit refusal answer, with up to 3 nearby notes as suggestions
  * ("相近的记录" the user might have meant). Suggestions map to references so
  * the client renders them as cards.
+ *
+ * `mode` keeps the wording honest (R115 P2 拒答口径失真)：
+ * - "no_recall": nothing was retrieved at all — 「没找到相关笔记」 is literally true.
+ * - "not_in_notes": recall DID hit topic notes but none contains the asked
+ *   detail — saying 「没找到」 would be false; say the notes don't mention it.
  */
-export function buildNoAnswerResponse(suggestions: Pick<NoteRow, "id" | "title" | "content">[]): {
+export function buildNoAnswerResponse(
+  suggestions: Pick<NoteRow, "id" | "title" | "content">[],
+  mode: "no_recall" | "not_in_notes" = "no_recall"
+): {
   answer: string;
   references: { index: number; note_id: string }[];
 } {
@@ -320,8 +342,12 @@ export function buildNoAnswerResponse(suggestions: Pick<NoteRow, "id" | "title" 
     const label = (n.title || n.content).replace(/\s+/g, " ").slice(0, 40);
     return `[${i + 1}] ${label}`;
   });
+  const lead =
+    mode === "not_in_notes"
+      ? "找到了相关的笔记，但里面没有提到你问的这个信息："
+      : `${NO_ANSWER_TEXT}以下是几条相近的记录，可能是你想找的：`;
   return {
-    answer: `${NO_ANSWER_TEXT}以下是几条相近的记录，可能是你想找的：\n${lines.join("\n")}`,
+    answer: `${lead}\n${lines.join("\n")}`,
     references: suggestions.slice(0, 3).map((n, i) => ({ index: i + 1, note_id: n.id })),
   };
 }

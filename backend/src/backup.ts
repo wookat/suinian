@@ -261,6 +261,8 @@ export interface RestoreStats {
   sensitive_skipped: number;
   media_imported: number;
   media_skipped: number;
+  /** 单个文件超过大小上限，主动跳过未导入（区别于真正的导入失败） */
+  media_oversized: number;
   media_failed: number;
 }
 
@@ -319,6 +321,7 @@ export async function restoreBackup(
     sensitive_skipped: 0,
     media_imported: 0,
     media_skipped: 0,
+    media_oversized: 0,
     media_failed: 0,
   };
 
@@ -340,7 +343,7 @@ export async function restoreBackup(
     const isMedia = name.startsWith("media/");
     if (!isNotes && !isMedia) return;
     if (isMedia && file.originalSize !== undefined && file.originalSize > MAX_MEDIA_ENTRY_BYTES) {
-      stats.media_failed++;
+      stats.media_oversized++;
       return;
     }
     const bufs: Uint8Array[] = [];
@@ -353,7 +356,7 @@ export async function restoreBackup(
       size += dat.length;
       if (isMedia && size > MAX_MEDIA_ENTRY_BYTES) {
         // oversized single media: drop it, keep going
-        stats.media_failed++;
+        stats.media_oversized++;
         file.terminate();
         return;
       }

@@ -122,3 +122,25 @@ describe("aggregateStats", () => {
     expect(stats.top_tags).toEqual([{ tag: "想法", count: 1 }]);
   });
 });
+
+describe("aggregateStats custom scope (R116)", () => {
+  const rows = [
+    row("2026-08-08 02:00:00", { tags: '["吉他"]' }),
+    row("2026-08-01 02:00:00", { tags: '["读书"]' }),
+    row("2025-01-01 02:00:00", { tags: '["吉他"]' }),
+    row("2026-08-05 02:00:00", { tags: '["吉他"]', is_sensitive: 1 }),
+  ];
+  it("filters all aggregates by tag, excluding sensitive notes", () => {
+    const s = aggregateStats(rows, 0, { days: 365, tzOffset: TZ, now: NOW, tag: "吉他" });
+    expect(s.total_notes).toBe(2);
+    expect(s.top_tags).toEqual([{ tag: "吉他", count: 2 }]);
+  });
+  it("filters by recent-days scope", () => {
+    const s = aggregateStats(rows, 0, { days: 365, tzOffset: TZ, now: NOW, scopeDays: 30 });
+    expect(s.total_notes).toBe(3);
+  });
+  it("combines time and tag scope", () => {
+    const s = aggregateStats(rows, 0, { days: 365, tzOffset: TZ, now: NOW, scopeDays: 30, tag: "吉他" });
+    expect(s.total_notes).toBe(1);
+  });
+});

@@ -50,7 +50,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type Im
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, ASK_CITATION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -1860,7 +1860,11 @@ app.post("/api/notes/batch", async (c) => {
 app.get("/api/stats", async (c) => {
   const days = Math.max(1, Math.min(730, parseInt(c.req.query("days") ?? "", 10) || 365));
   const tzOffset = normalizeTzOffset(c.req.query("tz_offset"));
-  const stats = await buildStats(c.env, c.get("userId"), { days, tzOffset });
+  // 自定义洞察范围（借鉴 flomo）：tag 按标签过滤，scope_days 只统计最近 N 天
+  const tag = (c.req.query("tag") ?? "").trim().slice(0, 50) || undefined;
+  const scopeDaysRaw = parseInt(c.req.query("scope_days") ?? "", 10);
+  const scopeDays = scopeDaysRaw > 0 ? Math.min(3650, scopeDaysRaw) : undefined;
+  const stats = await buildStats(c.env, c.get("userId"), { days, tzOffset, tag, scopeDays });
   return c.json(stats);
 });
 
@@ -2466,6 +2470,13 @@ app.post("/api/ask", async (c) => {
         .slice(0, 8);
     }
   }
+  // 带历史时改写器可能丢掉原问题里能命中目标笔记的关键词（R115 P2 召回
+  // 抖动）：原始问题的关键词并入召回词集，改写只能增补、不能搞丢。
+  if (history.length > 0 && recallQuestion !== question) {
+    for (const t of extractAskTerms(question, [])) {
+      if (!terms.includes(t) && terms.length < 10) terms.push(t);
+    }
+  }
   // sensitive (encrypted) notes never enter the ask context — not even their titles
   const conds: string[] = ["user_id = ?", "is_sensitive = 0"];
   const binds: unknown[] = [userId];
@@ -2599,7 +2610,7 @@ app.post("/api/ask", async (c) => {
   if (notes.length === 0) {
     // nothing recalled at all: answer "没找到" honestly (never bluff over the
     // recent-20) and suggest the nearest notes below the semantic threshold
-    const near = await semanticRecall(c.env, userId, recallQuestion, 3, 0.3);
+    const near = await semanticRecall(c.env, userId, recallQuestion, 3, ASK_SUGGESTION_MIN_SCORE);
     let suggestions: NoteRow[] = [];
     if (near.length > 0) {
       const ph = near.map(() => "?").join(",");
@@ -2643,7 +2654,7 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）；汇总计算时也不要解释为什么排除某一项（如「68 元（买书，不属于吃的，忽略）」这类筛选过程），算式里只列入选项。回答用中文，简洁。",
       },
       ...history,
       {
@@ -2684,12 +2695,17 @@ app.post("/api/ask", async (c) => {
       answer2 = retry;
     }
   }
-  // the model itself concluded "没找到": swap the reference dump (uncited
-  // recall context) for up to 3 nearest-by-semantic suggestions
+  // the model itself concluded "没找到" over recalled topic notes: honest
+  // wording is 「笔记里没提到」, not 「没找到相关笔记」 (R115 P2 拒答口径)；
+  // suggestions prefer strong semantic hits, falling back to the top recall
   if (answer2 && isRefusalAnswer(answer2)) {
     const ranked = [...notes].sort((a, b) => (semScore.get(b.id) ?? 0) - (semScore.get(a.id) ?? 0));
-    const suggestions = ranked.filter((n) => (semScore.get(n.id) ?? 0) > 0).slice(0, 3);
-    const { answer: noAnswer, references } = buildNoAnswerResponse(suggestions);
+    let suggestions = ranked.filter((n) => (semScore.get(n.id) ?? 0) >= ASK_SUGGESTION_MIN_SCORE).slice(0, 3);
+    if (suggestions.length === 0) suggestions = notes.slice(0, 3);
+    // only claim 「找到了相关的笔记」 when recall actually had strong hits;
+    // weak-only recall keeps the plain 「没找到」 wording
+    const mode = notes.some((n) => !weakIds.has(n.id)) ? "not_in_notes" : "no_recall";
+    const { answer: noAnswer, references } = buildNoAnswerResponse(suggestions, mode);
     const sensitiveHits = await countSensitiveHits(c.env, userId, terms);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(

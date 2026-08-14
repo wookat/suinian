@@ -100,7 +100,7 @@ export function TrashPage() {
     try {
       const purged = await emptyTrash()
       setNotes([])
-      setMsg(`已清空回收站（彻底删除 ${purged} 条）`)
+      setMsg(`已清空最近删除（彻底删除 ${purged} 条）`)
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "清空失败")
     } finally {
@@ -127,7 +127,7 @@ export function TrashPage() {
             </span>
           ) : (
             <Button variant="outline" size="sm" onClick={() => setConfirmEmpty(true)}>
-              <Trash2 className="size-4" /> 清空回收站
+              <Trash2 className="size-4" /> 全部彻底删除
             </Button>
           ))}
       </div>
@@ -147,8 +147,8 @@ export function TrashPage() {
       ) : notes.length === 0 ? (
         <EmptyState
           icon={Trash2}
-          title="回收站是空的"
-          description={`删除的笔记会在这里保留 ${retentionDays} 天，期间可以随时恢复。`}
+          title="最近删除是空的"
+          description="这里暂时没有已删除的笔记。"
         />
       ) : (
         <div className="space-y-3">

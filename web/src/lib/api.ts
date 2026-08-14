@@ -308,7 +308,7 @@ export async function getTrash(): Promise<TrashResponse> {
   }
 }
 
-/** 立即彻底删除回收站里的笔记（不可恢复） */
+/** 立即彻底删除最近删除里的笔记（不可恢复） */
 export async function purgeNotes(ids: string[]): Promise<number> {
   const res = await realFetch<{ ok: boolean; purged: number }>("/api/notes/purge", {
     method: "POST",
@@ -317,7 +317,7 @@ export async function purgeNotes(ids: string[]): Promise<number> {
   return res.purged
 }
 
-/** 清空回收站：彻底删除全部软删笔记（不可恢复） */
+/** 清空最近删除：彻底删除全部软删笔记（不可恢复） */
 export async function emptyTrash(): Promise<number> {
   const res = await realFetch<{ ok: boolean; purged: number }>("/api/notes/trash/empty", {
     method: "POST",
@@ -425,10 +425,13 @@ export async function batchNotesByFilter(
 }
 
 /** 全部标签 + 使用次数（按次数降序） */
-export async function getStats(days = 365): Promise<StatsResponse> {
+export async function getStats(days = 365, scope?: { tag?: string; scopeDays?: number }): Promise<StatsResponse> {
   if (loadSettings().useMock) return mockGetStats()
   const tz = -new Date().getTimezoneOffset()
-  return realFetch<StatsResponse>(`/api/stats?days=${days}&tz_offset=${tz}`)
+  let qs = `/api/stats?days=${days}&tz_offset=${tz}`
+  if (scope?.tag) qs += `&tag=${encodeURIComponent(scope.tag)}`
+  if (scope?.scopeDays) qs += `&scope_days=${scope.scopeDays}`
+  return realFetch<StatsResponse>(qs)
 }
 
 /** 随机漫步：抽一条历史笔记（后端已排除敏感/示例/软删）；无可抽时返回 null */
@@ -550,6 +553,8 @@ export interface RestoreStats {
   sensitive_skipped: number
   media_imported: number
   media_skipped: number
+  /** 单个文件超过大小上限，服务端主动跳过未导入 */
+  media_oversized: number
   media_failed: number
 }
 

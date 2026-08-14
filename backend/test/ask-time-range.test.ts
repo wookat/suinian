@@ -124,6 +124,14 @@ describe("buildNoAnswerResponse", () => {
     expect(answer).toContain("换个说法");
     expect(references).toEqual([]);
   });
+  it("says the notes don't mention it (not 没找到) when recall did hit topic notes", () => {
+    const notes = [{ id: "a", title: "体检记录", content: "x" }];
+    const { answer, references } = buildNoAnswerResponse(notes, "not_in_notes");
+    expect(answer).not.toContain("没找到相关笔记");
+    expect(answer).toContain("没有提到");
+    expect(answer).toContain("体检记录");
+    expect(references).toEqual([{ index: 1, note_id: "a" }]);
+  });
 });
 
 describe("sensitiveHintLine", () => {

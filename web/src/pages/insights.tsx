@@ -30,6 +30,14 @@ const SOURCE_LABEL: Record<string, string> = {
   mcp: "MCP",
 }
 
+const SCOPE_DAYS_OPTIONS = [
+  { value: 0, label: "全部时间" },
+  { value: 7, label: "近 7 天" },
+  { value: 30, label: "近 30 天" },
+  { value: 90, label: "近 90 天" },
+  { value: 365, label: "近 1 年" },
+]
+
 const BAR_COLORS = [
   "bg-sky-500",
   "bg-violet-500",
@@ -202,13 +210,23 @@ export function InsightsPage() {
   const [randomNote, setRandomNote] = useState<Note | null>(null)
   const [randomEmpty, setRandomEmpty] = useState(false)
   const [drawing, setDrawing] = useState(false)
+  // 自定义洞察范围（时间×标签，借鉴 flomo）；默认全部
+  const [scopeDays, setScopeDays] = useState(0)
+  const [scopeTag, setScopeTag] = useState("")
+  // 标签候选来自首次不带范围的统计，避免选中后候选列表自身被筛窄
+  const [allTags, setAllTags] = useState<string[]>([])
   const settingsVersion = useSettingsVersion()
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      setStats(await getStats())
+      const res = await getStats(365, {
+        tag: scopeTag || undefined,
+        scopeDays: scopeDays || undefined,
+      })
+      setStats(res)
+      if (!scopeTag && !scopeDays) setAllTags(res.top_tags.map((t) => t.tag))
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.status === 403))
         setError("未连接或 token 失效，请到设置页检查连接")
@@ -217,7 +235,7 @@ export function InsightsPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scopeTag, scopeDays])
 
   useEffect(() => {
     void load()
@@ -258,7 +276,9 @@ export function InsightsPage() {
 
   if (!stats) return null
 
-  if (stats.total_notes === 0) {
+  const scoped = scopeTag !== "" || scopeDays !== 0
+
+  if (stats.total_notes === 0 && !scoped) {
     return (
       <EmptyState
         icon={BarChart3}
@@ -272,8 +292,63 @@ export function InsightsPage() {
     )
   }
 
+  const scopeBar = (
+    <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="insight-scope">
+      <span className="text-muted-foreground">洞察范围</span>
+      <select
+        value={scopeDays}
+        onChange={(e) => setScopeDays(Number(e.target.value))}
+        className="h-7 rounded-md border bg-background px-2"
+        aria-label="时间范围"
+      >
+        {SCOPE_DAYS_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {allTags.length > 0 && (
+        <select
+          value={scopeTag}
+          onChange={(e) => setScopeTag(e.target.value)}
+          className="h-7 max-w-40 rounded-md border bg-background px-2"
+          aria-label="标签范围"
+        >
+          <option value="">全部标签</option>
+          {allTags.map((t) => (
+            <option key={t} value={t}>
+              #{t}
+            </option>
+          ))}
+        </select>
+      )}
+      {scoped && (
+        <button
+          type="button"
+          className="text-muted-foreground underline-offset-2 hover:underline"
+          onClick={() => {
+            setScopeDays(0)
+            setScopeTag("")
+          }}
+        >
+          重置
+        </button>
+      )}
+    </div>
+  )
+
+  if (stats.total_notes === 0) {
+    return (
+      <div className="space-y-5">
+        {scopeBar}
+        <EmptyState icon={BarChart3} title="该范围内没有记录" description="换个时间范围或标签再试试。" />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-5">
+      {scopeBar}
       {/* 总览 */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile icon={Flame} label="当前连续记录" value={`${stats.streak.current} 天`} accent />

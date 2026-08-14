@@ -17,6 +17,19 @@ const SIM_CONFIRM_FLOOR = 0.62;
 export const THREAD_CATEGORIES = "('idea','collect')";
 const EMBED_MODEL = "@cf/baai/bge-m3";
 
+const CJK = "\\u4e00-\\u9fff\\u3400-\\u4dbf";
+const CJK_BEFORE_LATIN = new RegExp(`([${CJK}])([A-Za-z0-9])`, "g");
+const LATIN_BEFORE_CJK = new RegExp(`([A-Za-z0-9%])([${CJK}])`, "g");
+
+/**
+ * Insert the standard thin space between CJK and Latin/digit runs
+ * (「掌握了C和G和弦」→「掌握了 C 和 G 和弦」) so LLM-generated titles and
+ * summaries match the spacing convention used everywhere else in the app.
+ */
+export function spacifyCjk(s: string): string {
+  return s.replace(CJK_BEFORE_LATIN, "$1 $2").replace(LATIN_BEFORE_CJK, "$1 $2");
+}
+
 /** Same field mix as semantic.noteEmbedText, local to avoid an import cycle. */
 function embedInput(n: Pick<NoteRow, "title" | "content" | "url_title" | "url_summary">): string {
   return [n.title, n.content, n.url_title, n.url_summary].filter(Boolean).join("\n");
@@ -124,7 +137,11 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
       await env.DB.prepare(
         "UPDATE threads SET title = ?, summary = ?, updated_at = datetime('now') WHERE id = ?"
       )
-        .bind((obj.title || fallbackTitle || "未命名线索").slice(0, 50), obj.summary ?? null, threadId)
+        .bind(
+          spacifyCjk((obj.title || fallbackTitle || "未命名线索").slice(0, 50)),
+          obj.summary ? spacifyCjk(obj.summary) : null,
+          threadId
+        )
         .run();
     }
   } catch (err) {

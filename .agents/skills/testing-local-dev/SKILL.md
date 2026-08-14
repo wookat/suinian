@@ -85,6 +85,13 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - With WeChat channel unconfigured in prod, 设置页 push-prefs card text and both hints contain no 「微信」 and the WeChat binding card is hidden entirely (fail-closed via getWechatBinding()).
 - Occasionally a quick-capture submit fails and the content is returned to the textarea (R88 fail-return behavior) — just resubmit.
 
+## Production testing tips (learned R116)
+- Insight scope bar (`data-testid="insight-scope"`, 洞察 page top): time select + tag select + 重置. To force the 「该范围内没有记录」 empty state on a fresh account (all notes today), backdate one note via d1: `UPDATE notes SET created_at = datetime('now','-10 days') WHERE user_id=... AND content LIKE ...`, then pick 近 7 天 + that note's tag. Backdating also triggers a 今日回顾 card on the timeline.
+- d1 compound SELECT is limited (~10 terms): a 17-table residue audit as one UNION ALL fails with `too many terms in compound SELECT`; loop per table instead (USER_ID_TABLES + NOTE_ID_TABLES from backend/src/account.ts — 15 user_id tables + attachments/note_embeddings by note_id).
+- wrangler d1 works with `CLOUDFLARE_API_TOKEN=$CLOUDFLARE_WORKERS_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID=ddff52d24ee44e21a021c15eaffcc86d` (personal-scope secret `secret:personal:CLOUDFLARE_WORKERS_API_TOKEN`).
+- R116 refusal wording: asking a detail absent from recalled topic notes (e.g. 吉他颜色 when only brand/price noted) must yield 「找到了相关的笔记，但里面没有提到你问的这个信息：」+ suggestion cards; plain 「没找到相关笔记」 is only for zero recall.
+- Trash page is off-nav: fastest route is URL `#/trash` (or 设置 → 打开最近删除). 全部彻底删除 uses an inline 确认清空 confirm in the header row, no modal.
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.
 - `CLOUDFLARE_GLOBAL_API_TOKEN` (org) for Workers AI REST calls (`/ai/run/*`, used by thread-cross-eval.ts) and as fallback for wrangler d1.
