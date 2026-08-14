@@ -287,7 +287,7 @@ export function reconcileAskCitations(
 /** The model's answer amounts to "没找到" (no [n] citations backing anything). */
 export function isRefusalAnswer(answer: string): boolean {
   const hasCitation = /[\[［]\d{1,2}[\]］]/.test(answer);
-  return !hasCitation && /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没有笔记/.test(answer);
+  return !hasCitation && /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没有笔记|没提到|未提及|没有提及/.test(answer);
 }
 
 export const NO_ANSWER_TEXT = "没找到相关笔记。";

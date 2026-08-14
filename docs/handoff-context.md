@@ -47,6 +47,7 @@
 - R91：全量线上评审（只测不改）——R88–R90 全部回归 PASS、安全抽查过、注销级联 14 表清零、Lighthouse 桌面 100/100/100/100、体验评分 记录4.9/整理4.9/找回4.9/首次4.8；无 P0/P1，P2 观察见 qa-report-r91.md；顺手清理了上轮遗留账号 `[QA-R88]-repro`
 - R92：大语料敏感隔离专项验证（生产 102 条语料含 12 条敏感，8 个隔离面——图谱/线索/回顾/周报/洞察/问答/嵌入/默认导出——全部 0 泄漏且阳性对照成立，报告 qa-report-r92.md；月报未覆盖）+ 注册页密码不一致字段级红框/内联提示 + 【排查】[QA-R88]-repro 残留系会话未执行注销非接口缺陷；生产 ADMIN_TOKEN 已轮换
 - R94：AI 多 provider 降级链（R93 P0 DeepSeek 余额耗尽应对）——chatComplete 主模型失败自动 fallback 到 Workers AI llama-3.3-70b（`AI_FALLBACK_MODEL` 可换/`none` 关闭，每次先试主模型→充值后自动回主）；`GET /health?probe=ai` 探针（primary/fallback/503）；兑底 cron 扫 `needs_retriage`，pending 超 1h 落 FALLBACK_TRIAGE+标记；前端 pending 超 10min 显示「分拣延迟」；删除文案修正；注销改应用内确认（弃 window.prompt）。生产已删 AI_MODEL 手工覆盖，当前 provider=fallback；线上回归全过，ask-eval 42/44 (95%)、triage-eval category 21/21（todo_due 3/5，fallback 模型时区语义偏差）（PR #110）
+- R114：落实 R113 审查（PR #133 audit-r113.md）——①财务合计意图以原始问题为准（改写只服务召回，带历史不再误走 fail-closed），时间范围同理优先原始问题；②检索强命中却拒答时去历史重试一次（仍拒答才诚实「没找到」），拒答判定补「没提到/未提及」措辞；③重复线索合并对 0.62-0.76 边界相似度加 LLM 同题确认（与聚类同一把关，直并阈值不降）；④wecomKfConfigured 补 WECOM_KF_SECRET、清空对话加确认弹窗、报告页提示同周期重复生成覆盖；eval 新增 q67-69（多轮财务/长历史数字召回）+ forbidAnswerContains 校验
 - R55：CJK 长问句 LLM 关键词抽取（extractAskKeywords，eval 28/28 全过）、ask 召回排除敏感笔记（含标题）、新手引导 4 步 tour（settings.tourSeen，仅新注册）、空态一键丢入 #示例 笔记+一键清除、周报提示词升级（主线/想法关联/悬而未决）
 
 ## 已知问题 / 观察项

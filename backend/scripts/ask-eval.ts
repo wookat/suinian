@@ -144,7 +144,7 @@ interface AskResponse {
   notes: { id: string }[];
 }
 
-const REFUSAL_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面/;
+const REFUSAL_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没提到|未提及/;
 
 interface QResult {
   q: EvalQuestion;
