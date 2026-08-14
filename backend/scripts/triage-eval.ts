@@ -142,6 +142,9 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
+  // 语料里的“明天/周五”期望值按上海时区计算，先把账号时区对齐，
+  // 避免 QA 账号默认 UTC 时 due 断言假失败（R118）
+  await api("/api/preferences", { method: "PATCH", body: JSON.stringify({ tz: "Asia/Shanghai" }) });
   const created: string[] = [];
   try {
     for (const c of CASES) {
