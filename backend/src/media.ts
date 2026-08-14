@@ -123,6 +123,19 @@ export async function transcribeAudio(env: Pick<Env, "AI">, bytes: Uint8Array): 
 const CORRECT_SYSTEM_PROMPT =
   "你是语音转写纠错助手。修正下面转写文本中的同音错别字与明显断句错误，不改变原意，不增删信息，输出纯文本（不要解释，不要 markdown）。";
 
+const CORRECTION_REFUSAL_RE = /抱歉|无法(?:提供|协助|帮助|处理|完成)|不能(?:提供|协助|帮助|处理)|作为(?:一个)?(?:AI|人工智能|语言模型|助手)|(?:敏感|隐私|安全)(?:信息|内容|问题)|I(?:'m| am) sorry|I can(?:no|')t/i;
+
+/**
+ * 纠错模型对含密码/敏感词的转写可能拒答，把拒答文案当成纠错结果会静默替换
+ * 用户原话（且拒答文本会被复判为非敏感）。命中拒答特征或长度严重失真时，
+ * 一律回退原始转写，让下游敏感闸门基于真实内容判定。
+ */
+export function isCorrectionRefusal(text: string, raw: string): boolean {
+  if (CORRECTION_REFUSAL_RE.test(text)) return true;
+  const rawLen = Math.min(raw.length, 4000);
+  return text.length > rawLen * 2 + 40 || text.length * 3 < rawLen;
+}
+
 /**
  * LLM post-correction of a Whisper transcript (homophone typos, obvious
  * segmentation errors). Returns the corrected text, or the original
@@ -147,7 +160,8 @@ export async function correctTranscript(
       "transcript correction"
     );
     const text = (out ?? "").trim();
-    return text || raw;
+    if (!text || isCorrectionRefusal(text, raw)) return raw;
+    return text;
   } catch (err) {
     console.error("correctTranscript: failed", err);
     return raw;

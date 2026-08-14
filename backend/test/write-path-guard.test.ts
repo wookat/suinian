@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-const SRC_DIR = join(__dirname, "..", "src");
+const SRC_DIR = new URL("../src", import.meta.url).pathname;
 /** 唯一允许出现 notes 守护字段写 SQL 的模块 */
 const DAO_FILE = "note-store.ts";
 /** 守护字段：写入必须经敏感管道（加密/title 置空/tags 严格过滤） */

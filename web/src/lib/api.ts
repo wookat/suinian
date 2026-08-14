@@ -945,6 +945,16 @@ export async function deleteAccount(): Promise<void> {
   await realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" })
 }
 
+/** 探测账号是否已被删除（token 失效 = 已删）；探测本身失败时保守返回 false。 */
+export async function verifyAccountDeleted(): Promise<boolean> {
+  try {
+    await realFetch<{ name: string }>("/api/auth/me")
+    return false
+  } catch (e) {
+    return e instanceof ApiError && e.status === 401
+  }
+}
+
 export interface TestConnectionResult {
   ok: boolean
   message: string
