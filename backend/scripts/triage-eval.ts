@@ -176,7 +176,8 @@ async function main() {
     for (let i = 0; i < 30; i++) {
       await sleep(3000);
       // no q= filter: sensitive notes are stored encrypted, so content LIKE would miss them
-      const res = await api<{ notes: NoteJson[] }>(`/api/notes?limit=50`);
+      // limit 必须 ≥ 用例数（当前 53），否则最旧的几条永远取不回被误判失败
+      const res = await api<{ notes: NoteJson[] }>(`/api/notes?limit=100`);
       notes = res.notes.filter((n) => created.includes(n.id));
       if (notes.length === created.length && notes.every((n) => n.category)) break;
     }

@@ -913,6 +913,11 @@ export async function applyTriage(env: Env, noteId: string, triage: TriageResult
   // AI title 可能把秘密值原样带出（如「todo密码是xxx」），title 一律置空，
   // tags 走严格过滤只留纯主题词
   const tags = triage.is_sensitive ? sanitizeSensitiveTags(mergedTags) : mergedTags;
+  // raw_transcript 是 content 的派生明文（语音原始转写），敏感时一并洗掉
+  if (triage.is_sensitive && newMeta.raw_transcript) {
+    delete newMeta.raw_transcript;
+    metaChanged = true;
+  }
   const sets = ["is_sensitive = ?"];
   const binds: unknown[] = [triage.is_sensitive ? 1 : 0];
   // fields the user set by hand stay untouched
@@ -1032,6 +1037,9 @@ async function createNote(
   const storedContent = gated.content;
   const preContentEnc = gated.content_enc;
   const preSensitive = gated.is_sensitive && gated.content_enc !== null;
+  // 敏感元数据洗净同样覆盖派生明文：raw_transcript 是语音原始转写，
+  // content 加密后若仍留在 meta 里会原样泄出秘密值
+  if (preSensitive && meta?.raw_transcript) delete meta.raw_transcript;
 
   // insert immediately (category resolved by triage, sync or async)
   await c.env.DB.prepare(
@@ -2072,6 +2080,7 @@ app.post("/api/notes/:id/retry-media", async (c) => {
   const storedContent = gated.content;
   const contentEnc = gated.content_enc;
   const sensitive = gated.is_sensitive && contentEnc !== null ? 1 : 0;
+  if (sensitive && newMeta.raw_transcript) delete newMeta.raw_transcript;
   // category back to NULL: the placeholder's triage is meaningless for the
   // real content — the async pipeline below re-sorts it like a fresh note
   await c.env.DB.prepare(
