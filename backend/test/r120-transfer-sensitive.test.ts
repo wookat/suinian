@@ -167,6 +167,30 @@ describe("applyTriage never persists secret values in derived fields (R120 P1-1)
     expect(String(note.content)).not.toContain(SECRET);
   });
 
+  it("scrubs plaintext raw_transcript from meta for sensitive notes (R122)", async () => {
+    const note: Record<string, unknown> = {
+      id: "n3",
+      title: null,
+      tags: "[]",
+      meta: JSON.stringify({ raw_transcript: `服务器 root 密码是 ${SECRET}` }),
+      is_sensitive: 0,
+    };
+    const env = { DB: fakeDb(note), SUINIAN_ENC_KEY: KEY } as unknown as Env;
+    const triage: TriageResult = {
+      category: "data",
+      tags: [],
+      title: null,
+      is_sensitive: true,
+      todo_due: null,
+      amount: null,
+      currency: null,
+      merchant: null,
+    };
+    await applyTriage(env, "n3", triage, `服务器 root 密码是 ${SECRET}`);
+    expect(String(note.meta)).not.toContain(SECRET);
+    expect(String(note.meta)).not.toContain("raw_transcript");
+  });
+
   it("keeps normal notes' AI title untouched", async () => {
     const note: Record<string, unknown> = { id: "n2", title: null, tags: "[]", meta: null, is_sensitive: 0 };
     const env = { DB: fakeDb(note), SUINIAN_ENC_KEY: KEY } as unknown as Env;
