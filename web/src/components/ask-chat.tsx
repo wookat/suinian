@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { BookmarkPlus, Check, CircleHelp, Loader2, SendHorizontal, Sparkles, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { NoteCard } from "@/components/note-card"
 import { ask, createNote } from "@/lib/api"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
@@ -132,6 +133,7 @@ export function AskChat({
   const [input, setInput] = useState("")
   const [asking, setAsking] = useState(false)
   const [saveStates, setSaveStates] = useState<Record<string, "saving" | "saved" | "error">>({})
+  const [confirmClear, setConfirmClear] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -266,7 +268,7 @@ export function AskChat({
               variant="ghost"
               size="sm"
               className="h-7 text-xs text-muted-foreground"
-              onClick={() => setMessages([])}
+              onClick={() => setConfirmClear(true)}
             >
               <Trash2 className="size-3.5" /> 清空对话
             </Button>
@@ -403,6 +405,17 @@ export function AskChat({
           {asking ? <Loader2 className="animate-spin" /> : <SendHorizontal />}
         </Button>
       </div>
+      <ConfirmDialog
+        open={confirmClear}
+        title="清空对话？"
+        description="将删除本机保存的全部问答记录，无法恢复。"
+        confirmLabel="清空"
+        onConfirm={() => {
+          setMessages([])
+          setConfirmClear(false)
+        }}
+        onCancel={() => setConfirmClear(false)}
+      />
     </Card>
   )
 }

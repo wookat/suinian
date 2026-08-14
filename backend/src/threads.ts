@@ -670,8 +670,9 @@ export async function mergeDuplicateThreads(env: Env, userId: string, aroundThre
       .all<{ id: string; created_at: string }>();
     let threads = results ?? [];
     if (threads.length < 2) return 0;
-    const reps = new Map<string, number[] | null>();
-    const repVector = async (threadId: string): Promise<number[] | null> => {
+    type Rep = { vector: number[] | null; text: string };
+    const reps = new Map<string, Rep | null>();
+    const repOf = async (threadId: string): Promise<Rep | null> => {
       if (!reps.has(threadId)) {
         const row = await env.DB.prepare(
           `SELECT n.id, n.title, n.content, n.url_title, n.url_summary, e.vector
@@ -696,7 +697,7 @@ export async function mergeDuplicateThreads(env: Env, userId: string, aroundThre
           v = await embed(env, embedInput(row));
           if (v) await saveEmbedding(env, row.id, v);
         }
-        reps.set(threadId, v);
+        reps.set(threadId, row ? { vector: v, text: row.title || row.content } : null);
       }
       return reps.get(threadId)!;
     };
@@ -708,13 +709,21 @@ export async function mergeDuplicateThreads(env: Env, userId: string, aroundThre
       let foldedThisPass = 0;
       const targets = scope ? threads.filter((t) => t.id === scope) : threads;
       for (const t of targets) {
-        const tv = await repVector(t.id);
-        if (!tv) continue;
+        const tr = await repOf(t.id);
+        if (!tr?.vector) continue;
         for (const o of threads) {
           if (o.id === t.id) continue;
-          const ov = await repVector(o.id);
-          if (!ov) continue;
-          if (cosineSim(tv, ov) < SIM_JOIN) continue;
+          const or = await repOf(o.id);
+          if (!or?.vector) continue;
+          const sim = cosineSim(tr.vector, or.vector);
+          if (sim < SIM_JOIN) {
+            // borderline pair (R113 P2): same LLM confirmation as clusterNote —
+            // concurrent same-topic saves can leave two clusters whose newest
+            // representatives sit just under SIM_JOIN
+            if (sim < SIM_CONFIRM_FLOOR) continue;
+            if (!(await deepseekConfirmPair(env, tr.text, or.text))) continue;
+            console.log(`threads: merge confirmed borderline pair sim=${sim.toFixed(3)} (user=${userId})`);
+          }
           // fold the newer thread into the older one
           const [keep, drop] = t.created_at <= o.created_at ? [t, o] : [o, t];
           await env.DB.prepare("UPDATE notes SET thread_id = ?, updated_at = datetime('now') WHERE thread_id = ?")

@@ -138,6 +138,7 @@ export function ReportsPage() {
           </>
         )}
       </Button>
+      <p className="text-xs text-muted-foreground">同一周期重复生成会覆盖更新已有报告</p>
       {generateError && <p className="text-sm text-destructive">{generateError}</p>}
     </div>
   )

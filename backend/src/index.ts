@@ -2411,18 +2411,24 @@ app.post("/api/ask", async (c) => {
   // explicit time scope ("上个月/最近一周/去年…") narrows recall to that window
   const timeRange = parseTimeRange(recallQuestion);
   // 财务/统计合计类问题走精确聚合（与周报/月报同一 financeStats 口径），
-  // 绝不让 LLM 对被 LIMIT 截断的召回结果心算合计（R107 P1-2）
-  const financeIntent = financeAggIntent(recallQuestion);
+  // 绝不让 LLM 对被 LIMIT 截断的召回结果心算合计（R107 P1-2）。
+  // 意图判定以原始问题为准（R113 P1）：改写只服务于召回，带历史时改写器
+  // 可能给普通合计补出限定成分，绝不能因此把 exact 打成 fail-closed。
+  const origFinanceIntent = financeAggIntent(question);
+  const financeIntent = origFinanceIntent ?? financeAggIntent(recallQuestion);
   if (financeIntent) {
+    // 时间范围同理优先取自原始问题；原始问题没带时间时才用改写结果
+    // （代词追问「那上个月呢」靠历史补出时间是合法的）
+    const fRange = (origFinanceIntent ? parseTimeRange(question) : null) ?? timeRange;
     const fConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income')"];
     const fBinds: unknown[] = [userId];
-    if (timeRange?.start) {
+    if (fRange?.start) {
       fConds.push("created_at >= ?");
-      fBinds.push(timeRange.start);
+      fBinds.push(fRange.start);
     }
-    if (timeRange?.end) {
+    if (fRange?.end) {
       fConds.push("created_at < ?");
-      fBinds.push(timeRange.end);
+      fBinds.push(fRange.end);
     }
     const fr = await c.env.DB.prepare(
       `SELECT * FROM notes WHERE ${fConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
@@ -2435,8 +2441,8 @@ app.post("/api/ask", async (c) => {
     // let the LLM mental-math truncated recall (multi-currency mixing risk)
     const answer =
       financeIntent === "exact"
-        ? buildFinanceAggAnswer(stats, timeRange?.phrase ?? null)
-        : buildFinanceFailClosedAnswer(stats, timeRange?.phrase ?? null);
+        ? buildFinanceAggAnswer(stats, fRange?.phrase ?? null)
+        : buildFinanceFailClosedAnswer(stats, fRange?.phrase ?? null);
     // sensitive finance notes count toward totals (report口径) but never surface as cards
     const refRows = frows.filter((n) => !n.is_sensitive).slice(0, 10);
     const references = refRows.map((n, i) => ({ index: i + 1, note_id: n.id }));
@@ -2637,7 +2643,7 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）。回答用中文，简洁。",
       },
       ...history,
       {
@@ -2650,9 +2656,37 @@ app.post("/api/ask", async (c) => {
       },
     ],
   });
+  // semantic-only hits (never keyword-matched) below the citation threshold
+  const weakIds = new Set(extraIds.filter((id) => (semScore.get(id) ?? 0) < ASK_CITATION_MIN_SCORE));
+  // 检索命中却误拒答（R113 P1）：强命中（关键词命中或语义分达标）存在时，
+  // 拒答很可能是历史话题干扰下的误判：去掉对话历史、同一上下文重问一次，
+  // 仍拒答才诚实返回「没找到」。
+  let answer2 = answer;
+  if (answer2 && isRefusalAnswer(answer2) && notes.some((n) => !weakIds.has(n.id))) {
+    const retry = await chatComplete(c.env, {
+      temperature: 0,
+      max_tokens: 800,
+      timeout_ms: 40_000,
+      messages: [
+        {
+          role: "system",
+          content:
+            "你是「碎念」个人笔记问答助手。下面的笔记片段是检索系统针对这个问题命中的结果，其中很可能包含答案。请逐条仔细阅读每个片段后回答问题，引用时用 [序号] 标注。问题问到具体数字时逐字引用原始数字。只有当所有片段确实都与问题无关时，才说没找到。只输出结论本身，回答用中文，简洁。",
+        },
+        {
+          role: "user",
+          content: `笔记片段：\n${context}\n\n问题：${recallQuestion}`,
+        },
+      ],
+    });
+    if (retry && !isRefusalAnswer(retry)) {
+      console.log("ask: refusal retry recovered an answer");
+      answer2 = retry;
+    }
+  }
   // the model itself concluded "没找到": swap the reference dump (uncited
   // recall context) for up to 3 nearest-by-semantic suggestions
-  if (answer && isRefusalAnswer(answer)) {
+  if (answer2 && isRefusalAnswer(answer2)) {
     const ranked = [...notes].sort((a, b) => (semScore.get(b.id) ?? 0) - (semScore.get(a.id) ?? 0));
     const suggestions = ranked.filter((n) => (semScore.get(n.id) ?? 0) > 0).slice(0, 3);
     const { answer: noAnswer, references } = buildNoAnswerResponse(suggestions);
@@ -2663,16 +2697,15 @@ app.post("/api/ask", async (c) => {
     );
     return c.json({ answer: noAnswer + sensitiveHintLine(sensitiveHits, terms), references, notes: refNotes, no_answer: true });
   }
-  // semantic-only hits (never keyword-matched) below the citation threshold
-  // stay in the context but never surface as citations; the answer text and
-  // the references array are rewritten together so no [n] marker dangles
-  const weakIds = new Set(extraIds.filter((id) => (semScore.get(id) ?? 0) < ASK_CITATION_MIN_SCORE));
-  const { answer: finalAnswer, references } = reconcileAskCitations(answer ?? "", noteIds, weakIds);
+  // weak semantic-only hits stay in the context but never surface as
+  // citations; the answer text and the references array are rewritten
+  // together so no [n] marker dangles
+  const { answer: finalAnswer, references } = reconcileAskCitations(answer2 ?? "", noteIds, weakIds);
   const byId = new Map(notes.map((n) => [n.id, n]));
   const refNotes = await Promise.all(
     references.map((r) => noteToJsonDecrypted(c.env, byId.get(r.note_id)!))
   );
-  if (!answer) {
+  if (!answer2) {
     return c.json({ answer: "（AI 暂不可用）已找到相关记录，见 references。", references, notes: refNotes });
   }
   return c.json({ answer: finalAnswer, references, notes: refNotes });

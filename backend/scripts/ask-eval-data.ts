@@ -128,6 +128,8 @@ export interface EvalQuestion {
   expectRefusal?: boolean;
   /** every substring must appear verbatim in the answer (deterministic paths) */
   expectAnswerContains?: string[];
+  /** none of these substrings may appear in the answer */
+  forbidAnswerContains?: string[];
   /** excluded from tuning; only counted in the final report */
   holdout?: boolean;
 }
@@ -299,5 +301,50 @@ export const QUESTIONS: EvalQuestion[] = [
     category: "财务聚合",
     question: "给猫花的钱合计有多少",
     expectAnswerContains: ["不做心算合计", "口径与周报/月报一致"],
+  },
+
+  // —— R114（R113 P1）：带历史时普通合计绝不能被改写带偏进 fail-closed ——
+  {
+    id: "q67",
+    category: "财务聚合",
+    question: "这个月一共花了多少钱",
+    history: [
+      { role: "user", content: "带猫打疫苗花了多少钱" },
+      { role: "assistant", content: "你带猫打了三联疫苗，花了 260 块 [1]。" },
+    ],
+    expectAnswerContains: ["口径与周报/月报一致"],
+    forbidAnswerContains: ["不做心算合计"],
+  },
+  {
+    id: "q68",
+    category: "财务聚合",
+    question: "那买东西一共用了多少钱",
+    history: [
+      { role: "user", content: "我最近买过什么" },
+      { role: "assistant", content: "你买了机械键盘 399 元 [1]和跑鞋 549 元 [2]。" },
+    ],
+    // 原始问题自带限定（买东西）：仍应 fail-closed
+    expectAnswerContains: ["不做心算合计", "口径与周报/月报一致"],
+    holdout: true,
+  },
+
+  // —— R114（R113 P1）：长对话后期检索命中绝不能答「没找到」 ——
+  {
+    id: "q69",
+    category: "数字细节",
+    question: "土鸡蛋的报价是每斤多少钱",
+    // 模拟 UI 长对话第 9 轮：前面多轮话题与当前问题无关（历史污染场景）
+    history: [
+      { role: "user", content: "我最近在想什么" },
+      { role: "assistant", content: "你在想咖啡馆快闪店 [1]、星尘项目方案 [2] 和换工作的事 [3]。" },
+      { role: "user", content: "咖啡馆那个点子最新进展是什么" },
+      { role: "assistant", content: "最新思路是周末快闪店试水，手冲定价 35 元 [1]。" },
+      { role: "user", content: "星尘现在用什么方案" },
+      { role: "assistant", content: "星尘改用方案B：消息队列解耦 [1]。" },
+    ],
+    expectAny: ["num1"],
+    expectAll: ["num1"],
+    expectAnswerContains: ["8.5"],
+    forbidAnswerContains: ["没找到", "没有相关"],
   },
 ];
