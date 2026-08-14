@@ -52,8 +52,8 @@ import java.util.concurrent.TimeUnit
 /** 面向用户的可读错误（网络/解析/HTTP 统一人话文案） */
 class ApiException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
-/** 乐观锁冲突（409）：笔记已被其他设备修改，调用方应刷新后重试 */
-class ConflictException(message: String) : Exception(message)
+/** 乐观锁冲突（409）：笔记已被其他设备修改；latest 为服务器最新副本（409 响应体携带），供调用方展示对照合并 */
+class ConflictException(message: String, val latest: Note? = null) : Exception(message)
 
 /** 真实后端 client，接口形状严格按 docs/SPEC.md */
 class ApiClient(private val baseUrl: String, private val token: String) {
@@ -322,7 +322,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
         resp.use {
             val text = it.body?.string().orEmpty()
-            if (it.code == 409) throw ConflictException(parseErrorMessage(text) ?: "这条笔记刚被其他设备修改，请刷新后重试")
+            if (it.code == 409) throw ConflictException(parseErrorMessage(text) ?: "这条笔记刚被其他设备修改，请刷新后重试", parseNoteLenient(text))
             if (!it.isSuccessful) throw httpError(it.code, text)
             parseNoteLenient(text)
         }

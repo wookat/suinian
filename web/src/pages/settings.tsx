@@ -525,6 +525,7 @@ function PushPreferencesCard() {
 
 function WechatBindingCard() {
   const [status, setStatus] = useState<WechatBindingStatus | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [bindCode, setBindCode] = useState<{ code: string; ttl_minutes: number } | null>(null)
@@ -534,13 +535,13 @@ function WechatBindingCard() {
     let cancelled = false
     const s = loadSettings()
     if (s.useMock || !s.apiBaseUrl || !s.apiToken) return
-    setError(null)
+    setLoadFailed(false)
     getWechatBinding()
       .then((st) => {
         if (!cancelled) setStatus(st)
       })
-      .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+      .catch(() => {
+        if (!cancelled) setLoadFailed(true)
       })
     return () => {
       cancelled = true
@@ -551,6 +552,8 @@ function WechatBindingCard() {
   if (s.useMock || !s.apiBaseUrl || !s.apiToken) return null
   // 两条微信通道都未开通时整卡隐藏，不再挂「即将开放」占位承诺
   if (status && !status.configured && !status.kf_configured) return null
+  // 状态请求失败（如 token 失效）时能力未知，按未开通处理整卡隐藏（fail closed）
+  if (status === null && loadFailed) return null
 
   async function generate() {
     if (busy) return
@@ -590,7 +593,7 @@ function WechatBindingCard() {
         </p>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
-      {status === null && !error ? (
+      {status === null ? (
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" /> 加载中…
         </p>
@@ -1438,8 +1441,8 @@ export function SettingsPage() {
       <Card className="p-4">
         <h2 className="text-sm font-medium">关于</h2>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          碎念 Suinian — 什么都能丢的 AI 收件箱。往微信 / Android / Web
-          随手一丢，AI 帮你分拣、串线索、随时找到。
+          碎念 Suinian — 什么都能丢的 AI 收件箱。往 Web / Android /
+          剪藏扩展随手一丢，AI 帮你分拣、串线索、随时找到。
         </p>
       </Card>
     </div>

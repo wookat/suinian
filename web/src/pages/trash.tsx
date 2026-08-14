@@ -8,15 +8,15 @@ import { emptyTrash, getTrash, purgeNotes, restoreNotes, ApiError, NetworkError 
 import { useSettingsVersion } from "@/lib/settings"
 import type { TrashNote } from "@/lib/types"
 
-/** 剩余保留时间的人话文案（不足一天按小时，最少「不足 1 小时」） */
+/** 剩余保留时间的人话文案（天数向上取整，刚删除即显示完整保留天数；不足一天按小时，最少「不足 1 小时」） */
 export function remainingLabel(purgeAt: string | null, now = Date.now()): string {
   if (!purgeAt) return ""
   const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(purgeAt) ? `${purgeAt.replace(" ", "T")}Z` : purgeAt
   const ms = Date.parse(iso) - now
   if (Number.isNaN(ms)) return ""
   if (ms <= 0) return "即将清理"
-  const days = Math.floor(ms / 86_400_000)
-  if (days >= 1) return `剩 ${days} 天`
+  const days = Math.ceil(ms / 86_400_000)
+  if (days > 1) return `剩 ${days} 天`
   const hours = Math.floor(ms / 3_600_000)
   return hours >= 1 ? `剩 ${hours} 小时` : "剩不足 1 小时"
 }

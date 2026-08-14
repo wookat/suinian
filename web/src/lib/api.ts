@@ -840,6 +840,22 @@ export async function getWechatBinding(): Promise<WechatBindingStatus> {
   return realFetch<WechatBindingStatus>("/api/wechat/binding")
 }
 
+/**
+ * 微信通道是否已开通（公众号或企微客服任一）。与设置页微信绑定卡同一来源
+ * （/api/wechat/binding）；未登录、演示模式或请求失败一律按未开通处理（fail closed），
+ * 供 tour 等入口文案统一判定，避免各处各写一套承诺。
+ */
+export async function isWechatConfigured(): Promise<boolean> {
+  const s = loadSettings()
+  if (s.useMock || !s.apiBaseUrl || !s.apiToken) return false
+  try {
+    const st = await getWechatBinding()
+    return Boolean(st.configured || st.kf_configured)
+  } catch {
+    return false
+  }
+}
+
 export async function createWechatBindCode(): Promise<{ code: string; expires_at: string; ttl_minutes: number }> {
   return realFetch<{ code: string; expires_at: string; ttl_minutes: number }>("/api/wechat/bind-code", { method: "POST" })
 }

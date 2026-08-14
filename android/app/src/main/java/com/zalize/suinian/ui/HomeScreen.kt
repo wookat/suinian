@@ -196,6 +196,8 @@ fun HomeScreen(
         NoteEditSheet(
             note = editing,
             saving = ui.savingEdit,
+            conflict = ui.editConflict,
+            onDismissConflict = { vm.dismissEditConflict() },
             onDismiss = { vm.closeEditor() },
             onSave = { content, title, category, tags, todoDue ->
                 vm.saveEdit(editing, content, title, category, tags, todoDue)

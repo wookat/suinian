@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -54,6 +56,8 @@ private val editCategories = listOf(
 fun NoteEditSheet(
     note: Note,
     saving: Boolean,
+    conflict: Note? = null,
+    onDismissConflict: () -> Unit = {},
     onDismiss: () -> Unit,
     onSave: (content: String, title: String, category: String?, tags: List<String>, todoDue: String?) -> Unit,
 ) {
@@ -82,6 +86,44 @@ fun NoteEditSheet(
         ) {
             Text("编辑笔记", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(12.dp))
+
+            if (conflict != null) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.tertiaryContainer, RoundedCornerShape(12.dp))
+                        .padding(12.dp),
+                ) {
+                    Text(
+                        "这条笔记刚被其他设备修改，你的输入仍保留在下方编辑框，可对照最新版本合并后再保存",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "最新版本：${conflict.content}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        maxLines = 6,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "放弃我的输入，改用最新版本",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.clickable {
+                            content = conflict.content
+                            title = conflict.title ?: ""
+                            category = conflict.category
+                            tags = conflict.tags
+                            due = conflict.todoDue ?: ""
+                            onDismissConflict()
+                        },
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+            }
 
             OutlinedTextField(
                 value = title,

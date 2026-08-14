@@ -278,11 +278,14 @@ function linkStatusText(status: string, url: string): string {
   return LINK_STATUS_TEXT[status] ?? "未能抓取正文，已保存链接"
 }
 
+/** 编辑保存结果：乐观锁 409 时带回服务器最新副本，卡片保留用户输入供对照合并 */
+export type EditResult = { conflict: Note } | void
+
 interface NoteCardProps {
   note: Note
   onToggleTodo?: (note: Note) => void
   onTagClick?: (tag: string) => void
-  onEdit?: (note: Note, patch: NotePatch) => void
+  onEdit?: (note: Note, patch: NotePatch) => EditResult | Promise<EditResult>
   onDelete?: (note: Note) => void
   onToggleSensitive?: (note: Note) => void
   categoryFilterActive?: boolean
@@ -330,6 +333,8 @@ export function NoteCard({
   const [editTags, setEditTags] = useState<string[]>(note.tags)
   const [editTagInput, setEditTagInput] = useState("")
   const [editDue, setEditDue] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [conflictNote, setConflictNote] = useState<Note | null>(null)
   const [copied, setCopied] = useState(false)
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
   const [revealed, setRevealed] = useState(false)
@@ -499,6 +504,7 @@ export function NoteCard({
                         setEditTags(note.tags)
                         setEditTagInput("")
                         setEditDue(dueToInput(note.todo_due))
+                        setConflictNote(null)
                         setEditing(true)
                         setMenuOpen(false)
                       }}
@@ -573,6 +579,28 @@ export function NoteCard({
               autoFocus
             />
             {editError && <p className="text-xs text-destructive">{editError}</p>}
+            {conflictNote && (
+              <div className="space-y-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs">
+                <p className="font-medium text-amber-600 dark:text-amber-400">
+                  这条笔记刚被其他设备修改，你的输入仍保留在上方编辑框，可对照最新版本合并后再保存
+                </p>
+                <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-muted-foreground">
+                  最新版本：{conflictNote.content}
+                </p>
+                <button
+                  onClick={() => {
+                    setEditValue(conflictNote.content)
+                    setEditCategory(conflictNote.category ?? "")
+                    setEditTags(conflictNote.tags)
+                    setEditDue(dueToInput(conflictNote.todo_due))
+                    setConflictNote(null)
+                  }}
+                  className="font-medium text-primary hover:underline"
+                >
+                  放弃我的输入，改用最新版本
+                </button>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <label className="text-xs text-muted-foreground" htmlFor={`cat-${note.id}`}>
                 分类
@@ -646,6 +674,7 @@ export function NoteCard({
             <div className="flex gap-2">
               <Button
                 size="sm"
+                disabled={saving}
                 onClick={() => {
                   const v = editValue.trim()
                   if (!v) {
@@ -661,18 +690,38 @@ export function NoteCard({
                   const due = inputToDue(editDue)
                   if ((editCategory || note.category) === "todo" && editDue !== dueToInput(note.todo_due))
                     patch.todo_due = due
-                  if (Object.keys(patch).length > 0) onEdit?.(note, patch)
-                  setEditError(null)
-                  setEditing(false)
+                  if (Object.keys(patch).length === 0) {
+                    setEditError(null)
+                    setConflictNote(null)
+                    setEditing(false)
+                    return
+                  }
+                  setSaving(true)
+                  void (async () => {
+                    try {
+                      const res = await onEdit?.(note, patch)
+                      if (res && "conflict" in res) {
+                        setConflictNote(res.conflict)
+                        return
+                      }
+                      setEditError(null)
+                      setConflictNote(null)
+                      setEditing(false)
+                    } finally {
+                      setSaving(false)
+                    }
+                  })()
                 }}
               >
-                保存
+                {saving ? "保存中…" : "保存"}
               </Button>
               <Button
                 size="sm"
                 variant="outline"
+                disabled={saving}
                 onClick={() => {
                   setEditError(null)
+                  setConflictNote(null)
                   setEditing(false)
                 }}
               >
