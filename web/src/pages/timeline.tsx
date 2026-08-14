@@ -21,6 +21,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { QuickInput } from "@/components/quick-input"
 import { DailyReview } from "@/components/daily-review"
 import { NoteCard } from "@/components/note-card"
+import type { EditResult } from "@/components/note-card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -748,23 +749,23 @@ export function TimelinePage() {
     }
   }
 
-  async function handleEdit(note: Note, patch: NotePatch) {
+  async function handleEdit(note: Note, patch: NotePatch): Promise<EditResult> {
     setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, ...patch } : n)))
     try {
       const fresh = await patchNote(note.id, patch, note.updated_at)
       setNotes((ns) => ns.map((n) => (n.id === note.id ? fresh : n)))
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
-        // another device edited this note first: refresh to the latest copy so
-        // the user re-edits on top of it instead of silently overwriting
+        // another device edited this note first: refresh to the latest copy and
+        // hand it back to the card, which keeps the user's typed text for merging
+        let latest: Note | null = null
         try {
-          const latest = await getNote(note.id)
-          setNotes((ns) => ns.map((n) => (n.id === note.id ? (latest ?? n) : n)))
+          latest = await getNote(note.id)
         } catch {
-          setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
+          // fall back to the pre-edit copy below
         }
-        showToast("这条笔记刚被其他设备修改，已刷新为最新内容，请重新编辑", undefined, 8000)
-        return
+        setNotes((ns) => ns.map((n) => (n.id === note.id ? (latest ?? note) : n)))
+        return { conflict: latest ?? note }
       }
       setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
       showToast(
@@ -1068,7 +1069,7 @@ export function TimelinePage() {
           <EmptyState
             icon={SearchX}
             title="没有找到匹配的笔记"
-            description="换个关键词、标签或分类试试，或清除筛选条件查看全部碎念。"
+            description="换个关键词、标签或分类试试，或清除筛选条件查看全部碎念。删过的内容不在这里，可到「最近删除」找找。"
             actionLabel="清除筛选"
             onAction={() => {
               setCategory("")
@@ -1086,6 +1087,10 @@ export function TimelinePage() {
                   }
                 : undefined
             }
+            tertiaryActionLabel="到最近删除找找"
+            onTertiaryAction={() => {
+              window.location.hash = "#/trash"
+            }}
           />
         ) : (
           <Card className="flex flex-col items-center gap-3 p-10 text-center animate-in fade-in duration-300">
@@ -1142,7 +1147,7 @@ export function TimelinePage() {
                     note={n}
                     onToggleTodo={(note) => void toggleTodo(note)}
                     onTagClick={setTag}
-                    onEdit={(note, patch) => void handleEdit(note, patch)}
+                    onEdit={handleEdit}
                     onDelete={(note) => void handleDelete(note)}
                     onToggleSensitive={(note) => void handleToggleSensitive(note)}
                     categoryFilterActive={category === n.category}

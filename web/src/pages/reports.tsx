@@ -175,7 +175,8 @@ export function ReportsPage() {
             <Card className="p-5">
               <h2 className="text-lg font-semibold">{reportTitle(selected)}</h2>
               <p className="mb-4 mt-1 text-xs font-medium text-muted-foreground">
-                {reportRangeLabel(selected)}
+                覆盖 {reportRangeLabel(selected)}
+                {selected.created_at ? ` · 生成于 ${selected.created_at.slice(0, 16)}` : ""}
               </p>
               {selected.content_md ? (
                 <ReportBody md={stripLeadingH1(selected.content_md)} />

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Send, Loader2, Paperclip, Sparkles, Lock, Tag } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
@@ -8,6 +8,26 @@ import type { Note } from "@/lib/types"
 
 export const MAX_CONTENT_CHARS = 20_000
 const COUNTER_THRESHOLD = 18_000
+
+/** 未提交输入的本地草稿：离线/刷新不丢字，提交成功即清 */
+const DRAFT_KEY = "suinian.quick_input_draft"
+
+function loadDraft(): string {
+  try {
+    return localStorage.getItem(DRAFT_KEY) ?? ""
+  } catch {
+    return ""
+  }
+}
+
+function saveDraft(value: string) {
+  try {
+    if (value) localStorage.setItem(DRAFT_KEY, value)
+    else localStorage.removeItem(DRAFT_KEY)
+  } catch {
+    // 存储不可用（隐私模式配额等）时静默降级，不影响输入
+  }
+}
 
 /** 内联指令（与帮助文案/微信指令对齐）：?问题 提问；!内容 原样保存；#标签 内容 手动打标 */
 export type InlineCommand =
@@ -32,7 +52,7 @@ export function parseInlineCommand(value: string): InlineCommand {
 }
 
 export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => void; onAsk?: (question: string) => void }) {
-  const [value, setValue] = useState("")
+  const [value, setValue] = useState(loadDraft)
   // 并发保存计数：输入框提交后立即清空，保存在后台进行，连发多条互不阻塞
   const [savingCount, setSavingCount] = useState(0)
   const saving = savingCount > 0
@@ -40,6 +60,10 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    saveDraft(value)
+  }, [value])
 
   const length = value.length
   const overLimit = length > MAX_CONTENT_CHARS

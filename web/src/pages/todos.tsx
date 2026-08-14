@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { CheckCircle2, ChevronDown, ListTodo } from "lucide-react"
 import { NoteCard } from "@/components/note-card"
+import type { EditResult } from "@/components/note-card"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { cn, parseDue, dueHasTime } from "@/lib/utils"
@@ -80,7 +81,7 @@ export function TodosPage() {
     }
   }
 
-  async function handleEdit(note: Note, patch: NotePatch) {
+  async function handleEdit(note: Note, patch: NotePatch): Promise<EditResult> {
     setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, ...patch } : n)))
     try {
       const fresh = await patchNote(note.id, patch, note.updated_at)
@@ -88,15 +89,16 @@ export function TodosPage() {
       setError(null)
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
-        // refresh to the latest copy so the user re-edits instead of overwriting
+        // refresh to the latest copy and hand it back to the card, which keeps
+        // the user's typed text for merging
+        let latest: Note | null = null
         try {
-          const latest = await getNote(note.id)
-          setNotes((ns) => ns.map((n) => (n.id === note.id ? (latest ?? n) : n)))
+          latest = await getNote(note.id)
         } catch {
-          setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
+          // fall back to the pre-edit copy below
         }
-        setError("这条笔记刚被其他设备修改，已刷新为最新内容，请重新编辑")
-        return
+        setNotes((ns) => ns.map((n) => (n.id === note.id ? (latest ?? note) : n)))
+        return { conflict: latest ?? note }
       }
       setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
       setError(`保存失败：${e instanceof Error ? e.message : String(e)}，请重试`)
@@ -170,7 +172,7 @@ export function TodosPage() {
                 key={n.id}
                 note={n}
                 onToggleTodo={(note) => void toggleTodo(note)}
-                onEdit={(note, patch) => void handleEdit(note, patch)}
+                onEdit={handleEdit}
                 onDelete={(note) => void handleDelete(note)}
                 onToggleSensitive={(note) => void handleToggleSensitive(note)}
               />
@@ -199,7 +201,7 @@ export function TodosPage() {
                 className="animate-in fade-in slide-in-from-top-2 duration-200"
                 note={n}
                 onToggleTodo={(note) => void toggleTodo(note)}
-                onEdit={(note, patch) => void handleEdit(note, patch)}
+                onEdit={handleEdit}
                 onDelete={(note) => void handleDelete(note)}
                 onToggleSensitive={(note) => void handleToggleSensitive(note)}
               />

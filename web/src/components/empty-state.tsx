@@ -10,6 +10,8 @@ export function EmptyState({
   onAction,
   secondaryActionLabel,
   onSecondaryAction,
+  tertiaryActionLabel,
+  onTertiaryAction,
 }: {
   icon: LucideIcon
   title: string
@@ -18,6 +20,8 @@ export function EmptyState({
   onAction?: () => void
   secondaryActionLabel?: string
   onSecondaryAction?: () => void
+  tertiaryActionLabel?: string
+  onTertiaryAction?: () => void
 }) {
   return (
     <Card className="flex flex-col items-center gap-3 p-10 text-center animate-in fade-in duration-300">
@@ -26,7 +30,7 @@ export function EmptyState({
       </span>
       <h2 className="text-base font-medium">{title}</h2>
       <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">{description}</p>
-      {((actionLabel && onAction) || (secondaryActionLabel && onSecondaryAction)) && (
+      {((actionLabel && onAction) || (secondaryActionLabel && onSecondaryAction) || (tertiaryActionLabel && onTertiaryAction)) && (
         <div className="mt-1 flex flex-wrap justify-center gap-2">
           {actionLabel && onAction && (
             <Button size="sm" variant="outline" onClick={onAction}>
@@ -36,6 +40,11 @@ export function EmptyState({
           {secondaryActionLabel && onSecondaryAction && (
             <Button size="sm" onClick={onSecondaryAction}>
               {secondaryActionLabel}
+            </Button>
+          )}
+          {tertiaryActionLabel && onTertiaryAction && (
+            <Button size="sm" variant="ghost" onClick={onTertiaryAction}>
+              {tertiaryActionLabel}
             </Button>
           )}
         </div>

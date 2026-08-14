@@ -1,6 +1,7 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { PenLine, Sparkles, MessageCircleQuestion, Share2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { isWechatConfigured } from "@/lib/api"
 import { loadSettings, saveSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 
@@ -23,9 +24,16 @@ const STEPS = [
   {
     icon: Share2,
     title: "哪里都能丢进来",
-    description: "微信 bot 发消息、浏览器剪藏扩展、Android 分享面板、Claude/Cursor（MCP）都能直达这里，入口见设置页与 GitHub 仓库首页。",
+    description: "", // 按微信通道实际开通状态动态生成，见 channelStepDescription
   },
 ] as const
+
+/** 第四步入口介绍：微信文案与设置页同一开关判定，未开通时不承诺已上线 */
+function channelStepDescription(wechatOn: boolean): string {
+  return wechatOn
+    ? "微信 bot 发消息、浏览器剪藏扩展、Android 分享面板、Claude/Cursor（MCP）都能直达这里，入口见设置页与 GitHub 仓库首页。"
+    : "浏览器剪藏扩展、Android 分享面板、Claude/Cursor（MCP）都能直达这里；微信入口即将上线（自部署可用 bridge）。入口见设置页与 GitHub 仓库首页。"
+}
 
 /**
  * One-time 4-step feature tour for freshly registered users entering the
@@ -33,6 +41,17 @@ const STEPS = [
  */
 export function FirstRunTour({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(0)
+  const [wechatOn, setWechatOn] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void isWechatConfigured().then((on) => {
+      if (!cancelled) setWechatOn(on)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   function finish() {
     saveSettings({ ...loadSettings(), tourSeen: true })
@@ -57,7 +76,9 @@ export function FirstRunTour({ onDone }: { onDone: () => void }) {
             <Icon className="size-7 text-accent-foreground" />
           </span>
           <h2 className="text-base font-semibold">{current.title}</h2>
-          <p className="min-h-20 text-sm leading-relaxed text-muted-foreground">{current.description}</p>
+          <p className="min-h-20 text-sm leading-relaxed text-muted-foreground">
+            {step === STEPS.length - 1 ? channelStepDescription(wechatOn) : current.description}
+          </p>
         </div>
         <div className="mt-2 flex justify-center gap-1.5">
           {STEPS.map((_, i) => (

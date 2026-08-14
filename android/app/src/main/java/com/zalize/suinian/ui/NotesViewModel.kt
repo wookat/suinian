@@ -58,6 +58,8 @@ data class NotesUiState(
     val batchBusy: Boolean = false,
     val editingNote: Note? = null,
     val savingEdit: Boolean = false,
+    /** 编辑保存遇 409 时的服务器最新副本：编辑器保持打开、用户输入不丢，展示对照供合并 */
+    val editConflict: Note? = null,
     val seedingSamples: Boolean = false,
 )
 
@@ -671,11 +673,16 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     // ---- 笔记编辑 ----
 
     fun openEditor(note: Note) {
-        _ui.value = _ui.value.copy(editingNote = note)
+        _ui.value = _ui.value.copy(editingNote = note, editConflict = null)
     }
 
     fun closeEditor() {
-        _ui.value = _ui.value.copy(editingNote = null)
+        _ui.value = _ui.value.copy(editingNote = null, editConflict = null)
+    }
+
+    /** 用户在冲突对照中选择了处置方式后收起对照条 */
+    fun dismissEditConflict() {
+        _ui.value = _ui.value.copy(editConflict = null)
     }
 
     fun saveEdit(
@@ -702,6 +709,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(
                     savingEdit = false,
                     editingNote = null,
+                    editConflict = null,
                     notes = if (updated != null) {
                         _ui.value.notes.map { if (it.id == note.id) updated else it }
                     } else _ui.value.notes,
@@ -709,9 +717,15 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 if (updated == null) refresh()
             } catch (e: ConflictException) {
-                // 冲突：拉取最新列表并保持编辑器关闭，用户基于最新内容重编辑
-                _ui.value = _ui.value.copy(savingEdit = false, editingNote = null, toast = e.message ?: "笔记已被其他设备修改，请重试")
-                refresh()
+                // 冲突：编辑器保持打开、用户输入不丢；带回最新副本供对照合并，重提基于最新 updated_at
+                val latest = e.latest
+                _ui.value = _ui.value.copy(
+                    savingEdit = false,
+                    editingNote = latest ?: _ui.value.editingNote,
+                    editConflict = latest ?: note,
+                    notes = if (latest != null) _ui.value.notes.map { if (it.id == note.id) latest else it } else _ui.value.notes,
+                )
+                if (latest == null) refresh()
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(savingEdit = false, toast = e.message ?: "保存失败")
             }

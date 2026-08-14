@@ -32,8 +32,9 @@ export function AuthPage() {
     if (name.trim().length < 2) return setError("用户名至少 2 个字符")
     if (password.length < 8) return setError("密码至少 8 个字符")
     if (mode === "register" && password !== password2) {
+      // 只用确认框下的内联提示，不另发全局 error，避免同屏重复与修正后残留旧错误
       setMismatch(true)
-      return setError("两次输入的密码不一致")
+      return
     }
     setBusy(true)
     const slowTimer = window.setTimeout(() => setSlow(true), 4000)

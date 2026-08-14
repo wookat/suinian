@@ -41,7 +41,8 @@ export function monthsUntilCuboxShutdown(now: Date = new Date()): number {
 }
 
 const CHANNELS = [
-  { icon: MessageCircle, label: "微信 bot", blurb: "给 bot 发消息就是记录", href: `${REPO}/tree/main/skill` },
+  // 微信官方通道尚未上线：登录前无法查询能力开关，按未开通的诚实文案展示（与设置页 fail-closed 口径一致）
+  { icon: MessageCircle, label: "微信 bot", blurb: "即将上线 · 自部署可用 bridge", href: `${REPO}/tree/main/skill` },
   { icon: Scissors, label: "剪藏扩展", blurb: "网页选中一键收进碎念", href: `${REPO}/tree/main/extension` },
   { icon: Smartphone, label: "Android", blurb: "系统分享 + 桌面小组件", href: `${REPO}/tree/main/android` },
   { icon: Globe, label: "Web · PWA", blurb: "手机桌面装成 App", href: "#/" },

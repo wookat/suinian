@@ -10,7 +10,7 @@
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers%20%2B%20D1-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-想法、链接、待办、密码、文件——只管往微信（或 Web / Android / 浏览器剪藏 / MCP）里丢，AI 帮你分拣归类、把散落数周的同题碎片串成思考线索，每周一告诉你「你最近在想什么」。
+想法、链接、待办、密码、文件——只管往 Web / Android / 浏览器剪藏 / MCP（或自部署的微信 bridge）里丢，AI 帮你分拣归类、把散落数周的同题碎片串成思考线索，每周一告诉你「你最近在想什么」。
 
 [在线体验（演示模式）](https://suinian.zalize.com) · [3 分钟自部署](docs/self-host.md) · [接入 Claude / Cursor（MCP）](docs/mcp.md) · [技术 SPEC](docs/SPEC.md)
 
@@ -24,7 +24,7 @@
 - **vs flomo**：flomo 靠你自己回顾；碎念用 AI 自动分拣（想法/待办/收藏/资料）、自动打标签，还把碎片串成「思考线索」。
 - **vs flomo Agent（MAX）**：flomo Agent 也住在微信里，但锁在 MAX 付费订阅后，记录仍靠你自己打标签（Agent 是"聊出来再写回"），没有产品化的线索视图；碎念免费开源，每条自动分拣，线索自动聚成视图，数据在你自己账号里。
 - **vs Cubox**：Cubox 是稍后读收藏夹；碎念什么都能收（文字/链接/语音/图片/密码），敏感内容 AES-256-GCM 加密，且**开源可自部署**，数据在你自己的 Cloudflare 账号里。
-- **微信即入口**：不用装新 App，给 bot 发消息就是记录，`?` 开头就是问答检索（微信入口可选，纯 Web/API 也完整可用）。
+- **微信即入口**（默认关闭，需自部署配置，见 [docs/wechat-integration.md](docs/wechat-integration.md)）：不用装新 App，给 bot 发消息就是记录，`?` 开头就是问答检索；线上版微信通道即将上线，纯 Web/API 也完整可用。
 
 | 能力 | 碎念 | flomo Agent（MAX） | OmniBox | just-note | mymind / Mem |
 |---|---|---|---|---|---|
@@ -47,7 +47,7 @@ Cubox 已官宣 **2027-05 停止速记/文件功能**，正在找新家？碎念
 
 | 入口 | 一句话 | 去哪里 |
 |---|---|---|
-| 微信公众号 | 关注 + 发绑定码即接入，发消息就是记录（普通用户零门槛） | [docs/wechat-integration.md](docs/wechat-integration.md) |
+| 微信公众号 | 默认关闭，需自部署配置（线上版即将上线）；开通后关注 + 发绑定码即接入，发消息就是记录 | [docs/wechat-integration.md](docs/wechat-integration.md) |
 | 微信 bot（自托管） | 个人微信 bridge，`?` 开头即问答（极客自部署） | [skill/](skill/) |
 | 浏览器剪藏扩展 | 网页选中右键一键收进碎念 | [extension/](extension/) |
 | Android | 系统分享面板 + 桌面小组件速记 | [android/](android/) |
