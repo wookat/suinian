@@ -1071,10 +1071,12 @@ async function createNote(
     if (n) {
       await extractGraph(c.env, n);
       const tid = await clusterNote(c.env, n);
-      // concurrent same-topic saves can each create a thread (the cluster
-      // reads race); a scoped merge right after clustering heals the split
-      if (tid) await mergeDuplicateThreads(c.env, userId, tid);
       await upsertNoteEmbedding(c.env, n);
+      // concurrent same-topic saves can each create a thread (the cluster
+      // reads race); a scoped merge after the embedding is stored heals the
+      // split — running it post-embed means the last note to finish sees every
+      // racing thread with a fresh representative vector
+      if (tid) await mergeDuplicateThreads(c.env, userId, tid);
     }
     if (url) {
       await enrichLinkInto(c.env, id);
@@ -3179,8 +3181,8 @@ async function retriageOne(
       console.error("retriage: cluster failed", err);
       return null;
     });
-    if (tid) await mergeDuplicateThreads(env, n.user_id, tid);
     await upsertNoteEmbedding(env, n);
+    if (tid) await mergeDuplicateThreads(env, n.user_id, tid);
   }
   return true;
 }
