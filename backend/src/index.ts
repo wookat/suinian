@@ -1057,7 +1057,16 @@ async function createNote(
       await clusterNote(c.env, n);
       await upsertNoteEmbedding(c.env, n);
     }
-    if (url) await enrichLinkInto(c.env, id);
+    if (url) {
+      await enrichLinkInto(c.env, id);
+      // link summary landed after the first embed/cluster pass: refresh the
+      // vector and give unthreaded collects a retry with the richer text
+      const enriched = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
+      if (enriched?.url_summary) {
+        await upsertNoteEmbedding(c.env, enriched);
+        if (enriched.category === "collect" && !enriched.thread_id) await clusterNote(c.env, enriched);
+      }
+    }
   };
 
   let triage: TriageResult | null = null;

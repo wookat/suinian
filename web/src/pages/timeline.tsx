@@ -139,6 +139,8 @@ export function TimelinePage() {
   const [askMode, setAskMode] = useState(false)
   // ? 内联指令：速记框直接提问 → 打开问答面板并发送
   const [askPrefill, setAskPrefill] = useState<string | null>(null)
+  // 搜索空态「用 AI 问问看」：只预填不自发，由用户确认后再消耗 AI 调用
+  const [askInputPrefill, setAskInputPrefill] = useState<string | null>(null)
   const [tagsExpanded, setTagsExpanded] = useState(false)
   const [mobileTagsExpanded, setMobileTagsExpanded] = useState(false)
   const [debouncing, setDebouncing] = useState(false)
@@ -963,6 +965,8 @@ export function TimelinePage() {
             onTagClick={setTag}
             initialQuestion={askPrefill}
             onInitialQuestionConsumed={() => setAskPrefill(null)}
+            initialInput={askInputPrefill}
+            onInitialInputConsumed={() => setAskInputPrefill(null)}
           />
         </Suspense>
       )}
@@ -1082,7 +1086,7 @@ export function TimelinePage() {
               search
                 ? () => {
                     setAskMode(true)
-                    setAskPrefill(search)
+                    setAskInputPrefill(search)
                     window.scrollTo({ top: 0, behavior: "smooth" })
                   }
                 : undefined

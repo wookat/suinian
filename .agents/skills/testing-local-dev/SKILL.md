@@ -78,5 +78,13 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - 409 conflict UI (R102+): after a stale save the editor stays open with your input, plus an amber 「最新版本：…」 panel and a 「放弃我的输入，改用最新版本」 button that backfills the textarea; manual merge + re-save then succeeds. Same component on timeline and todos pages.
 - DevTools device toolbar width also serves for ≥1280px checks (set 1280×800) since the physical screen is 1024 wide.
 
+## Production testing tips (learned R104)
+- `scripts/thread-cross-eval.ts` (Workers AI via REST) needs a token with Workers AI Read/Run: `CLOUDFLARE_WORKERS_API_TOKEN` returns code 10000 Authentication error on `/ai/run/*`; use `CLOUDFLARE_GLOBAL_API_TOKEN` (org secret) instead — pass it via a custom env var name in the exec tool's `env` (auto-injected secrets can shadow `CLOUDFLARE_API_TOKEN` set directly). Expected: A 40%R/40%P, B 100%R/48%P, B' 87%R/54%P, ~54 LLM confirm calls, ~2 min.
+- wrangler d1 remote may exit 1 after printing the account table when it can't resolve the account; set `CLOUDFLARE_ACCOUNT_ID=ddff52d24ee44e21a021c15eaffcc86d` explicitly. DB name is `suinian` (not suinian-db).
+- Search empty-state 「用 AI 问问看」 should only prefill+focus the ask textarea (no auto-send; wait ~5s to confirm no answer appears), while quick-capture `?问题` still auto-sends — both live in web/src/pages/timeline.tsx (initialInput vs initialQuestion).
+- With WeChat channel unconfigured in prod, 设置页 push-prefs card text and both hints contain no 「微信」 and the WeChat binding card is hidden entirely (fail-closed via getWechatBinding()).
+- Occasionally a quick-capture submit fails and the content is returned to the textarea (R88 fail-return behavior) — just resubmit.
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.
+- `CLOUDFLARE_GLOBAL_API_TOKEN` (org) for Workers AI REST calls (`/ai/run/*`, used by thread-cross-eval.ts) and as fallback for wrangler d1.

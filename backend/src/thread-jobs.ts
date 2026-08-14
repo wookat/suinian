@@ -1,5 +1,5 @@
 import type { Env, NoteRow } from "./types";
-import { clusterNote, newRebuildState, rebuildStep, summarizeThread, type RebuildState } from "./threads";
+import { clusterNote, newRebuildState, rebuildStep, summarizeThread, THREAD_CATEGORIES, type RebuildState } from "./threads";
 
 /** Wall-clock budget for the slice run inside the rebuild request's waitUntil. */
 export const REBUILD_SLICE_BUDGET_MS = 4 * 60_000;
@@ -184,7 +184,7 @@ export async function backfillThreadClusters(env: Env, timeBudgetMs = CLUSTER_BA
     const { results: users } = await env.DB.prepare(
       `SELECT DISTINCT n.user_id FROM notes n
         LEFT JOIN thread_backfill b ON b.user_id = n.user_id
-        WHERE n.category = 'idea' AND n.deleted_at IS NULL AND n.thread_id IS NULL
+        WHERE n.category IN ${THREAD_CATEGORIES} AND n.deleted_at IS NULL AND n.thread_id IS NULL
           AND (b.user_id IS NULL OR b.done = 0)
           AND n.user_id NOT IN (SELECT user_id FROM thread_jobs WHERE status IN ('queued','running'))
         LIMIT 20`
@@ -208,7 +208,7 @@ async function backfillUser(env: Env, userId: string, deadline: number): Promise
   let processed = 0;
   while (Date.now() < deadline) {
     const { results } = await env.DB.prepare(
-      `SELECT * FROM notes WHERE user_id = ?1 AND category = 'idea' AND deleted_at IS NULL
+      `SELECT * FROM notes WHERE user_id = ?1 AND category IN ${THREAD_CATEGORIES} AND deleted_at IS NULL
          AND (created_at > ?2 OR (created_at = ?2 AND id > ?3))
        ORDER BY created_at ASC, id ASC LIMIT ${BACKFILL_BATCH}`
     )
