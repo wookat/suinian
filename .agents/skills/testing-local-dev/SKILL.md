@@ -96,6 +96,14 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - Prod login API returns the token under `api_token` (not `token`): `SUINIAN_TOKEN=$(curl -s -X POST .../api/auth/login -H 'content-type: application/json' -d '{"name":...,"password":...}' | jq -r .api_token)` — handy for `scripts/triage-eval.ts`.
 - `browser_console`/CDP may fail to attach even with `--remote-debugging-port=9222` up; plan token extraction via the login API rather than localStorage.
 
+## Production testing tips (learned R122)
+- wrangler d1 remote: `CLOUDFLARE_WORKERS_API_TOKEN` may return 7403 "account not authorized"; fall back to `CLOUDFLARE_GLOBAL_API_TOKEN` (org secret) as `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID=ddff52d24ee44e21a021c15eaffcc86d`.
+- `scripts/triage-eval.ts` fetches only `/api/notes?limit=50` but has 53 cases (R122) — the 3+ oldest eval notes always come back "(unsorted)", so a perfect 53/53 is impossible until the script paginates or bumps the limit. Run it on a dedicated fresh account (register via `/api/auth/register`, delete via `DELETE /api/auth/me`) so pre-existing notes don't eat more of the 50-window.
+- The unified sensitive gate (backend/src/ingest.ts): skip_triage (`!` raw-save) uses only the high-precision detector — a bare "口令 P@ss2026" (no assignment verb like 改成了/是/：) stays plaintext BY DESIGN; use "口令改成了 X" style samples to exercise that path. `/api/notes/:id/retry-media` returns 该笔记无需重试 unless extraction actually failed — hard to exercise on prod.
+- Sensitive voice notes: content is encrypted but `meta.raw_transcript` keeps the plaintext transcript (potential leak channel — check whether fixed).
+- bulk_ingest rate limit: import and restore share one 3/min bucket; 4th call in a minute → 429.
+- Offline queue (R122 P1-3): DevTools Network → Offline, quick-capture shows "N 条离线速记待同步"; back to No throttling auto-flushes (201s) — notes appear without reload.
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.
 - `CLOUDFLARE_GLOBAL_API_TOKEN` (org) for Workers AI REST calls (`/ai/run/*`, used by thread-cross-eval.ts) and as fallback for wrangler d1.
