@@ -96,6 +96,14 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - Prod login API returns the token under `api_token` (not `token`): `SUINIAN_TOKEN=$(curl -s -X POST .../api/auth/login -H 'content-type: application/json' -d '{"name":...,"password":...}' | jq -r .api_token)` — handy for `scripts/triage-eval.ts`.
 - `browser_console`/CDP may fail to attach even with `--remote-debugging-port=9222` up; plan token extraction via the login API rather than localStorage.
 
+## Production testing tips (learned R122)
+- wrangler d1 remote: `CLOUDFLARE_WORKERS_API_TOKEN` may return 7403 "account not authorized"; fall back to `CLOUDFLARE_GLOBAL_API_TOKEN` (org secret) as `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID=ddff52d24ee44e21a021c15eaffcc86d`.
+- `scripts/triage-eval.ts` fetch window fixed in R122 follow-up (limit=100; must stay ≥ corpus size). Still run it on a dedicated fresh account (register via `/api/auth/register`, delete via `DELETE /api/auth/me`) so pre-existing notes don't eat the window.
+- The unified sensitive gate (backend/src/ingest.ts): skip_triage (`!` raw-save) uses only the high-precision detector — a bare "口令 P@ss2026" (no assignment verb like 改成了/是/：) stays plaintext BY DESIGN; use "口令改成了 X" style samples to exercise that path. `/api/notes/:id/retry-media` returns 该笔记无需重试 unless extraction actually failed — hard to exercise on prod.
+- Sensitive notes scrub `meta.raw_transcript` (fixed in R122 follow-up): createNote pre-check / applyTriage / retry-media all delete it; non-sensitive notes keep it intact.
+- bulk_ingest rate limit: import and restore share one 3/min bucket; 4th call in a minute → 429.
+- Offline queue (R122 P1-3): DevTools Network → Offline, quick-capture shows "N 条离线速记待同步"; back to No throttling auto-flushes (201s) — notes appear without reload.
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.
 - `CLOUDFLARE_GLOBAL_API_TOKEN` (org) for Workers AI REST calls (`/ai/run/*`, used by thread-cross-eval.ts) and as fallback for wrangler d1.
