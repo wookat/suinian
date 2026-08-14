@@ -232,12 +232,29 @@ describe("clusterNote cold start (no threads exist yet)", () => {
     const b = makeNote("b", "AI 收件箱要支持微信");
     db.notes.set("a", a);
     db.notes.set("b", b);
-    // cosine ≈ 0.6: candidate band, needs DeepSeek confirmation
-    const ai = fakeAi({ "做一个 AI 收件箱": [1, 0, 0], "AI 收件箱要支持微信": [0.6, 0.8, 0] });
+    // cosine ≈ 0.65: candidate band (0.62–0.76), needs DeepSeek confirmation
+    const ai = fakeAi({ "做一个 AI 收件箱": [1, 0, 0], "AI 收件箱要支持微信": [0.65, 0.76, 0] });
     const env = makeEnv(db, ai, "1");
     await clusterNote(env, a);
     await clusterNote(env, b);
     expect(db.threads.size).toBe(1);
+  });
+
+  it("does not ask the LLM below the unified 0.62 confirm floor (R106)", async () => {
+    const db = fakeDb();
+    // collect notes: below the floor they stop cold (no DeepSeek-only fallback),
+    // so a merge here could only come from a floor regression
+    const a = makeNote("a", "做一个 AI 收件箱", { category: "collect" });
+    const b = makeNote("b", "AI 收件箱要支持微信", { category: "collect" });
+    db.notes.set("a", a);
+    db.notes.set("b", b);
+    // cosine ≈ 0.55: inside the old 0.5 idea band, below the unified floor —
+    // even an eager LLM (always answers "1") must not merge them
+    const ai = fakeAi({ "做一个 AI 收件箱": [1, 0, 0], "AI 收件箱要支持微信": [0.55, 0.835, 0] });
+    const env = makeEnv(db, ai, "1");
+    await clusterNote(env, a);
+    await clusterNote(env, b);
+    expect(db.threads.size).toBe(0);
   });
 
   it("does not merge dissimilar ideas", async () => {

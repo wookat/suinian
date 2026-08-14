@@ -50,7 +50,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type Im
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, filterWeakReferences, sensitiveHintLine, ASK_CITATION_MIN_SCORE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, ASK_CITATION_MIN_SCORE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -141,6 +141,13 @@ app.onError((err, c) => {
 app.notFound((c) => c.json({ error: "not found" }, 404));
 
 const MAX_CONTENT_CHARS = 20_000;
+
+/** Per-user /api/ask requests per minute (each runs several LLM calls). */
+const ASK_RATE_LIMIT_MAX = 15;
+
+/** Backoff schedule for in-request triage retries (async path); each delay gets up to +100% jitter. */
+const TRIAGE_RETRY_DELAYS_MS = [3_000, 8_000];
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function contentTooLong(c: { json: (o: object, s: 413) => Response }, content: string): Response | null {
   if (content.length <= MAX_CONTENT_CHARS) return null;
@@ -1035,12 +1042,23 @@ async function createNote(
     )
     .run();
 
-  const runTriage = async (): Promise<TriageResult | null> => {
+  const runTriage = async (retry: boolean): Promise<TriageResult | null> => {
     const topTags = await loadTopTags(c.env.DB, userId).catch(() => [] as string[]);
     const corrections = await loadCategoryCorrections(c.env.DB, userId).catch(() => []);
     const tz = await loadUserTz(c.env, userId);
-    const triage = await triageNote(content, c.env, topTags, tz, corrections);
-    // null = AI unavailable: keep category NULL so the cron sweep retries later
+    let triage = await triageNote(content, c.env, topTags, tz, corrections);
+    // a concurrent burst of quick notes can trip provider rate limits and fail
+    // most of the batch at once; the async path retries inside the same
+    // waitUntil with jittered backoff (the jitter de-synchronizes the burst)
+    // so those notes sort within seconds instead of waiting for the cron sweep
+    if (retry) {
+      for (const base of TRIAGE_RETRY_DELAYS_MS) {
+        if (triage) break;
+        await sleep(base + Math.random() * base);
+        triage = await triageNote(content, c.env, topTags, tz, corrections);
+      }
+    }
+    // still null = AI unavailable: keep category NULL so the sweeps retry later
     if (triage) await applyTriage(c.env, id, triage, content);
     return triage;
   };
@@ -1050,7 +1068,7 @@ async function createNote(
   if (urls.length > 0) waitUntil(capped(fetchLinkMetaInto(c.env, id, urls), PIPELINE_TIMEOUT_MS, `linkmeta note=${id}`));
 
   const runPipeline = async (withTriage: boolean) => {
-    if (withTriage) await runTriage();
+    if (withTriage) await runTriage(true);
     const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
     if (n) {
       await extractGraph(c.env, n);
@@ -1073,7 +1091,8 @@ async function createNote(
   if (opts.skipTriage) {
     waitUntil(capped(runPipeline(false), PIPELINE_TIMEOUT_MS, `pipeline note=${id}`));
   } else if (opts.syncTriage) {
-    triage = await runTriage();
+    // sync path (wechat reply) stays single-attempt: the reply must be fast
+    triage = await runTriage(false);
     waitUntil(capped(runPipeline(false), PIPELINE_TIMEOUT_MS, `pipeline note=${id}`));
   } else {
     waitUntil(capped(runPipeline(true), PIPELINE_TIMEOUT_MS, `pipeline note=${id}`));
@@ -1243,9 +1262,33 @@ app.get("/api/notes", async (c) => {
     return c.json({ notes, next_cursor: next });
   }
 
+  // opportunistic sweep: a visible pending note older than the in-request
+  // retry window means its async triage died (isolate evicted / AI burst
+  // failure) — re-triage this user's backlog now instead of waiting for the
+  // 10-min cron; per-isolate throttle keeps polling clients from stampeding
+  const stale = page.some(
+    (n) => n.category === null && Date.now() - Date.parse(`${n.created_at.replace(" ", "T")}Z`) > 60_000
+  );
+  if (stale && shouldKickRetriage(userId)) {
+    c.executionCtx.waitUntil(
+      capped(retriageUnsorted(c.env, 15, 25_000, userId), 30_000, `retriage kick user=${userId}`)
+    );
+  }
+
   const notes = await Promise.all(page.map((n) => noteToJsonDecrypted(c.env, n)));
   return c.json({ notes, next_cursor: next });
 });
+
+/** Per-isolate throttle for the GET /api/notes retriage kick (one per user per minute). */
+const lastRetriageKick = new Map<string, number>();
+function shouldKickRetriage(userId: string): boolean {
+  const now = Date.now();
+  const last = lastRetriageKick.get(userId) ?? 0;
+  if (now - last < 60_000) return false;
+  lastRetriageKick.set(userId, now);
+  if (lastRetriageKick.size > 1000) lastRetriageKick.clear();
+  return true;
+}
 
 /** 409 with the latest server copy so the client can refresh and re-apply the edit. */
 async function conflictResponse(c: Context<{ Bindings: Env; Variables: Vars }>, id: string) {
@@ -2103,26 +2146,6 @@ app.post("/api/ingest/media", async (c) => {
   return c.json({ note: noteToJson(note), text: content, transcribed: ok, reply }, 201);
 });
 
-/**
- * Build the /api/ask references array so that [n] citations in the answer map
- * to entries: each reference carries the exact `index` used in the answer
- * ([index] ↔ note id). Cited notes come first in citation order; when the
- * answer has no [n] citations, all recalled notes are returned with their
- * prompt indexes.
- */
-export function buildAskReferences(
-  answer: string,
-  noteIds: string[]
-): { index: number; note_id: string }[] {
-  const cited: number[] = [];
-  for (const m of answer.matchAll(/[\[［](\d{1,2})[\]］]/g)) {
-    const n = parseInt(m[1], 10);
-    if (n >= 1 && n <= noteIds.length && !cited.includes(n)) cited.push(n);
-  }
-  const order = cited.length > 0 ? cited : noteIds.map((_, i) => i + 1);
-  return order.map((n) => ({ index: n, note_id: noteIds[n - 1] }));
-}
-
 export type AskHistoryMessage = { role: "user" | "assistant"; content: string };
 
 const ASK_HISTORY_MAX_MESSAGES = 6; // 最近 3 轮
@@ -2274,6 +2297,11 @@ async function countSensitiveHits(env: Env, userId: string, terms: string[]): Pr
 // ---- POST /api/ask ----
 app.post("/api/ask", async (c) => {
   const userId = c.get("userId");
+  // ask is the most expensive authenticated endpoint (several LLM calls per
+  // question): a per-user cap bounds cost from a leaked token or runaway client
+  if (!(await checkRateLimit(c.env.DB, "ask", [userId], ASK_RATE_LIMIT_MAX))) {
+    return c.json({ error: "提问太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
   const body = await c.req.json<{ question?: string; history?: unknown; graph?: unknown }>().catch(() => null);
   const question = (body?.question ?? "").trim();
   if (!question) return c.json({ error: "question required" }, 400);
@@ -2452,9 +2480,10 @@ app.post("/api/ask", async (c) => {
     return c.json({ answer: noAnswer + sensitiveHintLine(sensitiveHits, terms), references, notes: refNotes, no_answer: true });
   }
   // semantic-only hits (never keyword-matched) below the citation threshold
-  // stay in the context but never surface as citations
+  // stay in the context but never surface as citations; the answer text and
+  // the references array are rewritten together so no [n] marker dangles
   const weakIds = new Set(extraIds.filter((id) => (semScore.get(id) ?? 0) < ASK_CITATION_MIN_SCORE));
-  const references = filterWeakReferences(buildAskReferences(answer ?? "", noteIds), weakIds);
+  const { answer: finalAnswer, references } = reconcileAskCitations(answer ?? "", noteIds, weakIds);
   const byId = new Map(notes.map((n) => [n.id, n]));
   const refNotes = await Promise.all(
     references.map((r) => noteToJsonDecrypted(c.env, byId.get(r.note_id)!))
@@ -2462,7 +2491,7 @@ app.post("/api/ask", async (c) => {
   if (!answer) {
     return c.json({ answer: "（AI 暂不可用）已找到相关记录，见 references。", references, notes: refNotes });
   }
-  return c.json({ answer, references, notes: refNotes });
+  return c.json({ answer: finalAnswer, references, notes: refNotes });
 });
 
 // ---- GET /api/threads ----
@@ -2849,11 +2878,10 @@ app.get("/api/export", async (c) => {
     c.env.DB.prepare("SELECT * FROM threads WHERE user_id = ? ORDER BY updated_at DESC").bind(userId).all<ThreadRow>(),
     c.env.DB.prepare("SELECT * FROM weekly_reports WHERE user_id = ? ORDER BY week_start DESC").bind(userId).all<WeeklyReportRow>(),
   ]);
-  // notes still waiting for AI triage may turn out sensitive: a default
-  // (redacted) export skips them and reports the count
-  const allNotes = notesR.results ?? [];
-  const exportable = includeSensitive ? allNotes : allNotes.filter((n) => n.category !== null || n.is_sensitive);
-  const pendingExcluded = allNotes.length - exportable.length;
+  // every note is exported, including ones still waiting for AI triage
+  // (category stays null; write-time sensitive pre-detection already flagged
+  // and encrypted anything the regex caught, so the redaction below covers them)
+  const exportable = notesR.results ?? [];
   const notes = await Promise.all(
     exportable.map((n) =>
       n.is_sensitive && !includeSensitive
@@ -2868,7 +2896,7 @@ app.get("/api/export", async (c) => {
 
   const format = c.req.query("format");
   if (format === "markdown" || format === "md") {
-    let md = `# 碎念全量导出（${new Date().toISOString().slice(0, 10)}）\n\n共 ${notes.length} 条笔记、${threads.length} 条线索、${reports.length} 份周报。${pendingExcluded > 0 ? `另有 ${pendingExcluded} 条待分拣笔记未包含（分拣完成后重新导出即可）。` : ""}\n\n## 笔记\n`;
+    let md = `# 碎念全量导出（${new Date().toISOString().slice(0, 10)}）\n\n共 ${notes.length} 条笔记、${threads.length} 条线索、${reports.length} 份周报。\n\n## 笔记\n`;
     for (const n of notes) {
       md += `\n### ${n.title || n.content.slice(0, 30)}\n- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${n.url ? ` | 链接：${n.url}` : ""}\n\n${n.content}\n`;
     }
@@ -2886,7 +2914,6 @@ app.get("/api/export", async (c) => {
     notes,
     threads,
     reports,
-    ...(pendingExcluded > 0 ? { pending_excluded: pendingExcluded } : {}),
   });
 });
 
@@ -2975,15 +3002,16 @@ async function retriageOne(
  * Each round pulls `limit` notes and triages them with bounded concurrency;
  * with a time budget it keeps draining rounds until the backlog is empty, the
  * budget is spent, or the AI stops responding — so a 3000-note import is
- * sorted within hours instead of weeks.
+ * sorted within hours instead of weeks. `userId` scopes the sweep to one
+ * user (the opportunistic kick from GET /api/notes).
  */
-export async function retriageUnsorted(env: Env, limit = 10, timeBudgetMs = 0): Promise<void> {
+export async function retriageUnsorted(env: Env, limit = 10, timeBudgetMs = 0, userId?: string): Promise<void> {
   const started = Date.now();
   for (;;) {
     const { results } = await env.DB.prepare(
-      "SELECT id, user_id, content, content_enc, created_at FROM notes WHERE (category IS NULL OR json_extract(meta, '$.needs_retriage') = 1) AND deleted_at IS NULL AND created_at < datetime('now', '-2 minutes') ORDER BY (category IS NULL) DESC, created_at ASC LIMIT ?"
+      `SELECT id, user_id, content, content_enc, created_at FROM notes WHERE (category IS NULL OR json_extract(meta, '$.needs_retriage') = 1) AND deleted_at IS NULL AND created_at < datetime('now', '-1 minutes')${userId ? " AND user_id = ?" : ""} ORDER BY (category IS NULL) DESC, created_at ASC LIMIT ?`
     )
-      .bind(limit)
+      .bind(...(userId ? [userId, limit] : [limit]))
       .all<{ id: string; user_id: string; content: string; content_enc: string | null; created_at: string }>();
     const rows = results ?? [];
     if (rows.length === 0) break;

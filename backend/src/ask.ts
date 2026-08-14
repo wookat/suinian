@@ -148,19 +148,51 @@ export function inTimeRange(createdAt: string, range: TimeRange): boolean {
 /** Cosine similarity below which a semantic-only recall hit is too weak to appear as a citation. */
 export const ASK_CITATION_MIN_SCORE = 0.55;
 
+const CITE_RE = /[\[［](\d{1,2})[\]］]/g;
+
 /**
- * Drop weakly-related semantic-only sources from the reference list: notes that
- * entered the context purely via low-score semantic recall (never matched a
- * keyword) shouldn't surface as citations. Keeps the full list when filtering
- * would leave the answer with no reference at all.
+ * Single source of truth for /api/ask citations: the answer text and the
+ * references array are rewritten together so every [n] marker left in the
+ * answer maps to exactly one returned reference card.
+ *
+ * - [n] markers cite the prompt snippet order (1-based over `noteIds`).
+ * - Weak semantic-only sources (low-score recall that never matched a keyword)
+ *   are dropped from the citations AND their markers removed from the text —
+ *   unless that would leave the answer with zero references.
+ * - Out-of-range markers (model hallucination) are removed from the text.
+ * - Surviving citations are renumbered 1..k in first-citation order, both in
+ *   the text and in the returned references.
+ * - With no [n] markers at all, all recalled notes (minus weak ones) are
+ *   returned as references so the client can still show sources.
  */
-export function filterWeakReferences(
-  references: { index: number; note_id: string }[],
+export function reconcileAskCitations(
+  answer: string,
+  noteIds: string[],
   weakIds: ReadonlySet<string>
-): { index: number; note_id: string }[] {
-  if (weakIds.size === 0) return references;
-  const kept = references.filter((r) => !weakIds.has(r.note_id));
-  return kept.length > 0 ? kept : references;
+): { answer: string; references: { index: number; note_id: string }[] } {
+  const cited: number[] = [];
+  for (const m of answer.matchAll(CITE_RE)) {
+    const n = parseInt(m[1], 10);
+    if (n >= 1 && n <= noteIds.length && !cited.includes(n)) cited.push(n);
+  }
+  if (cited.length === 0) {
+    const strong = noteIds.filter((id) => !weakIds.has(id));
+    const list = strong.length > 0 ? strong : noteIds;
+    // hallucinated out-of-range markers still get stripped from the text
+    const cleaned = answer.replace(CITE_RE, "");
+    return { answer: cleaned, references: list.map((id, i) => ({ index: i + 1, note_id: id })) };
+  }
+  let keep = cited.filter((n) => !weakIds.has(noteIds[n - 1]));
+  if (keep.length === 0) keep = cited;
+  const renumber = new Map(keep.map((n, i) => [n, i + 1] as const));
+  const rewritten = answer.replace(CITE_RE, (_marker, d: string) => {
+    const nn = renumber.get(parseInt(d, 10));
+    return nn ? `[${nn}]` : "";
+  });
+  return {
+    answer: rewritten,
+    references: keep.map((n) => ({ index: renumber.get(n)!, note_id: noteIds[n - 1] })),
+  };
 }
 
 /** The model's answer amounts to "没找到" (no [n] citations backing anything). */

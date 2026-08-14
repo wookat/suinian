@@ -171,7 +171,7 @@ describe("retriage sweep decrypts pre-encrypted pending notes", () => {
   });
 });
 
-// ---- backup: pending notes excluded from default (redacted) backups ----
+// ---- backup: pending notes always included (R106); sensitive redaction intact ----
 
 function backupEnv(rows: Row[]): Env {
   return { DB: fakeDb(rows), SUINIAN_ENC_KEY: KEY } as unknown as Env;
@@ -188,29 +188,42 @@ async function runBackup(rows: Row[], includeSensitive: boolean) {
   };
 }
 
-describe("backup skips pending (unsorted) notes by default", () => {
-  const PENDING = { ...BASE_NOTE, id: "p1", category: null, content: SECRET_CONTENT };
+describe("backup includes pending (unsorted) notes", () => {
+  const PENDING = { ...BASE_NOTE, id: "p1", category: null, content: "还没分拣的普通笔记" };
+  const PENDING_SENSITIVE = {
+    ...BASE_NOTE,
+    id: "p2",
+    category: null,
+    content: ENC_PLACEHOLDER,
+    content_enc: null as string | null,
+    is_sensitive: 1,
+  };
   const SORTED = { ...BASE_NOTE, id: "s1", content: "已分拣的普通笔记" };
 
-  it("default backup excludes pending notes and counts them in the manifest", async () => {
-    const { manifest, notes } = await runBackup([PENDING, SORTED], false);
-    expect(notes.map((n) => n.id)).toEqual(["s1"]);
+  it("default backup includes pending notes with category null", async () => {
+    const enc = await encryptContent(KEY, SECRET_CONTENT);
+    const { manifest, notes } = await runBackup([PENDING, { ...PENDING_SENSITIVE, content_enc: enc }, SORTED], false);
+    expect(notes.map((n) => n.id)).toEqual(["p1", "p2", "s1"]);
+    expect(notes[0].category).toBeNull();
+    expect(notes[0].content).toBe(PENDING.content);
+    // pre-encrypted pending note stays redacted in a default backup
     expect(JSON.stringify(notes)).not.toContain(SECRET_CONTENT);
-    expect(manifest.counts.notes).toBe(1);
-    expect(manifest.pending_excluded).toBe(1);
+    expect(manifest.counts.notes).toBe(3);
+    expect("pending_excluded" in manifest).toBe(false);
   });
 
-  it("explicit include_sensitive backup still contains pending notes", async () => {
-    const { manifest, notes } = await runBackup([PENDING, SORTED], true);
-    expect(notes.map((n) => n.id)).toEqual(["p1", "s1"]);
-    expect(manifest.pending_excluded).toBeUndefined();
+  it("include_sensitive backup decrypts the pre-encrypted pending note", async () => {
+    const enc = await encryptContent(KEY, SECRET_CONTENT);
+    const { notes } = await runBackup([PENDING, { ...PENDING_SENSITIVE, content_enc: enc }, SORTED], true);
+    expect(notes.map((n) => n.id)).toEqual(["p1", "p2", "s1"]);
+    expect(notes[1].content).toBe(SECRET_CONTENT);
   });
 });
 
 // ---- export: same pending policy as backup ----
 
-describe("/api/export skips pending notes by default", () => {
-  const PENDING = { ...BASE_NOTE, id: "p1", category: null, content: SECRET_CONTENT };
+describe("/api/export includes pending notes", () => {
+  const PENDING = { ...BASE_NOTE, id: "p1", category: null, content: "还没分拣的普通笔记" };
   const SORTED = { ...BASE_NOTE, id: "s1", content: "已分拣的普通笔记" };
 
   async function runExport(query: string) {
@@ -225,12 +238,12 @@ describe("/api/export skips pending notes by default", () => {
     );
   }
 
-  it("default export excludes pending notes and reports the count", async () => {
+  it("default export includes pending notes with category null", async () => {
     const res = await runExport("");
-    const body = (await res.json()) as { notes: { id: string }[]; pending_excluded?: number };
-    expect(body.notes.map((n) => n.id)).toEqual(["s1"]);
-    expect(JSON.stringify(body.notes)).not.toContain(SECRET_CONTENT);
-    expect(body.pending_excluded).toBe(1);
+    const body = (await res.json()) as { notes: { id: string; category: string | null }[]; pending_excluded?: number };
+    expect(body.notes.map((n) => n.id)).toEqual(["p1", "s1"]);
+    expect(body.notes[0].category).toBeNull();
+    expect(body.pending_excluded).toBeUndefined();
   });
 
   it("include_sensitive=true export contains pending notes", async () => {
@@ -240,11 +253,12 @@ describe("/api/export skips pending notes by default", () => {
     expect(body.pending_excluded).toBeUndefined();
   });
 
-  it("markdown export mentions the excluded pending count", async () => {
+  it("markdown export renders pending notes under 未分拣", async () => {
     const res = await runExport("?format=md");
     const md = await res.text();
-    expect(md).toContain("1 条待分拣笔记未包含");
-    expect(md).not.toContain(SECRET_CONTENT);
+    expect(md).toContain("共 2 条笔记");
+    expect(md).toContain("未分拣");
+    expect(md).not.toContain("待分拣笔记未包含");
   });
 });
 

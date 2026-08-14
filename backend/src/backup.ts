@@ -66,8 +66,6 @@ export interface BackupManifest {
   exported_at: string;
   include_sensitive: boolean;
   counts: { notes: number; threads: number; reports: number; attachments: number };
-  /** Notes still waiting for AI triage that were left out of a default (redacted) backup. */
-  pending_excluded?: number;
 }
 
 function safeParse<T>(raw: string | null): T | null {
@@ -121,14 +119,11 @@ export async function buildBackupZip(
   const threadTitle = new Map(threads.map((t) => [t.id, t.title]));
   const backupNotes: BackupNote[] = [];
   const mediaEntries: { path: string; r2_key: string }[] = [];
-  let pendingExcluded = 0;
+  // every note goes into the backup, including ones still waiting for AI
+  // triage (category stays null and gets sorted after restore); write-time
+  // sensitive pre-detection already flagged/encrypted what the regex caught,
+  // so the redaction below covers pending notes too
   for (const n of notes) {
-    // notes still waiting for AI triage may turn out sensitive: a default
-    // (redacted) backup skips them and reports the count in the manifest
-    if (!includeSensitive && n.category === null && !n.is_sensitive) {
-      pendingExcluded++;
-      continue;
-    }
     let content = n.content;
     let title = n.title;
     let tags = safeParse<string[]>(n.tags) ?? [];
@@ -183,7 +178,6 @@ export async function buildBackupZip(
     exported_at: new Date().toISOString(),
     include_sensitive: includeSensitive,
     counts: { notes: backupNotes.length, threads: threads.length, reports: reports.length, attachments: mediaEntries.length },
-    ...(pendingExcluded > 0 ? { pending_excluded: pendingExcluded } : {}),
   };
 
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();

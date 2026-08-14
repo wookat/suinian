@@ -427,7 +427,7 @@ export function NoteCard({
               onCheckedChange={() => onSelectToggle?.(note)}
               onClick={(e) => e.stopPropagation()}
               aria-label={selected ? "取消选择" : "选择这条笔记"}
-              className="mr-0.5"
+              className="mr-0.5 size-5 sm:size-4"
             />
           )}
           {pending ? (
@@ -564,7 +564,7 @@ export function NoteCard({
             checked={done}
             onCheckedChange={() => onToggleTodo?.(note)}
             aria-label={done ? "标记为未完成" : "标记为完成"}
-            className="mt-0.5"
+            className="mt-0.5 size-5 sm:size-4"
           />
         )}
         {editing ? (

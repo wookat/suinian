@@ -1,59 +1,68 @@
 import { describe, it, expect } from "vitest";
-import { buildAskReferences } from "../src/index";
-import { filterWeakReferences } from "../src/ask";
+import { reconcileAskCitations } from "../src/ask";
 
 const ids = ["n1", "n2", "n3", "n4", "n5"];
+const none = new Set<string>();
 
-describe("buildAskReferences", () => {
-  it("maps [n] citations to note ids with matching index, in citation order", () => {
-    const refs = buildAskReferences("先看 [3]，再看 [1]，[3] 里也提到", ids);
-    expect(refs).toEqual([
-      { index: 3, note_id: "n3" },
-      { index: 1, note_id: "n1" },
+describe("reconcileAskCitations", () => {
+  it("maps [n] citations to note ids, renumbered 1..k in citation order", () => {
+    const { answer, references } = reconcileAskCitations("先看 [3]，再看 [1]，[3] 里也提到", ids, none);
+    expect(answer).toBe("先看 [1]，再看 [2]，[1] 里也提到");
+    expect(references).toEqual([
+      { index: 1, note_id: "n3" },
+      { index: 2, note_id: "n1" },
     ]);
   });
 
-  it("supports full-width brackets", () => {
-    expect(buildAskReferences("见［2］", ids)).toEqual([{ index: 2, note_id: "n2" }]);
+  it("normalizes full-width brackets", () => {
+    const { answer, references } = reconcileAskCitations("见［2］", ids, none);
+    expect(answer).toBe("见[1]");
+    expect(references).toEqual([{ index: 1, note_id: "n2" }]);
   });
 
-  it("ignores out-of-range citations", () => {
-    const refs = buildAskReferences("见 [7] 和 [2]", ids);
-    expect(refs).toEqual([{ index: 2, note_id: "n2" }]);
+  it("strips out-of-range (hallucinated) citations from the text", () => {
+    const { answer, references } = reconcileAskCitations("见 [7] 和 [2]", ids, none);
+    expect(answer).toBe("见  和 [1]");
+    expect(references).toEqual([{ index: 1, note_id: "n2" }]);
   });
 
-  it("falls back to all recalled notes with prompt indexes when nothing is cited", () => {
-    const refs = buildAskReferences("没找到相关笔记。", ["a", "b"]);
-    expect(refs).toEqual([
+  it("drops weak-source citations and removes their markers", () => {
+    const { answer, references } = reconcileAskCitations("[1] 和 [2] 以及 [3]", ids, new Set(["n2"]));
+    expect(answer).toBe("[1] 和  以及 [2]");
+    expect(references).toEqual([
+      { index: 1, note_id: "n1" },
+      { index: 2, note_id: "n3" },
+    ]);
+  });
+
+  it("keeps all citations rather than leaving an answer with zero references", () => {
+    const { answer, references } = reconcileAskCitations("见 [1]", ids, new Set(["n1"]));
+    expect(answer).toBe("见 [1]");
+    expect(references).toEqual([{ index: 1, note_id: "n1" }]);
+  });
+
+  it("falls back to all recalled notes when nothing is cited", () => {
+    const { answer, references } = reconcileAskCitations("没找到相关笔记。", ["a", "b"], none);
+    expect(answer).toBe("没找到相关笔记。");
+    expect(references).toEqual([
       { index: 1, note_id: "a" },
       { index: 2, note_id: "b" },
     ]);
   });
 
+  it("fallback excludes weak-only sources", () => {
+    const { references } = reconcileAskCitations("没找到。", ["a", "b"], new Set(["b"]));
+    expect(references).toEqual([{ index: 1, note_id: "a" }]);
+  });
+
   it("returns empty for empty recall", () => {
-    expect(buildAskReferences("", [])).toEqual([]);
-  });
-});
-
-describe("filterWeakReferences", () => {
-  const refs = [
-    { index: 1, note_id: "n1" },
-    { index: 2, note_id: "n2" },
-    { index: 3, note_id: "n3" },
-  ];
-
-  it("drops references whose note is a weak semantic-only hit", () => {
-    expect(filterWeakReferences(refs, new Set(["n2"]))).toEqual([
-      { index: 1, note_id: "n1" },
-      { index: 3, note_id: "n3" },
-    ]);
+    expect(reconcileAskCitations("", [], none)).toEqual({ answer: "", references: [] });
   });
 
-  it("returns references untouched when no weak ids", () => {
-    expect(filterWeakReferences(refs, new Set())).toEqual(refs);
-  });
-
-  it("keeps the full list rather than leaving an answer with zero references", () => {
-    expect(filterWeakReferences(refs, new Set(["n1", "n2", "n3"]))).toEqual(refs);
+  it("every marker left in the answer has a matching reference card", () => {
+    const { answer, references } = reconcileAskCitations("综合 [2][5]，另见 [9] 与 [4]", ids, new Set(["n5"]));
+    const markers = [...answer.matchAll(/[\[［](\d{1,2})[\]］]/g)].map((m) => parseInt(m[1], 10));
+    const refIndexes = references.map((r) => r.index);
+    expect(new Set(markers)).toEqual(new Set(refIndexes));
   });
 });
