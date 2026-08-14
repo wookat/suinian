@@ -28,12 +28,20 @@ let token = process.env.SUINIAN_TOKEN ?? "";
 let createdAccount = false;
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...init?.headers },
-  });
-  if (!res.ok) throw new Error(`${init?.method ?? "GET"} ${path} -> ${res.status} ${await res.text()}`);
-  return res.json() as Promise<T>;
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${API}${path}`, {
+      ...init,
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...init?.headers },
+    });
+    if (res.status === 429 && attempt < 3) {
+      const wait = 65_000 * (attempt + 1);
+      console.log(`  429 rate-limited on ${path}, retrying in ${wait / 1000}s...`);
+      await sleep(wait);
+      continue;
+    }
+    if (!res.ok) throw new Error(`${init?.method ?? "GET"} ${path} -> ${res.status} ${await res.text()}`);
+    return res.json() as Promise<T>;
+  }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
