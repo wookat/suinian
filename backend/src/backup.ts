@@ -3,7 +3,8 @@
 // restore path (dedup, media re-upload, background pipeline backfill).
 import { Zip, ZipDeflate, ZipPassThrough, Unzip, UnzipInflate, strToU8, strFromU8 } from "fflate";
 import type { Env, NoteMeta, NoteRow, ThreadRow, WeeklyReportRow } from "./types";
-import { decryptContent, encryptContent, ENC_PLACEHOLDER } from "./crypto";
+import { decryptContent, ENC_PLACEHOLDER } from "./crypto";
+import { sensitiveIngestGate } from "./ingest";
 import { backfillEmbeddings } from "./semantic";
 import { backfillGraphExtracts } from "./graph";
 import { clusterNote } from "./threads";
@@ -445,19 +446,18 @@ export async function restoreBackup(
         for (const a of n.attachments ?? []) {
           if (a && typeof a.path === "string") attByPath.set(a.path, { oldNoteId: n.id, att: a });
         }
-        let content = n.content;
-        let contentEnc: string | null = null;
-        const sensitive = n.is_sensitive === true;
-        // re-encrypt plaintext sensitive content at rest (redacted placeholders stay as-is)
-        if (sensitive && content !== SENSITIVE_EXPORT_PLACEHOLDER && env.SUINIAN_ENC_KEY) {
-          try {
-            contentEnc = await encryptContent(env.SUINIAN_ENC_KEY, content);
-            content = ENC_PLACEHOLDER;
-          } catch {
-            contentEnc = null;
-          }
-        }
-        const meta = sanitizeMetaForRestore(typeof n.meta === "object" ? n.meta : null);
+        // 恢复入库与其它入口走同一敏感管道（R122 P1-1）：不再信任备份文件里的
+        // is_sensitive 定论——外来/篡改的 zip 可以带着明文密码 + is_sensitive:false
+        // + 既定 category 绕过整个敏感体系。疑似命中标 needs_retriage 交 cron 复判。
+        const gated = await sensitiveIngestGate(env, {
+          content: n.content,
+          title: typeof n.title === "string" ? n.title : null,
+          tags: Array.isArray(n.tags) ? n.tags.filter((t): t is string => typeof t === "string").slice(0, 6) : [],
+          is_sensitive: n.is_sensitive === true,
+        });
+        const { content, content_enc: contentEnc } = gated;
+        const meta0 = sanitizeMetaForRestore(typeof n.meta === "object" ? n.meta : null);
+        const meta = gated.needs_retriage ? { ...(meta0 ?? {}), needs_retriage: true } : meta0;
         stmts.push(
           insert.bind(
             newId,
@@ -470,9 +470,9 @@ export async function restoreBackup(
             typeof n.url_summary === "string" ? n.url_summary : null,
             typeof n.url_titles === "string" ? n.url_titles : null,
             typeof n.category === "string" ? n.category : null,
-            JSON.stringify(Array.isArray(n.tags) ? n.tags.slice(0, 6) : []),
-            typeof n.title === "string" ? n.title : null,
-            sensitive ? 1 : 0,
+            JSON.stringify(gated.tags),
+            gated.title,
+            gated.is_sensitive ? 1 : 0,
             contentEnc,
             typeof n.todo_due === "string" ? n.todo_due : null,
             n.todo_done === true ? 1 : 0,

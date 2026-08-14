@@ -111,7 +111,6 @@ const CASES: EvalCase[] = [
   { content: `${PREFIX} 吉他课今天交了下半月学费 400 元`, category: "expense", amount: 400, currency: "CNY" },
   { content: `${PREFIX} 付了这个月房租 2600`, category: "expense", amount: 2600, currency: "CNY" },
   { content: `${PREFIX} 给车充电花了 58 块`, category: "expense", amount: 58, currency: "CNY" },
-  { content: `${PREFIX} 还了信用卡 3000`, category: "expense", amount: 3000, currency: "CNY" },
   { content: `${PREFIX} 物业费缴了 1800`, category: "expense", amount: 1800, currency: "CNY" },
   { content: `${PREFIX} 闲鱼卖了旧显示器 350 元`, category: "income", amount: 350, currency: "CNY" },
   { content: `${PREFIX} 上月报销的差旅费 800 到账了`, category: "income", amount: 800, currency: "CNY" },
@@ -128,8 +127,14 @@ const CASES: EvalCase[] = [
   { content: `${PREFIX} 微信零钱提现 2000 到银行卡`, category: "transfer", amount: 2000, currency: "CNY" },
   { content: `${PREFIX} 转了 5000 到余额宝`, category: "transfer", amount: 5000, currency: "CNY" },
   { content: `${PREFIX} 跟老妈借了 3000 周转`, category: "transfer", amount: 3000, currency: "CNY" },
-  // 反例：还信用卡是真实支出，不是平移
-  // （已有「还了信用卡 3000」→ expense 语料在上方 R118 组）
+  // R122 P1-2：借还第三态——归还入账/出账与押金退回都是 transfer，不是收支
+  { content: `${PREFIX} 表弟把上次借的 1500 还给我了`, category: "transfer", amount: 1500, currency: "CNY" },
+  { content: `${PREFIX} 房东退了押金 3500 到我微信`, category: "transfer", amount: 3500, currency: "CNY" },
+  { content: `${PREFIX} 上次借小王的 1000 今天还给他了`, category: "transfer", amount: 1000, currency: "CNY" },
+  // R122 D1：消费信贷还款是清偿负债的平移（刷卡时已记 expense）
+  { content: `${PREFIX} 还了信用卡 3000`, category: "transfer", amount: 3000, currency: "CNY" },
+  { content: `${PREFIX} 花呗上月账单自动扣了 2680`, category: "transfer", amount: 2680, currency: "CNY" },
+  // 反例：商家退货退款仍是 income（不被借还/押金规则误伤，语料见上方 R118 组退款条）
   // R120 P2：AA 净额——记自己实际承担的份额，不是垫付总额
   { content: `${PREFIX} 晚饭 AA 一共 480，四个人平摊，我先垫付了`, category: "expense", amount: 120, currency: "CNY" },
   // R120 P2：已敲定的决定是记录不是待办

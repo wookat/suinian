@@ -134,6 +134,7 @@ private val categories = listOf(
     "data" to "资料",
     "expense" to "支出",
     "income" to "收入",
+    "transfer" to "资金往来",
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

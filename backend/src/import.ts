@@ -1,5 +1,6 @@
 // Import pipeline: parse Cubox / flomo / Markdown / plain-text export files
 // into normalized note items (content + original created time + tags + url).
+import { sensitiveIngestGate } from "./ingest";
 
 export interface ImportAsset {
   name: string;
@@ -379,7 +380,7 @@ function itemHead(item: ImportItem): string {
  * R2 and recorded in attachments.
  */
 export async function runImport(
-  env: { DB: D1Database; MEDIA?: R2Bucket },
+  env: { DB: D1Database; MEDIA?: R2Bucket; SUINIAN_ENC_KEY?: string },
   userId: string,
   source: ImportSource,
   items: ImportItem[],
@@ -402,8 +403,8 @@ export async function runImport(
       const stmts: D1PreparedStatement[] = [];
       const inserted: { id: string; item: ImportItem }[] = [];
       const insert = db.prepare(
-        `INSERT INTO notes (id, user_id, source, raw_type, content, url, category, tags, meta, created_at, updated_at)
-         VALUES (?, ?, 'import', ?, ?, ?, NULL, ?, ?, ?, ?)`
+        `INSERT INTO notes (id, user_id, source, raw_type, content, url, category, tags, title, is_sensitive, content_enc, meta, created_at, updated_at)
+         VALUES (?, ?, 'import', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const item of chunk) {
         const createdAt = item.created_at ?? toUtcSql(new Date())!;
@@ -420,7 +421,15 @@ export async function runImport(
           // measure from when the note actually entered the queue
           imported_at: new Date().toISOString(),
         };
-        if (item.tags.length > 0) meta.import_tags = item.tags;
+        // 导入入库走写入层统一敏感管道（R122 P1-1）：疑似含密的历史笔记
+        // 同样 fail-closed 先加密，后续 cron 分拣复判（category 为 NULL 本就待分拣）
+        const gated = await sensitiveIngestGate(env, {
+          content: item.content,
+          title: null,
+          tags: item.tags,
+          is_sensitive: false,
+        });
+        if (item.tags.length > 0) meta.import_tags = gated.is_sensitive ? gated.tags : item.tags;
         const id = crypto.randomUUID();
         inserted.push({ id, item });
         stmts.push(
@@ -428,9 +437,12 @@ export async function runImport(
             id,
             userId,
             item.url && item.content.startsWith(item.url) ? "link" : "text",
-            item.content,
+            gated.content,
             item.url,
-            JSON.stringify(item.tags),
+            JSON.stringify(gated.tags),
+            gated.title,
+            gated.is_sensitive ? 1 : 0,
+            gated.content_enc,
             JSON.stringify(meta),
             createdAt,
             createdAt

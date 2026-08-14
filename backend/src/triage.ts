@@ -120,12 +120,11 @@ export function buildTriagePrompt(
   - "data"：需要保存备查的资料/参考信息/流程说明/密码/账号/号码，重点是“查”而不是“做”
   - "expense"：记录一笔已发生的花钱/消费/付款（买了/花了/付了/充了）
   - "income"：记录一笔已到账的收入（工资/报销到账/卖了/收到转账）
-  - "transfer"：资金平移，钱没有真正花掉也不是新收入——自己账户之间转账/提现/存入（微信零钱提现到银行卡、转 5000 到理财）、借入借出与还给自己的往来（跟朋友借了 2000、朋友还我之前借的钱按借还语境判 transfer）。这类不计入收支合计
+  - "transfer"：资金平移，钱没有真正花掉也不是新收入——自己账户之间转账/提现/存入（微信零钱提现到银行卡、转 5000 到理财）、借入借出与借还往来（跟朋友借了 2000、别人把借我的钱还给我、我把借来的钱还给别人，都按借还语境判 transfer）、押金交退（押金退回是拿回自己的钱，不是收入）、信用卡/花呗/白条/分期等负债还款（消费已在刷卡时记过账，清偿负债是平移不是当期消费）。这类不计入收支合计
   注意：“要去买/记得交钱”是尚未发生的动作→ todo，不是 expense；只讨论价格而非记账（如“这个耳机卖 299”）→ 按内容归 idea/collect/data
   收支方向（expense/income 二选一时先判钱的流向，绝不能标反）：钱从用户手里出去＝expense——「交/缴/付/花/买/充/续/还」＋金额一律是花钱，即使句中出现“学费/会费/房租”等收费名词也是用户在付钱；钱进用户手里＝income——「到账/收到/入账/进账/卖了/退款/报销到账/发工资/给我转」。方向判例：
   - 「吉他课今天交了下半月学费 400 元」→ expense，amount=400（交学费是用户付钱，绝不是收入）
   - 「付了这个月房租 2600」→ expense
-  - 「还了信用卡 3000」→ expense（还款是钱出去）
   - 「闲鱼卖了旧显示器 350 元」→ income（卖出收钱）
   - 「上月报销的差旅费 800 到账了」→ income
   - 「学生给我交了补课费 300」→ income（别人交钱给我）
@@ -133,7 +132,12 @@ export function buildTriagePrompt(
   - 「微信零钱提现 2000 到银行卡」→ transfer，amount=2000（自己账户间平移）
   - 「转了 5000 到余额宝」→ transfer（不是支出）
   - 「跟老妈借了 3000 周转」→ transfer（借入不是收入）
-  - 「还了信用卡 3000」仍是 expense（还款是钱出去给银行清偿消费）
+  - 「表弟把上次借的 1500 还给我了」→ transfer（收回借出的钱，不是新收入）
+  - 「房东退了押金 3500 到我微信」→ transfer（押金退回是拿回自己的钱，不是 income；区别于买东西退货退款）
+  - 「上次借小王的 1000 今天还给他了」→ transfer（归还借款，不是新消费）
+  - 「还了信用卡 3000」→ transfer（刷卡消费当时已记 expense，还款是清偿负债的平移，再记 expense 会重复）
+  - 「花呗上月账单自动扣了 2680」→ transfer（同上，负债还款）
+  注意区分：商家退货退款（「退款 99 到账」）仍是 income 冲抵消费；只有借还/押金/负债还款这类「拿回或归还本就属于某方的钱」才是 transfer
   AA/平摊判例：amount 记用户自己实际承担的净额——「晚饭 AA 一共 480，四个人平摊，我先垫付了」→ expense，amount=120（480÷4，垫付会收回的部分不算自己的支出）；平摊人数不明确时 amount=null，绝不要把垫付总额记成自己的支出
   判例：
   - 「公司报销流程：先在 OA 提单，再贴发票给财务」→ data（流程性参考，无待办动作）
@@ -289,12 +293,30 @@ const INCOME_DIRECTION_RE =
 const INTERNAL_TRANSFER_RE =
   /提现|(?:转|存)(?:了|入|到|进)?\s*[^，。;；\n]{0,10}?(?:银行卡|储蓄卡|余额宝|零钱通?|理财|定期|活期|基金账户|证券账户|自己的?[^，。;；\n]{0,4}(?:卡|账户))/;
 const BORROW_IN_RE = /(?:跟|向|从|找)\s*[^，。;；\n]{0,8}?借(?:了|到|来)/;
+// 借还第三态（R122 P1-2）：归还入账（别人把借我的钱还给我）、归还出账（我把
+// 借来的钱还回去）与押金退回都是拿回/归还本就属于某方的钱，记 income/expense
+// 会污染收支合计。归还动词必须与借/垫/押金语境同现才改判，避免误伤普通
+// 退货退款（仍是 income）与「还给他买了礼物」这类非借还句。
+const RETURN_VERB_RE = /还给|还了我|还我|还回来|转回来|退回来/;
+const BORROW_CONTEXT_RE = /借|垫付|垫的|押金/;
+const DEPOSIT_REFUND_RE = /押金[^，。;；\n]{0,8}(?:退|返)|退(?:了|还|回)?[^，。;；\n]{0,8}押金/;
+// 负债还款（R122 D1）：信用卡/花呗/白条/借呗/分期还款——消费已在刷卡时记账，
+// 清偿负债再记 expense 会重复计入支出合计。
+const DEBT_REPAY_RE =
+  /(?:信用卡|花呗|白条|借呗|分期)[^，。;；\n]{0,6}(?:还款|还清|还上|扣款|扣了|还了)|还(?:了|款|清|上|掉)?[^，。;；\n]{0,4}(?:信用卡|花呗|白条|借呗)(?:账单|欠款|的钱)?/;
 
 /** Deterministic backstop: reclassify obvious money-movement notes
- * (withdrawals / own-account transfers / borrowing) as transfer. */
+ * (withdrawals / own-account transfers / borrowing / loan repayment in either
+ * direction / deposit refunds / debt repayment) as transfer. */
 export function fixTransferMisfile(content: string, triage: TriageResult): TriageResult {
   if (triage.category !== "expense" && triage.category !== "income") return triage;
   if (INTERNAL_TRANSFER_RE.test(content) || BORROW_IN_RE.test(content)) {
+    return { ...triage, category: "transfer" };
+  }
+  if (DEPOSIT_REFUND_RE.test(content) || DEBT_REPAY_RE.test(content)) {
+    return { ...triage, category: "transfer" };
+  }
+  if (RETURN_VERB_RE.test(content) && BORROW_CONTEXT_RE.test(content)) {
     return { ...triage, category: "transfer" };
   }
   return triage;

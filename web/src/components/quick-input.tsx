@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Send, Loader2, Paperclip, Sparkles, Lock, Tag } from "lucide-react"
+import { Send, Loader2, Paperclip, Sparkles, Lock, Tag, CloudOff } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
-import { ApiError, createNote, ingestMedia, MAX_MEDIA_BYTES, SUPPORTED_FILE_EXTS } from "@/lib/api"
+import { ApiError, NetworkError, createNote, ingestMedia, MAX_MEDIA_BYTES, SUPPORTED_FILE_EXTS } from "@/lib/api"
+import { enqueueNote, flushOutbox, onOutboxCount, onOutboxFlushed, startOutboxAutoFlush } from "@/lib/outbox"
+import { loadSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import type { Note } from "@/lib/types"
 
@@ -58,12 +60,26 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
   const saving = savingCount > 0
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pendingSync, setPendingSync] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     saveDraft(value)
   }, [value])
+
+  // 离线队列（R122 P1-3）：启动时重放存量 + 监听 online 自动重放；
+  // 重放成功的笔记和待同步条数都回到本组件展示
+  useEffect(() => {
+    startOutboxAutoFlush()
+    const offCount = onOutboxCount(setPendingSync)
+    const offFlushed = onOutboxFlushed(onCreated)
+    return () => {
+      offCount()
+      offFlushed()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const length = value.length
   const overLimit = length > MAX_CONTENT_CHARS
@@ -94,6 +110,20 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
             : await createNote({ source: "web", raw_type: "text", content })
       onCreated(note)
     } catch (e) {
+      // 网络失败（离线/超时）：进 IndexedDB 离线队列，联网后自动补发，
+      // 多条离线速记全部保住；入队失败才退回输入框兕底
+      if (e instanceof NetworkError && !loadSettings().useMock) {
+        const payload =
+          cmd?.kind === "raw"
+            ? { source: "web" as const, raw_type: "text" as const, content: cmd.content, skip_triage: true }
+            : cmd?.kind === "tags" && cmd.content
+              ? { source: "web" as const, raw_type: "text" as const, content: cmd.content, tags: cmd.tags }
+              : { source: "web" as const, raw_type: "text" as const, content }
+        if (await enqueueNote(payload)) {
+          setError(null)
+          return
+        }
+      }
       // 保存失败：把内容退回输入框，不丢一个字
       setValue((v) => (v.trim() ? `${content}\n${v}` : content))
       if (e instanceof ApiError && e.status === 413) {
@@ -239,6 +269,15 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
         </p>
       )}
       {error && !overLimit && <p className="mt-1 text-xs text-destructive">{error}</p>}
+      {pendingSync > 0 && (
+        <button
+          onClick={() => void flushOutbox()}
+          className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          title="点击立即重试同步"
+        >
+          <CloudOff className="size-3.5" /> {pendingSync} 条离线速记待同步，联网后自动补发
+        </button>
+      )}
     </div>
   )
 }

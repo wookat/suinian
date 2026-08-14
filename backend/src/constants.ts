@@ -14,8 +14,19 @@ export const PIPELINE_TIMEOUT_MS = 60_000;
 
 export const SENSITIVE_EXPORT_PLACEHOLDER = "[已加密内容]";
 
-/** Per-user per-minute cap on POST /api/notes: bounds AI-quota abuse from a leaked token. */
+/**
+ * Per-user per-minute cap on single-note ingestion (速记/微信/媒体，MCP/扩展/
+ * Android 都经 /api/notes)：bounds AI-quota abuse from a leaked token. R122 P1-5：
+ * 同一限额覆盖所有触发 AI 入库管线的单笔入口，不再只限 POST /api/notes。
+ */
 export const NOTE_WRITE_RATE_LIMIT_MAX = 60;
+
+/**
+ * Per-user per-minute cap on bulk ingestion operations (导入/备份恢复)。按次而
+ * 非按笔限：单次合法导入可含数千笔（后台 cron 分批消化 AI 管线），按笔计费会
+ * 误伤正常迁移；按次限频已能封住泄露 token 的批量灌库滥用。
+ */
+export const BULK_INGEST_RATE_LIMIT_MAX = 3;
 
 /** Retention window (最近删除) before a soft-deleted note is hard-deleted by the cron sweep. */
 export const SOFT_DELETE_RETENTION_DAYS = 30;

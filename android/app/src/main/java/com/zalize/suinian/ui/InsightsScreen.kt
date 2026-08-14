@@ -61,6 +61,7 @@ private val CATEGORY_LABEL = mapOf(
     "data" to "资料",
     "expense" to "支出",
     "income" to "收入",
+    "transfer" to "资金往来",
     "pending" to "待分拣",
 )
 
