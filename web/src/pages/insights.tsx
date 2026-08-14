@@ -16,6 +16,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   data: "资料",
   expense: "支出",
   income: "收入",
+  transfer: "资金往来",
   pending: "待分拣",
 }
 

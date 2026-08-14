@@ -1,7 +1,7 @@
 import type { Category, Env, TriageResult } from "./types";
 import { chatComplete } from "./ai";
 
-const CATEGORIES: Category[] = ["idea", "todo", "collect", "data", "expense", "income"];
+const CATEGORIES: Category[] = ["idea", "todo", "collect", "data", "expense", "income", "transfer"];
 
 export const FALLBACK_TRIAGE: TriageResult = {
   category: "idea",
@@ -113,13 +113,14 @@ export function buildTriagePrompt(
     ? `\n用户已有标签（仅当内容确实属于该标签主题时才复用；不相关时宁可新造贴切标签，绝不要硬套已有标签）：${existingTags.slice(0, 50).join("、")}`
     : "";
   return `你是「碎念」笔记分拣助手。今天是 ${iso}（${weekday}），用户时区 ${tz}（UTC${off}）。相对日期一律基于今天换算，例如：「明天」= ${tomorrow.iso}（${tomorrow.weekday}）；「下周一」= ${nextMon.iso}（下一个周一，注意不是周二）。用户会丢来一条碎片信息，你输出严格 JSON（不要 markdown 代码块），字段：
-- category，六选一：
+- category，七选一：
   - "idea"：自己的想法/思考/灵感/感受，既不需要去做，也不是外部资源
   - "todo"：需要用户去做的事，通常有动作（买/交/回/约/换/提醒我）；没写时间也可以是待办
   - "collect"：收藏的外部链接/文章/视频/资源，内容以 URL 或“稍后看”为主
   - "data"：需要保存备查的资料/参考信息/流程说明/密码/账号/号码，重点是“查”而不是“做”
   - "expense"：记录一笔已发生的花钱/消费/付款（买了/花了/付了/充了）
   - "income"：记录一笔已到账的收入（工资/报销到账/卖了/收到转账）
+  - "transfer"：资金平移，钱没有真正花掉也不是新收入——自己账户之间转账/提现/存入（微信零钱提现到银行卡、转 5000 到理财）、借入借出与还给自己的往来（跟朋友借了 2000、朋友还我之前借的钱按借还语境判 transfer）。这类不计入收支合计
   注意：“要去买/记得交钱”是尚未发生的动作→ todo，不是 expense；只讨论价格而非记账（如“这个耳机卖 299”）→ 按内容归 idea/collect/data
   收支方向（expense/income 二选一时先判钱的流向，绝不能标反）：钱从用户手里出去＝expense——「交/缴/付/花/买/充/续/还」＋金额一律是花钱，即使句中出现“学费/会费/房租”等收费名词也是用户在付钱；钱进用户手里＝income——「到账/收到/入账/进账/卖了/退款/报销到账/发工资/给我转」。方向判例：
   - 「吉他课今天交了下半月学费 400 元」→ expense，amount=400（交学费是用户付钱，绝不是收入）
@@ -128,6 +129,12 @@ export function buildTriagePrompt(
   - 「闲鱼卖了旧显示器 350 元」→ income（卖出收钱）
   - 「上月报销的差旅费 800 到账了」→ income
   - 「学生给我交了补课费 300」→ income（别人交钱给我）
+  资金平移判例（transfer，不是 expense/income）：
+  - 「微信零钱提现 2000 到银行卡」→ transfer，amount=2000（自己账户间平移）
+  - 「转了 5000 到余额宝」→ transfer（不是支出）
+  - 「跟老妈借了 3000 周转」→ transfer（借入不是收入）
+  - 「还了信用卡 3000」仍是 expense（还款是钱出去给银行清偿消费）
+  AA/平摊判例：amount 记用户自己实际承担的净额——「晚饭 AA 一共 480，四个人平摊，我先垫付了」→ expense，amount=120（480÷4，垫付会收回的部分不算自己的支出）；平摊人数不明确时 amount=null，绝不要把垫付总额记成自己的支出
   判例：
   - 「公司报销流程：先在 OA 提单，再贴发票给财务」→ data（流程性参考，无待办动作）
   - 「9月1号起各部门预算表改用新模板」→ data（带日期的说明仍是资料，不是待办）
@@ -148,6 +155,7 @@ export function buildTriagePrompt(
   - 「Android 内测包搞定了，比计划提前一天」→ idea（完成宣告，不是新待办）
   - 「闲鱼挂出了显示器，350 出」→ idea（已完成的动作记录，不是待办）
   - 「季度报告初稿写完了」→ idea（完成宣告）
+  - 「公众号选题定了：只写三篇论文精读」→ idea（已做出的决定记录，不是待办）
   注意：知识性/技术性内容（讲解概念、原理、方法，日后可备查，如密码学/协议/算法/流程的讲解）→ data，即使开头写着「读书笔记/学习笔记」；只有以个人感想/启发/心情为主的读后感才是 idea。记录某个具体值（密码/号码/地址）供备查的内容 → data，句尾附带的「告诉某人」不改变其资料性质。判例：
   - 「读书笔记：《密码学与网络安全》讲 TLS 握手时用非对称加密交换会话密钥」→ data（知识备查，无个人感想）
   - 「Python 密码学入门笔记：哈希函数不可逆，适合存密码摘要」→ data（技术知识）
@@ -164,9 +172,9 @@ export function buildTriagePrompt(
   - 「JWT token 的刷新机制：access token 短效期，refresh token 长效期」→ false（只讨论概念，无具体值）
   - 「配置 API key 的步骤：在控制台生成 key 后写入环境变量」→ false（教程，无具体值）
   - 「curl -H "Authorization: Bearer <token>" 调用接口」→ false（占位符不是真实机密）
-- amount: 仅 expense/income 时输出的金额数字（不带单位，如 23 或 12.5）；内容里没有明确金额时必须为 null，绝不要猜测。其它类别一律 null
-- currency: 仅 expense/income 且 amount 非 null 时输出 ISO 4217 代码（人民币/块/元默认 "CNY"，美元 "USD"），否则 null
-- merchant: 仅 expense/income 时输出的商家或用途短语（<=12字），推断不出则 null
+- amount: 仅 expense/income/transfer 时输出的金额数字（不带单位，如 23 或 12.5）；内容里没有明确金额时必须为 null，绝不要猜测。其它类别一律 null
+- currency: 仅 expense/income/transfer 且 amount 非 null 时输出 ISO 4217 代码（人民币/块/元默认 "CNY"，美元 "USD"），否则 null
+- merchant: 仅 expense/income/transfer 时输出的商家或用途短语（<=12字），推断不出则 null
 - todo_due: 若是待办且能推断截止时间，基于上面给出的今天日期与星期换算（如"周五之前"= 从今天起最近的周五）。内容中有具体时刻（如"下午三点半""晚上8点"）时输出带时刻和时区偏移的 ISO 8601 "YYYY-MM-DDTHH:mm:00${off}"（24 小时制，时刻按用户时区 ${tz} 理解，偏移固定写 ${off}，如 "${tomorrow.iso}T15:30:00${off}"）；只有日期没有时刻时仅输出 "YYYY-MM-DD"；无法推断则 null。绝不要输出早于今天的日期
 ${
     corrections.length
@@ -224,6 +232,16 @@ export function sanitizeTags(tags: string[]): string[] {
   return tags.filter((t) => !TAG_SECRET_RE.test(t.trim())).slice(0, 3);
 }
 
+// 敏感笔记派生字段口径（R120 P1-1）：content 加密后，title/tags 绝不能把秘密
+// 值明文带出。title 一律置空（模型标题不可信，可能原样抄入密码值）；tags 只
+// 保留不含数字串/较长拉丁字母串的纯主题词（如「密码」「门禁」）。
+const SENSITIVE_TAG_VALUE_RE = /\d{3,}|[A-Za-z]\d|\d[A-Za-z]|[A-Za-z0-9_\-@#$%.]{10,}|^sk-/i;
+
+/** Strict tag filter for sensitive notes: drop anything that could be (part of) a secret value. */
+export function sanitizeSensitiveTags(tags: string[]): string[] {
+  return tags.filter((t) => !SENSITIVE_TAG_VALUE_RE.test(t.trim())).slice(0, 3);
+}
+
 // Leading [xxx] / 【xxx】 marker prefixes (issue keys, QA markers, 【草稿】-style
 // labels) are metadata, never topics: they must not leak into tags or the title.
 const LEADING_MARKERS_RE = /^\s*(?:[[【][^\]】\n]{1,24}[\]】]\s*)+/;
@@ -265,6 +283,23 @@ const EXPENSE_DIRECTION_RE =
 const INCOME_DIRECTION_RE =
   /到账|入账|进账|收到|收了|收款|卖了|卖出|退款|退了|返现|返了|发了工资|发工资|工资发|赚了|挣了|中了|收租|给我/;
 
+// 资金平移兑底（R120 P1-3）：模型把提现/内转/借入判成 expense/income 会把
+// 平移的钱直接污染收支合计。词面证据明确指向自己账户间平移或借入时，
+// 确定性改判 transfer；「借给」是借出（净支出语义），不匹配。
+const INTERNAL_TRANSFER_RE =
+  /提现|(?:转|存)(?:了|入|到|进)?\s*[^，。;；\n]{0,10}?(?:银行卡|储蓄卡|余额宝|零钱通?|理财|定期|活期|基金账户|证券账户|自己的?[^，。;；\n]{0,4}(?:卡|账户))/;
+const BORROW_IN_RE = /(?:跟|向|从|找)\s*[^，。;；\n]{0,8}?借(?:了|到|来)/;
+
+/** Deterministic backstop: reclassify obvious money-movement notes
+ * (withdrawals / own-account transfers / borrowing) as transfer. */
+export function fixTransferMisfile(content: string, triage: TriageResult): TriageResult {
+  if (triage.category !== "expense" && triage.category !== "income") return triage;
+  if (INTERNAL_TRANSFER_RE.test(content) || BORROW_IN_RE.test(content)) {
+    return { ...triage, category: "transfer" };
+  }
+  return triage;
+}
+
 /** Deterministic finance-direction backstop: flip income↔expense when the
  * content's money-flow verbs unambiguously contradict the model's verdict. */
 export function fixFinanceDirection(content: string, triage: TriageResult): TriageResult {
@@ -281,7 +316,7 @@ export function fixFinanceDirection(content: string, triage: TriageResult): Tria
 // （定档/上映/发售）无用户动作时也不是待办。只在模型判了 todo 且词面
 // 证据明确时降级，其它情况不动。
 const COMPLETED_LOG_RE =
-  /写完了|做完了|完成了|搞定了|读完|看完了|交了|发布了|上线了|挂出了?|发出了|提交了|搬完了|修好了/;
+  /写完了|做完了|完成了|搞定了|读完|看完了|交了|发布了|上线了|挂出了?|发出了|提交了|搬完了|修好了|定了[：:，,]|敲定了?|定下来了/;
 const ANNOUNCEMENT_RE = /定档|上映|首映|开播|发售|开售|开票|发布会|官宣/;
 const FUTURE_ACTION_RE =
   /记得|提醒|要去|得去|别忘|预约|安排|回头|稍后|之前去|去买|去交|去还|去取|去看|买票|抢票|再润色|再改|跟进|待办/;
@@ -345,7 +380,7 @@ export function parseTriageJson(text: string, defaultOffset = "+08:00"): TriageR
   const title = typeof o.title === "string" ? o.title : "";
   const is_sensitive = o.is_sensitive === true;
   const todo_due = normalizeTodoDue(o.todo_due, defaultOffset);
-  const isFinance = category === "expense" || category === "income";
+  const isFinance = category === "expense" || category === "income" || category === "transfer";
   const amount =
     isFinance && typeof o.amount === "number" && Number.isFinite(o.amount) && o.amount > 0
       ? o.amount
@@ -417,9 +452,11 @@ export async function triageNote(
   env: Parameters<typeof chatComplete>[0],
   existingTags: string[] = [],
   tz: string = DEFAULT_TZ,
-  corrections: CategoryCorrection[] = []
+  corrections: CategoryCorrection[] = [],
+  // 相对日期锚点：导入/延迟分拣的历史笔记必须以笔记原始记录时间为「今天」，
+  // 否则「明天交房租」会漂移到分拣执行日（R120 P2）
+  now: Date = new Date()
 ): Promise<TriageResult | null> {
-  const now = new Date();
   const text = await chatComplete(env, {
     temperature: 0.2,
     max_tokens: 300,
@@ -430,7 +467,7 @@ export async function triageNote(
   });
   let result = (text && parseTriageJson(text, tzOffsetString(now, tz))) || null;
   if (result) result = stripMarkerNoise(content, result);
-  if (result) result = demoteEventLog(content, fixFinanceDirection(content, result));
+  if (result) result = demoteEventLog(content, fixTransferMisfile(content, fixFinanceDirection(content, result)));
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {
     result = result

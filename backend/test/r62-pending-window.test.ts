@@ -56,6 +56,7 @@ function fakeDb(rows: Row[]) {
           return stmt;
         },
         async first() {
+          if (sql.includes("INSERT INTO auth_rate_limits")) return { count: 1 };
           if (sql.includes("FROM users")) return binds[0] === "good-token" ? { id: "u1" } : null;
           if (sql.includes("FROM notes WHERE id = ?")) return rows.find((r) => r.id === binds[0]) ?? null;
           return null;

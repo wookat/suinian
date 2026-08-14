@@ -1,6 +1,6 @@
 export type NoteSource = "wechat" | "android" | "web" | "api" | "extension" | "from-ask" | "import" | "mcp"
 export type NoteRawType = "text" | "link" | "image" | "voice" | "file"
-export type NoteCategory = "idea" | "todo" | "collect" | "data" | "expense" | "income"
+export type NoteCategory = "idea" | "todo" | "collect" | "data" | "expense" | "income" | "transfer"
 
 export interface NoteMeta {
   raw_transcript?: string

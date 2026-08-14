@@ -124,6 +124,16 @@ const CASES: EvalCase[] = [
   { content: `${PREFIX} 沙丘 3 定档 10 月 1 日上映`, category: "data" },
   { content: `${PREFIX} 沙丘 3 十月上映，提醒我提前买票`, category: "todo" },
   { content: `${PREFIX} 闲鱼挂出了显示器，350 出`, category: "idea" },
+  // R120 P1-3：资金平移（内转/提现/借入）是 transfer，不是收支
+  { content: `${PREFIX} 微信零钱提现 2000 到银行卡`, category: "transfer", amount: 2000, currency: "CNY" },
+  { content: `${PREFIX} 转了 5000 到余额宝`, category: "transfer", amount: 5000, currency: "CNY" },
+  { content: `${PREFIX} 跟老妈借了 3000 周转`, category: "transfer", amount: 3000, currency: "CNY" },
+  // 反例：还信用卡是真实支出，不是平移
+  // （已有「还了信用卡 3000」→ expense 语料在上方 R118 组）
+  // R120 P2：AA 净额——记自己实际承担的份额，不是垫付总额
+  { content: `${PREFIX} 晚饭 AA 一共 480，四个人平摊，我先垫付了`, category: "expense", amount: 120, currency: "CNY" },
+  // R120 P2：已敲定的决定是记录不是待办
+  { content: `${PREFIX} 公众号选题定了：只写三篇论文精读`, category: "idea" },
   // R108：完成式日志不是待办（R107 P2-3：误标 todo 污染悬而未决）
   { content: `${PREFIX} 今天跑步 7 公里，早上出门凉快多了`, category: "idea" },
   { content: `${PREFIX} 读完《纳瓦尔宝典》第四章，杠杆的三种形式很有启发`, category: "idea" },
