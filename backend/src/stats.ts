@@ -85,11 +85,33 @@ interface StatNoteRow {
 export function aggregateStats(
   rows: StatNoteRow[],
   threadCount: number,
-  opts: { days: number; tzOffset: number; now?: number }
+  opts: { days: number; tzOffset: number; now?: number; tag?: string; scopeDays?: number }
 ): StatsResponse {
   const { days, tzOffset } = opts;
   const today = localDateOf(opts.now ?? Date.now(), tzOffset);
   const since = addDays(today, -(days - 1));
+
+  // 自定义洞察范围（时间×标签）：命中范围的行才参与全部统计。标签筛选时
+  // 排除敏感笔记（它们的标签本就不对外暴露，按标签筛选会反推内容）。
+  if (opts.tag || opts.scopeDays) {
+    const scopeSince = opts.scopeDays ? addDays(today, -(opts.scopeDays - 1)) : null;
+    rows = rows.filter((r) => {
+      if (scopeSince) {
+        const ms = parseCreatedAt(r.created_at);
+        if (Number.isNaN(ms) || localDateOf(ms, tzOffset) < scopeSince) return false;
+      }
+      if (opts.tag) {
+        if (r.is_sensitive) return false;
+        try {
+          const tags = JSON.parse(r.tags || "[]") as string[];
+          if (!Array.isArray(tags) || !tags.includes(opts.tag)) return false;
+        } catch {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
 
   const dailyMap = new Map<string, number>();
   const catMap = new Map<string, number>();
@@ -135,7 +157,11 @@ export function aggregateStats(
 }
 
 /** One-shot dashboard stats. Soft-deleted and #示例 sample notes never count. */
-export async function buildStats(env: Env, userId: string, opts: { days: number; tzOffset: number }): Promise<StatsResponse> {
+export async function buildStats(
+  env: Env,
+  userId: string,
+  opts: { days: number; tzOffset: number; tag?: string; scopeDays?: number }
+): Promise<StatsResponse> {
   const [notesRes, threadRes] = await Promise.all([
     env.DB.prepare(
       "SELECT created_at, category, source, tags, is_sensitive FROM notes WHERE user_id = ? AND deleted_at IS NULL AND tags NOT LIKE ?"

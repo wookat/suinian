@@ -54,11 +54,11 @@ const ROUTES = [
   },
   {
     path: "reports",
-    label: "周报",
+    label: "报告",
     icon: FileText,
     page: ReportsPage,
-    title: "每周思考报告",
-    description: "每周一自动生成，回顾「本周你在想什么」",
+    title: "思考报告",
+    description: "周报每周一、月报每月 1 日自动生成，回顾「这段时间你在想什么」",
   },
   {
     path: "insights",
@@ -113,7 +113,7 @@ const TRASH_ROUTE = {
   icon: SettingsIcon,
   page: TrashPage,
   title: "最近删除",
-  description: "删除的笔记保留 30 天，可恢复或立即彻底删除",
+  description: "已删除笔记的暂存处，可以恢复或立即彻底删除",
 } as const
 
 // off-nav route: register/login (linked from onboarding & settings)

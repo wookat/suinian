@@ -66,3 +66,18 @@ describe("reconcileAskCitations", () => {
     expect(new Set(markers)).toEqual(new Set(refIndexes));
   });
 });
+
+describe("cleanDanglingCitations via reconcileAskCitations (R116)", () => {
+  it("cleans orphaned 和/以及 plus dangling 根据 after weak markers are removed", () => {
+    const { answer } = reconcileAskCitations("根据 [1]、[2]、 和 [3]，你这个月花了 100 元", ["a", "b", "c"], new Set(["c"]));
+    expect(answer).toBe("根据 [1]、[2]，你这个月花了 100 元");
+  });
+  it("repairs a citation verb stranded at the start after an out-of-range marker is stripped", () => {
+    const { answer } = reconcileAskCitations("[7] 提到医生开的降压药", ["a"], new Set());
+    expect(answer).toBe("笔记里提到医生开的降压药");
+  });
+  it("does not touch a normal 和 between words", () => {
+    const { answer } = reconcileAskCitations("学了 C 和 G 和弦 [1]", ["a"], new Set());
+    expect(answer).toBe("学了 C 和 G 和弦 [1]");
+  });
+});

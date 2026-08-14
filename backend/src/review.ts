@@ -69,10 +69,11 @@ async function revisitCandidates(env: Env, userId: string, exclude: string[], li
        AND length(content) >= 20
        AND created_at < datetime('now', '-14 days')
        AND updated_at < datetime('now', '-7 days')
+       AND id NOT IN (SELECT note_id FROM daily_reviews WHERE user_id = ? AND review_date >= date('now', '-30 days'))
        ${exclude.length > 0 ? `AND id NOT IN (${ph})` : ""}
      ORDER BY RANDOM() LIMIT ?`
   )
-    .bind(userId, ...exclude, limit)
+    .bind(userId, userId, ...exclude, limit)
     .all<NoteRow>();
   return results ?? [];
 }
