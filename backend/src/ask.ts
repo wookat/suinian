@@ -176,10 +176,43 @@ export function isFinanceAggQuestion(question: string): boolean {
  *   the exact overall stats instead.
  * - null: not an aggregate question (single-item price etc.) — normal ask.
  */
+// Fact-seeking wording: the user wants details from specific notes (names,
+// which ones, when), not a books-level sum. Compound questions like「买的两本
+// 书叫什么，一共花了多少钱」must reach normal recall so the notes themselves
+// answer both parts — fail-closing them hides the answer (R117 P2-1).
+const FACT_QUERY_RE = /叫什么|是什么|什么名|名字|哪几?[本个件家部]|哪些|分别|各是|什么时候|在哪/;
+
 export function financeAggIntent(question: string): "exact" | "fail_closed" | null {
   if (isFinanceAggQuestion(question)) return "exact";
+  if (FACT_QUERY_RE.test(question)) return null;
   if (FINANCE_WORD_RE.test(question) && STRONG_AGG_RE.test(question)) return "fail_closed";
   return null;
+}
+
+// ---- 拒答建议主题相关性（R118 P2，R117 §四-2）----
+// 建议列表与「找到了相关的笔记」口径都必须以主题词命中为准：语义分上
+// “花钱类”笔记会压过真正的主题笔记（理发），零召回时弱命中也会被误称
+// “相关”。从检索词里剥掉时间/聚合/财务/语气词后剩下的才是主题词。
+
+/** Strip time/aggregate/finance/filler wording from recall terms, keeping only topic words. */
+export function askTopicTerms(terms: string[]): string[] {
+  const out: string[] = [];
+  for (const t of terms) {
+    let r = t;
+    for (const re of STRIP_RES) r = r.replace(re, "");
+    if (r.length >= 2 && !out.includes(r)) out.push(r);
+  }
+  return out;
+}
+
+/** Whether a note textually contains any of the topic terms (title/content/tags). */
+export function noteHitsTopic(
+  note: Pick<NoteRow, "title" | "content" | "tags">,
+  topics: string[]
+): boolean {
+  if (topics.length === 0) return false;
+  const hay = `${note.title ?? ""}\n${note.content}\n${note.tags ?? ""}`;
+  return topics.some((t) => hay.includes(t));
 }
 
 /** Fail-closed answer: no arithmetic on the qualified subset, exact overall stats instead. */

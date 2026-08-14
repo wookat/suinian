@@ -426,13 +426,11 @@ export async function restoreBackup(
         // 提醒用户迁移请用勾选敏感内容的完整备份
         if (n.is_sensitive === true && (n.content === SENSITIVE_EXPORT_PLACEHOLDER || n.content === ENC_PLACEHOLDER)) {
           stats.sensitive_skipped++;
-          for (const _a of n.attachments ?? []) stats.media_skipped++;
           continue;
         }
         const key = `${n.created_at}\u0000${n.content}`;
         if (seen.has(key) || (n.is_sensitive === true && (await isSensitiveDup(n)))) {
           stats.notes_skipped++;
-          for (const _a of n.attachments ?? []) stats.media_skipped++;
           continue;
         }
         seen.add(key);
@@ -494,6 +492,9 @@ export async function restoreBackup(
   };
 
   const storeMedia = async (entry: ZipEntry): Promise<void> => {
+    // 每个被跳过的媒体只在这里计一次（R118 P2：笔记循环不再预计，
+    // 避免重复恢复时 media_skipped 翻倍）：父笔记被跳过/重复的媒体没有
+    // attByPath 映射或没有新 ID，都落到下面两个分支
     const info = attByPath.get(entry.name);
     if (!info) {
       stats.media_skipped++;
@@ -501,7 +502,6 @@ export async function restoreBackup(
     }
     const newNoteId = idMap.get(info.oldNoteId);
     if (!newNoteId) {
-      // parent note was a duplicate (already counted) or invalid
       stats.media_skipped++;
       return;
     }
