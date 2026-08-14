@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
-import { triageNote, loadTopTags, normalizeTodoDue, detectSensitive, isValidTimezone, DEFAULT_TZ, FALLBACK_TRIAGE } from "./triage";
+import { triageNote, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, isValidTimezone, DEFAULT_TZ, FALLBACK_TRIAGE } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
@@ -1036,8 +1036,9 @@ async function createNote(
 
   const runTriage = async (): Promise<TriageResult | null> => {
     const topTags = await loadTopTags(c.env.DB, userId).catch(() => [] as string[]);
+    const corrections = await loadCategoryCorrections(c.env.DB, userId).catch(() => []);
     const tz = await loadUserTz(c.env, userId);
-    const triage = await triageNote(content, c.env, topTags, tz);
+    const triage = await triageNote(content, c.env, topTags, tz, corrections);
     // null = AI unavailable: keep category NULL so the cron sweep retries later
     if (triage) await applyTriage(c.env, id, triage, content);
     return triage;
@@ -2405,7 +2406,9 @@ app.post("/api/ask", async (c) => {
 // daily summary refresh for every thread and doesn't reflect real activity).
 app.get("/api/threads", async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT t.*, (SELECT MAX(n.created_at) FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL) AS last_note_at
+    `SELECT t.*, (SELECT MAX(n.created_at) FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL) AS last_note_at,
+            (SELECT MIN(n.created_at) FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL) AS first_note_at,
+            (SELECT COUNT(*) FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL AND n.created_at >= datetime('now', '-7 days')) AS week_new_count
        FROM threads t WHERE t.user_id = ? AND t.note_count > 0
       ORDER BY last_note_at DESC LIMIT 100`
   )
@@ -2876,8 +2879,9 @@ async function retriageOne(
     if (plain !== null) content = plain;
   }
   const topTags = await loadTopTags(env.DB, row.user_id).catch(() => [] as string[]);
+  const corrections = await loadCategoryCorrections(env.DB, row.user_id).catch(() => []);
   const tz = await loadUserTz(env, row.user_id);
-  const triage = await triageNote(content, env, topTags, tz);
+  const triage = await triageNote(content, env, topTags, tz, corrections);
   if (!triage) {
     // the whole AI chain is down: after a grace period stop showing the user a
     // spinner forever — give the note the fallback category and mark it so the

@@ -99,7 +99,7 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
         {
           role: "system",
           content:
-            '以下是同一条思考线索里按时间排列的碎片。输出严格 JSON {"title":"<=20字的线索标题","summary":"<=120字的线索脉络总结"}，只输出 JSON。',
+            '以下是同一条思考线索里按时间排列的碎片。输出严格 JSON {"title":"<=20字的线索标题","summary":"<=120字的线索脉络总结"}，只输出 JSON。要求：标题必须概括全部碎片共同的主题，用碎片中实际出现的关键词组成，禁止使用「日常工作总结」「一些想法」这类任何内容都适用的泛化标题；summary 要讲出想法从第一条到最后一条如何递进/演变（谁引出谁、哪里转向），不许把各条标题逗号串联了事。',
         },
         { role: "user", content: digest },
       ],

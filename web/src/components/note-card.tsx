@@ -39,6 +39,7 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { downloadNoteFile, refetchLink } from "@/lib/api"
 import { cn, formatTime, parseServerTime, parseDue, dueHasTime } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
@@ -302,6 +303,7 @@ export function NoteCard({
   const [editTagInput, setEditTagInput] = useState("")
   const [editDue, setEditDue] = useState("")
   const [copied, setCopied] = useState(false)
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
   const [revealed, setRevealed] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [metaOpen, setMetaOpen] = useState(false)
@@ -368,7 +370,7 @@ export function NoteCard({
 
   function handleDelete() {
     setMenuOpen(false)
-    if (window.confirm("确定删除这条碎念吗？将移入「最近删除」，30 天内可恢复。")) onDelete?.(note)
+    setConfirmDeleteOpen(true)
   }
 
   const extraTags = note.tags.length - MAX_TAGS
@@ -849,6 +851,17 @@ export function NoteCard({
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        title="删除这条碎念？"
+        description="将移入「最近删除」，30 天内可恢复。"
+        confirmLabel="删除"
+        onConfirm={() => {
+          setConfirmDeleteOpen(false)
+          onDelete?.(note)
+        }}
+        onCancel={() => setConfirmDeleteOpen(false)}
+      />
     </Card>
   )
 }

@@ -53,5 +53,9 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - Note-card 「⋯」 menu button is `md:opacity-0` (visible only on hover) but always clickable — click just right of the timestamp (~x=694).
 - AI health probe: `GET /health?probe=ai` → `{ok, ai:{provider: "primary"|"fallback", model}}`, 503 when the whole chain is down. Account deletion now uses an in-app confirm (type 「注销」 via clipboard paste) — no more native prompt stubbing needed.
 
+## Production testing tips (learned R96)
+- Registering usernames containing `[` etc. via xdotool direct typing can drop characters (`[QA` became `[Q`); paste the username via clipboard (xclip) instead.
+- `browser_console` may attach to a different Chrome instance (shows chrome://new-tab-page); to verify login state, use 设置页「复制我的 API token」+ xclip + curl instead.
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.

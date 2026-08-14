@@ -132,7 +132,7 @@ export function ThreadGraphView({
     for (const n of pts) {
       // labels render below nodes, centered; approximate their box so the fit
       // keeps them inside the container (CJK glyphs ≈ fontSize px wide each)
-      const labelHalfW = (n.label.length * (n.kind === "entity" ? 11 : 9)) / 2
+      const labelHalfW = (n.label.length * (n.kind === "entity" ? 12 : 10)) / 2
       minX = Math.min(minX, (n.x ?? 0) - Math.max(n.radius, labelHalfW))
       maxX = Math.max(maxX, (n.x ?? 0) + Math.max(n.radius, labelHalfW))
       minY = Math.min(minY, (n.y ?? 0) - n.radius)
@@ -371,8 +371,12 @@ export function ThreadGraphView({
                       x={((s.x ?? 0) + (t.x ?? 0)) / 2}
                       y={((s.y ?? 0) + (t.y ?? 0)) / 2 - 3}
                       textAnchor="middle"
-                      fontSize={9}
-                      fill="var(--muted-foreground)"
+                      fontSize={10}
+                      fill="var(--foreground)"
+                      paintOrder="stroke"
+                      stroke="var(--background)"
+                      strokeWidth={3}
+                      strokeLinejoin="round"
                     >
                       {l.label}
                     </text>
@@ -402,9 +406,9 @@ export function ThreadGraphView({
                   <text
                     y={n.radius + 11}
                     textAnchor="middle"
-                    fontSize={n.kind === "entity" ? 11 : 9}
+                    fontSize={n.kind === "entity" ? 12 : 10}
                     fontWeight={n.kind === "entity" ? 500 : 400}
-                    fill={n.kind === "entity" ? "var(--foreground)" : "var(--muted-foreground)"}
+                    fill="var(--foreground)"
                     paintOrder="stroke"
                     stroke="var(--background)"
                     strokeWidth={3}

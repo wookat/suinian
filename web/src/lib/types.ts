@@ -131,6 +131,10 @@ export interface Thread {
   updated_at: string
   /** 最新一条碎片的创建时间（列表接口返回） */
   last_note_at?: string | null
+  /** 最早一条碎片的创建时间（列表接口返回） */
+  first_note_at?: string | null
+  /** 近 7 天新增碎片数（列表接口返回） */
+  week_new_count?: number
 }
 
 export interface ThreadGraphEntity {
