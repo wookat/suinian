@@ -1,4 +1,5 @@
 import type { NoteRow } from "./types";
+import { formatAmount, type FinanceStats } from "./reports";
 
 /**
  * Helpers for /api/ask retrieval quality (R54): deterministic time-range
@@ -136,6 +137,46 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     }
   }
   return null;
+}
+
+// ---- 财务聚合问答（R107 P1-2）----
+// 「X 时间一共花了多少钱」类合计问题必须走 SQL 精确聚合（与周报/月报同一
+// financeStats 口径），绝不能靠 LLM 对被 LIMIT 截断的召回片段心算。
+
+const FINANCE_WORD_RE = /花了?|花销|花费|支出|消费|开销|收入|进账|入账|结余|收支|记了?账|赚了?/;
+const AGG_WORD_RE = /一共|总共|合计|总计|共计|加起来|多少钱|多少笔|几笔|平均每/;
+// strip time phrases / finance verbs / aggregation words / filler; whatever
+// meaningful text remains means the question is about a specific item
+// ("买咖啡花了多少钱"), not an overall aggregate — fall through to normal ask.
+const STRIP_RES: RegExp[] = [
+  /今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})月(?:份|初|中|底)?/g,
+  /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少/g,
+  /花了?|花销|花费|支出|消费|开销|收入|进账|入账|结余|收支|记了?账|赚了?|钱/g,
+  /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|了|吗|呢|啊|呀|哦|是|都|在|有|和|与|？|\?|，|,|。|、|\s/g,
+];
+
+/** True when the question asks for an overall finance aggregate (not a specific item's price). */
+export function isFinanceAggQuestion(question: string): boolean {
+  if (!FINANCE_WORD_RE.test(question) || !AGG_WORD_RE.test(question)) return false;
+  let residual = question;
+  for (const re of STRIP_RES) residual = residual.replace(re, "");
+  return residual.length < 2;
+}
+
+/** Deterministic answer for finance aggregate questions, built from financeStats (report口径). */
+export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null): string {
+  const scope = phrase ?? "全部笔记";
+  if (stats.expenseCount === 0 && stats.incomeCount === 0) {
+    return `${scope}没有记账记录（支出/收入均为 0 笔）。`;
+  }
+  const lines = Object.entries(stats.totals).map(
+    ([cur, t]) =>
+      `- ${cur}：支出 ${formatAmount(t.expense, cur)}，收入 ${formatAmount(t.income, cur)}，结余 ${formatAmount(t.income - t.expense, cur)}`
+  );
+  let md = `${scope}共记录 ${stats.expenseCount} 笔支出、${stats.incomeCount} 笔收入。\n${lines.join("\n")}`;
+  if (stats.unknownAmount > 0) md += `\n（另有 ${stats.unknownAmount} 笔未识别出金额，未计入合计。）`;
+  md += `\n\n以上为精确统计，口径与周报/月报一致。`;
+  return md;
 }
 
 /** True when a note's created_at (UTC sql string) falls inside the range. */

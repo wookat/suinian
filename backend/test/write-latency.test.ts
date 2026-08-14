@@ -51,7 +51,7 @@ function fakeDb() {
           if (sql.includes("FROM users WHERE name = ?")) {
             return users.find((u) => u.name === binds[0]) ?? null;
           }
-          if (sql.includes("FROM auth_rate_limits")) return null;
+          if (sql.includes("auth_rate_limits")) return { count: 1 };
           if (sql.includes("FROM notes WHERE id = ?")) {
             return notes.find((n) => n.id === binds[0]) ?? null;
           }

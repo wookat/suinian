@@ -185,7 +185,7 @@ export default function App() {
         </div>
       )}
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-20 hidden w-52 flex-col border-r bg-card p-4 md:flex">
+      <aside className="fixed inset-y-0 left-0 z-20 hidden w-52 flex-col border-r bg-card p-4 md:flex print:hidden">
         <div className="mb-6 flex items-center gap-2 px-2">
           <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
             碎
@@ -218,14 +218,14 @@ export default function App() {
       </aside>
 
       {/* Mobile top bar */}
-      <header className="sticky top-0 z-20 flex items-center gap-2 border-b bg-background/90 px-4 py-3 backdrop-blur md:hidden">
+      <header className="sticky top-0 z-20 flex items-center gap-2 border-b bg-background/90 px-4 py-3 backdrop-blur md:hidden print:hidden">
         <span className="flex size-7 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-foreground">
           碎
         </span>
         <h1 className="text-base font-semibold">{active.path === "" ? "碎念" : active.label}</h1>
       </header>
 
-      <div className="md:pl-52">
+      <div className="md:pl-52 print:pl-0">
         <div className="mx-auto flex max-w-2xl gap-8 px-4 pb-24 pt-4 md:pb-8 md:pt-6 lg:max-w-3xl xl:max-w-6xl">
           <main
             key={active.path}
@@ -236,7 +236,7 @@ export default function App() {
               <Page />
             </Suspense>
           </main>
-          <aside className="hidden w-72 shrink-0 pt-1 xl:block">
+          <aside className="hidden w-72 shrink-0 pt-1 xl:block print:hidden">
             <div className="sticky top-6">
               <RightRail />
             </div>
@@ -245,7 +245,7 @@ export default function App() {
       </div>
 
       {/* Mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t bg-card/95 backdrop-blur md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t bg-card/95 backdrop-blur md:hidden print:hidden">
         {ROUTES.map((r) => {
           const Icon = r.icon
           return (

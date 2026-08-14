@@ -1,5 +1,7 @@
 import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
+import { DEFAULT_TZ, loadUserTz, tzOffsetMinutes, tzSqlModifier, zonedDate } from "./triage";
+import { localDateOf, parseCreatedAt } from "./stats";
 
 export type ReviewKind = "year_ago" | "month_ago" | "revisit" | "recurring_theme" | "pending_todo";
 
@@ -27,6 +29,12 @@ export function shanghaiDate(now: Date = new Date()): string {
   return new Date(now.getTime() + 8 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
+/** A stored UTC created_at rendered as the user's local YYYY-MM-DD. */
+export function localReviewDate(createdAt: string, tzOffsetMin: number): string {
+  const ms = parseCreatedAt(createdAt);
+  return Number.isNaN(ms) ? createdAt.slice(0, 10) : localDateOf(ms, tzOffsetMin);
+}
+
 /** The same calendar day shifted back by months/years (clamped by Date rollover). */
 export function shiftDate(dateYmd: string, opts: { years?: number; months?: number }): string {
   const [y, m, d] = dateYmd.split("-").map((x) => parseInt(x, 10));
@@ -40,14 +48,14 @@ export function shiftDate(dateYmd: string, opts: { years?: number; months?: numb
   return target.toISOString().slice(0, 10);
 }
 
-async function notesOnShanghaiDay(env: Env, userId: string, dayYmd: string, limit: number): Promise<NoteRow[]> {
+async function notesOnLocalDay(env: Env, userId: string, dayYmd: string, limit: number, tzModifier: string): Promise<NoteRow[]> {
   const { results } = await env.DB.prepare(
     `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL
-       AND datetime(created_at, '+8 hours') >= datetime(? || ' 00:00:00')
-       AND datetime(created_at, '+8 hours') <= datetime(? || ' 23:59:59')
+       AND datetime(created_at, ?) >= datetime(? || ' 00:00:00')
+       AND datetime(created_at, ?) <= datetime(? || ' 23:59:59')
      ORDER BY length(content) DESC LIMIT ?`
   )
-    .bind(userId, dayYmd, dayYmd, limit)
+    .bind(userId, tzModifier, dayYmd, tzModifier, dayYmd, limit)
     .all<NoteRow>();
   return results ?? [];
 }
@@ -118,7 +126,7 @@ async function pendingTodoCandidate(env: Env, userId: string, exclude: string[])
     .first<NoteRow>();
 }
 
-async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind): Promise<string> {
+async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind, tzOffsetMin = 480): Promise<string> {
   const text = (
     await chatComplete(env, {
       temperature: 0.6,
@@ -132,7 +140,7 @@ async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind): Promise
         },
         {
           role: "user",
-          content: `记录时间：${note.created_at.slice(0, 10)}（${KIND_LABEL[kind]}）\n内容：${(note.title || note.content).slice(0, 300)}`,
+          content: `记录时间：${localReviewDate(note.created_at, tzOffsetMin)}（${KIND_LABEL[kind]}）\n内容：${(note.title || note.content).slice(0, 300)}`,
         },
       ],
     })
@@ -161,7 +169,11 @@ export async function generateDailyReviewDetailed(
   userId: string,
   now: Date = new Date()
 ): Promise<DailyReviewGenResult> {
-  const today = shanghaiDate(now);
+  // 回顾的“今天”与周年/月年的日边界按用户时区偏好计算（R107 P2-2）
+  const tz = await loadUserTz(env, userId).catch(() => DEFAULT_TZ);
+  const tzModifier = tzSqlModifier(now, tz);
+  const tzOffsetMin = tzOffsetMinutes(now, tz);
+  const today = zonedDate(now, tz).iso;
   const existing = await env.DB.prepare(
     "SELECT COUNT(*) AS n FROM daily_reviews WHERE user_id = ? AND review_date = ?"
   )
@@ -179,8 +191,8 @@ export async function generateDailyReviewDetailed(
       seen.add(n.id);
     }
   };
-  push(await notesOnShanghaiDay(env, userId, shiftDate(today, { years: 1 }), 2), "year_ago", 2);
-  push(await notesOnShanghaiDay(env, userId, shiftDate(today, { months: 1 }), 2), "month_ago", 2);
+  push(await notesOnLocalDay(env, userId, shiftDate(today, { years: 1 }), 2, tzModifier), "year_ago", 2);
+  push(await notesOnLocalDay(env, userId, shiftDate(today, { months: 1 }), 2, tzModifier), "month_ago", 2);
   // 洞察轮换：按日期奇偶轮换「反复出现的主题」/「悬置的待办」优先级，每天至多 1 条
   if (picks.length < MAX_REVIEW_ITEMS) {
     const dayNum = parseInt(today.replace(/-/g, ""), 10);
@@ -214,7 +226,7 @@ export async function generateDailyReviewDetailed(
     const { note, kind } = picks[i];
     let comment = FALLBACK_COMMENT[kind];
     try {
-      comment = await reviewComment(env, note, kind);
+      comment = await reviewComment(env, note, kind, tzOffsetMin);
     } catch {
       /* keep the fallback comment */
     }
@@ -242,7 +254,8 @@ export interface TodayReviewItem {
  * on demand when the daily cron hasn't run yet for this user.
  */
 export async function getTodayReview(env: Env, userId: string, now: Date = new Date()): Promise<{ date: string; items: TodayReviewItem[] }> {
-  const today = shanghaiDate(now);
+  const tz = await loadUserTz(env, userId).catch(() => DEFAULT_TZ);
+  const today = zonedDate(now, tz).iso;
   const query = () =>
     env.DB.prepare(
       `SELECT r.id AS review_id, r.kind, r.comment, n.*

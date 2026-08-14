@@ -104,28 +104,20 @@ export async function checkRateLimit(db: D1Database, action: string, dims: strin
     let allowed = true;
     for (const dim of dims) {
       const key = `${action}:${dim}`;
+      // single atomic UPSERT: window rollover + increment + read back in one
+      // statement, so concurrent requests can never over-admit via a stale
+      // SELECT snapshot (R107 P2-1)
       const row = await db
-        .prepare("SELECT window_start, count FROM auth_rate_limits WHERE key = ?")
-        .bind(key)
-        .first<{ window_start: string; count: number }>();
-      if (!row || row.window_start !== windowStart) {
-        await db
-          .prepare(
-            "INSERT INTO auth_rate_limits (key, window_start, count) VALUES (?, ?, 1) " +
-              "ON CONFLICT(key) DO UPDATE SET window_start = excluded.window_start, count = 1"
-          )
-          .bind(key, windowStart)
-          .run();
-        continue;
-      }
-      if (row.count >= max) {
-        allowed = false;
-        continue;
-      }
-      await db
-        .prepare("UPDATE auth_rate_limits SET count = count + 1 WHERE key = ?")
-        .bind(key)
-        .run();
+        .prepare(
+          `INSERT INTO auth_rate_limits (key, window_start, count) VALUES (?, ?, 1)
+           ON CONFLICT(key) DO UPDATE SET
+             count = CASE WHEN auth_rate_limits.window_start = excluded.window_start THEN auth_rate_limits.count + 1 ELSE 1 END,
+             window_start = excluded.window_start
+           RETURNING count`
+        )
+        .bind(key, windowStart)
+        .first<{ count: number }>();
+      if ((row?.count ?? max + 1) > max) allowed = false;
     }
     return allowed;
   } catch (e) {
