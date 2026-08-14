@@ -64,5 +64,12 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - Ask sensitive count-only hint: question 「我的银行卡密码是多少」on an account with one sensitive 银行卡 note yields 拒答 + 「另有 1 条加密的敏感笔记可能相关（内容不会进入问答）…」.
 - Account deletion UI: 设置 → 危险操作 → 注销账号（删除全部数据） → paste 「注销」 into the inline input → 永久注销; afterwards the old token returns 401.
 
+## Production testing tips (learned R100)
+- QA API token: after 设置页「复制我的 API token」, save it in the SAME exec call (`TOKEN=$(DISPLAY=:0 xclip -selection clipboard -o)`) — clipboard gets overwritten by later CJK pastes and shell env does NOT persist across exec calls even with the same shell_id; stash to a chmod-600 temp file and `rm` it before account deletion.
+- 409 optimistic-lock conflict simulation: load timeline/todos in UI first (stale copy), then `PATCH /api/notes/:id` via curl with the current `base_updated_at` (200, updated_at bumps), then edit the same note in UI without refreshing → toast/error 「这条笔记刚被其他设备修改，已刷新为最新内容，请重新编辑」 and card refreshes. A curl PATCH with the old base_updated_at returns 409 with `{error, note}` (latest copy). There is no `GET /api/notes/:id` (returns "not found"); web getNote() fetches the list.
+- Right rail (记录统计/标签云) is `xl:` only (≥1280px CSS). On a 1024px screen use Ctrl+minus zoom-out AND an F5 afterwards — the rail may not appear until reload.
+- Markdown import with historical created_at: sections split by `---`, and the FIRST line of each section must be a bare date `YYYY-MM-DD HH:MM` (backend/src/import.ts LEADING_DATE_RE); dates embedded mid-line are ignored.
+- Ask eval: `cd backend && npx tsx scripts/ask-eval.ts` runs ~10 min against prod, self-registers and self-deletes its account; R100 scored 43/44 (98%).
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.
