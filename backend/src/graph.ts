@@ -35,18 +35,6 @@ export interface EntityRow {
   vector: string | null;
 }
 
-export interface EdgeRow {
-  id: string;
-  user_id: string;
-  src_type: string;
-  src_id: string;
-  dst_type: string;
-  dst_id: string;
-  relation: string;
-  confidence: number;
-  note_id: string | null;
-}
-
 interface ExtractedEntity {
   name: string;
   type: EntityType;
@@ -335,12 +323,6 @@ export async function deleteNotesGraph(env: Env, noteIds: string[]): Promise<voi
   } catch (err) {
     console.error(`graph: batch delete failed (${noteIds.length} notes)`, err);
   }
-}
-
-/** Delete all graph data for a user (account deletion). */
-export async function deleteUserGraph(env: Env, userId: string): Promise<void> {
-  await env.DB.prepare("DELETE FROM edges WHERE user_id = ?").bind(userId).run();
-  await env.DB.prepare("DELETE FROM entities WHERE user_id = ?").bind(userId).run();
 }
 
 /** Entity ids mentioned by a note. */

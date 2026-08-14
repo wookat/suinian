@@ -4,7 +4,7 @@ import { NoteCard } from "@/components/note-card"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { cn, parseDue, dueHasTime } from "@/lib/utils"
-import { getNotes, patchNote, deleteNote } from "@/lib/api"
+import { getNotes, getNote, patchNote, deleteNote, ApiError } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
 import type { Note, NotePatch } from "@/lib/types"
 
@@ -83,10 +83,21 @@ export function TodosPage() {
   async function handleEdit(note: Note, patch: NotePatch) {
     setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, ...patch } : n)))
     try {
-      const fresh = await patchNote(note.id, patch)
+      const fresh = await patchNote(note.id, patch, note.updated_at)
       setNotes((ns) => ns.map((n) => (n.id === note.id ? fresh : n)))
       setError(null)
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        // refresh to the latest copy so the user re-edits instead of overwriting
+        try {
+          const latest = await getNote(note.id)
+          setNotes((ns) => ns.map((n) => (n.id === note.id ? (latest ?? n) : n)))
+        } catch {
+          setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
+        }
+        setError("这条笔记刚被其他设备修改，已刷新为最新内容，请重新编辑")
+        return
+      }
       setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
       setError(`保存失败：${e instanceof Error ? e.message : String(e)}，请重试`)
     }

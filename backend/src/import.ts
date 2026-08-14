@@ -414,7 +414,12 @@ export async function runImport(
         }
         seen.add(`${createdAt}\u0000${item.content}`);
         noTime.add(item.content);
-        const meta: Record<string, unknown> = { import_source: source };
+        const meta: Record<string, unknown> = {
+          import_source: source,
+          // notes keep their original created_at; lateness/triage hints must
+          // measure from when the note actually entered the queue
+          imported_at: new Date().toISOString(),
+        };
         if (item.tags.length > 0) meta.import_tags = item.tags;
         const id = crypto.randomUUID();
         inserted.push({ id, item });

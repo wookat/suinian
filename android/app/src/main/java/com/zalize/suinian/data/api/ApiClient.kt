@@ -52,6 +52,9 @@ import java.util.concurrent.TimeUnit
 /** 面向用户的可读错误（网络/解析/HTTP 统一人话文案） */
 class ApiException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
+/** 乐观锁冲突（409）：笔记已被其他设备修改，调用方应刷新后重试 */
+class ConflictException(message: String) : Exception(message)
+
 /** 真实后端 client，接口形状严格按 docs/SPEC.md */
 class ApiClient(private val baseUrl: String, private val token: String) {
 
@@ -154,7 +157,8 @@ class ApiClient(private val baseUrl: String, private val token: String) {
     suspend fun setTodoDone(id: String, done: Boolean): Note? =
         patchNote(id, buildJsonObject { put("todo_done", done) })
 
-    /** PATCH /api/notes/:id：编辑 content/title/category/tags/todo_due（null 清除截止时间） */
+    /** PATCH /api/notes/:id：编辑 content/title/category/tags/todo_due（null 清除截止时间）。
+     * baseUpdatedAt 传入编辑时加载的 updated_at，服务端乐观锁冲突时返 409 */
     suspend fun updateNote(
         id: String,
         content: String? = null,
@@ -163,6 +167,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         tags: List<String>? = null,
         todoDue: String? = null,
         clearTodoDue: Boolean = false,
+        baseUpdatedAt: String? = null,
     ): Note? = patchNote(
         id,
         buildJsonObject {
@@ -172,6 +177,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             if (tags != null) putJsonArray("tags") { tags.forEach { add(JsonPrimitive(it)) } }
             if (todoDue != null) put("todo_due", todoDue)
             else if (clearTodoDue) put("todo_due", JsonNull)
+            if (baseUpdatedAt != null) put("base_updated_at", baseUpdatedAt)
         },
     )
 
@@ -315,8 +321,10 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             throw ApiException("网络连接失败，请检查网络后重试", e)
         }
         resp.use {
-            if (!it.isSuccessful) throw httpError(it.code)
-            parseNoteLenient(it.body?.string().orEmpty())
+            val text = it.body?.string().orEmpty()
+            if (it.code == 409) throw ConflictException(parseErrorMessage(text) ?: "这条笔记刚被其他设备修改，请刷新后重试")
+            if (!it.isSuccessful) throw httpError(it.code, text)
+            parseNoteLenient(text)
         }
     }
 

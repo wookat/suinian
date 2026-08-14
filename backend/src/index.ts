@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
 import { triageNote, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, isValidTimezone, DEFAULT_TZ, FALLBACK_TRIAGE } from "./triage";
@@ -1237,6 +1238,15 @@ app.get("/api/notes", async (c) => {
   return c.json({ notes, next_cursor: next });
 });
 
+/** 409 with the latest server copy so the client can refresh and re-apply the edit. */
+async function conflictResponse(c: Context<{ Bindings: Env; Variables: Vars }>, id: string) {
+  const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
+  return c.json(
+    { error: "该笔记刚被其他设备修改，已返回最新内容，请基于最新内容重试", note: note ? await noteToJsonDecrypted(c.env, note) : null },
+    409
+  );
+}
+
 // ---- PATCH /api/notes/:id ----
 app.patch("/api/notes/:id", async (c) => {
   const userId = c.get("userId");
@@ -1245,11 +1255,18 @@ app.patch("/api/notes/:id", async (c) => {
   if (!body) return c.json({ error: "invalid body" }, 400);
 
   const existing = await c.env.DB.prepare(
-    "SELECT is_sensitive, content, content_enc, meta FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+    "SELECT is_sensitive, content, content_enc, meta, updated_at FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
   )
     .bind(id, userId)
-    .first<{ is_sensitive: number; content: string; content_enc: string | null; meta: string | null }>();
+    .first<{ is_sensitive: number; content: string; content_enc: string | null; meta: string | null; updated_at: string }>();
   if (!existing) return c.json({ error: "not found" }, 404);
+
+  // optimistic lock: clients editing a loaded note send its updated_at back so
+  // a concurrent edit from another device surfaces as 409 instead of a silent
+  // last-write-wins overwrite
+  if (typeof body.base_updated_at === "string" && body.base_updated_at !== existing.updated_at) {
+    return conflictResponse(c, id);
+  }
 
   const wantSensitive =
     typeof body.is_sensitive === "boolean" ? body.is_sensitive : !!existing.is_sensitive;
@@ -1323,10 +1340,22 @@ app.patch("/api/notes/:id", async (c) => {
   if (sets.length === 0) return c.json({ error: "no updatable fields" }, 400);
   sets.push("updated_at = datetime('now')");
 
-  const res = await c.env.DB.prepare(`UPDATE notes SET ${sets.join(", ")} WHERE id = ? AND user_id = ?`)
-    .bind(...binds, id, userId)
+  // CAS on updated_at closes the read→write race window (another device
+  // committing between our SELECT and this UPDATE)
+  const res = await c.env.DB.prepare(
+    `UPDATE notes SET ${sets.join(", ")} WHERE id = ? AND user_id = ? AND updated_at = ?`
+  )
+    .bind(...binds, id, userId, existing.updated_at)
     .run();
-  if (!res.meta.changes) return c.json({ error: "not found" }, 404);
+  if (!res.meta.changes) {
+    const still = await c.env.DB.prepare(
+      "SELECT id FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+    )
+      .bind(id, userId)
+      .first<{ id: string }>();
+    if (still) return conflictResponse(c, id);
+    return c.json({ error: "not found" }, 404);
+  }
   const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
   c.executionCtx.waitUntil(capped(upsertNoteEmbedding(c.env, note!), PIPELINE_TIMEOUT_MS, `patch-embed note=${id}`));
   const sensitivityChanged =

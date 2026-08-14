@@ -751,9 +751,21 @@ export function TimelinePage() {
   async function handleEdit(note: Note, patch: NotePatch) {
     setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, ...patch } : n)))
     try {
-      const fresh = await patchNote(note.id, patch)
+      const fresh = await patchNote(note.id, patch, note.updated_at)
       setNotes((ns) => ns.map((n) => (n.id === note.id ? fresh : n)))
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        // another device edited this note first: refresh to the latest copy so
+        // the user re-edits on top of it instead of silently overwriting
+        try {
+          const latest = await getNote(note.id)
+          setNotes((ns) => ns.map((n) => (n.id === note.id ? (latest ?? n) : n)))
+        } catch {
+          setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
+        }
+        showToast("这条笔记刚被其他设备修改，已刷新为最新内容，请重新编辑", undefined, 8000)
+        return
+      }
       setNotes((ns) => ns.map((n) => (n.id === note.id ? note : n)))
       showToast(
         `保存失败：${e instanceof Error ? e.message : String(e)}`,
