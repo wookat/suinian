@@ -69,6 +69,7 @@ private val categories = listOf(
     "data" to "资料",
     "expense" to "支出",
     "income" to "收入",
+    "transfer" to "资金往来",
 )
 
 fun categoryLabel(category: String?): String {
@@ -441,18 +442,22 @@ fun NoteCard(
             }
 
             // 收支记账：金额/币种（支出负号、收入正号）+ 商户/用途
-            if ((note.category == "expense" || note.category == "income") && !masked) {
+            if ((note.category == "expense" || note.category == "income" || note.category == "transfer") && !masked) {
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val income = note.category == "income"
+                    val transfer = note.category == "transfer"
+                    // transfer 是资金平移：无正负号（对齐 Web 的 ⇄ 前缀），中性色
                     val amountText = note.amount?.let {
-                        (if (income) "+" else "-") + formatAmount(it, note.currency ?: "CNY")
-                    } ?: "金额待定"
+                        (if (income) "+" else if (transfer) "⇄" else "-") + formatAmount(it, note.currency ?: "CNY")
+                    } ?: (if (transfer) "资金往来" else "金额待定")
                     Text(
                         amountText,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
-                        color = if (income) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
+                        color = if (income) MaterialTheme.colorScheme.tertiary
+                        else if (transfer) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.error,
                     )
                     val merchant = note.meta?.financeMerchant?.takeIf { it.isNotBlank() }
                     if (merchant != null) {

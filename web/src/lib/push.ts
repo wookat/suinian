@@ -44,7 +44,14 @@ export async function enablePush(): Promise<void> {
   if (!config.enabled || !config.vapid_public_key) throw new Error("服务端未配置推送（VAPID）")
   const permission = await Notification.requestPermission()
   if (permission !== "granted") throw new Error("通知权限被拒绝，请在浏览器设置中允许本站通知后重试")
-  const reg = await navigator.serviceWorker.ready
+  // serviceWorker.ready 是一个永不 reject 的 promise：SW 注册失败/被禁用时会
+  // 永远 pending，把首跑引导卡的按钮卡成无限转圈（R121 P2）。加超时兜底。
+  const reg = await Promise.race([
+    navigator.serviceWorker.ready,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("页面离线组件未就绪，请刷新页面后重试")), 10_000),
+    ),
+  ])
   const sub =
     (await reg.pushManager.getSubscription()) ??
     (await reg.pushManager.subscribe({

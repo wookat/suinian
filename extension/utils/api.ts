@@ -9,8 +9,29 @@ export interface Settings {
 export const DEFAULT_API_BASE = "https://suinian-api.zalize.com";
 export const DEFAULT_WEB_BASE = "https://suinian.zalize.com";
 
+// API token 存 storage.local（R122 P2）：storage.sync 会把 token 同步到用户
+// 浏览器账号云端与其它设备，扩大泄露面；凭据只留本机。旧版 sync 里的
+// 设置首次读取时自动迁移到 local 并从云端清除。
+const SETTING_DEFAULTS = { apiBaseUrl: DEFAULT_API_BASE, apiToken: "", webBaseUrl: DEFAULT_WEB_BASE };
+
+async function migrateFromSync(): Promise<void> {
+  try {
+    const legacy = await browser.storage.sync.get(SETTING_DEFAULTS);
+    if (String(legacy.apiToken || "").trim() || String(legacy.apiBaseUrl || "") !== DEFAULT_API_BASE) {
+      await browser.storage.local.set(legacy);
+    }
+    await browser.storage.sync.remove(["apiBaseUrl", "apiToken", "webBaseUrl"]);
+  } catch {
+    // sync 不可用时跳过迁移，不影响 local 读写
+  }
+}
+
 export async function loadSettings(): Promise<Settings> {
-  const raw = await browser.storage.sync.get({ apiBaseUrl: DEFAULT_API_BASE, apiToken: "", webBaseUrl: DEFAULT_WEB_BASE });
+  let raw = await browser.storage.local.get(SETTING_DEFAULTS);
+  if (!String(raw.apiToken || "").trim()) {
+    await migrateFromSync();
+    raw = await browser.storage.local.get(SETTING_DEFAULTS);
+  }
   return {
     apiBaseUrl: String(raw.apiBaseUrl || DEFAULT_API_BASE).trim().replace(/\/$/, ""),
     apiToken: String(raw.apiToken || "").trim(),
@@ -19,14 +40,14 @@ export async function loadSettings(): Promise<Settings> {
 }
 
 export async function saveSettings(s: Settings): Promise<void> {
-  await browser.storage.sync.set({
+  await browser.storage.local.set({
     apiBaseUrl: s.apiBaseUrl.trim().replace(/\/$/, ""),
     apiToken: s.apiToken.trim(),
     webBaseUrl: (s.webBaseUrl || DEFAULT_WEB_BASE).trim().replace(/\/$/, ""),
   });
 }
 
-export type Category = "idea" | "todo" | "collect" | "data" | "expense" | "income";
+export type Category = "idea" | "todo" | "collect" | "data" | "expense" | "income" | "transfer";
 
 export const CATEGORY_OPTIONS: { value: Category; label: string }[] = [
   { value: "idea", label: "想法" },
@@ -35,6 +56,7 @@ export const CATEGORY_OPTIONS: { value: Category; label: string }[] = [
   { value: "data", label: "资料" },
   { value: "expense", label: "支出" },
   { value: "income", label: "收入" },
+  { value: "transfer", label: "资金往来" },
 ];
 
 export interface SaveNotePayload {

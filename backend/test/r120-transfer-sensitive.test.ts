@@ -36,7 +36,6 @@ describe("fixTransferMisfile (R120 P1-3)", () => {
   });
 
   it("keeps real expense/income untouched", () => {
-    expect(fixTransferMisfile("还了信用卡 3000", t("expense")).category).toBe("expense");
     expect(fixTransferMisfile("午饭黄焖鸡 23 块", t("expense")).category).toBe("expense");
     expect(fixTransferMisfile("这个月工资发了 15000", t("income")).category).toBe("income");
     // 借给（借出）不是借入，不改判
@@ -46,6 +45,37 @@ describe("fixTransferMisfile (R120 P1-3)", () => {
   it("never touches non-finance categories", () => {
     expect(fixTransferMisfile("提现流程文档整理", t("data")).category).toBe("data");
     expect(fixTransferMisfile("记得去银行卡转账", t("todo")).category).toBe("todo");
+  });
+});
+
+describe("fixTransferMisfile 借还第三态 + 押金/负债还款 (R122 P1-2/D1)", () => {
+  it("reclassifies incoming loan repayment misfiled as income", () => {
+    expect(fixTransferMisfile("表弟把上次借的 1500 还给我了", t("income", { amount: 1500 })).category).toBe("transfer");
+    expect(fixTransferMisfile("妈妈把我借她的钱转回来了", t("income")).category).toBe("transfer");
+  });
+
+  it("reclassifies outgoing loan repayment misfiled as expense", () => {
+    expect(fixTransferMisfile("上次借小王的 1000 今天还给他了", t("expense", { amount: 1000 })).category).toBe("transfer");
+  });
+
+  it("reclassifies deposit refunds misfiled as income", () => {
+    expect(fixTransferMisfile("房东退了押金 3500 到我微信", t("income", { amount: 3500 })).category).toBe("transfer");
+    expect(fixTransferMisfile("押金 500 退回来了", t("income")).category).toBe("transfer");
+  });
+
+  it("reclassifies consumer-debt repayment misfiled as expense (D1)", () => {
+    expect(fixTransferMisfile("还了信用卡 3000", t("expense", { amount: 3000 })).category).toBe("transfer");
+    expect(fixTransferMisfile("花呗上月账单自动扣了 2680", t("expense")).category).toBe("transfer");
+    expect(fixTransferMisfile("白条还款 899", t("expense")).category).toBe("transfer");
+  });
+
+  it("keeps plain merchandise refunds as income (不误伤退货退款)", () => {
+    expect(fixTransferMisfile("退货的鞋退款 269 已收到", t("income")).category).toBe("income");
+    expect(fixTransferMisfile("退款 99 到账", t("income")).category).toBe("income");
+  });
+
+  it("keeps 还给 without borrow context untouched", () => {
+    expect(fixTransferMisfile("给妈妈买了按摩仪还给她预定了体检，花了 2000", t("expense")).category).toBe("expense");
   });
 });
 

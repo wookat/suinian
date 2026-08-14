@@ -5,6 +5,7 @@ import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow }
 import { triageNote, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
+import { sensitiveIngestGate } from "./ingest";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
 import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads } from "./threads";
@@ -59,6 +60,7 @@ import {
   RETRIAGE_TIME_BUDGET_MS,
   TRIAGE_DEGRADE_AFTER_MS,
   NOTE_WRITE_RATE_LIMIT_MAX,
+  BULK_INGEST_RATE_LIMIT_MAX,
 } from "./constants";
 import { buildStats, normalizeTzOffset, SAMPLE_TAG_LIKE } from "./stats";
 import {
@@ -1020,21 +1022,16 @@ async function createNote(
   // encrypted from the very first write, so the pending window never serves
   // plaintext through backup/export/MCP/list paths. The model stays the
   // primary judge — applyTriage restores plaintext when it says non-sensitive.
-  let storedContent = content;
-  let preContentEnc: string | null = null;
-  let preSensitive = false;
-  // skipTriage notes never get a model verdict, so only the high-precision
-  // detector applies (a broad hint would stay encrypted forever)
-  const preHit = opts.skipTriage ? detectSensitive(content) : maybeSensitive(content);
-  if (preHit && c.env.SUINIAN_ENC_KEY) {
-    try {
-      preContentEnc = await encryptContent(c.env.SUINIAN_ENC_KEY, content);
-      storedContent = ENC_PLACEHOLDER;
-      preSensitive = true;
-    } catch {
-      preContentEnc = null;
-    }
-  }
+  const gated = await sensitiveIngestGate(
+    c.env,
+    { content, title: null, tags: manualTags, is_sensitive: false },
+    // skipTriage notes never get a model verdict, so only the high-precision
+    // detector applies (a broad hint would stay encrypted forever)
+    { rejudge: !opts.skipTriage }
+  );
+  const storedContent = gated.content;
+  const preContentEnc = gated.content_enc;
+  const preSensitive = gated.is_sensitive && gated.content_enc !== null;
 
   // insert immediately (category resolved by triage, sync or async)
   await c.env.DB.prepare(
@@ -1049,7 +1046,7 @@ async function createNote(
       storedContent,
       url ?? null,
       opts.skipTriage ? "idea" : null,
-      JSON.stringify(manualTags),
+      JSON.stringify(gated.tags),
       meta ? JSON.stringify(meta) : null,
       preSensitive ? 1 : 0,
       preContentEnc
@@ -2071,18 +2068,10 @@ app.post("/api/notes/:id/retry-media", async (c) => {
 
   // same fail-closed sensitive pre-check as createNote: the re-extracted text
   // waits for AI triage, so possible secrets are encrypted from the first write
-  let storedContent = content;
-  let contentEnc: string | null = null;
-  let sensitive = 0;
-  if (maybeSensitive(content) && c.env.SUINIAN_ENC_KEY) {
-    try {
-      contentEnc = await encryptContent(c.env.SUINIAN_ENC_KEY, content);
-      storedContent = ENC_PLACEHOLDER;
-      sensitive = 1;
-    } catch {
-      contentEnc = null;
-    }
-  }
+  const gated = await sensitiveIngestGate(c.env, { content, title: null, tags: [], is_sensitive: false });
+  const storedContent = gated.content;
+  const contentEnc = gated.content_enc;
+  const sensitive = gated.is_sensitive && contentEnc !== null ? 1 : 0;
   // category back to NULL: the placeholder's triage is meaningless for the
   // real content — the async pipeline below re-sorts it like a fresh note
   await c.env.DB.prepare(
@@ -2136,6 +2125,11 @@ app.post("/api/ingest/wechat", async (c) => {
   if (!body || !(body.content ?? "").trim()) return c.json({ error: "content required" }, 400);
   const tooLong = contentTooLong(c, body.content ?? "");
   if (tooLong) return tooLong;
+  // 同一 note_write 限额覆盖所有单笔 AI 入库入口（R122 P1-5）；放在入参校验之后，
+  // 非法请求不消耗配额
+  if (!(await checkRateLimit(c.env.DB, "note_write", [c.get("userId")], NOTE_WRITE_RATE_LIMIT_MAX))) {
+    return c.json({ error: "写入太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
   const skipTriage = body.skip_triage === true;
   // wechat needs the category/tags in its confirmation text -> triage stays synchronous
   const { note, triage: triageResult } = await createNote(
@@ -2214,6 +2208,10 @@ app.delete("/api/wechat/binding", async (c) => {
 // text extraction (+ AI summary for long docs); the extracted text becomes
 // the note content and flows through the normal async triage pipeline.
 app.post("/api/ingest/media", async (c) => {
+  // 同一 note_write 限额覆盖所有单笔 AI 入库入口（R122 P1-5）
+  if (!(await checkRateLimit(c.env.DB, "note_write", [c.get("userId")], NOTE_WRITE_RATE_LIMIT_MAX))) {
+    return c.json({ error: "写入太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
   const parsed = await parseMediaRequest(c.req.raw);
   if ("error" in parsed) return c.json({ error: parsed.error }, parsed.status);
 
@@ -3080,6 +3078,10 @@ const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
 
 app.post("/api/import", async (c) => {
   const userId = c.get("userId");
+  // 批量入库按次限频（R122 P1-5）：泄露 token 也无法用导入绕过写入限流狂灌 AI 管线
+  if (!(await checkRateLimit(c.env.DB, "bulk_ingest", [userId], BULK_INGEST_RATE_LIMIT_MAX))) {
+    return c.json({ error: "导入太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
   const isZipSource = (s: string) => ZIP_IMPORT_SOURCES.includes(s as ImportSource);
   let source = "";
   let text = "";
@@ -3228,6 +3230,10 @@ app.get("/api/backup", async (c) => {
 // Restore a backup zip: notes keep original time/tags/category, media
 // re-uploaded to R2 under the new note ids, duplicates skipped.
 app.post("/api/backup/restore", async (c) => {
+  // 批量入库按次限频（R122 P1-5）：与导入共用 bulk_ingest 限额
+  if (!(await checkRateLimit(c.env.DB, "bulk_ingest", [c.get("userId")], BULK_INGEST_RATE_LIMIT_MAX))) {
+    return c.json({ error: "恢复操作太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
   const ct = c.req.header("content-type") || "";
   let stream: ReadableStream<Uint8Array> | null = null;
   if (ct.includes("multipart/form-data")) {
