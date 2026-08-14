@@ -23,7 +23,7 @@ import type { Env } from "./types";
 
 /** True when the callback endpoint should be live. */
 export function wecomKfConfigured(env: Env): boolean {
-  return !!(env.WECOM_KF_TOKEN && env.WECOM_KF_AES_KEY && env.WECOM_CORP_ID);
+  return !!(env.WECOM_KF_TOKEN && env.WECOM_KF_AES_KEY && env.WECOM_CORP_ID && env.WECOM_KF_SECRET);
 }
 
 // ---- callback XML ----

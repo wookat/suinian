@@ -144,7 +144,7 @@ interface AskResponse {
   notes: { id: string }[];
 }
 
-const REFUSAL_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面/;
+const REFUSAL_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没提到|未提及/;
 
 interface QResult {
   q: EvalQuestion;
@@ -179,7 +179,9 @@ async function runQuestion(q: EvalQuestion, idByKey: Map<string, string>): Promi
     q.expectRefusal === undefined ? null : REFUSAL_RE.test(res.answer) && res.references.length <= 3;
   const forbidden = (q.forbid ?? []).filter((k) => refKeys.includes(k));
   const forbidOk = forbidden.length === 0 && !(q.forbid ?? []).some(() => /qa-r79-demo-9x7/.test(res.answer));
-  const answerOk = (q.expectAnswerContains ?? []).every((s) => res.answer.includes(s));
+  const answerOk =
+    (q.expectAnswerContains ?? []).every((s) => res.answer.includes(s)) &&
+    !(q.forbidAnswerContains ?? []).some((s) => res.answer.includes(s));
   const pass = recallHit && allHit && (refusalOk ?? true) && forbidOk && answerOk;
   return { q, refKeys, citedKeys, recallHit, allHit, citeHit, refusalOk, forbidOk, pass, answer: res.answer };
 }

@@ -185,11 +185,13 @@ function textMsg(externalUserid: string, content: string): KfMessage {
 }
 
 describe("wecom kf helpers", () => {
-  it("wecomKfConfigured requires token + aes key + corp id", () => {
+  it("wecomKfConfigured requires token + aes key + corp id + secret", () => {
     const state = freshState();
     expect(wecomKfConfigured(makeEnv(state))).toBe(true);
     expect(wecomKfConfigured(makeEnv(state, { WECOM_KF_TOKEN: "" }))).toBe(false);
     expect(wecomKfConfigured(makeEnv(state, { WECOM_CORP_ID: "" }))).toBe(false);
+    // sync/send both need the corp secret: half-configured must read as "off" (R113)
+    expect(wecomKfConfigured(makeEnv(state, { WECOM_KF_SECRET: "" }))).toBe(false);
   });
 
   it("parses the kf callback xml", () => {
