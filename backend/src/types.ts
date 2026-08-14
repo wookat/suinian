@@ -86,6 +86,8 @@ export interface TriageResult {
 export interface NoteMeta {
   /** Original Whisper transcript before LLM correction (audio notes). */
   raw_transcript?: string;
+  /** Result of the last transcription/extraction attempt (voice/image notes). */
+  media_status?: "ok" | "extract_failed";
   /** Full vision-model description (image notes). */
   image_description?: string;
   /** Site name of the linked page (link notes). */

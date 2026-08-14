@@ -7,7 +7,7 @@ import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
-import { clusterNote, refreshThreads, reconcileThreads } from "./threads";
+import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads } from "./threads";
 import {
   createRebuildJob,
   getActiveThreadJob,
@@ -50,7 +50,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type Im
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, isFinanceAggQuestion, buildFinanceAggAnswer, ASK_CITATION_MIN_SCORE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, ASK_CITATION_MIN_SCORE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -1070,7 +1070,10 @@ async function createNote(
     const n = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
     if (n) {
       await extractGraph(c.env, n);
-      await clusterNote(c.env, n);
+      const tid = await clusterNote(c.env, n);
+      // concurrent same-topic saves can each create a thread (the cluster
+      // reads race); a scoped merge right after clustering heals the split
+      if (tid) await mergeDuplicateThreads(c.env, userId, tid);
       await upsertNoteEmbedding(c.env, n);
     }
     if (url) {
@@ -1957,6 +1960,98 @@ app.post("/api/notes/:id/refetch-link", async (c) => {
   return c.json({ note: await noteToJsonDecrypted(c.env, updated!) });
 });
 
+// ---- POST /api/notes/:id/retry-media ----
+// In-place retry of transcription/extraction for a failed voice/image/file
+// note (R109 P2-4): re-runs the extractor on the R2-archived original, so the
+// user never has to re-upload. On success the note re-enters the normal async
+// triage pipeline with the real content.
+app.post("/api/notes/:id/retry-media", async (c) => {
+  const id = c.req.param("id");
+  const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL")
+    .bind(id, c.get("userId"))
+    .first<NoteRow>();
+  if (!note) return c.json({ error: "not found" }, 404);
+  const meta = parseNoteMeta(note.meta) ?? {};
+  const failed =
+    (note.raw_type === "file" && meta.file_status === "extract_failed") ||
+    ((note.raw_type === "voice" || note.raw_type === "image") &&
+      (meta.media_status === "extract_failed" ||
+        note.content.startsWith(AUDIO_FAILED_PLACEHOLDER) ||
+        note.content.startsWith(IMAGE_FAILED_PLACEHOLDER)));
+  if (!failed) return c.json({ error: "该笔记无需重试" }, 400);
+  if (!c.env.MEDIA) return c.json({ error: "media storage not configured" }, 404);
+  const att = await c.env.DB.prepare("SELECT r2_key, mime FROM attachments WHERE note_id = ? ORDER BY rowid DESC LIMIT 1")
+    .bind(id)
+    .first<{ r2_key: string; mime: string | null }>();
+  const obj = att ? await c.env.MEDIA.get(att.r2_key) : null;
+  if (!obj) return c.json({ error: "原件未存档，无法原地重试，请重新上传" }, 404);
+  const bytes = new Uint8Array(await obj.arrayBuffer());
+
+  let content: string | null = null;
+  const newMeta: NoteMeta = { ...meta };
+  if (note.raw_type === "voice") {
+    const raw = await transcribeAudio(c.env, bytes);
+    if (raw !== null) {
+      const corrected = await correctTranscript(c.env, raw);
+      content = corrected;
+      if (corrected !== raw) newMeta.raw_transcript = raw;
+      newMeta.media_status = "ok";
+    }
+  } else if (note.raw_type === "image") {
+    const extraction = await describeImage(c.env, bytes);
+    if (extraction !== null) {
+      content = extraction.content;
+      if (extraction.description && extraction.description !== extraction.content) {
+        newMeta.image_description = extraction.description;
+      }
+      newMeta.media_status = "ok";
+    }
+  } else {
+    const kind = detectFileKind(meta.file_name, meta.file_mime ?? att!.mime ?? "");
+    if (!kind) return c.json({ error: "不支持的文件类型" }, 400);
+    const result = await buildFileNote(c.env, kind, meta.file_name || "file", bytes);
+    if (result.extracted) {
+      content = result.content;
+      newMeta.file_status = "ok";
+      if (result.excerpt) newMeta.file_excerpt = result.excerpt;
+    }
+  }
+  if (content === null) {
+    return c.json({ error: "重试仍然失败，原件已保留，可稍后再试", retryable: true }, 502);
+  }
+
+  // same fail-closed sensitive pre-check as createNote: the re-extracted text
+  // waits for AI triage, so possible secrets are encrypted from the first write
+  let storedContent = content;
+  let contentEnc: string | null = null;
+  let sensitive = 0;
+  if (maybeSensitive(content) && c.env.SUINIAN_ENC_KEY) {
+    try {
+      contentEnc = await encryptContent(c.env.SUINIAN_ENC_KEY, content);
+      storedContent = ENC_PLACEHOLDER;
+      sensitive = 1;
+    } catch {
+      contentEnc = null;
+    }
+  }
+  // category back to NULL: the placeholder's triage is meaningless for the
+  // real content — the async pipeline below re-sorts it like a fresh note
+  await c.env.DB.prepare(
+    "UPDATE notes SET content = ?, content_enc = ?, is_sensitive = ?, category = NULL, meta = ?, updated_at = datetime('now') WHERE id = ?"
+  )
+    .bind(storedContent, contentEnc, sensitive, JSON.stringify(newMeta), id)
+    .run();
+  c.executionCtx.waitUntil(
+    capped(
+      retriageOne(c.env, { id, user_id: note.user_id, content: storedContent, content_enc: contentEnc, created_at: note.created_at }),
+      PIPELINE_TIMEOUT_MS,
+      `retry-media note=${id}`
+    )
+  );
+  const updated = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
+  return c.json({ note: await noteToJsonDecrypted(c.env, updated!) });
+});
+
 // ---- GET /api/notes/:id/file ----
 // Proxy-download the original attachment from R2 (owner-only; bearer auth
 // already enforced by the /api/* middleware).
@@ -2125,6 +2220,9 @@ app.post("/api/ingest/media", async (c) => {
   const ok = content !== null;
   if (content === null) {
     content = `${parsed.type === "audio" ? AUDIO_FAILED_PLACEHOLDER : IMAGE_FAILED_PLACEHOLDER}${parsed.fileName ? `（${parsed.fileName}）` : ""}`;
+    // explicit failure marker: the client offers an in-place retry (original
+    // is archived in R2), no re-upload needed
+    meta = { ...(meta ?? {}), media_status: "extract_failed" };
   }
 
   const tooLong = contentTooLong(c, content);
@@ -2312,7 +2410,8 @@ app.post("/api/ask", async (c) => {
   const timeRange = parseTimeRange(recallQuestion);
   // 财务/统计合计类问题走精确聚合（与周报/月报同一 financeStats 口径），
   // 绝不让 LLM 对被 LIMIT 截断的召回结果心算合计（R107 P1-2）
-  if (isFinanceAggQuestion(recallQuestion)) {
+  const financeIntent = financeAggIntent(recallQuestion);
+  if (financeIntent) {
     const fConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income')"];
     const fBinds: unknown[] = [userId];
     if (timeRange?.start) {
@@ -2329,12 +2428,24 @@ app.post("/api/ask", async (c) => {
       .bind(...fBinds)
       .all<NoteRow>();
     const frows = fr.results ?? [];
-    const answer = buildFinanceAggAnswer(financeStats(frows), timeRange?.phrase ?? null);
+    const stats = financeStats(frows);
+    // fail-closed (R109 P1): aggregate wording we can't scope exactly — never
+    // let the LLM mental-math truncated recall (multi-currency mixing risk)
+    const answer =
+      financeIntent === "exact"
+        ? buildFinanceAggAnswer(stats, timeRange?.phrase ?? null)
+        : buildFinanceFailClosedAnswer(stats, timeRange?.phrase ?? null);
     // sensitive finance notes count toward totals (report口径) but never surface as cards
     const refRows = frows.filter((n) => !n.is_sensitive).slice(0, 10);
     const references = refRows.map((n, i) => ({ index: i + 1, note_id: n.id }));
     const refNotes = refRows.map((n) => noteToJson(n));
-    return c.json({ answer, references, notes: refNotes, finance_aggregate: true });
+    return c.json({
+      answer,
+      references,
+      notes: refNotes,
+      finance_aggregate: financeIntent === "exact",
+      ...(financeIntent === "fail_closed" ? { finance_fail_closed: true } : {}),
+    });
   }
   let terms = extractAskTerms(recallQuestion, history);
   // unsegmented CJK clauses never LIKE-match: extract real keywords via LLM,
@@ -3017,7 +3128,11 @@ async function retriageOne(
   const n = await env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(row.id).first<NoteRow>();
   if (n) {
     await extractGraph(env, n);
-    await clusterNote(env, n).catch((err) => console.error("retriage: cluster failed", err));
+    const tid = await clusterNote(env, n).catch((err) => {
+      console.error("retriage: cluster failed", err);
+      return null;
+    });
+    if (tid) await mergeDuplicateThreads(env, n.user_id, tid);
     await upsertNoteEmbedding(env, n);
   }
   return true;

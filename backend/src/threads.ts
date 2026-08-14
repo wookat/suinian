@@ -648,10 +648,86 @@ export async function reconcileThreads(
   return { deleted, dissolved };
 }
 
+/**
+ * Merge duplicate same-topic threads (R109 P2-1): two notes on the same topic
+ * saved concurrently can each spawn a thread (both clusterNote calls read "no
+ * thread yet" before either writes). Rather than serializing ingestion,
+ * compare each thread's representative (newest non-sensitive note) embedding
+ * and fold pairs at/above SIM_JOIN into the older thread. `aroundThreadId`
+ * scopes the scan to one freshly-touched thread (ingest pipeline); without it
+ * every thread of the user is scanned (daily refresh). Never throws.
+ */
+export async function mergeDuplicateThreads(env: Env, userId: string, aroundThreadId?: string): Promise<number> {
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT id, created_at FROM threads WHERE user_id = ? AND note_count > 0 ORDER BY created_at ASC LIMIT 100"
+    )
+      .bind(userId)
+      .all<{ id: string; created_at: string }>();
+    const threads = results ?? [];
+    if (threads.length < 2) return 0;
+    const reps = new Map<string, number[] | null>();
+    const repVector = async (threadId: string): Promise<number[] | null> => {
+      if (!reps.has(threadId)) {
+        const row = await env.DB.prepare(
+          `SELECT e.vector FROM notes n JOIN note_embeddings e ON e.note_id = n.id
+            WHERE n.thread_id = ? AND n.deleted_at IS NULL AND n.is_sensitive = 0
+            ORDER BY n.created_at DESC LIMIT 1`
+        )
+          .bind(threadId)
+          .first<{ vector: string }>();
+        let v: number[] | null = null;
+        if (row?.vector) {
+          try {
+            const p = JSON.parse(row.vector) as number[];
+            v = Array.isArray(p) && p.length > 0 ? p : null;
+          } catch {
+            v = null;
+          }
+        }
+        reps.set(threadId, v);
+      }
+      return reps.get(threadId)!;
+    };
+    let merged = 0;
+    const targets = aroundThreadId ? threads.filter((t) => t.id === aroundThreadId) : threads;
+    for (const t of targets) {
+      const tv = await repVector(t.id);
+      if (!tv) continue;
+      for (const o of threads) {
+        if (o.id === t.id) continue;
+        const ov = await repVector(o.id);
+        if (!ov) continue;
+        if (cosineSim(tv, ov) < SIM_JOIN) continue;
+        // fold the newer thread into the older one
+        const [keep, drop] = t.created_at <= o.created_at ? [t, o] : [o, t];
+        await env.DB.prepare("UPDATE notes SET thread_id = ?, updated_at = datetime('now') WHERE thread_id = ?")
+          .bind(keep.id, drop.id)
+          .run();
+        await env.DB.prepare("DELETE FROM threads WHERE id = ?").bind(drop.id).run();
+        await reconcileThread(env, keep.id);
+        reps.delete(keep.id);
+        reps.delete(drop.id);
+        merged++;
+        console.log(`threads: merged duplicate thread ${drop.id} into ${keep.id} (user=${userId})`);
+        if (aroundThreadId) return merged; // scoped thread may have been folded away
+        break;
+      }
+    }
+    return merged;
+  } catch (err) {
+    console.error(`threads: mergeDuplicateThreads failed for user=${userId}`, err);
+    return 0;
+  }
+}
+
 /** Daily cron: refresh title/summary/note_count of every thread from its notes. */
 export async function refreshThreads(env: Env): Promise<void> {
   // drop orphaned (0-note) threads and dissolve 1-note leftovers first
   await reconcileThreads(env).catch((err) => console.error("threads: reconcile failed", err));
+  // fold duplicate same-topic threads left behind by concurrent clustering
+  const { results: users } = await env.DB.prepare("SELECT DISTINCT user_id FROM threads").all<{ user_id: string }>();
+  for (const u of users ?? []) await mergeDuplicateThreads(env, u.user_id);
   const { results: threads } = await env.DB.prepare(
     "SELECT id, user_id, title FROM threads"
   ).all<{ id: string; user_id: string; title: string }>();
