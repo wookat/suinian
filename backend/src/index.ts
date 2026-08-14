@@ -7,7 +7,7 @@ import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
-import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads } from "./threads";
+import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads } from "./threads";
 import {
   createRebuildJob,
   getActiveThreadJob,
@@ -50,7 +50,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type Im
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, ASK_CITATION_MIN_SCORE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, ASK_CITATION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -2541,6 +2541,40 @@ app.post("/api/ask", async (c) => {
       notes = notes.slice(0, 25);
     }
   }
+  // 多跳二次检索（R112 P1-1）：因果/对应/后续类问题的第二跳笔记往往与问题
+  // 本身无词面/语义重叠（如「白板目标后来有着落吗」需要落地那一条）：用
+  // 首轮命中的 top 片段拼接问题再做一次语义召回，只对命中多跳措辞的问题
+  // 触发（单跳问题零额外延迟），且只增补≤6 条、总上下文封顶 30 条。
+  const multiHopIds = new Set<string>();
+  if (notes.length > 0 && !timeRange && MULTI_HOP_RE.test(recallQuestion)) {
+    try {
+      const seeds = notes
+        .slice(0, 3)
+        .map((n) => `${n.title ?? ""} ${n.content.slice(0, 160)}`.trim())
+        .join("\n");
+      const hopHits = await semanticRecall(c.env, userId, `${recallQuestion}\n${seeds}`, 8);
+      const missing = hopHits.filter((h) => !notes.some((n) => n.id === h.note_id)).slice(0, 6);
+      if (missing.length > 0) {
+        const ph = missing.map(() => "?").join(",");
+        const r = await c.env.DB.prepare(
+          `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL AND id IN (${ph})`
+        )
+          .bind(userId, ...missing.map((h) => h.note_id))
+          .all<NoteRow>();
+        const hopById = new Map((r.results ?? []).map((n) => [n.id, n]));
+        for (const h of missing) {
+          const n = hopById.get(h.note_id);
+          if (!n) continue;
+          multiHopIds.add(n.id);
+          semScore.set(n.id, Math.max(semScore.get(n.id) ?? 0, h.score));
+          notes.push(n);
+        }
+        notes = notes.slice(0, 30);
+      }
+    } catch (err) {
+      console.error("ask: multi-hop second recall failed", err);
+    }
+  }
   if (notes.length === 0) {
     // nothing recalled at all: answer "没找到" honestly (never bluff over the
     // recent-20) and suggest the nearest notes below the semantic threshold
@@ -2576,7 +2610,7 @@ app.post("/api/ask", async (c) => {
       ]
         .filter(Boolean)
         .join(", ");
-      const graphTag = graphNoteIds.has(n.id) ? ", 图谱关联" : "";
+      const graphTag = graphNoteIds.has(n.id) ? ", 图谱关联" : multiHopIds.has(n.id) ? ", 二跳关联" : "";
       return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}) ${n.title ?? ""}\n${n.content.slice(0, 500)}`;
     })
     .join("\n\n");
@@ -2588,7 +2622,7 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）。回答用中文，简洁。",
       },
       ...history,
       {
@@ -3196,6 +3230,8 @@ export default {
       ctx.waitUntil(purgeExpiredSoftDeletes(env, ctx));
       // full-history thread clustering: advance each user's cursor over old ideas
       ctx.waitUntil(backfillThreadClusters(env));
+      // deferred duplicate-thread merge: heal concurrent same-topic splits once embeddings are ready
+      ctx.waitUntil(sweepRecentDuplicateThreads(env));
       // resume queued/stale async rebuild jobs (survives the request-side slice dying)
       ctx.waitUntil(resumeThreadJobs(env));
       // web push: todo due reminders (at most once per todo) + daily review push (once per user per local day)
