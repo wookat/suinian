@@ -109,7 +109,8 @@ export type QuestionCategory =
   | "多跳"
   | "演化脉络"
   | "为什么依据"
-  | "数字细节";
+  | "数字细节"
+  | "财务聚合";
 
 export interface EvalQuestion {
   id: string;
@@ -125,6 +126,8 @@ export interface EvalQuestion {
   forbid?: string[];
   /** the answer must be an explicit "没找到" style refusal */
   expectRefusal?: boolean;
+  /** every substring must appear verbatim in the answer (deterministic paths) */
+  expectAnswerContains?: string[];
   /** excluded from tuning; only counted in the final report */
   holdout?: boolean;
 }
@@ -246,4 +249,28 @@ export const QUESTIONS: EvalQuestion[] = [
   { id: "q57", category: "数字细节", question: "土鸡蛋报价是多少", expectAny: ["num1"], expectAll: ["num1"] },
   { id: "q58", category: "数字细节", question: "土鸡蛋礼盒装多少钱一盒，什么时候提货", expectAny: ["num1"], expectAll: ["num1"] },
   { id: "q59", category: "数字细节", question: "上次那个鸡蛋供应商的报价是每斤多少元来着", expectAny: ["num1"], expectAll: ["num1"], holdout: true },
+
+  // —— 财务聚合（R108：必须走 SQL 精确聚合，绝不 LLM 心算）——
+  {
+    id: "q60",
+    category: "财务聚合",
+    question: "我一共花了多少钱",
+    expectAny: ["exp1", "exp2", "nz20"],
+    expectAnswerContains: ["笔支出", "口径与周报/月报一致"],
+  },
+  {
+    id: "q61",
+    category: "财务聚合",
+    question: "最近30天总共消费了多少",
+    expectAnswerContains: ["口径与周报/月报一致"],
+    holdout: true,
+  },
+  {
+    id: "q62",
+    category: "财务聚合",
+    question: "买机械键盘花了多少钱",
+    // 具体单笔价格问题不走聚合短路，要命中具体那条支出
+    expectAny: ["exp1"],
+    holdout: true,
+  },
 ];

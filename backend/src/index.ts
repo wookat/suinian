@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
-import { triageNote, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, isValidTimezone, DEFAULT_TZ, FALLBACK_TRIAGE } from "./triage";
+import { triageNote, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
@@ -30,8 +30,8 @@ import {
   checkRateLimit,
   clientIp,
 } from "./auth";
-import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports } from "./reports";
-import { getTodayReview, generateAllDailyReviews, readCronHeartbeats, shanghaiDate } from "./review";
+import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports, financeStats } from "./reports";
+import { getTodayReview, generateAllDailyReviews, readCronHeartbeats } from "./review";
 import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings, EMBED_BACKFILL_BUDGET_MS } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteNotesGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
 import { deleteUserData } from "./account";
@@ -50,7 +50,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type Im
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, ASK_CITATION_MIN_SCORE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, isFinanceAggQuestion, buildFinanceAggAnswer, ASK_CITATION_MIN_SCORE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -825,18 +825,6 @@ app.delete("/api/auth/me", async (c) => {
   return c.json({ ok: true });
 });
 
-/** The user's IANA timezone (browser-reported, stored in preferences); Asia/Shanghai when unset. */
-async function loadUserTz(env: Env, userId: string): Promise<string> {
-  try {
-    const row = await env.DB.prepare("SELECT tz FROM user_preferences WHERE user_id = ?")
-      .bind(userId)
-      .first<{ tz: string | null }>();
-    return row?.tz && isValidTimezone(row.tz) ? row.tz : DEFAULT_TZ;
-  } catch {
-    return DEFAULT_TZ;
-  }
-}
-
 // Legacy rows stored todo_due without a UTC offset; those values are Asia/Shanghai local times.
 export function normalizeStoredTodoDue(v: string | null): string | null {
   if (!v) return v;
@@ -940,6 +928,11 @@ export async function applyTriage(env: Env, noteId: string, triage: TriageResult
     const enc = await encryptContent(env.SUINIAN_ENC_KEY, content);
     sets.push("content = ?", "content_enc = ?");
     binds.push(ENC_PLACEHOLDER, enc);
+  } else if (!triage.is_sensitive) {
+    // the fail-closed pre-check may have encrypted the pending note; the model
+    // (primary judge) says non-sensitive → restore plaintext, drop ciphertext
+    sets.push("content = ?", "content_enc = NULL");
+    binds.push(content);
   }
   await env.DB.prepare(`UPDATE notes SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?`)
     .bind(...binds, noteId)
@@ -1006,13 +999,18 @@ async function createNote(
         }
       : (body.meta ?? null);
 
-  // sync sensitive pre-check (regex, no AI call): obvious credential values are
-  // encrypted from the very first write, so the pre-triage window never serves
-  // their plaintext through backup/export/MCP/list paths
+  // sync sensitive pre-check (no AI call), fail-closed: while the note waits
+  // for AI triage, anything that certainly OR possibly contains a secret is
+  // encrypted from the very first write, so the pending window never serves
+  // plaintext through backup/export/MCP/list paths. The model stays the
+  // primary judge — applyTriage restores plaintext when it says non-sensitive.
   let storedContent = content;
   let preContentEnc: string | null = null;
   let preSensitive = false;
-  if (detectSensitive(content) && c.env.SUINIAN_ENC_KEY) {
+  // skipTriage notes never get a model verdict, so only the high-precision
+  // detector applies (a broad hint would stay encrypted forever)
+  const preHit = opts.skipTriage ? detectSensitive(content) : maybeSensitive(content);
+  if (preHit && c.env.SUINIAN_ENC_KEY) {
     try {
       preContentEnc = await encryptContent(c.env.SUINIAN_ENC_KEY, content);
       storedContent = ENC_PLACEHOLDER;
@@ -2312,6 +2310,32 @@ app.post("/api/ask", async (c) => {
   const recallQuestion = await rewriteAskQuestion(c.env, question, history);
   // explicit time scope ("上个月/最近一周/去年…") narrows recall to that window
   const timeRange = parseTimeRange(recallQuestion);
+  // 财务/统计合计类问题走精确聚合（与周报/月报同一 financeStats 口径），
+  // 绝不让 LLM 对被 LIMIT 截断的召回结果心算合计（R107 P1-2）
+  if (isFinanceAggQuestion(recallQuestion)) {
+    const fConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income')"];
+    const fBinds: unknown[] = [userId];
+    if (timeRange?.start) {
+      fConds.push("created_at >= ?");
+      fBinds.push(timeRange.start);
+    }
+    if (timeRange?.end) {
+      fConds.push("created_at < ?");
+      fBinds.push(timeRange.end);
+    }
+    const fr = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE ${fConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
+    )
+      .bind(...fBinds)
+      .all<NoteRow>();
+    const frows = fr.results ?? [];
+    const answer = buildFinanceAggAnswer(financeStats(frows), timeRange?.phrase ?? null);
+    // sensitive finance notes count toward totals (report口径) but never surface as cards
+    const refRows = frows.filter((n) => !n.is_sensitive).slice(0, 10);
+    const references = refRows.map((n, i) => ({ index: i + 1, note_id: n.id }));
+    const refNotes = refRows.map((n) => noteToJson(n));
+    return c.json({ answer, references, notes: refNotes, finance_aggregate: true });
+  }
   let terms = extractAskTerms(recallQuestion, history);
   // unsegmented CJK clauses never LIKE-match: extract real keywords via LLM,
   // keeping any short naive terms; failures keep the naive terms untouched
@@ -2726,9 +2750,10 @@ app.post("/api/push/test", async (c) => {
 });
 
 // ---- GET /api/todos/today ----
-// 当天（上海时区）到期 + 已过期的未完成待办，供 bridge 上午推送清单
+// 当天（用户时区）到期 + 已过期的未完成待办，供 bridge 上午推送清单
 app.get("/api/todos/today", async (c) => {
-  const today = shanghaiDate();
+  const tz = await loadUserTz(c.env, c.get("userId"));
+  const today = zonedDate(new Date(), tz).iso;
   const { results } = await c.env.DB.prepare(
     `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL
        AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0)
@@ -2879,14 +2904,15 @@ app.get("/api/export", async (c) => {
     c.env.DB.prepare("SELECT * FROM weekly_reports WHERE user_id = ? ORDER BY week_start DESC").bind(userId).all<WeeklyReportRow>(),
   ]);
   // every note is exported, including ones still waiting for AI triage
-  // (category stays null; write-time sensitive pre-detection already flagged
-  // and encrypted anything the regex caught, so the redaction below covers them)
+  // (category stays null). Fail-closed: a redacted export also redacts pending
+  // notes whose content merely hints at credentials — the model hasn't judged
+  // them yet, so plaintext must not leave this path either
   const exportable = notesR.results ?? [];
   const notes = await Promise.all(
     exportable.map((n) =>
-      n.is_sensitive && !includeSensitive
+      !includeSensitive && (n.is_sensitive || (n.category === null && maybeSensitive(n.content)))
         ? Promise.resolve(
-            noteToJson({ ...n, content: SENSITIVE_EXPORT_PLACEHOLDER, title: SENSITIVE_EXPORT_PLACEHOLDER, tags: "[]" })
+            noteToJson({ ...n, content: SENSITIVE_EXPORT_PLACEHOLDER, title: SENSITIVE_EXPORT_PLACEHOLDER, tags: "[]", is_sensitive: 1 })
           )
         : noteToJsonDecrypted(c.env, n)
     )

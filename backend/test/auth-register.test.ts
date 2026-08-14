@@ -34,6 +34,15 @@ function fakeDb(users: UserRow[]) {
           return stmt;
         },
         async first() {
+          if (sql.startsWith("INSERT INTO auth_rate_limits")) {
+            // atomic UPSERT + RETURNING count (window rollover resets to 1)
+            const key = binds[0] as string;
+            const windowStart = binds[1] as string;
+            const row = rateLimits.get(key);
+            const count = row && row.window_start === windowStart ? row.count + 1 : 1;
+            rateLimits.set(key, { window_start: windowStart, count });
+            return { count };
+          }
           if (sql.startsWith("SELECT window_start, count FROM auth_rate_limits")) {
             return rateLimits.get(binds[0] as string) ?? null;
           }

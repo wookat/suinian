@@ -3,6 +3,13 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* 打印只保留正文：所有悬浮层（快捷输入条、悬浮按钮、提示气泡等 fixed 元素）不进入打印 */
+@media print {
+  .fixed {
+    display: none !important;
+  }
+}
+
 :root {
   --background: oklch(0.985 0.002 90);
   --foreground: oklch(0.24 0.01 260);

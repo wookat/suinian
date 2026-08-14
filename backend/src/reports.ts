@@ -1,12 +1,16 @@
 import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
+import { DEFAULT_TZ, loadUserTz, tzOffsetMs, tzOffsetMinutes, tzSqlModifier } from "./triage";
+import { localDateOf, parseCreatedAt } from "./stats";
+
+const SH_OFFSET_MS = 8 * 3600 * 1000;
 
 /**
- * Week boundaries in Asia/Shanghai for "last week" relative to `now`:
- * returns { weekStart, weekEnd } as YYYY-MM-DD (Monday .. Sunday inclusive).
+ * Week boundaries in the user's timezone (offsetMs east of UTC) for "last
+ * week" relative to `now`: { weekStart, weekEnd } as YYYY-MM-DD (Mon..Sun).
  */
-export function lastWeekRange(now: Date = new Date()): { weekStart: string; weekEnd: string } {
-  const sh = new Date(now.getTime() + 8 * 3600 * 1000);
+export function lastWeekRange(now: Date = new Date(), offsetMs: number = SH_OFFSET_MS): { weekStart: string; weekEnd: string } {
+  const sh = new Date(now.getTime() + offsetMs);
   const dow = sh.getUTCDay(); // 0=Sun
   const daysSinceMonday = (dow + 6) % 7;
   const thisMonday = new Date(Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), sh.getUTCDate() - daysSinceMonday));
@@ -15,25 +19,25 @@ export function lastWeekRange(now: Date = new Date()): { weekStart: string; week
   return { weekStart: lastMonday.toISOString().slice(0, 10), weekEnd: lastSunday.toISOString().slice(0, 10) };
 }
 
-/** Current week (Monday..today) in Asia/Shanghai. */
-export function thisWeekRange(now: Date = new Date()): { weekStart: string; weekEnd: string } {
-  const sh = new Date(now.getTime() + 8 * 3600 * 1000);
+/** Current week (Monday..today) in the user's timezone. */
+export function thisWeekRange(now: Date = new Date(), offsetMs: number = SH_OFFSET_MS): { weekStart: string; weekEnd: string } {
+  const sh = new Date(now.getTime() + offsetMs);
   const daysSinceMonday = (sh.getUTCDay() + 6) % 7;
   const monday = new Date(Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), sh.getUTCDate() - daysSinceMonday));
   return { weekStart: monday.toISOString().slice(0, 10), weekEnd: sh.toISOString().slice(0, 10) };
 }
 
-/** Previous calendar month in Asia/Shanghai as [monthStart, monthEnd] (both inclusive, YYYY-MM-DD). */
-export function lastMonthRange(now: Date = new Date()): { monthStart: string; monthEnd: string } {
-  const sh = new Date(now.getTime() + 8 * 3600 * 1000);
+/** Previous calendar month in the user's timezone as [monthStart, monthEnd] (both inclusive, YYYY-MM-DD). */
+export function lastMonthRange(now: Date = new Date(), offsetMs: number = SH_OFFSET_MS): { monthStart: string; monthEnd: string } {
+  const sh = new Date(now.getTime() + offsetMs);
   const first = new Date(Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth() - 1, 1));
   const last = new Date(Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), 0));
   return { monthStart: first.toISOString().slice(0, 10), monthEnd: last.toISOString().slice(0, 10) };
 }
 
-/** Current calendar month (1st..today) in Asia/Shanghai. */
-export function thisMonthRange(now: Date = new Date()): { monthStart: string; monthEnd: string } {
-  const sh = new Date(now.getTime() + 8 * 3600 * 1000);
+/** Current calendar month (1st..today) in the user's timezone. */
+export function thisMonthRange(now: Date = new Date(), offsetMs: number = SH_OFFSET_MS): { monthStart: string; monthEnd: string } {
+  const sh = new Date(now.getTime() + offsetMs);
   const first = new Date(Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), 1));
   return { monthStart: first.toISOString().slice(0, 10), monthEnd: sh.toISOString().slice(0, 10) };
 }
@@ -59,16 +63,17 @@ export async function todoStatsForWeek(
   userId: string,
   weekStart: string,
   weekEnd: string,
-  weekNotes: NoteRow[]
+  weekNotes: NoteRow[],
+  tzModifier: string = "+480 minutes"
 ): Promise<TodoStats> {
   const todos = weekNotes.filter((n) => n.category === "todo");
   const doneRows = await env.DB.prepare(
     `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND category = 'todo' AND todo_done = 1 AND done_at IS NOT NULL
-       AND datetime(done_at, '+8 hours') >= datetime(? || ' 00:00:00')
-       AND datetime(done_at, '+8 hours') <= datetime(? || ' 23:59:59')
+       AND datetime(done_at, ?) >= datetime(? || ' 00:00:00')
+       AND datetime(done_at, ?) <= datetime(? || ' 23:59:59')
      LIMIT 100`
   )
-    .bind(userId, weekStart, weekEnd)
+    .bind(userId, tzModifier, weekStart, tzModifier, weekEnd)
     .all<NoteRow>();
   const done = (doneRows.results ?? []).filter((n) => !n.is_sensitive);
   const title = (n: NoteRow) => escapeMdText((n.title || n.content).slice(0, 40));
@@ -189,31 +194,37 @@ export async function generatePeriodReport(
   which: "last" | "this" = "last",
   period: "week" | "month" = "week"
 ): Promise<{ id: string; week_start: string } | null> {
+  // period boundaries and digest dates follow the user's stored timezone
+  // preference (Asia/Shanghai when unset) instead of a hardcoded +8h
+  const tz = await loadUserTz(env, userId).catch(() => DEFAULT_TZ);
+  const offsetMs = tzOffsetMs(now, tz);
+  const offsetMin = tzOffsetMinutes(now, tz);
+  const tzModifier = tzSqlModifier(now, tz);
   let weekStart: string;
   let weekEnd: string;
   if (period === "month") {
-    const r = which === "this" ? thisMonthRange(now) : lastMonthRange(now);
+    const r = which === "this" ? thisMonthRange(now, offsetMs) : lastMonthRange(now, offsetMs);
     weekStart = r.monthStart;
     weekEnd = r.monthEnd;
   } else {
-    const r = which === "this" ? thisWeekRange(now) : lastWeekRange(now);
+    const r = which === "this" ? thisWeekRange(now, offsetMs) : lastWeekRange(now, offsetMs);
     weekStart = r.weekStart;
     weekEnd = r.weekEnd;
   }
-  // notes created during [weekStart, weekEnd] in Shanghai time = UTC range shifted by -8h
+  // notes created during [weekStart, weekEnd] in the user's local time
   const { results } = await env.DB.prepare(
     `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL
-       AND datetime(created_at, '+8 hours') >= datetime(? || ' 00:00:00')
-       AND datetime(created_at, '+8 hours') <= datetime(? || ' 23:59:59')
+       AND datetime(created_at, ?) >= datetime(? || ' 00:00:00')
+       AND datetime(created_at, ?) <= datetime(? || ' 23:59:59')
      ORDER BY created_at ASC LIMIT ${period === "month" ? 1000 : 300}`
   )
-    .bind(userId, weekStart, weekEnd)
+    .bind(userId, tzModifier, weekStart, tzModifier, weekEnd)
     .all<NoteRow>();
   const notes = results ?? [];
   // no notes this week: don't store an empty "0 条" report
   if (notes.length === 0) return null;
 
-  const stats = await todoStatsForWeek(env, userId, weekStart, weekEnd, notes).catch(
+  const stats = await todoStatsForWeek(env, userId, weekStart, weekEnd, notes, tzModifier).catch(
     (): TodoStats => ({ created: 0, createdDone: 0, doneInWeek: 0, openTitles: [], doneTitles: [] })
   );
   const finance = financeStats(notes);
@@ -232,7 +243,10 @@ export async function generatePeriodReport(
             (n.category === "expense" || n.category === "income") && typeof n.amount === "number"
               ? ` 金额=${formatAmount(n.amount, n.currency || "CNY")}`
               : "";
-          return `${i + 1}. [${cat}]${amt} (${n.created_at.slice(0, 10)}) ${(n.title || n.content).slice(0, 200)}`;
+          // 日期按用户时区展示，与报告期段边界同口径（R107 P2-2：原始 UTC 日期错位）
+          const ms = parseCreatedAt(n.created_at);
+          const day = Number.isNaN(ms) ? n.created_at.slice(0, 10) : localDateOf(ms, offsetMin);
+          return `${i + 1}. [${cat}]${amt} (${day}) ${(n.title || n.content).slice(0, 200)}`;
         })
         .join("\n");
       const label = period === "month" ? "月报" : "周报";

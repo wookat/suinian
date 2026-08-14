@@ -6,7 +6,7 @@ import { marked } from "marked"
 import DOMPurify from "dompurify"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
+import { cn, parseServerTime } from "@/lib/utils"
 import { getReports, getReport, generateReport } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
 import type { ReportPeriod, WeeklyReport } from "@/lib/types"
@@ -42,6 +42,13 @@ function monthLabel(monthStart: string): string {
 
 function reportPeriod(r: WeeklyReport): ReportPeriod {
   return r.period === "month" ? "month" : "week"
+}
+
+function formatGeneratedAt(createdAt: string): string {
+  const d = parseServerTime(createdAt)
+  if (Number.isNaN(d.getTime())) return createdAt.slice(0, 16)
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 function reportTitle(r: WeeklyReport): string {
@@ -176,7 +183,7 @@ export function ReportsPage() {
               <h2 className="text-lg font-semibold">{reportTitle(selected)}</h2>
               <p className="mb-4 mt-1 text-xs font-medium text-muted-foreground">
                 覆盖 {reportRangeLabel(selected)}
-                {selected.created_at ? ` · 生成于 ${selected.created_at.slice(0, 16)}` : ""}
+                {selected.created_at ? ` · 生成于 ${formatGeneratedAt(selected.created_at)}` : ""}
               </p>
               {selected.content_md ? (
                 <ReportBody md={stripLeadingH1(selected.content_md)} />

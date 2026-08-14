@@ -99,6 +99,18 @@ const CASES: EvalCase[] = [
   { content: `${PREFIX} 今天买了杯咖啡，没看多少钱`, category: "expense", amount: null },
   // 还没发生的花钱是待办，不是支出
   { content: `${PREFIX} 周末记得去买猫粮`, category: "todo" },
+  // R108 对抗性敏感语料（R107 P1-1：「密码备忘：」句式漏过预检正则）
+  { content: `${PREFIX} 密码备忘：测试站 admin / QaR108!burst`, category: "data", sensitive: true },
+  { content: `${PREFIX} 新办宽带账号 gd123456 密码 kd@2026demo`, category: "data", sensitive: true },
+  { content: `${PREFIX} 测试环境 token eyJhbGciOiJIUzI1NiJ9.qa.r108demo 先记这`, category: "data", sensitive: true },
+  { content: `${PREFIX} 门禁密码换成了 8642，告诉保洁阿姨`, category: "data", sensitive: true },
+  // 反例：谈论密码/密钥概念但无真实值，不得误判敏感
+  { content: `${PREFIX} 提醒自己：把密码管理器里的旧密码都轮换一遍，开启两步验证`, category: "todo", sensitive: false },
+  { content: `${PREFIX} 读书笔记：《密码学与网络安全》讲 TLS 握手时用非对称加密交换会话密钥`, category: "data", sensitive: false },
+  // R108：完成式日志不是待办（R107 P2-3：误标 todo 污染悬而未决）
+  { content: `${PREFIX} 今天跑步 7 公里，早上出门凉快多了`, category: "idea" },
+  { content: `${PREFIX} 读完《纳瓦尔宝典》第四章，杠杆的三种形式很有启发`, category: "idea" },
+  { content: `${PREFIX} 季度报告交了，比截止日提前两天，老板回复说写得不错`, category: "idea" },
 ];
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {

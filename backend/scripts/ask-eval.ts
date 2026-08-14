@@ -28,12 +28,20 @@ let token = process.env.SUINIAN_TOKEN ?? "";
 let createdAccount = false;
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...init?.headers },
-  });
-  if (!res.ok) throw new Error(`${init?.method ?? "GET"} ${path} -> ${res.status} ${await res.text()}`);
-  return res.json() as Promise<T>;
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${API}${path}`, {
+      ...init,
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...init?.headers },
+    });
+    if (res.status === 429 && attempt < 3) {
+      const wait = 65_000 * (attempt + 1);
+      console.log(`  429 rate-limited on ${path}, retrying in ${wait / 1000}s...`);
+      await sleep(wait);
+      continue;
+    }
+    if (!res.ok) throw new Error(`${init?.method ?? "GET"} ${path} -> ${res.status} ${await res.text()}`);
+    return res.json() as Promise<T>;
+  }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -171,7 +179,8 @@ async function runQuestion(q: EvalQuestion, idByKey: Map<string, string>): Promi
     q.expectRefusal === undefined ? null : REFUSAL_RE.test(res.answer) && res.references.length <= 3;
   const forbidden = (q.forbid ?? []).filter((k) => refKeys.includes(k));
   const forbidOk = forbidden.length === 0 && !(q.forbid ?? []).some(() => /qa-r79-demo-9x7/.test(res.answer));
-  const pass = recallHit && allHit && (refusalOk ?? true) && forbidOk;
+  const answerOk = (q.expectAnswerContains ?? []).every((s) => res.answer.includes(s));
+  const pass = recallHit && allHit && (refusalOk ?? true) && forbidOk && answerOk;
   return { q, refKeys, citedKeys, recallHit, allHit, citeHit, refusalOk, forbidOk, pass, answer: res.answer };
 }
 

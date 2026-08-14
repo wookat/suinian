@@ -1,4 +1,4 @@
-import type { Category, TriageResult } from "./types";
+import type { Category, Env, TriageResult } from "./types";
 import { chatComplete } from "./ai";
 
 const CATEGORIES: Category[] = ["idea", "todo", "collect", "data", "expense", "income"];
@@ -37,11 +37,34 @@ export function tzOffsetString(now: Date, tz: string): string {
   return `${m[1]}${m[2].padStart(2, "0")}:${m[3] ?? "00"}`;
 }
 
-function tzOffsetMs(now: Date, tz: string): number {
+export function tzOffsetMs(now: Date, tz: string): number {
   const off = tzOffsetString(now, tz);
   const sign = off.startsWith("-") ? -1 : 1;
   const [h, min] = off.slice(1).split(":").map(Number);
   return sign * (h * 60 + min) * 60_000;
+}
+
+/** UTC offset of `tz` at `now` in whole minutes east of UTC. */
+export function tzOffsetMinutes(now: Date, tz: string): number {
+  return Math.round(tzOffsetMs(now, tz) / 60_000);
+}
+
+/** SQLite datetime() modifier shifting UTC into `tz` local time, e.g. "+480 minutes". */
+export function tzSqlModifier(now: Date, tz: string): string {
+  const mins = tzOffsetMinutes(now, tz);
+  return `${mins >= 0 ? "+" : ""}${mins} minutes`;
+}
+
+/** The user's IANA timezone (browser-reported, stored in preferences); Asia/Shanghai when unset. */
+export async function loadUserTz(env: Env, userId: string): Promise<string> {
+  try {
+    const row = await env.DB.prepare("SELECT tz FROM user_preferences WHERE user_id = ?")
+      .bind(userId)
+      .first<{ tz: string | null }>();
+    return row?.tz && isValidTimezone(row.tz) ? row.tz : DEFAULT_TZ;
+  } catch {
+    return DEFAULT_TZ;
+  }
 }
 
 /** Date in timezone `tz` (offset by `offsetDays`) as { iso: "YYYY-MM-DD", weekday: "周X" }. */
@@ -112,6 +135,10 @@ export function buildTriagePrompt(
   - 「报销到账 1200」→ income，amount=1200，currency="CNY"
   - 「今天买了杯咖啡，没看多少钱」→ expense，amount=null（金额不确定绝不要猜）
   - 「周末记得去买猫粮」→ todo（还没花钱，不是 expense）
+  注意：已经发生/完成的动作叙述是日志不是待办——「跑了 7 公里」「读完第四章」「搞定了/交了/发布了」这类完成式记录归 idea（生活/工作日志、读书感想）或 expense/income（若是记账），绝不要因为句子里有动词就归 todo。判例：
+  - 「跑步 7 公里，早上出门凉快多了」→ idea（完成式运动日志，不是待办）
+  - 「读《纳瓦尔宝典》第四章，杠杆的三种形式很有启发」→ idea（读书笔记，不是待办）
+  - 「Android 内测包搞定了，比计划提前一天」→ idea（完成宣告，不是新待办）
 - tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）。标签必须是内容的主题词，用能概括这条内容的具体场景词（如打车→「交通」、午饭→「餐饮」、买咖啡→「咖啡」），不要一律套「购物」这类宽泛词。内容开头的方括号前缀标记（如「[QA-123]」「[P0]」「【草稿】」）和序号（「1.」）是元数据记号，不是主题：既不能整个照抄进标签，也不能把括号里的词抽出来当标签${tagHint}
 - title: 一句话短标题（<=20字），同样要忽略开头的方括号前缀/序号，不要抄进标题。判例：「[P0] 修复登录超时」→ title="修复登录超时"，tags 不含 "P0"；「[QA-TEST] 周五交报告」→ title="周五交报告"，tags 不含 "QA-TEST"、"QA"、"TEST"
 - is_sensitive: 是否含真实机密 (boolean)。仅当内容中出现真实可用的机密「具体值」时才为 true：密码/口令/密钥/API key/token 的具体值、完整身份证号、银行卡号、手机号+姓名组合、账号+密码组合。以下情况必须为 false：技术文档/教程/笔记只是讨论密码、token、密钥等概念而未出现具体秘密值；代码片段中的变量名/占位符（如 <token>、your-api-key、xxx）；普通长文、文件内容中的 ID/哈希/版本号等非机密长字符串。判例：
@@ -145,6 +172,24 @@ const ID_CARD_RE = /身份证[^\n]{0,10}\d{17}[\dXx]\b|\b\d{17}[Xx]\b/;
 const BANK_CARD_RE = /(银行卡|卡号|储蓄卡|信用卡)[^\n]{0,10}\d{12,19}\b/;
 // values that are placeholders/templates, not real secrets
 const PLACEHOLDER_VALUE_RE = /^(<|\{|\[|\*{2,}|x{3,}|你的|your[-_]?|占位)/i;
+
+// Fail-closed hint for the pre-triage window: any credential-ish topic word at
+// all. Much broader than detectSensitive on purpose — a hit only means "treat
+// as sensitive until the model has classified", never a final verdict. The
+// model remains the primary judge; applyTriage restores plaintext when it
+// confidently says non-sensitive.
+const SENSITIVE_TOPIC_RE =
+  /密码|口令|密钥|秘钥|私钥|passw(?:or)?d|passphrase|\bpwd\b|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|\bsecret\b|\btoken\b|验证码|pin\s?码|身份证|银行卡|信用卡|储蓄卡|卡号|账号/i;
+
+/**
+ * Write-time pre-check for notes awaiting AI triage (fail-closed): true when
+ * the content certainly (detectSensitive) or possibly (topic hint) contains a
+ * secret. Uncertain notes get encrypted for the pending window so backup/
+ * export/list paths can never leak plaintext before the model has judged.
+ */
+export function maybeSensitive(content: string): boolean {
+  return detectSensitive(content) || SENSITIVE_TOPIC_RE.test(content);
+}
 
 /** Regex fallback: does the content look like it contains a real credential value? */
 export function detectSensitive(content: string): boolean {

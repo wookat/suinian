@@ -8,6 +8,7 @@ import { backfillEmbeddings } from "./semantic";
 import { backfillGraphExtracts } from "./graph";
 import { clusterNote } from "./threads";
 import { SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
+import { maybeSensitive } from "./triage";
 
 export const BACKUP_FORMAT = "suinian-backup";
 export const BACKUP_VERSION = 1;
@@ -120,14 +121,18 @@ export async function buildBackupZip(
   const backupNotes: BackupNote[] = [];
   const mediaEntries: { path: string; r2_key: string }[] = [];
   // every note goes into the backup, including ones still waiting for AI
-  // triage (category stays null and gets sorted after restore); write-time
-  // sensitive pre-detection already flagged/encrypted what the regex caught,
-  // so the redaction below covers pending notes too
+  // triage (category stays null and gets sorted after restore). Fail-closed:
+  // besides confirmed-sensitive notes, a redacted (default) backup also
+  // redacts pending notes whose content merely hints at credentials — the
+  // model hasn't judged them yet, so plaintext must not leave via this path
+  // (covers writes that predate the write-time pre-check and imports)
   for (const n of notes) {
     let content = n.content;
     let title = n.title;
     let tags = safeParse<string[]>(n.tags) ?? [];
-    if (n.is_sensitive) {
+    const pendingUncertain =
+      !n.is_sensitive && !includeSensitive && n.category === null && maybeSensitive(n.content);
+    if (n.is_sensitive || pendingUncertain) {
       if (includeSensitive) {
         if (n.content_enc && env.SUINIAN_ENC_KEY) {
           const plain = await decryptContent(env.SUINIAN_ENC_KEY, n.content_enc);
@@ -158,7 +163,7 @@ export async function buildBackupZip(
       category: n.category,
       tags,
       title,
-      is_sensitive: !!n.is_sensitive,
+      is_sensitive: !!n.is_sensitive || pendingUncertain,
       todo_due: n.todo_due,
       todo_done: !!n.todo_done,
       done_at: n.done_at,
