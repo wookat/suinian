@@ -257,6 +257,8 @@ export interface RestoreStats {
   notes_total: number;
   notes_imported: number;
   notes_skipped: number;
+  /** 脱敏备份里的「[已加密内容]」占位壳：无明文可恢复，跳过不导入（R112 P2-2） */
+  sensitive_skipped: number;
   media_imported: number;
   media_skipped: number;
   media_failed: number;
@@ -314,6 +316,7 @@ export async function restoreBackup(
     notes_total: 0,
     notes_imported: 0,
     notes_skipped: 0,
+    sensitive_skipped: 0,
     media_imported: 0,
     media_skipped: 0,
     media_failed: 0,
@@ -415,6 +418,14 @@ export async function restoreBackup(
       );
       const stmts: D1PreparedStatement[] = [];
       for (const n of chunk) {
+        // 脱敏备份的敏感笔记只剩占位符，无任何可恢复明文：静默导入会变成
+        // 永久丢失明文的壳笔记，改为跳过并在统计里显式报告 sensitive_skipped，
+        // 提醒用户迁移请用勾选敏感内容的完整备份
+        if (n.is_sensitive === true && (n.content === SENSITIVE_EXPORT_PLACEHOLDER || n.content === ENC_PLACEHOLDER)) {
+          stats.sensitive_skipped++;
+          for (const _a of n.attachments ?? []) stats.media_skipped++;
+          continue;
+        }
         const key = `${n.created_at}\u0000${n.content}`;
         if (seen.has(key) || (n.is_sensitive === true && (await isSensitiveDup(n)))) {
           stats.notes_skipped++;

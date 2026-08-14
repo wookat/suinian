@@ -752,7 +752,7 @@ export function SettingsPage() {
       const stats: RestoreStats = await restoreBackup(file)
       setRestoreMsg({
         ok: true,
-        text: `恢复完成：笔记 ${stats.notes_imported}/${stats.notes_total} 条（跳过重复 ${stats.notes_skipped} 条），媒体 ${stats.media_imported} 个${stats.media_failed > 0 ? `，失败 ${stats.media_failed} 个` : ""}。AI 分拣/线索/图谱会在后台陆续补全`,
+        text: `恢复完成：笔记 ${stats.notes_imported}/${stats.notes_total} 条（跳过重复 ${stats.notes_skipped} 条）${(stats.sensitive_skipped ?? 0) > 0 ? `，跳过脱敏占位的敏感笔记 ${stats.sensitive_skipped} 条（迁移敏感内容请用勾选「包含敏感内容」的完整备份）` : ""}，媒体 ${stats.media_imported} 个${stats.media_failed > 0 ? `，失败 ${stats.media_failed} 个` : ""}。AI 分拣/线索/图谱会在后台陆续补全`,
       })
     } catch (e) {
       setRestoreMsg({ ok: false, text: e instanceof Error ? e.message : "恢复失败，请稍后重试" })
@@ -1312,7 +1312,7 @@ export function SettingsPage() {
         <div>
           <h2 className="text-sm font-medium">从完整备份恢复</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            导入「下载完整备份」导出的 zip：笔记保留原时间/标签/分类，语音/图片/文件原件重新入库；已存在的同一条笔记（按备份内的笔记 ID）自动跳过，可安心重复恢复（最大 200MB）
+            导入「下载完整备份」导出的 zip：笔记保留原时间/标签/分类，语音/图片/文件原件重新入库；已存在的同一条笔记（按备份内的笔记 ID）自动跳过，可安心重复恢复（最大 200MB）。注意：未勾选敏感内容的脱敏备份只含占位符，恢复时会跳过这些敏感笔记——迁移请用包含敏感内容的完整备份
           </p>
         </div>
         <input

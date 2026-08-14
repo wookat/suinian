@@ -546,6 +546,8 @@ export interface RestoreStats {
   notes_total: number
   notes_imported: number
   notes_skipped: number
+  /** 脱敏备份里的「[已加密内容]」占位壳：无明文可恢复，服务端跳过不导入 */
+  sensitive_skipped: number
   media_imported: number
   media_skipped: number
   media_failed: number

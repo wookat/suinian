@@ -410,11 +410,10 @@ describe("restoreBackup", () => {
     } as unknown as Env;
     const zipBytes = zipSync(Object.fromEntries([...entries.entries()]));
     const result = await restoreBackup(dstEnv, "u2", streamOf(zipBytes), () => undefined);
-    expect(result).toMatchObject({ notes_total: 1, notes_imported: 1 });
-    const ins = inserted.find((r) => r.sql.includes("INSERT INTO notes"))!;
-    expect(ins.binds[4]).toBe(SENSITIVE_EXPORT_PLACEHOLDER); // redacted stays redacted
-    expect(ins.binds[12]).toBe(1); // still flagged sensitive + isolated
-    expect(ins.binds[13]).toBeNull(); // nothing fake-encrypted
+    // R112 P2-2: the redacted placeholder shell has no recoverable plaintext —
+    // it is skipped (and reported) instead of silently imported as a fake note
+    expect(result).toMatchObject({ notes_total: 1, notes_imported: 0, sensitive_skipped: 1 });
+    expect(inserted.filter((r) => r.sql.includes("INSERT INTO notes"))).toHaveLength(0);
   });
 
   it("full roundtrip: export zip restores losslessly on a fresh account", async () => {

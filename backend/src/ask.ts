@@ -143,7 +143,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
 // 「X 时间一共花了多少钱」类合计问题必须走 SQL 精确聚合（与周报/月报同一
 // financeStats 口径），绝不能靠 LLM 对被 LIMIT 截断的召回片段心算。
 
-const FINANCE_WORD_RE = /花了?|花销|花费|支出|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?/;
+const FINANCE_WORD_RE = /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|用了?(?=[^？?。]{0,10}(?:多少|几))/;
 const AGG_WORD_RE = /一共|总共|合计|总计|共计|加起来|多少钱|多少笔|几笔|平均每|总额|结余|收支|余额|多少|怎么样|怎样|如何|情况/;
 // sum-style wording that only makes sense as a books-level aggregate: when it
 // appears with a finance word but the question can't be routed to the exact
@@ -155,7 +155,7 @@ const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|�
 const STRIP_RES: RegExp[] = [
   /今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})月(?:份|初|中|底)?/g,
   /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
-  /花了?|花销|花费|支出|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|钱/g,
+  /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|用了?|钱/g,
   /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|了|吗|呢|啊|呀|哦|是|都|在|有|和|与|？|\?|，|,|。|、|\s/g,
 ];
 
@@ -214,10 +214,30 @@ export function inTimeRange(createdAt: string, range: TimeRange): boolean {
   return true;
 }
 
+/**
+ * Relation/follow-up wording whose answer usually spans two notes (多跳：首轮
+ * 命中的笔记 + 与它因果/对应的第二跳笔记)。Gates the second-pass seeded
+ * semantic recall in /api/ask so single-hop questions pay no extra latency.
+ */
+export const MULTI_HOP_RE = /关系|关联|依据|后来|进展|着落|落地|来龙去脉|脉络|演化|一体|同一|对得上|接上|呼应|前提|支撑/;
+
 /** Cosine similarity below which a semantic-only recall hit is too weak to appear as a citation. */
 export const ASK_CITATION_MIN_SCORE = 0.55;
 
 const CITE_RE = /[\[［](\d{1,2})[\]］]/g;
+
+// 引用导言后面的 [n] 被剔除后会留下「参见 ，」这种空位；把悬空的导言词、
+// 空括号和叠在一起的标点一并清掉，保证答案文本不出现断尾引用格式。
+const DANGLING_LEADIN_RE = /(?:另?可?参见|详见)[\s　]*(?=$|[，。；、！？,.;!?)）\]】])/g;
+function cleanDanglingCitations(s: string): string {
+  return s
+    .replace(DANGLING_LEADIN_RE, "")
+    // orphan 、/， left where a removed marker preceded a surviving one
+    .replace(/(^|[\s　（(：:])[、，][\s　]*(?=[\[［])/g, "$1")
+    .replace(/（[\s　]*）|\([\s　]*\)/g, "")
+    .replace(/[\s　]*([，。；、！？])[\s　]*(?=[，。；、！？])/g, "")
+    .replace(/^[\s　]*[，、；][\s　]*/, "");
+}
 
 /**
  * Single source of truth for /api/ask citations: the answer text and the
@@ -248,7 +268,7 @@ export function reconcileAskCitations(
     const strong = noteIds.filter((id) => !weakIds.has(id));
     const list = strong.length > 0 ? strong : noteIds;
     // hallucinated out-of-range markers still get stripped from the text
-    const cleaned = answer.replace(CITE_RE, "");
+    const cleaned = cleanDanglingCitations(answer.replace(CITE_RE, ""));
     return { answer: cleaned, references: list.map((id, i) => ({ index: i + 1, note_id: id })) };
   }
   let keep = cited.filter((n) => !weakIds.has(noteIds[n - 1]));
@@ -259,7 +279,7 @@ export function reconcileAskCitations(
     return nn ? `[${nn}]` : "";
   });
   return {
-    answer: rewritten,
+    answer: cleanDanglingCitations(rewritten),
     references: keep.map((n) => ({ index: renumber.get(n)!, note_id: noteIds[n - 1] })),
   };
 }
