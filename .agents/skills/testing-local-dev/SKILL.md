@@ -98,9 +98,9 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 
 ## Production testing tips (learned R122)
 - wrangler d1 remote: `CLOUDFLARE_WORKERS_API_TOKEN` may return 7403 "account not authorized"; fall back to `CLOUDFLARE_GLOBAL_API_TOKEN` (org secret) as `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID=ddff52d24ee44e21a021c15eaffcc86d`.
-- `scripts/triage-eval.ts` fetches only `/api/notes?limit=50` but has 53 cases (R122) — the 3+ oldest eval notes always come back "(unsorted)", so a perfect 53/53 is impossible until the script paginates or bumps the limit. Run it on a dedicated fresh account (register via `/api/auth/register`, delete via `DELETE /api/auth/me`) so pre-existing notes don't eat more of the 50-window.
+- `scripts/triage-eval.ts` fetch window fixed in R122 follow-up (limit=100; must stay ≥ corpus size). Still run it on a dedicated fresh account (register via `/api/auth/register`, delete via `DELETE /api/auth/me`) so pre-existing notes don't eat the window.
 - The unified sensitive gate (backend/src/ingest.ts): skip_triage (`!` raw-save) uses only the high-precision detector — a bare "口令 P@ss2026" (no assignment verb like 改成了/是/：) stays plaintext BY DESIGN; use "口令改成了 X" style samples to exercise that path. `/api/notes/:id/retry-media` returns 该笔记无需重试 unless extraction actually failed — hard to exercise on prod.
-- Sensitive voice notes: content is encrypted but `meta.raw_transcript` keeps the plaintext transcript (potential leak channel — check whether fixed).
+- Sensitive notes scrub `meta.raw_transcript` (fixed in R122 follow-up): createNote pre-check / applyTriage / retry-media all delete it; non-sensitive notes keep it intact.
 - bulk_ingest rate limit: import and restore share one 3/min bucket; 4th call in a minute → 429.
 - Offline queue (R122 P1-3): DevTools Network → Offline, quick-capture shows "N 条离线速记待同步"; back to No throttling auto-flushes (201s) — notes appear without reload.
 
