@@ -117,11 +117,16 @@ export function AskChat({
   onTagClick,
   initialQuestion,
   onInitialQuestionConsumed,
+  initialInput,
+  onInitialInputConsumed,
 }: {
   onTagClick?: (tag: string) => void
   /** 首页速记框 `?问题` 内联指令带过来的问题，挂载/变化时自动发送 */
   initialQuestion?: string | null
   onInitialQuestionConsumed?: () => void
+  /** 预填到输入框但不自动发送（搜索空态「用 AI 问问看」：由用户确认后再消耗 AI 调用） */
+  initialInput?: string | null
+  onInitialInputConsumed?: () => void
 }) {
   const [messages, setMessages] = useState<AskChatMessage[]>(loadMessages)
   const [input, setInput] = useState("")
@@ -129,6 +134,7 @@ export function AskChat({
   const [saveStates, setSaveStates] = useState<Record<string, "saving" | "saved" | "error">>({})
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   // 账号切换（token 变化）时切到对应账号的历史，绝不把上个账号的对话带过去
   const settingsVersion = useSettingsVersion()
@@ -229,6 +235,14 @@ export function AskChat({
     void send(initialQuestion)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- send 依赖当前 state，仅在新问题到来时触发
   }, [initialQuestion])
+
+  useEffect(() => {
+    if (!initialInput) return
+    setInput(initialInput)
+    onInitialInputConsumed?.()
+    inputRef.current?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在新预填到来时触发
+  }, [initialInput])
 
   return (
     <Card className="flex flex-col gap-0 overflow-hidden p-0">
@@ -372,6 +386,7 @@ export function AskChat({
 
       <div className="flex items-end gap-2 border-t px-3 py-2.5">
         <textarea
+          ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {

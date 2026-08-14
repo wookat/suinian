@@ -447,6 +447,8 @@ function PushPreferencesCard() {
   const [prefs, setPrefs] = useState<PushPreferences | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // fail closed like WechatBindingCard: only mention WeChat when a channel is live
+  const [wechatOn, setWechatOn] = useState(false)
   const settingsVersion = useSettingsVersion()
 
   useEffect(() => {
@@ -461,6 +463,11 @@ function PushPreferencesCard() {
       .catch((e: unknown) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e))
       })
+    getWechatBinding()
+      .then((st) => {
+        if (!cancelled) setWechatOn(Boolean(st.configured || st.kf_configured))
+      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
@@ -486,15 +493,23 @@ function PushPreferencesCard() {
   }
 
   const OPTIONS: { key: "daily_review_push" | "todo_reminder_push"; label: string; hint: string }[] = [
-    { key: "daily_review_push", label: "每日回顾推送", hint: "每天早上 08:00 把「今日回顾」推到浏览器通知（已绑微信时同步推微信）" },
-    { key: "todo_reminder_push", label: "待办提醒推送", hint: "带时间的待办提前 30 分钟推浏览器通知，全天待办当天 08:00 提醒；已绑微信时上午推当天清单" },
+    {
+      key: "daily_review_push",
+      label: "每日回顾推送",
+      hint: `每天早上 08:00 把「今日回顾」推到浏览器通知${wechatOn ? "（已绑微信时同步推微信）" : ""}`,
+    },
+    {
+      key: "todo_reminder_push",
+      label: "待办提醒推送",
+      hint: `带时间的待办提前 30 分钟推浏览器通知，全天待办当天 08:00 提醒${wechatOn ? "；已绑微信时上午推当天清单" : ""}`,
+    },
   ]
 
   return (
     <Card className="space-y-3 p-4">
       <div>
         <h2 className="text-sm font-medium">推送偏好</h2>
-        <p className="mt-1 text-xs text-muted-foreground">控制浏览器通知与微信 bot 的主动推送，默认全开；关闭后当天即生效</p>
+        <p className="mt-1 text-xs text-muted-foreground">{`控制浏览器通知${wechatOn ? "与微信 bot" : ""}的主动推送，默认全开；关闭后当天即生效`}</p>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
       {prefs === null && !error ? (

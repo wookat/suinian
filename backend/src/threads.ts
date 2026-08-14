@@ -8,7 +8,22 @@ const SIM_JOIN = 0.76;
 const SIM_CANDIDATE = 0.5;
 /** Narrower confirm band for the frugal (cron backfill) path: fewer LLM calls. */
 const SIM_CANDIDATE_FRUGAL = 0.62;
+/**
+ * Stricter confirm floor when a collect note is on either side of the pair.
+ * One-off article collects are the most common over-join source (offline A/B:
+ * scripts/thread-cross-eval.ts — at 0.5 a travel article joined an unrelated
+ * travel thread; at 0.62 collect-caused mis-joins drop to zero while the
+ * collect+idea same-topic combo still clusters).
+ */
+const SIM_CANDIDATE_COLLECT = 0.62;
+/** Categories that participate in thread clustering: thoughts and the articles they react to. */
+export const THREAD_CATEGORIES = "('idea','collect')";
 const EMBED_MODEL = "@cf/baai/bge-m3";
+
+/** Same field mix as semantic.noteEmbedText, local to avoid an import cycle. */
+function embedInput(n: Pick<NoteRow, "title" | "content" | "url_title" | "url_summary">): string {
+  return [n.title, n.content, n.url_title, n.url_summary].filter(Boolean).join("\n");
+}
 
 export function cosineSim(a: number[], b: number[]): number {
   let dot = 0;
@@ -218,16 +233,18 @@ export async function clusterNote(
     ? async () => {}
     : (threadId: string, fallbackTitle?: string) => summarizeThread(env, threadId, fallbackTitle);
   try {
-    if (note.category !== "idea") return null;
+    if (note.category !== "idea" && note.category !== "collect") return null;
     // graph signal first: an idea sharing entities/relations with an existing
-    // idea joins its thread regardless of embedding similarity
-    if (!note.is_sensitive && opts?.useGraph !== false) {
+    // idea joins its thread regardless of embedding similarity. Collect notes
+    // skip this path: with no similarity floor, entity overlap alone (e.g. a
+    // shared place name in an unrelated article) would over-join them.
+    if (note.category === "idea" && !note.is_sensitive && opts?.useGraph !== false) {
       const mate = await findGraphThreadMate(env, note);
       if (mate) {
         console.log(`threads: graph mate note=${note.id} mate=${mate.note_id} shared=${mate.shared}`);
         // still store the embedding so search/ask recall keeps working
         if (!(await loadStoredEmbedding(env, note.id))) {
-          const v = await embed(env, `${note.title ?? ""}\n${note.content}`);
+          const v = await embed(env, embedInput(note));
           if (v) await saveEmbedding(env, note.id, v);
         }
         let threadId = mate.thread_id;
@@ -246,17 +263,17 @@ export async function clusterNote(
     // sensitive notes never enter the vector store (content is encrypted at rest)
     let vector = note.is_sensitive ? null : await loadStoredEmbedding(env, note.id);
     if (!note.is_sensitive && !vector) {
-      vector = await embed(env, `${note.title ?? ""}\n${note.content}`);
+      vector = await embed(env, embedInput(note));
       if (vector) await saveEmbedding(env, note.id, vector);
     }
     if (vector) {
-      type Candidate = { id: string; thread_id: string | null; title: string | null; content: string; vector: string | null };
-      // recent ideas (any age cap removed) + one representative note per
-      // existing thread, so historical threads stay joinable beyond the window
+      type Candidate = { id: string; thread_id: string | null; category: string; title: string | null; content: string; url_title: string | null; url_summary: string | null; vector: string | null };
+      // recent ideas/collects (any age cap removed) + one representative note
+      // per existing thread, so historical threads stay joinable beyond the window
       const { results } = await env.DB.prepare(
-        `SELECT n.id, n.thread_id, n.title, n.content, e.vector FROM notes n
+        `SELECT n.id, n.thread_id, n.category, n.title, n.content, n.url_title, n.url_summary, e.vector FROM notes n
          LEFT JOIN note_embeddings e ON e.note_id = n.id
-         WHERE n.user_id = ? AND n.category = 'idea' AND n.deleted_at IS NULL AND n.id != ?
+         WHERE n.user_id = ? AND n.category IN ${THREAD_CATEGORIES} AND n.deleted_at IS NULL AND n.id != ?
          ORDER BY n.created_at DESC LIMIT 200`
       )
         .bind(note.user_id, note.id)
@@ -264,7 +281,7 @@ export async function clusterNote(
       const candidates: Candidate[] = [...(results ?? [])];
       try {
         const { results: reps } = await env.DB.prepare(
-          `SELECT n.id, n.thread_id, n.title, n.content, e.vector FROM notes n
+          `SELECT n.id, n.thread_id, n.category, n.title, n.content, n.url_title, n.url_summary, e.vector FROM notes n
            LEFT JOIN note_embeddings e ON e.note_id = n.id
            WHERE n.id IN (
              SELECT (SELECT nn.id FROM notes nn WHERE nn.thread_id = t.id AND nn.deleted_at IS NULL
@@ -279,7 +296,7 @@ export async function clusterNote(
       } catch (err) {
         console.error("threads: thread representatives query failed", err);
       }
-      let best: { id: string; thread_id: string | null; title: string | null; content: string; sim: number } | null =
+      let best: { id: string; thread_id: string | null; category: string; title: string | null; content: string; sim: number } | null =
         null;
       let backfilled = 0;
       for (const r of candidates) {
@@ -291,19 +308,23 @@ export async function clusterNote(
             v = null;
           }
         } else if (backfilled < 20) {
-          // lazily embed older idea notes that predate the embeddings table
+          // lazily embed older notes that predate the embeddings table
           backfilled++;
-          v = await embed(env, `${r.title ?? ""}\n${r.content}`);
+          v = await embed(env, embedInput(r));
           if (v) await saveEmbedding(env, r.id, v);
         }
         if (!v) continue;
         const sim = cosineSim(vector, v);
         if (!best || sim > best.sim)
-          best = { id: r.id, thread_id: r.thread_id, title: r.title, content: r.content, sim };
+          best = { id: r.id, thread_id: r.thread_id, category: r.category, title: r.title, content: r.content, sim };
       }
       if (best) {
         const direct = best.sim >= SIM_JOIN;
-        const confirmFloor = opts?.frugal ? SIM_CANDIDATE_FRUGAL : SIM_CANDIDATE;
+        const crossCollect = note.category === "collect" || best.category === "collect";
+        const confirmFloor = Math.max(
+          opts?.frugal ? SIM_CANDIDATE_FRUGAL : SIM_CANDIDATE,
+          crossCollect ? SIM_CANDIDATE_COLLECT : 0
+        );
         const confirmed =
           !direct &&
           best.sim >= confirmFloor &&
@@ -325,8 +346,10 @@ export async function clusterNote(
       } else {
         console.log(`threads: cluster note=${note.id} no comparable idea notes`);
       }
-      // frugal path stops here: embedding prescreen + at most one confirm call
-      if (opts?.frugal) return null;
+      // frugal path stops here: embedding prescreen + at most one confirm call.
+      // collect notes also stop: the LLM-only fallbacks have no similarity
+      // floor, so one-off article collects would over-join (see eval script)
+      if (opts?.frugal || note.category === "collect") return null;
       // borderline/no embedding match: still try DeepSeek against existing thread titles
       const picked = await pickThreadByDeepseek(env, note);
       if (picked) {
@@ -336,7 +359,7 @@ export async function clusterNote(
       }
       return null;
     }
-    if (opts?.frugal) return null;
+    if (opts?.frugal || note.category === "collect") return null;
     // no embedding available: DeepSeek-only fallback (existing threads, then cold-start pairing)
     console.log(`threads: no embedding for note=${note.id}, using deepseek fallback`);
     const picked = await pickThreadByDeepseek(env, note);
@@ -425,12 +448,12 @@ const REBUILD_SECOND_PASS_MAX = 200;
 export async function rebuildStep(env: Env, userId: string, state: RebuildState, deadline: number): Promise<RebuildState> {
   if (state.phase === "reset") {
     const cnt = await env.DB.prepare(
-      "SELECT COUNT(*) AS c FROM notes WHERE user_id = ? AND category = 'idea' AND deleted_at IS NULL"
+      `SELECT COUNT(*) AS c FROM notes WHERE user_id = ? AND category IN ${THREAD_CATEGORIES} AND deleted_at IS NULL`
     )
       .bind(userId)
       .first<{ c: number }>();
     state.total = cnt?.c ?? 0;
-    await env.DB.prepare("UPDATE notes SET thread_id = NULL WHERE user_id = ? AND category = 'idea'")
+    await env.DB.prepare(`UPDATE notes SET thread_id = NULL WHERE user_id = ? AND category IN ${THREAD_CATEGORIES}`)
       .bind(userId)
       .run();
     await env.DB.prepare(
@@ -446,7 +469,7 @@ export async function rebuildStep(env: Env, userId: string, state: RebuildState,
   if (state.phase === "cluster") {
     while (Date.now() < deadline) {
       const { results } = await env.DB.prepare(
-        `SELECT * FROM notes WHERE user_id = ?1 AND category = 'idea' AND deleted_at IS NULL
+        `SELECT * FROM notes WHERE user_id = ?1 AND category IN ${THREAD_CATEGORIES} AND deleted_at IS NULL
            AND (created_at > ?2 OR (created_at = ?2 AND id > ?3))
          ORDER BY created_at ASC, id ASC LIMIT ${REBUILD_BATCH}`
       )

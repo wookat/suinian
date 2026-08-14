@@ -14,6 +14,8 @@ function fakeDb() {
     return c;
   }
 
+  const inThreadCats = (n: NoteRow) => n.category === "idea" || n.category === "collect";
+
   const db = {
     notes,
     embeddings,
@@ -39,21 +41,24 @@ function fakeDb() {
           if (sql.includes("COUNT(*) AS c FROM notes WHERE user_id")) {
             let c = 0;
             for (const n of notes.values())
-              if (n.user_id === binds[0] && n.category === "idea" && n.deleted_at === null) c++;
+              if (n.user_id === binds[0] && inThreadCats(n) && n.deleted_at === null) c++;
             return { c };
           }
           return null;
         },
         async all() {
           if (sql.includes("FROM notes n")) {
-            // candidate ideas with embeddings
+            // candidate ideas/collects with embeddings
             const rows = [...notes.values()]
-              .filter((n) => n.user_id === binds[0] && n.category === "idea" && n.id !== binds[1])
+              .filter((n) => n.user_id === binds[0] && inThreadCats(n) && n.id !== binds[1])
               .map((n) => ({
                 id: n.id,
                 thread_id: n.thread_id,
+                category: n.category,
                 title: n.title,
                 content: n.content,
+                url_title: n.url_title,
+                url_summary: n.url_summary,
                 vector: embeddings.get(n.id) ?? null,
               }));
             return { results: rows };
@@ -70,7 +75,7 @@ function fakeDb() {
           }
           if (sql.includes("SELECT * FROM notes WHERE user_id")) {
             let rows = [...notes.values()].filter(
-              (n) => n.user_id === binds[0] && n.category === "idea" && n.deleted_at === null
+              (n) => n.user_id === binds[0] && inThreadCats(n) && n.deleted_at === null
             );
             if (sql.includes("thread_id IS NULL")) rows = rows.filter((n) => n.thread_id === null);
             if (sql.includes("created_at > ?2")) {
@@ -112,7 +117,7 @@ function fakeDb() {
             if (sql.includes("WHERE thread_id = ?")) {
               for (const n of notes.values()) if (n.thread_id === binds[0]) n.thread_id = null;
             } else {
-              for (const n of notes.values()) if (n.user_id === binds[0] && n.category === "idea") n.thread_id = null;
+              for (const n of notes.values()) if (n.user_id === binds[0] && inThreadCats(n)) n.thread_id = null;
             }
           } else if (sql.includes("UPDATE threads SET note_count = ?")) {
             const t = threads.get(binds[1] as string);
@@ -278,13 +283,66 @@ describe("clusterNote merge into existing thread", () => {
     expect(db.notes.get("b")!.thread_id).toBe("t1");
   });
 
-  it("ignores non-idea notes", async () => {
+  it("ignores notes outside idea/collect (todo/expense/data)", async () => {
     const db = fakeDb();
     const t = makeNote("t", "买牛奶", { category: "todo" });
     db.notes.set("t", t);
     const env = makeEnv(db, fakeAi({ 买牛奶: [1, 0, 0] }));
     await clusterNote(env, t);
     expect(db.threads.size).toBe(0);
+  });
+
+  it("attaches a highly similar collect to the matched idea's thread", async () => {
+    const db = fakeDb();
+    db.threads.set("t1", { id: "t1", user_id: "u1", title: "AI 收件箱", note_count: 1 });
+    const a = makeNote("a", "做一个 AI 收件箱", { thread_id: "t1" });
+    const b = makeNote("b", "https://example.com/ai-inbox", {
+      category: "collect",
+      url: "https://example.com/ai-inbox",
+      url_title: "AI 收件箱产品分析",
+      url_summary: "一篇关于 AI 收件箱产品形态的文章",
+    });
+    db.notes.set("a", a);
+    db.notes.set("b", b);
+    db.embeddings.set("a", JSON.stringify([1, 0, 0]));
+    const ai = fakeAi({ "AI 收件箱产品分析": [0.99, 0.1, 0] });
+    const env = makeEnv(db, ai);
+    await clusterNote(env, b);
+    expect(db.notes.get("b")!.thread_id).toBe("t1");
+  });
+
+  it("does not confirm a borderline collect below the collect floor", async () => {
+    const db = fakeDb();
+    db.threads.set("t1", { id: "t1", user_id: "u1", title: "AI 收件箱", note_count: 1 });
+    const a = makeNote("a", "做一个 AI 收件箱", { thread_id: "t1" });
+    const b = makeNote("b", "https://example.com/other", {
+      category: "collect",
+      url: "https://example.com/other",
+      url_title: "旅行攻略",
+      url_summary: "一篇旅行攻略文章",
+    });
+    db.notes.set("a", a);
+    db.notes.set("b", b);
+    db.embeddings.set("a", JSON.stringify([1, 0, 0]));
+    // cosine ≈ 0.55: above the idea confirm band (0.5) but below the collect floor (0.62)
+    const ai = fakeAi({ 旅行攻略: [0.55, 0.835, 0] });
+    const env = makeEnv(db, ai, "1"); // DeepSeek would say yes — must never be asked
+    await clusterNote(env, b);
+    expect(db.notes.get("b")!.thread_id).toBeNull();
+    expect(db.threads.size).toBe(1);
+  });
+
+  it("never routes collects through the LLM-only fallbacks", async () => {
+    const db = fakeDb();
+    db.threads.set("t1", { id: "t1", user_id: "u1", title: "AI 收件箱", note_count: 1 });
+    const a = makeNote("a", "做一个 AI 收件箱", { thread_id: "t1" });
+    const b = makeNote("b", "https://example.com/ai", { category: "collect", url: "https://example.com/ai" });
+    db.notes.set("a", a);
+    db.notes.set("b", b);
+    // no embeddings available → idea would use the DeepSeek fallback; collect must not
+    const env = makeEnv(db, undefined, "1");
+    await clusterNote(env, b);
+    expect(db.notes.get("b")!.thread_id).toBeNull();
   });
 });
 
@@ -308,5 +366,24 @@ describe("rebuildThreads", () => {
     expect(res.threads).toBe(1);
     expect(db.notes.get("a")!.thread_id).toBe(db.notes.get("b")!.thread_id);
     expect(db.notes.get("c")!.thread_id).toBeNull();
+  });
+
+  it("includes collects in the rebuild scope", async () => {
+    const db = fakeDb();
+    const a = makeNote("a", "做一个 AI 收件箱");
+    const b = makeNote("b", "https://example.com/ai-inbox", {
+      category: "collect",
+      url: "https://example.com/ai-inbox",
+      url_title: "AI 收件箱产品分析",
+      created_at: "2026-08-02 00:00:00",
+    });
+    db.notes.set("a", a);
+    db.notes.set("b", b);
+    const ai = fakeAi({ "做一个 AI 收件箱": [1, 0, 0], "AI 收件箱产品分析": [0.99, 0.1, 0] });
+    const env = makeEnv(db, ai, "0");
+    const res = await rebuildThreads(env, "u1");
+    expect(res.ideas).toBe(2);
+    expect(res.threads).toBe(1);
+    expect(db.notes.get("b")!.thread_id).toBe(db.notes.get("a")!.thread_id);
   });
 });
