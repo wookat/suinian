@@ -71,7 +71,7 @@ export type Category = "idea" | "todo" | "collect" | "data" | "expense" | "incom
 export interface TriageResult {
   category: Category;
   tags: string[];
-  title: string;
+  title: string | null;
   is_sensitive: boolean;
   todo_due?: string | null;
   /** Amount for expense/income notes; null when the amount is uncertain. */

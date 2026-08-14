@@ -68,6 +68,7 @@ function latencyDb(notes: Row[], latencyMs: number) {
         async first() {
           stats.roundtrips++;
           await sleep(latencyMs);
+          if (sql.includes("auth_rate_limits")) return { count: 1 };
           if (sql.includes("FROM users")) return binds[0] === "good-token" ? { id: "u1" } : null;
           return null;
         },
@@ -141,8 +142,8 @@ describe("POST /api/notes/batch roundtrip budget (R89: intermittent 40-60s)", ()
     const res = await app.request(req({ action: "add_tags", ids, tags: ["新标签"] }), undefined, makeEnv(db), ctx);
     const body = (await res.json()) as { affected: number };
     expect(body.affected).toBe(1000);
-    // auth first() + 13 selects (parallel) + ceil(1000/100)=10 batch calls
-    expect(db.stats.roundtrips).toBeLessThanOrEqual(25);
+    // auth first() + rate-limit first() + 13 selects (parallel) + ceil(1000/100)=10 batch calls
+    expect(db.stats.roundtrips).toBeLessThanOrEqual(26);
     expect(db.stats.batchCalls).toBeLessThanOrEqual(10);
   });
 

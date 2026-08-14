@@ -28,6 +28,18 @@ export const NOTE_WRITE_RATE_LIMIT_MAX = 60;
  */
 export const BULK_INGEST_RATE_LIMIT_MAX = 3;
 
+/**
+ * Per-user per-minute cap on batch note mutations (批量删除/打标/归类)。纯 D1
+ * 写、无 AI 调用，限额只为封住泄露 token 的高频批量篡改（R123 P2）。
+ */
+export const BATCH_WRITE_RATE_LIMIT_MAX = 30;
+
+/**
+ * Per-user per-minute cap on full-history thread rebuilds：全量重建对每条笔记
+ * 都可能触发嵌入/图谱调用，是最重的单个入口（R123 P2）。
+ */
+export const THREAD_REBUILD_RATE_LIMIT_MAX = 2;
+
 /** Retention window (最近删除) before a soft-deleted note is hard-deleted by the cron sweep. */
 export const SOFT_DELETE_RETENTION_DAYS = 30;
 

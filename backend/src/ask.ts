@@ -189,6 +189,87 @@ export function financeAggIntent(question: string): "exact" | "fail_closed" | nu
   return null;
 }
 
+// ---- 计数/枚举类问答（R124 P1-2）----
+// 「记了多少条」类计数问题与财务聚合同理：必须走 SQL COUNT 精确计数，绝不能
+// 让 LLM 对被 LIMIT 截断的召回窗口猜总数（R123 实测：实为 210 条答成 16）。
+// 带主题限定无法精确 SQL 化时 fail-closed 说明，仍给出可精确的总数。
+
+/** 问的是「记了多少条/几条笔记」这类计数（金额类交财务路径优先处理）。 */
+const COUNT_Q_RE = /(?:多少|几)\s*[条篇](?:笔记|记录)?|(?:记|写|存|收藏|保存)[了过]?[^？?。]{0,8}(?:多少|几)\s*[条篇个样件]/;
+
+const COUNT_STRIP_RES: RegExp[] = [
+  STRIP_RES[0], // 时间短语，与财务聚合同一口径
+  /到目前为止|截止到?现在|截至现在|至今|目前|现在|为止|开始记录以来|一共|总共|合计|总计|共计|加起来|到底|大概|大约|多少|几/g,
+  /笔记|记录|条|篇|个|样|件|东西|内容|事情|事/g,
+  /记|写|存|收藏|保存|发/g,
+  /请问|一下|来着|帮我数|数数|统计|我的?|了|过|吗|呢|啊|呀|哦|是|都|在|有|？|\?|，|,|。|、|\s/g,
+];
+
+/**
+ * How /api/ask should answer a note-count question:
+ * - "exact": 无额外限定（或只有时间限定）→ SQL COUNT 精确回答。
+ * - "fail_closed": 计数措辞但剩余主题/标签限定 → 拒绝猜数，给出可精确的总数。
+ * - null: 不是计数问题。
+ */
+export function countAggIntent(question: string): "exact" | "fail_closed" | null {
+  if (!COUNT_Q_RE.test(question)) return null;
+  // 金额/账目类计数（几笔支出、花了多少）由财务聚合路径处理
+  if (FINANCE_WORD_RE.test(question)) return null;
+  if (FACT_QUERY_RE.test(question)) return null;
+  let residual = question;
+  for (const re of COUNT_STRIP_RES) residual = residual.replace(re, "");
+  return residual.length < 2 ? "exact" : "fail_closed";
+}
+
+/** 「这段时间都记了什么/记了哪些」——时间窗枚举，走 SQL 全量列举而非 top-k 召回。 */
+export function enumListIntent(question: string): boolean {
+  return /都记[了过]?(?:些|哪些)?什么|记[了过](?:些什么|哪些)|都写[了过]?(?:些|哪些)?什么|都有哪些笔记|记录[了过](?:些什么|哪些|什么)/.test(question);
+}
+
+const COUNT_CATEGORY_LABELS: Record<string, string> = {
+  idea: "想法",
+  todo: "待办",
+  collect: "收藏",
+  data: "资料",
+  expense: "支出",
+  income: "收入",
+  transfer: "资金往来",
+};
+
+/** Exact count answer from SQL aggregation（含分类分布与加密笔记数）。 */
+export function buildCountAnswer(
+  total: number,
+  byCategory: { category: string | null; cnt: number }[],
+  sensitiveCount: number,
+  phrase: string | null
+): string {
+  const scope = phrase ? `${phrase}` : "到目前为止";
+  if (total === 0) return `${scope}你还没有记录任何笔记。`;
+  const parts = byCategory
+    .filter((r) => r.cnt > 0)
+    .map((r) => `${r.category ? (COUNT_CATEGORY_LABELS[r.category] ?? r.category) : "待分类"} ${r.cnt} 条`);
+  let answer = `${scope}你一共记了 ${total} 条笔记`;
+  if (parts.length > 0) answer += `，其中：${parts.join("、")}`;
+  answer += "。";
+  if (sensitiveCount > 0) answer += `（含 ${sensitiveCount} 条加密的敏感笔记）`;
+  answer += "\n\n以上为数据库精确统计（不含已删除笔记）。";
+  return answer;
+}
+
+/** Fail-closed：计数措辞带主题限定，无法精确 SQL 化时拒绝猜数并给出可精确的总数。 */
+export function buildCountFailClosedAnswer(
+  total: number,
+  byCategory: { category: string | null; cnt: number }[],
+  sensitiveCount: number,
+  phrase: string | null
+): string {
+  return (
+    "这个计数问题带有主题/内容限定条件，暂不支持按限定条件精确计数；为避免从部分检索结果猜数出错，我不做估算。\n\n" +
+    `${buildCountAnswer(total, byCategory, sensitiveCount, phrase)}\n\n` +
+    "如需按主题查看，可在时间流搜索该关键词逐条确认。"
+  );
+}
+
 // ---- 拒答建议主题相关性（R118 P2，R117 §四-2）----
 // 建议列表与「找到了相关的笔记」口径都必须以主题词命中为准：语义分上
 // “花钱类”笔记会压过真正的主题笔记（理发），零召回时弱命中也会被误称

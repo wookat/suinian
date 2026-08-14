@@ -47,6 +47,7 @@ function fakeDb(notes: Row[], opts?: { onSql?: (sql: string, binds: unknown[]) =
         },
         async first() {
           opts?.onSql?.(sql, binds);
+          if (sql.includes("auth_rate_limits")) return { count: 1 };
           if (sql.includes("FROM users WHERE api_token")) {
             if (binds[0] === "token-a") return { id: "u_a" };
             if (binds[0] === "token-b") return { id: "u_b" };
