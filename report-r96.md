@@ -42,10 +42,17 @@
 | 设置页「每日回顾推送」375px 折行错位 | ✅ 本轮修：勾选项改顶对齐 + label/hint 收进同一可折行容器，窄屏折行不再错位 |
 | 删除确认用原生 confirm 与应用内风格不一 | ✅ 本轮修：新增轻量 `ConfirmDialog`（应用内弹窗，Esc/遮罩取消），笔记卡删除与时间流批量删除均改用；设置页标签合并/删除、token 轮换等低频操作挂账下轮统一 |
 
-## 4. 回归验证
+## 4. 回归验证（全绿，GitHub Actions 保持禁用，本地为准）
 
-（本地验证 + QA 全链路结果见本节，GitHub Actions 保持禁用，本地全绿为准。）
+**本地验证**：
+- backend：`npx tsc --noEmit` 通过；`npm test` 508/508 通过（49 文件，含新增 test/r96-prompts.test.ts）
+- web：`npm run lint` 通过（仅存量 fast-refresh warning）；`npm run build` 通过
+- eval（部署后对生产实跑）：ask-eval 41/44（93%，dev set，与 R94 42/44 同水位）；triage-eval **category 21/21、todo_due 5/5、tags 无前缀污染 21/21、sensitive 5/5、amount 4/4** —— todo_due 从 R94 的 3/5 回到 5/5
 
-- backend：`npx tsc --noEmit` / `npm test`（含新增 r96-prompts.test.ts）/ eval
-- web：`npm run lint` / `npm run build`
-- QA：[QA-R96] 独立账号全链路，测毕注销并逐表核清，u_boss 未触碰
+**部署**：worker suinian-api（版本 dba47da0-2f9e）+ Pages suinian（--branch main）已上线；`/health` `{"ok":true}`、`/health?probe=ai` provider=fallback（DeepSeek 余额未回，属既知状态）、Web 200。
+
+**QA 全链路（生产，[QA-R96]-e2e-7431 / u_d5d377236fbd，录屏全程）**：注册→连发多类型笔记（AI 分拣分类/due/标签全对）→ R96 新功能逐项验证（应用内删除弹窗单条+批量含 Esc/遮罩/取消、375px 批量栏换行不溢出、空搜索「用 AI 问问看」、线索卡「本周 +3」、图谱标签浅/暗色均清晰、375px 推送偏好折行对齐）→ few-shot 反哺观察生效（手动改分类后同类新笔记按用户偏好归类）→ 常规回归（编辑/标签/回收站恢复/AI 问答/暗色）全过。无 P0/P1。
+
+P2 观察：「用 AI 问问看」点击后直接自动提问（复用 askPrefill 既有机制），比「仅预填」更进一步，视为符合意图保留。
+
+**清理核验**：QA 账号（含一个输入误注册即删的 u_826e3ee62f7c）已 `DELETE /api/auth/me`，旧 token 全部 401；D1 remote 逐表（notes/threads/weekly_reports/entities/edges/daily_reviews/user_preferences/push_* /thread_* /wechat_* /wecom_* 等 17 表）按 4 个本轮 QA/eval user id 查询全部 0 行，attachments/note_embeddings 无孤儿行；`users` 表仅剩 `u_boss / Thomas`，未触碰。
