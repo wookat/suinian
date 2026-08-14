@@ -110,6 +110,8 @@ export interface NoteMeta {
   file_status?: "ok" | "extract_failed";
   /** Export source this note was imported from (imported notes). */
   import_source?: string;
+  /** When the note entered the queue via batch import; lateness is measured from here, not the preserved created_at. */
+  imported_at?: string;
   /** Original tags from the export file, merged back after AI triage (imported notes). */
   import_tags?: string[];
   /** Merchant / purpose of an expense/income note. */

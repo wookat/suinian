@@ -181,8 +181,11 @@ export function parseImageExtraction(raw: string): ImageExtraction {
   const descMatch = cleaned.match(/(?:^|\n)\s*描述[:：]\s*([\s\S]*)/);
   const text = (textMatch?.[1] ?? "").trim();
   const desc = (descMatch?.[1] ?? "").trim();
-  const hasText = text.length > 0 && !/^(无|没有|无文字|N\/A|none)。?$/i.test(text);
-  if (hasText) return { content: text, description: desc || cleaned };
+  // models often echo the prompt's angle-bracket placeholder (e.g. "<无>");
+  // strip wrapping brackets before deciding whether the image really has text
+  const bare = text.replace(/^[<《【「(（\[]+/, "").replace(/[>》】」)）\]]+$/, "").trim();
+  const hasText = bare.length > 0 && !/^(无|没有|无文字|N\/A|none)。?$/i.test(bare);
+  if (hasText) return { content: bare, description: desc || cleaned };
   // no text in image: fall back to the first sentence of the description
   const fallback = desc || cleaned;
   const firstSentence = fallback.split(/(?<=[。！？!?])/)[0]?.trim() || fallback;
@@ -203,7 +206,11 @@ export async function describeImage(env: Pick<Env, "AI">, bytes: Uint8Array): Pr
       "vision"
     )) as { response?: string };
     const text = (out.response ?? "").trim();
-    return text ? parseImageExtraction(text) : null;
+    if (!text) return null;
+    const extraction = parseImageExtraction(text);
+    // never let an empty/placeholder-only extraction become note content;
+    // callers fall back to the honest failure placeholder instead
+    return extraction.content ? extraction : null;
   } catch (err) {
     console.error("describeImage: failed", err);
     return null;

@@ -3,17 +3,6 @@ import { chatComplete } from "./ai";
 
 export type ReviewKind = "year_ago" | "month_ago" | "revisit" | "recurring_theme" | "pending_todo";
 
-export interface DailyReviewRow {
-  id: string;
-  user_id: string;
-  review_date: string;
-  note_id: string;
-  kind: ReviewKind;
-  comment: string | null;
-  position: number;
-  created_at: string;
-}
-
 /** Max review items generated per user per day (first is the "one" pushed; extras feed 翻下一条). */
 export const MAX_REVIEW_ITEMS = 3;
 

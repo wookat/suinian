@@ -90,6 +90,8 @@ function fakeDb(notes: Row[]) {
                 (n) => n.id === whereBinds[0] && (whereBinds.length < 2 || n.user_id === whereBinds[1])
               );
             }
+            if (wherePart.includes("updated_at = ?"))
+              targets = targets.filter((n) => n.updated_at === whereBinds[whereBinds.length - 1]);
             if (wherePart.includes("deleted_at IS NULL")) targets = targets.filter((n) => !n.deleted_at);
             if (wherePart.includes("deleted_at IS NOT NULL")) targets = targets.filter((n) => !!n.deleted_at);
             for (const note of targets) {
@@ -162,6 +164,79 @@ describe("PATCH manual_override + done_at", () => {
     await app.request(req("PATCH", "/api/notes/n1", { todo_done: false }), undefined, env, ctx);
     expect(notes[0].todo_done).toBe(0);
     expect(notes[0].done_at).toBeNull();
+  });
+});
+
+describe("PATCH optimistic lock (base_updated_at)", () => {
+  it("stale base_updated_at gets 409 with the latest note", async () => {
+    const notes = [baseNote("n1", { updated_at: "2026-08-07 00:05:00" })];
+    const res = await app.request(
+      req("PATCH", "/api/notes/n1", { content: "mine", base_updated_at: "2026-08-07 00:00:00" }),
+      undefined,
+      makeEnv(notes),
+      ctx
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; note: { id: string; content: string } };
+    expect(body.error).toContain("其他设备");
+    expect(body.note.id).toBe("n1");
+    expect(notes[0].content).toBe("note n1");
+  });
+
+  it("matching base_updated_at succeeds and bumps updated_at", async () => {
+    const notes = [baseNote("n1")];
+    const res = await app.request(
+      req("PATCH", "/api/notes/n1", { content: "mine", base_updated_at: "2026-08-07 00:00:00" }),
+      undefined,
+      makeEnv(notes),
+      ctx
+    );
+    expect(res.status).toBe(200);
+    expect(notes[0].content).toBe("mine");
+    expect(notes[0].updated_at).toBe("2026-08-07 00:00:01");
+  });
+
+  it("read→write race (row changed after select) gets 409", async () => {
+    const notes = [baseNote("n1")];
+    const env = makeEnv(notes);
+    // simulate another device committing between the route's SELECT and UPDATE:
+    // the fake row's updated_at no longer matches the CAS predicate
+    const db = env.DB as unknown as { prepare(sql: string): { bind(...a: unknown[]): { first(): Promise<unknown>; all(): Promise<unknown>; run(): Promise<unknown> } } };
+    const origPrepare = db.prepare.bind(db);
+    let selected = false;
+    db.prepare = (sql: string) => {
+      const stmt = origPrepare(sql);
+      if (sql.includes("SELECT is_sensitive") && !selected) {
+        selected = true;
+        const origBind = stmt.bind.bind(stmt);
+        return {
+          ...stmt,
+          bind(...a: unknown[]) {
+            const bound = origBind(...a);
+            return {
+              ...bound,
+              async first() {
+                const row = (await bound.first()) as Row | null;
+                const snapshot = row ? { ...row } : row;
+                notes[0].updated_at = "2026-08-07 00:09:00"; // concurrent commit
+                return snapshot;
+              },
+            };
+          },
+        };
+      }
+      return stmt;
+    };
+    const res = await app.request(req("PATCH", "/api/notes/n1", { content: "mine" }), undefined, env, ctx);
+    expect(res.status).toBe(409);
+    expect(notes[0].content).toBe("note n1");
+  });
+
+  it("PATCH without base_updated_at still succeeds (MCP/extension field updates)", async () => {
+    const notes = [baseNote("n1")];
+    const res = await app.request(req("PATCH", "/api/notes/n1", { content: "mine" }), undefined, makeEnv(notes), ctx);
+    expect(res.status).toBe(200);
+    expect(notes[0].content).toBe("mine");
   });
 });
 

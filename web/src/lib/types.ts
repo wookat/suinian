@@ -19,6 +19,9 @@ export interface NoteMeta {
   manual_override?: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean }
   /** 问答写回：由「存为笔记」保存的问答结论 */
   from_ask?: boolean
+  import_source?: string
+  /** 批量导入的入库时间（区别于保留的原 created_at），用于分拣延迟判断 */
+  imported_at?: string
 }
 
 export interface Note {

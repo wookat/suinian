@@ -9,6 +9,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zalize.suinian.SuinianApp
 import com.zalize.suinian.data.AppSettings
+import com.zalize.suinian.data.api.ConflictException
 import com.zalize.suinian.data.CreateNoteRequest
 import com.zalize.suinian.data.DailyReviewItem
 import com.zalize.suinian.data.InlineCommand
@@ -696,6 +697,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                     tags = tags.takeIf { it != note.tags },
                     todoDue = todoDue.takeIf { !it.isNullOrBlank() && it != note.todoDue },
                     clearTodoDue = todoDue.isNullOrBlank() && !note.todoDue.isNullOrBlank(),
+                    baseUpdatedAt = note.updatedAt,
                 )
                 _ui.value = _ui.value.copy(
                     savingEdit = false,
@@ -706,6 +708,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                     toast = "已保存",
                 )
                 if (updated == null) refresh()
+            } catch (e: ConflictException) {
+                // 冲突：拉取最新列表并保持编辑器关闭，用户基于最新内容重编辑
+                _ui.value = _ui.value.copy(savingEdit = false, editingNote = null, toast = e.message ?: "笔记已被其他设备修改，请重试")
+                refresh()
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(savingEdit = false, toast = e.message ?: "保存失败")
             }

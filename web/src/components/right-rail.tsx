@@ -2,39 +2,36 @@ import { useEffect, useMemo, useState } from "react"
 import { Hash, BarChart3, GitBranch } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { getNotes, getStats, getThreads } from "@/lib/api"
+import { getStats, getThreads } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
-import type { Note, Thread } from "@/lib/types"
+import type { Thread } from "@/lib/types"
 
 const MAX_RAIL_THREADS = 3
 
 const MAX_RAIL_TAGS = 20
 
 export function RightRail() {
-  const [notes, setNotes] = useState<Note[] | null>(null)
   const [threads, setThreads] = useState<Thread[]>([])
   const [globalStats, setGlobalStats] = useState<{ total: number; days: number } | null>(null)
+  const [topTags, setTopTags] = useState<{ tag: string; count: number }[]>([])
   const settingsVersion = useSettingsVersion()
 
   useEffect(() => {
     let cancelled = false
-    getNotes({ limit: 100 })
-      .then((res) => {
-        if (!cancelled) setNotes(res.notes)
-      })
-      .catch(() => {
-        if (!cancelled) setNotes([])
-      })
     getStats()
       .then((res) => {
-        if (!cancelled)
-          setGlobalStats({
-            total: res.total_notes,
-            days: res.active_days ?? res.daily.filter((d) => d.count > 0).length,
-          })
+        if (cancelled) return
+        setGlobalStats({
+          total: res.total_notes,
+          days: res.active_days ?? res.daily.filter((d) => d.count > 0).length,
+        })
+        setTopTags(res.top_tags ?? [])
       })
       .catch(() => {
-        if (!cancelled) setGlobalStats(null)
+        if (!cancelled) {
+          setGlobalStats(null)
+          setTopTags([])
+        }
       })
     getThreads()
       .then((res) => {
@@ -48,21 +45,15 @@ export function RightRail() {
     }
   }, [settingsVersion])
 
-  const tags = useMemo(() => {
-    const count = new Map<string, number>()
-    for (const n of notes ?? [])
-      for (const t of n.tags) count.set(t, (count.get(t) ?? 0) + 1)
-    return [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_RAIL_TAGS)
-  }, [notes])
+  // 全局聚合的 top_tags，而非前 100 条采样计数
+  const tags = useMemo(
+    () => topTags.slice(0, MAX_RAIL_TAGS).map((t) => [t.tag, t.count] as const),
+    [topTags],
+  )
 
-  const stats = useMemo(() => {
-    if (globalStats) return globalStats
-    if (!notes) return null
-    const days = new Set(notes.map((n) => n.created_at.slice(0, 10)))
-    return { total: notes.length, days: days.size }
-  }, [globalStats, notes])
+  const stats = globalStats
 
-  if (!notes || notes.length === 0) return null
+  if (!stats || stats.total === 0) return null
 
   return (
     <div className="space-y-4">

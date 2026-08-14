@@ -241,11 +241,13 @@ export function patchPersisted(fresh: Note, patch: NotePatch): boolean {
   return true
 }
 
-export async function patchNote(id: string, patch: NotePatch): Promise<Note> {
+export async function patchNote(id: string, patch: NotePatch, baseUpdatedAt?: string): Promise<Note> {
   if (loadSettings().useMock) return mockPatchNote(id, patch)
   const body: Record<string, unknown> = { ...patch }
   if (patch.todo_done != null) body.todo_done = patch.todo_done === 1
   if (patch.is_sensitive != null) body.is_sensitive = patch.is_sensitive === 1
+  // optimistic lock: the server rejects with 409 when the note changed since it was loaded
+  if (baseUpdatedAt) body.base_updated_at = baseUpdatedAt
   const res = await realFetch<Record<string, unknown>>(`/api/notes/${id}`, {
     method: "PATCH",
     body: JSON.stringify(body),

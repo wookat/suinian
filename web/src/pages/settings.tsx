@@ -486,8 +486,8 @@ function PushPreferencesCard() {
   }
 
   const OPTIONS: { key: "daily_review_push" | "todo_reminder_push"; label: string; hint: string }[] = [
-    { key: "daily_review_push", label: "每日回顾推送", hint: "每天早上把「今日回顾」推到浏览器通知/微信" },
-    { key: "todo_reminder_push", label: "待办提醒推送", hint: "待办到点推浏览器通知；微信上午推当天清单" },
+    { key: "daily_review_push", label: "每日回顾推送", hint: "每天早上 08:00 把「今日回顾」推到浏览器通知（已绑微信时同步推微信）" },
+    { key: "todo_reminder_push", label: "待办提醒推送", hint: "带时间的待办提前 30 分钟推浏览器通知，全天待办当天 08:00 提醒；已绑微信时上午推当天清单" },
   ]
 
   return (
@@ -549,6 +549,8 @@ function WechatBindingCard() {
 
   const s = loadSettings()
   if (s.useMock || !s.apiBaseUrl || !s.apiToken) return null
+  // 两条微信通道都未开通时整卡隐藏，不再挂「即将开放」占位承诺
+  if (status && !status.configured && !status.kf_configured) return null
 
   async function generate() {
     if (busy) return
@@ -591,10 +593,6 @@ function WechatBindingCard() {
       {status === null && !error ? (
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" /> 加载中…
-        </p>
-      ) : status && !status.configured && !status.kf_configured ? (
-        <p className="text-sm text-muted-foreground">
-          微信绑定即将开放，敬请期待。自部署用户可参考仓库 docs/wechat-integration.md 提前开通。
         </p>
       ) : status ? (
         <div className="space-y-3">
@@ -702,7 +700,7 @@ export function SettingsPage() {
       setImportFailed(result.failed_items)
       setImportMsg({
         ok: true,
-        text: `导入完成：共解析 ${stats.total} 条，成功 ${stats.imported} 条，跳过重复 ${stats.skipped} 条${stats.failed > 0 ? `，失败 ${stats.failed} 条` : ""}。AI 分拣/线索/图谱会在后台陆续完成`,
+        text: `导入完成：共解析 ${stats.total} 条，成功 ${stats.imported} 条，跳过重复 ${stats.skipped} 条${stats.failed > 0 ? `，失败 ${stats.failed} 条` : ""}。AI 分拣会在后台排队完成（通常几分钟内），线索/图谱随后更新`,
       })
     } catch (e) {
       setImportMsg({ ok: false, text: e instanceof Error ? e.message : "导入失败，请稍后重试" })
@@ -1167,7 +1165,7 @@ export function SettingsPage() {
         <div>
           <h2 className="text-sm font-medium">导入数据</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            从 Cubox / flomo / Notion / Obsidian / Apple 备忘录 / Markdown / 纯文本导出文件批量导入笔记，保留原创建时间与标签，重复内容自动跳过（单文件最大 20MB）
+            从 Cubox / flomo / Notion / Obsidian / Apple 备忘录 / Markdown / 纯文本导出文件批量导入笔记，保留原创建时间与标签；同一时间且内容相同的条目视为重复自动跳过，可安心重复导入同一文件（单文件最大 20MB）
           </p>
         </div>
         <div className="flex flex-wrap gap-1 rounded-lg bg-secondary p-1">
@@ -1261,7 +1259,14 @@ export function SettingsPage() {
             ) : (
               <CircleAlert className="size-4 shrink-0" />
             )}
-            {importMsg.text}
+            <span>
+              {importMsg.text}
+              {importMsg.ok && (
+                <a href="#/" className="ml-2 underline underline-offset-2">
+                  去时间线查看
+                </a>
+              )}
+            </span>
           </p>
         )}
         {importing && importProgress && importProgress.total > 0 && (
@@ -1289,7 +1294,7 @@ export function SettingsPage() {
         <div>
           <h2 className="text-sm font-medium">从完整备份恢复</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            导入「下载完整备份」导出的 zip：笔记保留原时间/标签/分类，语音/图片/文件原件重新入库；重复导入自动跳过（最大 200MB）
+            导入「下载完整备份」导出的 zip：笔记保留原时间/标签/分类，语音/图片/文件原件重新入库；已存在的同一条笔记（按备份内的笔记 ID）自动跳过，可安心重复恢复（最大 200MB）
           </p>
         </div>
         <input
@@ -1330,7 +1335,14 @@ export function SettingsPage() {
             ) : (
               <CircleAlert className="size-4 shrink-0" />
             )}
-            {restoreMsg.text}
+            <span>
+              {restoreMsg.text}
+              {restoreMsg.ok && (
+                <a href="#/" className="ml-2 underline underline-offset-2">
+                  去时间线查看
+                </a>
+              )}
+            </span>
           </p>
         )}
       </Card>

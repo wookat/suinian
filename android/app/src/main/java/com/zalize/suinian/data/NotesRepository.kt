@@ -91,10 +91,11 @@ class NotesRepository(
         tags: List<String>? = null,
         todoDue: String? = null,
         clearTodoDue: Boolean = false,
+        baseUpdatedAt: String? = null,
     ): Note? {
         val (client, mock) = api()
         if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
-        return client.updateNote(id, content, title, category, tags, todoDue, clearTodoDue)
+        return client.updateNote(id, content, title, category, tags, todoDue, clearTodoDue, baseUpdatedAt)
     }
 
     /** 批量操作：delete / add_tags / remove_tags / set_category */

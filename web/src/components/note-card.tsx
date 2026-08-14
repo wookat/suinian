@@ -316,8 +316,10 @@ export function NoteCard({
   const isLink = note.url != null
   const done = note.todo_done === 1
   const pending = note.category === null
-  // 分拣正常几秒内完成；超过阈值说明 AI 侧出了问题，诚实告知而不是永久转圈
-  const pendingLate = pending && Date.now() - parseServerTime(note.created_at).getTime() > PENDING_LATE_MS
+  // 分拣正常几秒内完成；超过阈值说明 AI 侧出了问题，诚实告知而不是永久转圈。
+  // 导入笔记保留原 created_at，延迟从实际入库时间（imported_at）起算
+  const pendingSince = note.meta?.imported_at ?? note.created_at
+  const pendingLate = pending && Date.now() - parseServerTime(pendingSince).getTime() > PENDING_LATE_MS
   const sensitive = note.is_sensitive === 1
 
   const [menuOpen, setMenuOpen] = useState(false)
