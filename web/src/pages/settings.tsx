@@ -1074,7 +1074,7 @@ export function SettingsPage() {
         <div>
           <h2 className="text-sm font-medium">导出数据</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            导出全部笔记/线索/周报。敏感笔记默认脱敏，勾选后才会明文导出
+            导出全部笔记（含待分拣）/线索/周报。敏感笔记默认脱敏，勾选后才会明文导出
           </p>
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
@@ -1439,7 +1439,7 @@ export function SettingsPage() {
                   setThemeState(opt.value)
                 }}
                 className={cn(
-                  "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  "flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium transition-colors sm:px-3",
                   theme === opt.value
                     ? "bg-card shadow-sm"
                     : "text-muted-foreground hover:text-foreground",

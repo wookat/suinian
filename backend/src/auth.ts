@@ -90,7 +90,7 @@ export function registrationEnabled(v: string | undefined): boolean {
 export const RATE_LIMIT_MAX = 5;
 
 /**
- * Fixed-window rate limit backed by D1 (5/min per action+dimension), checked
+ * Fixed-window rate limit backed by D1 (`max`/min per action+dimension), checked
  * across every given dimension (e.g. IP and account) — all must be under the
  * limit. Trade-off: a D1 table is the simplest durable option on Workers
  * (in-memory state is per-isolate and evicted freely); a fixed minute window
@@ -98,7 +98,7 @@ export const RATE_LIMIT_MAX = 5;
  * throttling. Fails closed on D1 errors: if the limiter store is down we
  * conservatively reject instead of letting unlimited attempts through.
  */
-export async function checkRateLimit(db: D1Database, action: string, dims: string[]): Promise<boolean> {
+export async function checkRateLimit(db: D1Database, action: string, dims: string[], max = RATE_LIMIT_MAX): Promise<boolean> {
   const windowStart = new Date().toISOString().slice(0, 16); // minute granularity
   try {
     let allowed = true;
@@ -118,7 +118,7 @@ export async function checkRateLimit(db: D1Database, action: string, dims: strin
           .run();
         continue;
       }
-      if (row.count >= RATE_LIMIT_MAX) {
+      if (row.count >= max) {
         allowed = false;
         continue;
       }

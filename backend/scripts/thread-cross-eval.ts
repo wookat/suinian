@@ -122,7 +122,13 @@ async function llmConfirmPair(acc: string, a: string, b: string): Promise<boolea
 }
 
 /** Sequential replay of clusterNote's embedding path over in-scope fragments. */
-async function simulate(acc: string, frags: Frag[], vecs: Map<string, number[]>, crossFloor = false): Promise<Map<string, string>> {
+async function simulate(
+  acc: string,
+  frags: Frag[],
+  vecs: Map<string, number[]>,
+  crossFloor = false,
+  uniformFloor?: number
+): Promise<Map<string, string>> {
   const threadOf = new Map<string, string>(); // frag id -> thread id
   let nextThread = 0;
   const seen: Frag[] = [];
@@ -135,9 +141,10 @@ async function simulate(acc: string, frags: Frag[], vecs: Map<string, number[]>,
     if (best) {
       const direct = best.sim >= SIM_JOIN;
       const floor =
-        crossFloor && (f.category === "collect" || best.frag.category === "collect")
+        uniformFloor ??
+        (crossFloor && (f.category === "collect" || best.frag.category === "collect")
           ? SIM_CANDIDATE_CROSS
-          : SIM_CANDIDATE;
+          : SIM_CANDIDATE);
       const confirmed =
         !direct &&
         best.sim >= floor &&
@@ -206,8 +213,15 @@ async function main() {
   const b2 = await simulate(acc, CORPUS, vecs, true);
   const sb2 = score("B' idea+collect strict", CORPUS, b2);
 
+  const uniform = Number(process.env.UNIFORM_FLOOR || SIM_CANDIDATE_CROSS);
+  console.log(`\n=== Policy C: idea+collect, uniform confirm floor ${uniform} (R106 proposal) ===`);
+  const c2 = await simulate(acc, CORPUS, vecs, false, uniform);
+  const sc = score(`C idea+collect uniform floor ${uniform}`, CORPUS, c2);
+
   console.log(`\nLLM confirm calls total: ${confirmCalls} (model ${CONFIRM_MODEL})`);
-  console.log(`\nSummary: A ${(sa.recall * 100).toFixed(0)}%R/${(sa.precision * 100).toFixed(0)}%P  B ${(sb.recall * 100).toFixed(0)}%R/${(sb.precision * 100).toFixed(0)}%P  B' ${(sb2.recall * 100).toFixed(0)}%R/${(sb2.precision * 100).toFixed(0)}%P`);
+  console.log(
+    `\nSummary: A ${(sa.recall * 100).toFixed(0)}%R/${(sa.precision * 100).toFixed(0)}%P  B ${(sb.recall * 100).toFixed(0)}%R/${(sb.precision * 100).toFixed(0)}%P  B' ${(sb2.recall * 100).toFixed(0)}%R/${(sb2.precision * 100).toFixed(0)}%P  C ${(sc.recall * 100).toFixed(0)}%R/${(sc.precision * 100).toFixed(0)}%P`
+  );
 }
 
 main().catch((e) => {

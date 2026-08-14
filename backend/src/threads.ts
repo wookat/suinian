@@ -4,18 +4,15 @@ import { findGraphThreadMate } from "./graph";
 
 /** bge-m3 cosine similarity above which two ideas join the same thread directly. */
 const SIM_JOIN = 0.76;
-/** Similarity above which DeepSeek is asked to confirm a borderline match. */
-const SIM_CANDIDATE = 0.5;
-/** Narrower confirm band for the frugal (cron backfill) path: fewer LLM calls. */
-const SIM_CANDIDATE_FRUGAL = 0.62;
 /**
- * Stricter confirm floor when a collect note is on either side of the pair.
- * One-off article collects are the most common over-join source (offline A/B:
- * scripts/thread-cross-eval.ts — at 0.5 a travel article joined an unrelated
- * travel thread; at 0.62 collect-caused mis-joins drop to zero while the
- * collect+idea same-topic combo still clusters).
+ * Unified similarity floor above which the LLM is asked to confirm a
+ * borderline match (R106, from the audit-r105 §3.2 A/B: on the same corpus a
+ * 0.5 idea-side floor confirmed 11 mis-joined pairs — pair precision 59.3% —
+ * while a uniform 0.62 floor reached 84.2% precision at unchanged 88.9%
+ * recall). Applies to every pair (idea and collect alike) and to both the
+ * request path and the frugal cron backfill.
  */
-const SIM_CANDIDATE_COLLECT = 0.62;
+const SIM_CONFIRM_FLOOR = 0.62;
 /** Categories that participate in thread clustering: thoughts and the articles they react to. */
 export const THREAD_CATEGORIES = "('idea','collect')";
 const EMBED_MODEL = "@cf/baai/bge-m3";
@@ -220,8 +217,8 @@ async function deepseekConfirmPair(env: Env, a: string, b: string): Promise<bool
  * user's other idea notes (recent ones plus one representative per existing
  * thread, so years-old threads stay joinable), and join/create a thread on
  * high similarity. Falls back to a DeepSeek title-match when Workers AI is
- * unavailable. `frugal` (cron backfill over large histories) narrows the
- * LLM-confirm band and skips the DeepSeek-only fallbacks to bound cost.
+ * unavailable. `frugal` (cron backfill over large histories) skips the
+ * DeepSeek-only fallbacks to bound cost.
  * Never throws. Returns the thread id the note was attached to, if any.
  */
 export async function clusterNote(
@@ -320,14 +317,9 @@ export async function clusterNote(
       }
       if (best) {
         const direct = best.sim >= SIM_JOIN;
-        const crossCollect = note.category === "collect" || best.category === "collect";
-        const confirmFloor = Math.max(
-          opts?.frugal ? SIM_CANDIDATE_FRUGAL : SIM_CANDIDATE,
-          crossCollect ? SIM_CANDIDATE_COLLECT : 0
-        );
         const confirmed =
           !direct &&
-          best.sim >= confirmFloor &&
+          best.sim >= SIM_CONFIRM_FLOOR &&
           (await deepseekConfirmPair(env, note.title || note.content, best.title || best.content));
         console.log(
           `threads: cluster note=${note.id} best=${best.id} sim=${best.sim.toFixed(3)} direct=${direct} confirmed=${confirmed}`
