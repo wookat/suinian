@@ -50,7 +50,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type Im
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -2622,6 +2622,13 @@ app.post("/api/ask", async (c) => {
       const byId = new Map((r.results ?? []).map((n) => [n.id, n]));
       suggestions = near.map((h) => byId.get(h.note_id)).filter((n): n is NoteRow => !!n);
     }
+    // 宁缺毋滥（R118 P2）：零召回时只把真命中主题词的笔记当建议，
+    // 避免把仅语义擦边的无关笔记称作“相近的记录”
+    const zeroTopics = askTopicTerms(terms);
+    if (zeroTopics.length > 0) {
+      const topicHits = suggestions.filter((n) => noteHitsTopic(n, zeroTopics));
+      suggestions = topicHits.length > 0 ? topicHits : [];
+    }
     const { answer, references } = buildNoAnswerResponse(suggestions);
     const sensitiveHits = await countSensitiveHits(c.env, userId, terms);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
@@ -2699,12 +2706,25 @@ app.post("/api/ask", async (c) => {
   // wording is 「笔记里没提到」, not 「没找到相关笔记」 (R115 P2 拒答口径)；
   // suggestions prefer strong semantic hits, falling back to the top recall
   if (answer2 && isRefusalAnswer(answer2)) {
-    const ranked = [...notes].sort((a, b) => (semScore.get(b.id) ?? 0) - (semScore.get(a.id) ?? 0));
-    let suggestions = ranked.filter((n) => (semScore.get(n.id) ?? 0) >= ASK_SUGGESTION_MIN_SCORE).slice(0, 3);
+    // 主题笔记优先（R118 P2）：语义分上“花钱类”笔记会压过真正的主题
+    // 笔记（理发），建议列表先排命中主题词的，再按语义分排
+    const topics = askTopicTerms(terms);
+    const ranked = [...notes].sort((a, b) => {
+      const ta = noteHitsTopic(a, topics) ? 1 : 0;
+      const tb = noteHitsTopic(b, topics) ? 1 : 0;
+      if (ta !== tb) return tb - ta;
+      return (semScore.get(b.id) ?? 0) - (semScore.get(a.id) ?? 0);
+    });
+    let suggestions = ranked
+      .filter((n) => noteHitsTopic(n, topics) || (semScore.get(n.id) ?? 0) >= ASK_SUGGESTION_MIN_SCORE)
+      .slice(0, 3);
     if (suggestions.length === 0) suggestions = notes.slice(0, 3);
-    // only claim 「找到了相关的笔记」 when recall actually had strong hits;
-    // weak-only recall keeps the plain 「没找到」 wording
-    const mode = notes.some((n) => !weakIds.has(n.id)) ? "not_in_notes" : "no_recall";
+    // only claim 「找到了相关的笔记」 when recall had strong hits AND at least
+    // one of them actually contains a topic word (R117 零召回误称相关)
+    const mode =
+      notes.some((n) => !weakIds.has(n.id)) && (topics.length === 0 || notes.some((n) => noteHitsTopic(n, topics)))
+        ? "not_in_notes"
+        : "no_recall";
     const { answer: noAnswer, references } = buildNoAnswerResponse(suggestions, mode);
     const sensitiveHits = await countSensitiveHits(c.env, userId, terms);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
@@ -2964,7 +2984,7 @@ app.get("/api/todos/today", async (c) => {
   const tz = await loadUserTz(c.env, c.get("userId"));
   const today = zonedDate(new Date(), tz).iso;
   const { results } = await c.env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL
+    `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL
        AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0)
        AND todo_due IS NOT NULL AND date(todo_due) <= ?
      ORDER BY datetime(todo_due) ASC LIMIT 50`

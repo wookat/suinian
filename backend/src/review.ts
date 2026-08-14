@@ -117,7 +117,7 @@ async function recurringThemeCandidate(env: Env, userId: string, exclude: string
 async function pendingTodoCandidate(env: Env, userId: string, exclude: string[]): Promise<NoteRow | null> {
   const ph = exclude.map(() => "?").join(",");
   return await env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL
+    `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL
        AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0)
        AND todo_due IS NOT NULL AND datetime(todo_due) <= datetime('now', '+2 days')
        ${exclude.length > 0 ? `AND id NOT IN (${ph})` : ""}
@@ -153,7 +153,9 @@ async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind, tzOffset
  * Generate today's review items for one user (idempotent: existing rows for
  * the date are kept and the function returns without regenerating). Picks
  * "a year ago today" / "a month ago today" notes first, then fills with
- * long-untouched high-value ideas. Sensitive notes never enter reviews.
+ * long-untouched high-value ideas. Sensitive notes never enter reviews,
+ * except due-driven pending todos (D1-R118)：加密待办的截止提醒必须生效，
+ * 展示与点评只用明文 title/占位符，密文内容绝不出库。
  */
 export async function generateDailyReview(env: Env, userId: string, now: Date = new Date()): Promise<number> {
   return (await generateDailyReviewDetailed(env, userId, now)).count;
@@ -261,7 +263,7 @@ export async function getTodayReview(env: Env, userId: string, now: Date = new D
     env.DB.prepare(
       `SELECT r.id AS review_id, r.kind, r.comment, n.*
          FROM daily_reviews r JOIN notes n ON n.id = r.note_id
-        WHERE r.user_id = ? AND r.review_date = ? AND n.is_sensitive = 0
+        WHERE r.user_id = ? AND r.review_date = ?
         ORDER BY r.position ASC`
     )
       .bind(userId, today)

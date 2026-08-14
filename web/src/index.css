@@ -11,6 +11,8 @@
 }
 
 :root {
+  /* 系统控件（滚动条等）跟随主题（R118 P2 暗色滚动条） */
+  color-scheme: light;
   --background: oklch(0.985 0.002 90);
   --foreground: oklch(0.24 0.01 260);
   --card: oklch(1 0 0);
@@ -41,6 +43,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.19 0.008 260);
   --foreground: oklch(0.93 0.004 90);
   --card: oklch(0.23 0.008 260);

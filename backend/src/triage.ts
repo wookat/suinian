@@ -121,6 +121,13 @@ export function buildTriagePrompt(
   - "expense"：记录一笔已发生的花钱/消费/付款（买了/花了/付了/充了）
   - "income"：记录一笔已到账的收入（工资/报销到账/卖了/收到转账）
   注意：“要去买/记得交钱”是尚未发生的动作→ todo，不是 expense；只讨论价格而非记账（如“这个耳机卖 299”）→ 按内容归 idea/collect/data
+  收支方向（expense/income 二选一时先判钱的流向，绝不能标反）：钱从用户手里出去＝expense——「交/缴/付/花/买/充/续/还」＋金额一律是花钱，即使句中出现“学费/会费/房租”等收费名词也是用户在付钱；钱进用户手里＝income——「到账/收到/入账/进账/卖了/退款/报销到账/发工资/给我转」。方向判例：
+  - 「吉他课今天交了下半月学费 400 元」→ expense，amount=400（交学费是用户付钱，绝不是收入）
+  - 「付了这个月房租 2600」→ expense
+  - 「还了信用卡 3000」→ expense（还款是钱出去）
+  - 「闲鱼卖了旧显示器 350 元」→ income（卖出收钱）
+  - 「上月报销的差旅费 800 到账了」→ income
+  - 「学生给我交了补课费 300」→ income（别人交钱给我）
   判例：
   - 「公司报销流程：先在 OA 提单，再贴发票给财务」→ data（流程性参考，无待办动作）
   - 「9月1号起各部门预算表改用新模板」→ data（带日期的说明仍是资料，不是待办）
@@ -139,6 +146,11 @@ export function buildTriagePrompt(
   - 「跑步 7 公里，早上出门凉快多了」→ idea（完成式运动日志，不是待办）
   - 「读《纳瓦尔宝典》第四章，杠杆的三种形式很有启发」→ idea（读书笔记，不是待办）
   - 「Android 内测包搞定了，比计划提前一天」→ idea（完成宣告，不是新待办）
+  - 「闲鱼挂出了显示器，350 出」→ idea（已完成的动作记录，不是待办）
+  - 「季度报告初稿写完了」→ idea（完成宣告）
+  注意：外部事件/公告（电影定档、发布会日期、新品发售）只是资讯，不是用户要做的事——归 data 或 collect，日期也不是 todo_due；只有内容明确包含用户自己的动作（买票/提醒我看/去参加）才是 todo。判例：
+  - 「沙丘 3 定档 10 月 1 日上映」→ data（外部事件公告，不是待办）
+  - 「沙丘 3 十月上映，提醒我提前买票」→ todo（含用户动作）
 - tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）。标签必须是内容的主题词，用能概括这条内容的具体场景词（如打车→「交通」、午饭→「餐饮」、买咖啡→「咖啡」），不要一律套「购物」这类宽泛词。内容开头的方括号前缀标记（如「[QA-123]」「[P0]」「【草稿】」）和序号（「1.」）是元数据记号，不是主题：既不能整个照抄进标签，也不能把括号里的词抽出来当标签${tagHint}
 - title: 一句话短标题（<=20字），同样要忽略开头的方括号前缀/序号，不要抄进标题。判例：「[P0] 修复登录超时」→ title="修复登录超时"，tags 不含 "P0"；「[QA-TEST] 周五交报告」→ title="周五交报告"，tags 不含 "QA-TEST"、"QA"、"TEST"
 - is_sensitive: 是否含真实机密 (boolean)。仅当内容中出现真实可用的机密「具体值」时才为 true：密码/口令/密钥/API key/token 的具体值、完整身份证号、银行卡号、手机号+姓名组合、账号+密码组合。以下情况必须为 false：技术文档/教程/笔记只是讨论密码、token、密钥等概念而未出现具体秘密值；代码片段中的变量名/占位符（如 <token>、your-api-key、xxx）；普通长文、文件内容中的 ID/哈希/版本号等非机密长字符串。判例：
@@ -237,6 +249,50 @@ export function stripMarkerNoise(content: string, triage: TriageResult): TriageR
   }
   title = title.replace(/^[\s\-—:：]+/, "").trim();
   return { ...triage, tags, title };
+}
+
+// ---- 收支方向兑底（R118 P1）----
+// 模型把「交学费 400」判成 income 会直接污染财务聚合账本：当内容里只有
+// 钱“出去”的词面证据而无任何钱“进来”的词面证据时（反之亦然），确定性
+// 地纠正方向。两侧都有词或都没词时不动，模型仍是主判。
+const EXPENSE_DIRECTION_RE =
+  /交了|缴了|付了|花了|买了|充了|续了|还了|交费|缴费|付款|付掉|花掉|续费|充值|还款|请客|打赏了|损失/;
+const INCOME_DIRECTION_RE =
+  /到账|入账|进账|收到|收了|收款|卖了|卖出|退款|退了|返现|返了|发了工资|发工资|工资发|赚了|挣了|中了|收租|给我/;
+
+/** Deterministic finance-direction backstop: flip income↔expense when the
+ * content's money-flow verbs unambiguously contradict the model's verdict. */
+export function fixFinanceDirection(content: string, triage: TriageResult): TriageResult {
+  if (triage.category !== "expense" && triage.category !== "income") return triage;
+  const out = EXPENSE_DIRECTION_RE.test(content);
+  const inn = INCOME_DIRECTION_RE.test(content);
+  if (triage.category === "income" && out && !inn) return { ...triage, category: "expense" };
+  if (triage.category === "expense" && inn && !out) return { ...triage, category: "income" };
+  return triage;
+}
+
+// ---- 事件/日志误判 todo 兑底（R118 P2，R107/R113/R117 三轮同型）----
+// 完成式叙述（写完了/挂出了/搞定了）无未来动作时不是待办；外部公告
+// （定档/上映/发售）无用户动作时也不是待办。只在模型判了 todo 且词面
+// 证据明确时降级，其它情况不动。
+const COMPLETED_LOG_RE =
+  /写完了|做完了|完成了|搞定了|读完|看完了|交了|发布了|上线了|挂出了?|发出了|提交了|搬完了|修好了/;
+const ANNOUNCEMENT_RE = /定档|上映|首映|开播|发售|开售|开票|发布会|官宣/;
+const FUTURE_ACTION_RE =
+  /记得|提醒|要去|得去|别忘|预约|安排|回头|稍后|之前去|去买|去交|去还|去取|去看|买票|抢票|再润色|再改|跟进|待办/;
+
+/** Deterministic backstop: demote completed-action logs / external
+ * announcements the model misfiled as todo. Logs become idea; announcements
+ * become data (their date is information, not a due). */
+export function demoteEventLog(content: string, triage: TriageResult): TriageResult {
+  if (triage.category !== "todo" || FUTURE_ACTION_RE.test(content)) return triage;
+  if (!triage.todo_due && COMPLETED_LOG_RE.test(content)) {
+    return { ...triage, category: "idea", todo_due: null };
+  }
+  if (ANNOUNCEMENT_RE.test(content) && !/我/.test(content)) {
+    return { ...triage, category: "data", todo_due: null };
+  }
+  return triage;
 }
 
 const TODO_DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::\d{2})?\s*(Z|[+-]\d{2}:?\d{2})?)?/;
@@ -369,6 +425,7 @@ export async function triageNote(
   });
   let result = (text && parseTriageJson(text, tzOffsetString(now, tz))) || null;
   if (result) result = stripMarkerNoise(content, result);
+  if (result) result = demoteEventLog(content, fixFinanceDirection(content, result));
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {
     result = result

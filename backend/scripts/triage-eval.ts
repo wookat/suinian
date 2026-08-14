@@ -107,6 +107,23 @@ const CASES: EvalCase[] = [
   // 反例：谈论密码/密钥概念但无真实值，不得误判敏感
   { content: `${PREFIX} 提醒自己：把密码管理器里的旧密码都轮换一遍，开启两步验证`, category: "todo", sensitive: false },
   { content: `${PREFIX} 读书笔记：《密码学与网络安全》讲 TLS 握手时用非对称加密交换会话密钥`, category: "data", sensitive: false },
+  // R118 P1：收支方向易混语料（交/付/花/收/退/报销/还/卖）
+  { content: `${PREFIX} 吉他课今天交了下半月学费 400 元`, category: "expense", amount: 400, currency: "CNY" },
+  { content: `${PREFIX} 付了这个月房租 2600`, category: "expense", amount: 2600, currency: "CNY" },
+  { content: `${PREFIX} 给车充电花了 58 块`, category: "expense", amount: 58, currency: "CNY" },
+  { content: `${PREFIX} 还了信用卡 3000`, category: "expense", amount: 3000, currency: "CNY" },
+  { content: `${PREFIX} 物业费缴了 1800`, category: "expense", amount: 1800, currency: "CNY" },
+  { content: `${PREFIX} 闲鱼卖了旧显示器 350 元`, category: "income", amount: 350, currency: "CNY" },
+  { content: `${PREFIX} 上月报销的差旅费 800 到账了`, category: "income", amount: 800, currency: "CNY" },
+  { content: `${PREFIX} 退货的鞋退款 269 已收到`, category: "income", amount: 269, currency: "CNY" },
+  { content: `${PREFIX} 学生给我交了补课费 300`, category: "income", amount: 300, currency: "CNY" },
+  { content: `${PREFIX} 这个月工资发了 15000`, category: "income", amount: 15000, currency: "CNY" },
+  // 未发生的交钱是待办不是支出
+  { content: `${PREFIX} 月底前记得去交电费`, category: "todo" },
+  // R118 P2：外部事件公告不是待办
+  { content: `${PREFIX} 沙丘 3 定档 10 月 1 日上映`, category: "data" },
+  { content: `${PREFIX} 沙丘 3 十月上映，提醒我提前买票`, category: "todo" },
+  { content: `${PREFIX} 闲鱼挂出了显示器，350 出`, category: "idea" },
   // R108：完成式日志不是待办（R107 P2-3：误标 todo 污染悬而未决）
   { content: `${PREFIX} 今天跑步 7 公里，早上出门凉快多了`, category: "idea" },
   { content: `${PREFIX} 读完《纳瓦尔宝典》第四章，杠杆的三种形式很有启发`, category: "idea" },
