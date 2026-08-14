@@ -2553,6 +2553,15 @@ app.post("/api/ask", async (c) => {
         .map((n) => `${n.title ?? ""} ${n.content.slice(0, 160)}`.trim())
         .join("\n");
       const hopHits = await semanticRecall(c.env, userId, `${recallQuestion}\n${seeds}`, 8);
+      // notes already in context that the enriched query now scores well get
+      // their weak-extra stigma lifted (they'd otherwise be stripped from
+      // citations by the ASK_CITATION_MIN_SCORE reconcile below)
+      for (const h of hopHits) {
+        if (h.score >= ASK_CITATION_MIN_SCORE && notes.some((n) => n.id === h.note_id)) {
+          multiHopIds.add(h.note_id);
+          semScore.set(h.note_id, Math.max(semScore.get(h.note_id) ?? 0, h.score));
+        }
+      }
       const missing = hopHits.filter((h) => !notes.some((n) => n.id === h.note_id)).slice(0, 6);
       if (missing.length > 0) {
         const ph = missing.map(() => "?").join(",");
@@ -2562,13 +2571,17 @@ app.post("/api/ask", async (c) => {
           .bind(userId, ...missing.map((h) => h.note_id))
           .all<NoteRow>();
         const hopById = new Map((r.results ?? []).map((n) => [n.id, n]));
+        const hopNotes: NoteRow[] = [];
         for (const h of missing) {
           const n = hopById.get(h.note_id);
           if (!n) continue;
           multiHopIds.add(n.id);
           semScore.set(n.id, Math.max(semScore.get(n.id) ?? 0, h.score));
-          notes.push(n);
+          hopNotes.push(n);
         }
+        // slot second-hop notes right behind the seed hits so they land in
+        // the part of the context the model actually cites from
+        notes.splice(Math.min(3, notes.length), 0, ...hopNotes);
         notes = notes.slice(0, 30);
       }
     } catch (err) {

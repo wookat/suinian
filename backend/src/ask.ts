@@ -232,6 +232,8 @@ const DANGLING_LEADIN_RE = /(?:另?可?参见|详见)[\s　]*(?=$|[，。；、�
 function cleanDanglingCitations(s: string): string {
   return s
     .replace(DANGLING_LEADIN_RE, "")
+    // orphan 、/， left where a removed marker preceded a surviving one
+    .replace(/(^|[\s　（(：:])[、，][\s　]*(?=[\[［])/g, "$1")
     .replace(/（[\s　]*）|\([\s　]*\)/g, "")
     .replace(/[\s　]*([，。；、！？])[\s　]*(?=[，。；、！？])/g, "")
     .replace(/^[\s　]*[，、；][\s　]*/, "");
