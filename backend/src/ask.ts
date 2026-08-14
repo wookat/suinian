@@ -228,7 +228,8 @@ export function buildFinanceFailClosedAnswer(stats: FinanceStats, phrase: string
 export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null): string {
   const scope = phrase ?? "全部笔记";
   if (stats.expenseCount === 0 && stats.incomeCount === 0) {
-    return `${scope}没有记账记录（支出/收入均为 0 笔）。`;
+    const transferNote = stats.transferCount > 0 ? `另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支。` : "";
+    return `${scope}没有记账记录（支出/收入均为 0 笔）。${transferNote}`;
   }
   const lines = Object.entries(stats.totals).map(
     ([cur, t]) =>
@@ -236,6 +237,7 @@ export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null
   );
   let md = `${scope}共记录 ${stats.expenseCount} 笔支出、${stats.incomeCount} 笔收入。\n${lines.join("\n")}`;
   if (stats.unknownAmount > 0) md += `\n（另有 ${stats.unknownAmount} 笔未识别出金额，未计入合计。）`;
+  if (stats.transferCount > 0) md += `\n（另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支合计。）`;
   md += `\n\n以上为精确统计，口径与周报/月报一致。`;
   return md;
 }

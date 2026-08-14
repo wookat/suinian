@@ -44,6 +44,7 @@ const CATEGORY_OPTIONS: { value: NoteCategory; label: string }[] = [
   { value: "data", label: "资料" },
   { value: "expense", label: "支出" },
   { value: "income", label: "收入" },
+  { value: "transfer", label: "资金往来" },
 ]
 
 const CATEGORY_TABS = [
@@ -54,6 +55,7 @@ const CATEGORY_TABS = [
   { value: "data", label: "资料" },
   { value: "expense", label: "支出" },
   { value: "income", label: "收入" },
+  { value: "transfer", label: "资金往来" },
 ] as const
 
 const SAMPLE_TAG = "示例"

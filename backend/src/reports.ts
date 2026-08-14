@@ -42,7 +42,7 @@ export function thisMonthRange(now: Date = new Date(), offsetMs: number = SH_OFF
   return { monthStart: first.toISOString().slice(0, 10), monthEnd: sh.toISOString().slice(0, 10) };
 }
 
-const CATEGORY_LABEL: Record<string, string> = { idea: "想法", todo: "待办", collect: "收藏", data: "资料", expense: "支出", income: "收入" };
+const CATEGORY_LABEL: Record<string, string> = { idea: "想法", todo: "待办", collect: "收藏", data: "资料", expense: "支出", income: "收入", transfer: "资金往来" };
 
 /** Escape user-controlled text embedded into fallback markdown so it can never carry HTML/code into the renderer. */
 export function escapeMdText(s: string): string {
@@ -102,6 +102,8 @@ export function todoSection(stats: TodoStats): string {
 export interface FinanceStats {
   expenseCount: number;
   incomeCount: number;
+  /** 资金平移（内转/提现/借入）笔数：只报告笔数，金额永不计入收支合计。 */
+  transferCount: number;
   /** Totals per currency, e.g. { CNY: { expense: 123, income: 0 } }. Only counts notes with a known amount. */
   totals: Record<string, { expense: number; income: number }>;
   /** Finance notes without an extractable amount (excluded from totals). */
@@ -110,8 +112,13 @@ export interface FinanceStats {
 
 /** Sum the period's expense/income notes per currency. */
 export function financeStats(periodNotes: NoteRow[]): FinanceStats {
-  const stats: FinanceStats = { expenseCount: 0, incomeCount: 0, totals: {}, unknownAmount: 0 };
+  const stats: FinanceStats = { expenseCount: 0, incomeCount: 0, transferCount: 0, totals: {}, unknownAmount: 0 };
   for (const n of periodNotes) {
+    if (n.category === "transfer") {
+      // 资金平移只计笔数，金额不污染收支合计
+      stats.transferCount++;
+      continue;
+    }
     if (n.category !== "expense" && n.category !== "income") continue;
     if (n.category === "expense") stats.expenseCount++;
     else stats.incomeCount++;
@@ -135,12 +142,13 @@ export function formatAmount(amount: number, currency: string): string {
 }
 
 export function financeSection(stats: FinanceStats): string {
-  if (stats.expenseCount === 0 && stats.incomeCount === 0) return "";
+  if (stats.expenseCount === 0 && stats.incomeCount === 0 && stats.transferCount === 0) return "";
   let md = `\n## 收支合计\n本期记了 ${stats.expenseCount} 笔支出、${stats.incomeCount} 笔收入。\n`;
   for (const [cur, t] of Object.entries(stats.totals)) {
     md += `- ${cur}：支出 ${formatAmount(t.expense, cur)}，收入 ${formatAmount(t.income, cur)}，结余 ${formatAmount(t.income - t.expense, cur)}\n`;
   }
   if (stats.unknownAmount > 0) md += `- 另有 ${stats.unknownAmount} 笔未识别出金额，未计入合计\n`;
+  if (stats.transferCount > 0) md += `- 另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支\n`;
   return md;
 }
 

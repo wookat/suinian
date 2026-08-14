@@ -92,6 +92,10 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - R116 refusal wording: asking a detail absent from recalled topic notes (e.g. 吉他颜色 when only brand/price noted) must yield 「找到了相关的笔记，但里面没有提到你问的这个信息：」+ suggestion cards; plain 「没找到相关笔记」 is only for zero recall.
 - Trash page is off-nav: fastest route is URL `#/trash` (or 设置 → 打开最近删除). 全部彻底删除 uses an inline 确认清空 confirm in the header row, no modal.
 
+## Production testing tips (learned R120)
+- Prod login API returns the token under `api_token` (not `token`): `SUINIAN_TOKEN=$(curl -s -X POST .../api/auth/login -H 'content-type: application/json' -d '{"name":...,"password":...}' | jq -r .api_token)` — handy for `scripts/triage-eval.ts`.
+- `browser_console`/CDP may fail to attach even with `--remote-debugging-port=9222` up; plan token extraction via the login API rather than localStorage.
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.
 - `CLOUDFLARE_GLOBAL_API_TOKEN` (org) for Workers AI REST calls (`/ai/run/*`, used by thread-cross-eval.ts) and as fallback for wrangler d1.

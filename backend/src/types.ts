@@ -66,7 +66,7 @@ export interface WeeklyReportRow {
   created_at: string;
 }
 
-export type Category = "idea" | "todo" | "collect" | "data" | "expense" | "income";
+export type Category = "idea" | "todo" | "collect" | "data" | "expense" | "income" | "transfer";
 
 export interface TriageResult {
   category: Category;

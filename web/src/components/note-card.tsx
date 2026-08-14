@@ -30,6 +30,7 @@ import {
   X,
   Wallet,
   Coins,
+  ArrowLeftRight,
   Puzzle,
   FolderInput,
   GitBranch,
@@ -78,6 +79,11 @@ const CATEGORY_META: Record<
     label: "收入",
     icon: Coins,
     activeClassName: "bg-green-500/10 text-green-600 dark:text-green-400",
+  },
+  transfer: {
+    label: "资金往来",
+    icon: ArrowLeftRight,
+    activeClassName: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
   },
 }
 
@@ -177,13 +183,13 @@ export function AmountChip({ note }: { note: Note }) {
   const merchant = note.meta?.finance_merchant
   const label =
     note.amount != null
-      ? `${note.category === "income" ? "+" : "-"}${formatAmount(note.amount, note.currency || "CNY")}`
+      ? `${note.category === "income" ? "+" : note.category === "transfer" ? "⇄" : "-"}${formatAmount(note.amount, note.currency || "CNY")}`
       : "金额待定"
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
-        note.amount == null
+        note.amount == null || note.category === "transfer"
           ? "bg-muted text-muted-foreground"
           : note.category === "income"
             ? "bg-green-500/10 text-green-600 dark:text-green-400"
@@ -476,7 +482,7 @@ export function NoteCard({
             </span>
           )}
           {note.category === "todo" && <DueChip due={note.todo_due} />}
-          {(note.category === "expense" || note.category === "income") && <AmountChip note={note} />}
+          {(note.category === "expense" || note.category === "income" || note.category === "transfer") && <AmountChip note={note} />}
           <RawTypeBadge rawType={note.raw_type} />
           {note.match === "semantic" && (
             <Badge variant="secondary" className="gap-1 text-xs text-muted-foreground" title="按语义相关召回，原文可能不含搜索词">

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
-import { triageNote, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE } from "./triage";
+import { triageNote, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import { encodeCursor, decodeCursor } from "./cursor";
@@ -58,6 +58,7 @@ import {
   SOFT_DELETE_RETENTION_DAYS,
   RETRIAGE_TIME_BUDGET_MS,
   TRIAGE_DEGRADE_AFTER_MS,
+  NOTE_WRITE_RATE_LIMIT_MAX,
 } from "./constants";
 import { buildStats, normalizeTzOffset, SAMPLE_TAG_LIKE } from "./stats";
 import {
@@ -212,7 +213,17 @@ app.post("/api/auth/register", async (c) => {
   } catch (e) {
     console.error("register: insert failed", e);
     const msg = e instanceof Error ? e.message : String(e);
-    if (/UNIQUE/i.test(msg)) return c.json({ error: "用户名已存在", code: "NAME_TAKEN" }, 409);
+    if (/UNIQUE/i.test(msg)) {
+      // 并发同名注册被唯一索引拦住（R120 P1-2）：同密码的并发重试仍返回
+      // 已建账号（与上方幂等重试同一语义），其它一律 409
+      const winner = await c.env.DB.prepare("SELECT id, name, api_token, password_hash FROM users WHERE name = ?")
+        .bind(name)
+        .first<{ id: string; name: string; api_token: string; password_hash: string | null }>();
+      if (winner?.password_hash && (await verifyPassword(password, winner.password_hash))) {
+        return c.json({ user: { id: winner.id, name: winner.name }, api_token: winner.api_token });
+      }
+      return c.json({ error: "用户名已存在", code: "NAME_TAKEN" }, 409);
+    }
     return c.json({ error: "注册失败（数据库写入出错），请重试", code: "DB_WRITE_FAILED" }, 500);
   }
   console.log(`register: created ${id} in ${Date.now() - started}ms`);
@@ -875,6 +886,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   data: "资料",
   expense: "支出",
   income: "收入",
+  transfer: "资金往来",
 };
 
 export async function applyTriage(env: Env, noteId: string, triage: TriageResult, content: string): Promise<void> {
@@ -892,15 +904,19 @@ export async function applyTriage(env: Env, noteId: string, triage: TriageResult
     delete newMeta.needs_retriage;
     metaChanged = true;
   }
-  const tags = Array.isArray(importTags)
+  const mergedTags = Array.isArray(importTags)
     ? [...new Set([...importTags, ...triage.tags])].slice(0, 6)
     : triage.tags;
+  // 敏感笔记派生字段与加密口径一致（R120 P1-1）：content 进 content_enc 后，
+  // AI title 可能把秘密值原样带出（如「todo密码是xxx」），title 一律置空，
+  // tags 走严格过滤只留纯主题词
+  const tags = triage.is_sensitive ? sanitizeSensitiveTags(mergedTags) : mergedTags;
   const sets = ["is_sensitive = ?"];
   const binds: unknown[] = [triage.is_sensitive ? 1 : 0];
   // fields the user set by hand stay untouched
   if (!override?.title) {
     sets.push("title = ?");
-    binds.push(triage.title || null);
+    binds.push(triage.is_sensitive ? null : triage.title || null);
   }
   if (!override?.todo_due) {
     // AI only fills a missing due; an already-set due is never cleared or replaced
@@ -1110,13 +1126,21 @@ app.post("/api/notes", async (c) => {
   const body = await c.req
     .json<{ source?: string; raw_type?: string; content?: string; url?: string; tags?: string[]; skip_triage?: boolean; meta?: NoteMeta | null }>()
     .catch(() => null);
-  if (!body || !(body.content ?? "").trim()) return c.json({ error: "content required" }, 400);
-  const tooLong = contentTooLong(c, body.content ?? "");
+  // 非字符串 content（数字/对象/数组）必须是 400 而不是下游 500（R120 P2）
+  if (!body || typeof body.content !== "string" || !body.content.trim()) {
+    return c.json({ error: "content 必须是非空字符串" }, 400);
+  }
+  const tooLong = contentTooLong(c, body.content);
   if (tooLong) return tooLong;
+  const userId = c.get("userId");
+  // 写入频率上限（R120 P2）：泄露的 token / 失控脚本不能无限刷 AI 配额
+  if (!(await checkRateLimit(c.env.DB, "note_write", [userId], NOTE_WRITE_RATE_LIMIT_MAX))) {
+    return c.json({ error: "写入太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
   // skip_triage (`!` inline command): store as-is, never re-sorted
   const skipTriage = body.skip_triage === true;
   // returns immediately; triage + link fetch + clustering backfill asynchronously
-  const { note } = await createNote(c, c.get("userId"), body, (p) => c.executionCtx.waitUntil(p), { syncTriage: false, skipTriage });
+  const { note } = await createNote(c, userId, body, (p) => c.executionCtx.waitUntil(p), { syncTriage: false, skipTriage });
   return c.json({ note: await noteToJsonDecrypted(c.env, note) }, 201);
 });
 
@@ -1310,10 +1334,10 @@ app.patch("/api/notes/:id", async (c) => {
   if (!body) return c.json({ error: "invalid body" }, 400);
 
   const existing = await c.env.DB.prepare(
-    "SELECT is_sensitive, content, content_enc, meta, updated_at FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+    "SELECT is_sensitive, content, content_enc, meta, tags, updated_at FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
   )
     .bind(id, userId)
-    .first<{ is_sensitive: number; content: string; content_enc: string | null; meta: string | null; updated_at: string }>();
+    .first<{ is_sensitive: number; content: string; content_enc: string | null; meta: string | null; tags: string; updated_at: string }>();
   if (!existing) return c.json({ error: "not found" }, 404);
 
   // optimistic lock: clients editing a loaded note send its updated_at back so
@@ -1360,12 +1384,27 @@ app.patch("/api/notes/:id", async (c) => {
     sets.push("is_sensitive = ?");
     binds.push(body.is_sensitive ? 1 : 0);
   }
+  // 转敏感时旧的 AI title/tags 可能已把秘密值明文带出（R120 P1-1）：
+  // 未显式提供新值时一并清洗，与 applyTriage 同一口径
+  if (body.is_sensitive === true && !existing.is_sensitive) {
+    if (typeof body.title !== "string") sets.push("title = NULL");
+    if (!Array.isArray(body.tags)) {
+      let oldTags: string[] = [];
+      try {
+        oldTags = (JSON.parse(existing.tags || "[]") as unknown[]).filter((t): t is string => typeof t === "string");
+      } catch {
+        oldTags = [];
+      }
+      sets.push("tags = ?");
+      binds.push(JSON.stringify(sanitizeSensitiveTags(oldTags)));
+    }
+  }
   if (typeof body.todo_done === "boolean") {
     sets.push("todo_done = ?", "done_at = ?");
     binds.push(body.todo_done ? 1 : 0, body.todo_done ? new Date().toISOString() : null);
   }
   const override: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean } = {};
-  if (typeof body.category === "string" && ["idea", "todo", "collect", "data", "expense", "income"].includes(body.category)) {
+  if (typeof body.category === "string" && ["idea", "todo", "collect", "data", "expense", "income", "transfer"].includes(body.category)) {
     sets.push("category = ?");
     binds.push(body.category);
     override.category = true;
@@ -1427,7 +1466,11 @@ app.patch("/api/notes/:id", async (c) => {
 
 /** Regenerate only the AI title after a content edit (never touches category/tags/due). */
 export async function recomputeTitle(env: Env, noteId: string, content: string): Promise<void> {
-  const row = await env.DB.prepare("SELECT meta FROM notes WHERE id = ?").bind(noteId).first<{ meta: string | null }>();
+  const row = await env.DB.prepare("SELECT meta, is_sensitive FROM notes WHERE id = ?")
+    .bind(noteId)
+    .first<{ meta: string | null; is_sensitive: number }>();
+  // 敏感笔记的 title 永远保持置空，绝不重算出可能含秘密值的标题
+  if (row?.is_sensitive) return;
   if (parseNoteMeta(row?.meta ?? null)?.manual_override?.title) return;
   const triage = await triageNote(content, env);
   if (!triage || !triage.title) return;
@@ -1800,7 +1843,7 @@ app.post("/api/notes/batch", async (c) => {
   if ((action === "add_tags" || action === "remove_tags") && tags.length === 0)
     return c.json({ error: "tags required" }, 400);
   const category = typeof body.category === "string" ? body.category : "";
-  if (action === "set_category" && !["idea", "todo", "collect", "data", "expense", "income"].includes(category))
+  if (action === "set_category" && !["idea", "todo", "collect", "data", "expense", "income", "transfer"].includes(category))
     return c.json({ error: "invalid category" }, 400);
   const opts = { tags, category };
 
@@ -2424,7 +2467,7 @@ app.post("/api/ask", async (c) => {
     // 时间范围同理优先取自原始问题；原始问题没带时间时才用改写结果
     // （代词追问「那上个月呢」靠历史补出时间是合法的）
     const fRange = (origFinanceIntent ? parseTimeRange(question) : null) ?? timeRange;
-    const fConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income')"];
+    const fConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
     const fBinds: unknown[] = [userId];
     if (fRange?.start) {
       fConds.push("created_at >= ?");
@@ -2661,7 +2704,7 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）；汇总计算时也不要解释为什么排除某一项（如「68 元（买书，不属于吃的，忽略）」这类筛选过程），算式里只列入选项。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）；汇总计算时也不要解释为什么排除某一项（如「68 元（买书，不属于吃的，忽略）」这类筛选过程），算式里只列入选项。涉及金额汇总时，不同币种（如 CNY 与 USD）绝不能直接相加，必须分币种分别合计并注明币种；分类为 transfer（资金往来：内转/提现/借入）的金额不是支出也不是收入，不要计入收支合计。回答用中文，简洁。",
       },
       ...history,
       {
@@ -3228,7 +3271,10 @@ async function retriageOne(
   const topTags = await loadTopTags(env.DB, row.user_id).catch(() => [] as string[]);
   const corrections = await loadCategoryCorrections(env.DB, row.user_id).catch(() => []);
   const tz = await loadUserTz(env, row.user_id);
-  const triage = await triageNote(content, env, topTags, tz, corrections);
+  // 历史/导入笔记的相对日期以笔记原始记录时间为锚点，不随分拣执行日漂移
+  const noteTime = new Date(Date.parse(`${row.created_at.replace(" ", "T")}Z`));
+  const anchor = Number.isFinite(noteTime.getTime()) ? noteTime : new Date();
+  const triage = await triageNote(content, env, topTags, tz, corrections, anchor);
   if (!triage) {
     // the whole AI chain is down: after a grace period stop showing the user a
     // spinner forever — give the note the fallback category and mark it so the

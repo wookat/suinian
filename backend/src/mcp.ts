@@ -58,9 +58,9 @@ export function buildMcpServer(api: ApiCall): McpServer {
         content: z.string().min(1).max(20000).describe("笔记内容，纯文本，可含链接"),
         tags: z.array(z.string()).max(6).optional().describe("手动标签（可选，最多 6 个；不传则由 AI 自动打标签）"),
         category: z
-          .enum(["idea", "todo", "collect", "data", "expense", "income"])
+          .enum(["idea", "todo", "collect", "data", "expense", "income", "transfer"])
           .optional()
-          .describe("手动分类（可选：idea 想法 / todo 待办 / collect 收藏 / data 资料 / expense 支出 / income 收入；不传则由 AI 自动分拣）"),
+          .describe("手动分类（可选：idea 想法 / todo 待办 / collect 收藏 / data 资料 / expense 支出 / income 收入 / transfer 资金往来；不传则由 AI 自动分拣）"),
       },
     },
     async ({ content, tags, category }) => {
@@ -92,7 +92,7 @@ export function buildMcpServer(api: ApiCall): McpServer {
       inputSchema: {
         query: z.string().min(1).describe("搜索关键词或一句自然语言"),
         category: z
-          .enum(["idea", "todo", "collect", "data", "expense", "income"])
+          .enum(["idea", "todo", "collect", "data", "expense", "income", "transfer"])
           .optional()
           .describe("限定分类（可选）"),
         tag: z.string().optional().describe("限定标签（可选）"),
