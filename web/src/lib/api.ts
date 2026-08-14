@@ -266,6 +266,15 @@ export async function refetchLink(id: string): Promise<Note> {
   return normalizeNote((res.note ?? res) as Record<string, unknown>)
 }
 
+/** 原地重试语音转写/图片提取/文件解析（用 R2 存档的原件，无需重传），返回更新后的笔记 */
+export async function retryMedia(id: string): Promise<Note> {
+  if (loadSettings().useMock) throw new Error("演示模式不支持重试")
+  const res = await realFetch<Record<string, unknown>>(`/api/notes/${id}/retry-media`, {
+    method: "POST",
+  })
+  return normalizeNote((res.note ?? res) as Record<string, unknown>)
+}
+
 export async function deleteNote(id: string): Promise<void> {
   if (loadSettings().useMock) return mockDeleteNote(id)
   await realFetch<{ ok: boolean }>(`/api/notes/${id}`, { method: "DELETE" })

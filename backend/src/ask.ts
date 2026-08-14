@@ -143,15 +143,19 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
 // 「X 时间一共花了多少钱」类合计问题必须走 SQL 精确聚合（与周报/月报同一
 // financeStats 口径），绝不能靠 LLM 对被 LIMIT 截断的召回片段心算。
 
-const FINANCE_WORD_RE = /花了?|花销|花费|支出|消费|开销|收入|进账|入账|结余|收支|记了?账|赚了?/;
-const AGG_WORD_RE = /一共|总共|合计|总计|共计|加起来|多少钱|多少笔|几笔|平均每/;
+const FINANCE_WORD_RE = /花了?|花销|花费|支出|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?/;
+const AGG_WORD_RE = /一共|总共|合计|总计|共计|加起来|多少钱|多少笔|几笔|平均每|总额|结余|收支|余额|多少|怎么样|怎样|如何|情况/;
+// sum-style wording that only makes sense as a books-level aggregate: when it
+// appears with a finance word but the question can't be routed to the exact
+// aggregate (extra qualifiers remain), the LLM must NOT mental-math it.
+const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|总额|结余|收支|余额/;
 // strip time phrases / finance verbs / aggregation words / filler; whatever
 // meaningful text remains means the question is about a specific item
 // ("买咖啡花了多少钱"), not an overall aggregate — fall through to normal ask.
 const STRIP_RES: RegExp[] = [
   /今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})月(?:份|初|中|底)?/g,
-  /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少/g,
-  /花了?|花销|花费|支出|消费|开销|收入|进账|入账|结余|收支|记了?账|赚了?|钱/g,
+  /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
+  /花了?|花销|花费|支出|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|钱/g,
   /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|了|吗|呢|啊|呀|哦|是|都|在|有|和|与|？|\?|，|,|。|、|\s/g,
 ];
 
@@ -161,6 +165,30 @@ export function isFinanceAggQuestion(question: string): boolean {
   let residual = question;
   for (const re of STRIP_RES) residual = residual.replace(re, "");
   return residual.length < 2;
+}
+
+/**
+ * How /api/ask should answer a finance question (R109 P1):
+ * - "exact": overall aggregate — answer from financeStats, never the LLM.
+ * - "fail_closed": aggregate wording but extra qualifiers remain ("咖啡一共
+ *   花了多少") — the exact path can't scope it, and the LLM would mental-math
+ *   truncated recall (and may mix currencies). Refuse the arithmetic and show
+ *   the exact overall stats instead.
+ * - null: not an aggregate question (single-item price etc.) — normal ask.
+ */
+export function financeAggIntent(question: string): "exact" | "fail_closed" | null {
+  if (isFinanceAggQuestion(question)) return "exact";
+  if (FINANCE_WORD_RE.test(question) && STRONG_AGG_RE.test(question)) return "fail_closed";
+  return null;
+}
+
+/** Fail-closed answer: no arithmetic on the qualified subset, exact overall stats instead. */
+export function buildFinanceFailClosedAnswer(stats: FinanceStats, phrase: string | null): string {
+  return (
+    "这个合计问题带有额外限定条件，暂不支持按限定条件精确合计；为避免估算出错（尤其多币种不能直接相加），我不做心算合计。\n\n" +
+    `${buildFinanceAggAnswer(stats, phrase)}\n\n` +
+    "如需细看某一项，可在时间流搜索关键词逐条查看，或到「报告」页查看周报/月报的分类统计。"
+  );
 }
 
 /** Deterministic answer for finance aggregate questions, built from financeStats (report口径). */

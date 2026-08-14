@@ -8,6 +8,7 @@
 import { buildPushPayload, type PushSubscription as WirePushSubscription } from "@block65/webcrypto-web-push";
 import type { Env, NoteRow } from "./types";
 import { getTodayReview, writeCronHeartbeat, shanghaiDate } from "./review";
+import { DEFAULT_TZ, loadUserTz, tzOffsetString } from "./triage";
 
 export interface PushSubRow {
   id: string;
@@ -87,16 +88,27 @@ export async function sendPushToUser(env: Env, userId: string, payload: PushPayl
   return ok;
 }
 
+/** Epoch ms of a local wall-clock time ("YYYY-MM-DDTHH:mm") in IANA timezone `tz`. */
+function parseInTz(local: string, tz: string): number {
+  let off = "+08:00";
+  try {
+    off = tzOffsetString(new Date(Date.parse(`${local}:00Z`)), tz);
+  } catch {
+    // invalid tz string: keep the Asia/Shanghai fallback
+  }
+  return Date.parse(`${local}:00${off}`);
+}
+
 /**
  * Due-time of a todo in epoch ms. `todo_due` is either a bare date
- * (YYYY-MM-DD, treated as 09:00 Asia/Shanghai), a datetime with a UTC offset,
- * or a legacy offset-less datetime (Asia/Shanghai local).
+ * (YYYY-MM-DD, treated as 09:00 local in the user's timezone), a datetime
+ * with a UTC offset, or a legacy offset-less datetime (user-local).
  */
-export function todoDueEpochMs(due: string | null): number | null {
+export function todoDueEpochMs(due: string | null, tz: string = DEFAULT_TZ): number | null {
   if (!due) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(due)) return Date.parse(`${due}T09:00:00+08:00`);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(due)) return parseInTz(`${due}T09:00`, tz);
   const m = due.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2})?$/);
-  const t = m ? Date.parse(`${m[1]}T${m[2]}:00+08:00`) : Date.parse(due);
+  const t = m ? parseInTz(`${m[1]}T${m[2]}`, tz) : Date.parse(due);
   return Number.isNaN(t) ? null : t;
 }
 
@@ -106,14 +118,14 @@ const REMINDER_LOOKBACK_MS = 24 * 3600 * 1000;
 export const REMINDER_LEAD_MS = 30 * 60_000;
 
 /**
- * When to remind for a todo: 30 minutes before a timed due, or 08:00
- * Asia/Shanghai on the due day for bare dates (before the day's implicit
+ * When to remind for a todo: 30 minutes before a timed due, or 08:00 local
+ * (user timezone) on the due day for bare dates (before the day's implicit
  * 09:00 due). Reminders are useful before the deadline, not after it.
  */
-export function todoReminderEpochMs(due: string | null): number | null {
+export function todoReminderEpochMs(due: string | null, tz: string = DEFAULT_TZ): number | null {
   if (!due) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(due)) return Date.parse(`${due}T08:00:00+08:00`);
-  const t = todoDueEpochMs(due);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(due)) return parseInTz(`${due}T08:00`, tz);
+  const t = todoDueEpochMs(due, tz);
   return t === null ? null : t - REMINDER_LEAD_MS;
 }
 
@@ -135,18 +147,32 @@ export interface TodoReminderStats {
 export async function sweepTodoReminders(env: Env, now: Date = new Date()): Promise<TodoReminderStats> {
   const stats: TodoReminderStats = { candidates: 0, reminded: 0, delivered: 0, skipped_pref: 0, skipped_no_sub: 0 };
   if (!pushConfigured(env)) return stats;
+  // push the due-date window into SQL (R109 P2-3): without it, a backlog of
+  // stale or far-future todos could crowd the 200-row cap and starve the
+  // actually-due ones. ±2 days around today covers every UTC offset plus the
+  // 24h lookback; the exact per-timezone check stays in the filter below.
+  const nowIso = now.toISOString().slice(0, 10);
   const { results } = await env.DB.prepare(
     `SELECT * FROM notes
       WHERE deleted_at IS NULL AND category = 'todo'
         AND (todo_done IS NULL OR todo_done = 0)
         AND todo_reminded_at IS NULL AND todo_due IS NOT NULL
-      LIMIT 200`
-  ).all<NoteRow>();
+        AND substr(todo_due, 1, 10) BETWEEN date(?, '-2 days') AND date(?, '+2 days')
+      ORDER BY todo_due ASC LIMIT 200`
+  )
+    .bind(nowIso, nowIso)
+    .all<NoteRow>();
   const nowMs = now.getTime();
-  const dueRows = (results ?? []).filter((n) => {
-    const t = todoReminderEpochMs(n.todo_due);
-    return t !== null && t <= nowMs && t >= nowMs - REMINDER_LOOKBACK_MS;
-  });
+  const tzCache = new Map<string, string>();
+  const userTz = async (uid: string): Promise<string> => {
+    if (!tzCache.has(uid)) tzCache.set(uid, await loadUserTz(env, uid));
+    return tzCache.get(uid)!;
+  };
+  const dueRows: NoteRow[] = [];
+  for (const n of results ?? []) {
+    const t = todoReminderEpochMs(n.todo_due, await userTz(n.user_id));
+    if (t !== null && t <= nowMs && t >= nowMs - REMINDER_LOOKBACK_MS) dueRows.push(n);
+  }
   stats.candidates = dueRows.length;
 
   const subCache = new Map<string, PushSubRow[]>();
@@ -172,7 +198,7 @@ export async function sweepTodoReminders(env: Env, now: Date = new Date()): Prom
       continue;
     }
     const label = n.is_sensitive ? "一条待办" : (n.title || n.content || "待办").slice(0, 60);
-    const dueMs = todoDueEpochMs(n.todo_due);
+    const dueMs = todoDueEpochMs(n.todo_due, await userTz(n.user_id));
     const timing =
       dueMs !== null && dueMs <= nowMs
         ? "已到期"

@@ -15,6 +15,7 @@ export interface NoteMeta {
   file_kind?: string
   file_excerpt?: string
   file_status?: "ok" | "extract_failed"
+  media_status?: "ok" | "extract_failed"
   finance_merchant?: string
   manual_override?: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean }
   /** 问答写回：由「存为笔记」保存的问答结论 */

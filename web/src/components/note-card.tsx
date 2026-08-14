@@ -41,7 +41,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
-import { downloadNoteFile, refetchLink } from "@/lib/api"
+import { downloadNoteFile, refetchLink, retryMedia } from "@/lib/api"
 import { cn, formatTime, parseServerTime, parseDue, dueHasTime } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
 
@@ -346,6 +346,8 @@ export function NoteCard({
   const [downloading, setDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState<string | null>(null)
   const [refetching, setRefetching] = useState(false)
+  const [retryingMedia, setRetryingMedia] = useState(false)
+  const [retryMediaError, setRetryMediaError] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const fileMeta = note.raw_type === "file" && note.meta?.file_name ? note.meta : null
@@ -372,6 +374,25 @@ export function NoteCard({
       // keep the current failed state; the user can retry again
     } finally {
       setRefetching(false)
+    }
+  }
+
+  const mediaFailed =
+    (note.raw_type === "voice" && (note.meta?.media_status === "extract_failed" || note.content.startsWith("【语音】转写失败"))) ||
+    (note.raw_type === "image" && (note.meta?.media_status === "extract_failed" || note.content.startsWith("【图片】文字提取失败"))) ||
+    (note.raw_type === "file" && note.meta?.file_status === "extract_failed")
+
+  async function retryMediaExtract() {
+    if (retryingMedia) return
+    setRetryingMedia(true)
+    setRetryMediaError(null)
+    try {
+      setLocalNote(await retryMedia(note.id))
+    } catch (e) {
+      // keep the failed state visible; the user can retry again
+      setRetryMediaError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRetryingMedia(false)
     }
   }
 
@@ -863,6 +884,21 @@ export function NoteCard({
               >
                 {expanded ? "收起" : "展开全文"}
               </button>
+            )}
+            {mediaFailed && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <CircleAlert className="size-3.5 shrink-0" />
+                <span>{note.raw_type === "voice" ? "转写失败，原件已存档" : note.raw_type === "image" ? "文字提取失败，原件已存档" : "文本提取失败，原件已存档"}</span>
+                <button
+                  onClick={() => void retryMediaExtract()}
+                  disabled={retryingMedia}
+                  className="inline-flex items-center gap-1 font-medium text-primary hover:underline disabled:opacity-60"
+                >
+                  <RefreshCw className={cn("size-3", retryingMedia && "animate-spin")} />
+                  {retryingMedia ? "重试中…" : "原地重试"}
+                </button>
+                {retryMediaError && <span className="w-full text-destructive">{retryMediaError}</span>}
+              </div>
             )}
             {fileMeta && (
               <div className="mt-2 rounded-lg border bg-muted/40 p-2.5">

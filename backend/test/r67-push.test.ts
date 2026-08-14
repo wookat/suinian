@@ -67,7 +67,7 @@ interface FakeNote {
 interface FakeState {
   notes: FakeNote[];
   subs: { id: string; user_id: string; endpoint: string; p256dh: string; auth: string; tz: string | null; ua: string | null; created_at: string; last_ok_at: string | null }[];
-  prefs: Map<string, { daily_review_push: number; todo_reminder_push: number }>;
+  prefs: Map<string, { daily_review_push: number; todo_reminder_push: number; tz?: string | null }>;
   dailyLog: Set<string>; // `${user_id}|${date}`
   reviews: Map<string, { kind: string; comment: string; note: FakeNote }[]>;
   heartbeats: string[];
@@ -117,11 +117,19 @@ function fakeEnv(state: FakeState, vapid: { publicKey: string; privateKey: strin
         },
         async all() {
           if (sql.includes("FROM notes")) {
-            return {
-              results: state.notes.filter(
-                (n) => n.deleted_at === null && n.category === "todo" && n.todo_done === 0 && n.todo_reminded_at === null && n.todo_due !== null
-              ),
-            };
+            let rows = state.notes.filter(
+              (n) => n.deleted_at === null && n.category === "todo" && n.todo_done === 0 && n.todo_reminded_at === null && n.todo_due !== null
+            );
+            if (sql.includes("substr(todo_due, 1, 10)")) {
+              const base = Date.parse(`${binds[0]}T00:00:00Z`);
+              const lo = new Date(base - 2 * 86400_000).toISOString().slice(0, 10);
+              const hi = new Date(base + 2 * 86400_000).toISOString().slice(0, 10);
+              rows = rows.filter((n) => {
+                const d = (n.todo_due ?? "").slice(0, 10);
+                return d >= lo && d <= hi;
+              });
+            }
+            return { results: rows };
           }
           if (sql.includes("DISTINCT s.user_id")) {
             const users = new Set<string>();
@@ -309,6 +317,36 @@ describe("sweepTodoReminders", () => {
     const stats = await sweepTodoReminders(env, new Date("2026-08-08T02:00:00Z"));
     expect(stats.reminded).toBe(0);
     expect(state.notes[0].todo_reminded_at).toBeNull();
+  });
+
+  it("pushes the due-date window into SQL: far-past/far-future dues never reach the row cap", async () => {
+    const now = new Date("2026-08-08T02:00:00Z");
+    const state = makeState({
+      notes: [
+        todoNote("ancient", "u1", "2026-01-01T09:00:00+08:00"),
+        todoNote("nextmonth", "u1", "2026-09-20T09:00:00+08:00"),
+        todoNote("due", "u1", "2026-08-08T09:30:00+08:00"),
+      ],
+    });
+    const stats = await sweepTodoReminders(fakeEnv(state, vapid), now);
+    expect(stats.candidates).toBe(1);
+    expect(stats.reminded).toBe(1);
+    expect(state.notes.find((n) => n.id === "due")!.todo_reminded_at).not.toBeNull();
+    expect(state.notes.find((n) => n.id === "ancient")!.todo_reminded_at).toBeNull();
+  });
+
+  it("reminds bare-date todos in the user's own timezone, not Asia/Shanghai (R109 P2-2)", async () => {
+    const state = makeState({
+      notes: [todoNote("ny", "u1", "2026-08-08")],
+      prefs: new Map([["u1", { daily_review_push: 1, todo_reminder_push: 1, tz: "America/New_York" }]]),
+    });
+    const env = fakeEnv(state, vapid);
+    // 08:05 Shanghai but 20:05 previous day in New York: not yet
+    const early = await sweepTodoReminders(env, new Date("2026-08-08T00:05:00Z"));
+    expect(early.candidates).toBe(0);
+    // 08:05 New York (EDT, UTC-4)
+    const stats = await sweepTodoReminders(env, new Date("2026-08-08T12:05:00Z"));
+    expect(stats.reminded).toBe(1);
   });
 
   it("hides sensitive todo content in the notification body", async () => {

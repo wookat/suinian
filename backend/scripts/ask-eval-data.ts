@@ -273,4 +273,31 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAny: ["exp1"],
     holdout: true,
   },
+  // —— R110（R109 P1 badcase）：「结余/收支」类措辞也必须走精确聚合 ——
+  {
+    id: "q63",
+    category: "财务聚合",
+    question: "上个月结余多少钱",
+    expectAnswerContains: ["口径与周报/月报一致"],
+  },
+  {
+    id: "q64",
+    category: "财务聚合",
+    question: "本月收支结余怎么样，一共多少",
+    expectAnswerContains: ["口径与周报/月报一致"],
+  },
+  {
+    id: "q65",
+    category: "财务聚合",
+    question: "这个月收支情况如何",
+    expectAnswerContains: ["口径与周报/月报一致"],
+    holdout: true,
+  },
+  // 带限定条件的合计：fail-closed，拒绝心算、给出精确整体口径
+  {
+    id: "q66",
+    category: "财务聚合",
+    question: "给猫花的钱合计有多少",
+    expectAnswerContains: ["不做心算合计", "口径与周报/月报一致"],
+  },
 ];
