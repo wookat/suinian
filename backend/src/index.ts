@@ -5,7 +5,16 @@ import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow }
 import { triageNote, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
-import { sensitiveIngestGate } from "./ingest";
+import {
+  parseNoteMeta,
+  prepareNoteInsert,
+  applyNotePatch,
+  replaceNoteContent,
+  applyTriage,
+  setNoteAiTitle,
+  prepareTagsUpdate,
+} from "./note-store";
+export { applyTriage } from "./note-store";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
 import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads } from "./threads";
@@ -51,7 +60,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type Im
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countAggIntent, buildCountAnswer, buildCountFailClosedAnswer, enumListIntent, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -61,6 +70,8 @@ import {
   TRIAGE_DEGRADE_AFTER_MS,
   NOTE_WRITE_RATE_LIMIT_MAX,
   BULK_INGEST_RATE_LIMIT_MAX,
+  BATCH_WRITE_RATE_LIMIT_MAX,
+  THREAD_REBUILD_RATE_LIMIT_MAX,
 } from "./constants";
 import { buildStats, normalizeTzOffset, SAMPLE_TAG_LIKE } from "./stats";
 import {
@@ -845,16 +856,6 @@ export function normalizeStoredTodoDue(v: string | null): string | null {
   return m ? `${m[1]}T${m[2]}:00+08:00` : v;
 }
 
-function parseNoteMeta(raw: string | null): NoteMeta | null {
-  if (!raw) return null;
-  try {
-    const obj = JSON.parse(raw) as NoteMeta;
-    return typeof obj === "object" && obj !== null ? obj : null;
-  } catch {
-    return null;
-  }
-}
-
 function noteToJson(n: NoteRow) {
   return {
     ...n,
@@ -890,77 +891,6 @@ const CATEGORY_LABEL: Record<string, string> = {
   income: "收入",
   transfer: "资金往来",
 };
-
-export async function applyTriage(env: Env, noteId: string, triage: TriageResult, content: string): Promise<void> {
-  // imported notes carry their original tags in meta.import_tags: keep them
-  // first and union in the AI-suggested ones
-  const row = await env.DB.prepare("SELECT meta, todo_due FROM notes WHERE id = ?")
-    .bind(noteId)
-    .first<{ meta: string | null; todo_due: string | null }>();
-  const meta = parseNoteMeta(row?.meta ?? null);
-  const override = meta?.manual_override;
-  const importTags = meta?.import_tags;
-  const newMeta: NoteMeta = { ...(meta ?? {}) };
-  let metaChanged = false;
-  if (newMeta.needs_retriage) {
-    delete newMeta.needs_retriage;
-    metaChanged = true;
-  }
-  const mergedTags = Array.isArray(importTags)
-    ? [...new Set([...importTags, ...triage.tags])].slice(0, 6)
-    : triage.tags;
-  // 敏感笔记派生字段与加密口径一致（R120 P1-1）：content 进 content_enc 后，
-  // AI title 可能把秘密值原样带出（如「todo密码是xxx」），title 一律置空，
-  // tags 走严格过滤只留纯主题词
-  const tags = triage.is_sensitive ? sanitizeSensitiveTags(mergedTags) : mergedTags;
-  // raw_transcript 是 content 的派生明文（语音原始转写），敏感时一并洗掉
-  if (triage.is_sensitive && newMeta.raw_transcript) {
-    delete newMeta.raw_transcript;
-    metaChanged = true;
-  }
-  const sets = ["is_sensitive = ?"];
-  const binds: unknown[] = [triage.is_sensitive ? 1 : 0];
-  // fields the user set by hand stay untouched
-  if (!override?.title) {
-    sets.push("title = ?");
-    binds.push(triage.is_sensitive ? null : triage.title || null);
-  }
-  if (!override?.todo_due) {
-    // AI only fills a missing due; an already-set due is never cleared or replaced
-    sets.push("todo_due = ?");
-    binds.push(row?.todo_due ?? triage.todo_due ?? null);
-  }
-  if (!override?.category) {
-    sets.push("category = ?", "amount = ?", "currency = ?");
-    binds.push(triage.category, triage.amount ?? null, triage.currency ?? null);
-    if (triage.merchant) {
-      newMeta.finance_merchant = triage.merchant;
-      metaChanged = true;
-    }
-  }
-  if (metaChanged) {
-    sets.push("meta = ?");
-    binds.push(JSON.stringify(newMeta));
-  }
-  if (!override?.tags) {
-    sets.push("tags = ?");
-    binds.push(JSON.stringify(tags));
-  }
-  if (triage.is_sensitive && env.SUINIAN_ENC_KEY) {
-    // encrypt-at-rest: ciphertext into content_enc, plaintext replaced by a placeholder
-    const enc = await encryptContent(env.SUINIAN_ENC_KEY, content);
-    sets.push("content = ?", "content_enc = ?");
-    binds.push(ENC_PLACEHOLDER, enc);
-  } else if (!triage.is_sensitive) {
-    // the fail-closed pre-check may have encrypted the pending note; the model
-    // (primary judge) says non-sensitive → restore plaintext, drop ciphertext
-    sets.push("content = ?", "content_enc = NULL");
-    binds.push(content);
-  }
-  await env.DB.prepare(`UPDATE notes SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?`)
-    .bind(...binds, noteId)
-    .run();
-}
 
 async function fetchLinkMetaInto(env: Env, noteId: string, urls: string[]): Promise<void> {
   if (urls.length === 0) return;
@@ -1027,39 +957,26 @@ async function createNote(
   // encrypted from the very first write, so the pending window never serves
   // plaintext through backup/export/MCP/list paths. The model stays the
   // primary judge — applyTriage restores plaintext when it says non-sensitive.
-  const gated = await sensitiveIngestGate(
+  // insert immediately (category resolved by triage, sync or async)
+  const { stmt } = await prepareNoteInsert(
     c.env,
-    { content, title: null, tags: manualTags, is_sensitive: false },
+    c.env.DB,
+    {
+      id,
+      user_id: userId,
+      source,
+      raw_type: rawType,
+      content,
+      url: url ?? null,
+      category: opts.skipTriage ? "idea" : null,
+      tags: manualTags,
+      meta,
+    },
     // skipTriage notes never get a model verdict, so only the high-precision
     // detector applies (a broad hint would stay encrypted forever)
-    { rejudge: !opts.skipTriage }
+    { rejudge: !opts.skipTriage, markSensitive: "onlyEncrypted" }
   );
-  const storedContent = gated.content;
-  const preContentEnc = gated.content_enc;
-  const preSensitive = gated.is_sensitive && gated.content_enc !== null;
-  // 敏感元数据洗净同样覆盖派生明文：raw_transcript 是语音原始转写，
-  // content 加密后若仍留在 meta 里会原样泄出秘密值
-  if (preSensitive && meta?.raw_transcript) delete meta.raw_transcript;
-
-  // insert immediately (category resolved by triage, sync or async)
-  await c.env.DB.prepare(
-    `INSERT INTO notes (id, user_id, source, raw_type, content, url, category, tags, meta, is_sensitive, content_enc)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  )
-    .bind(
-      id,
-      userId,
-      source,
-      rawType,
-      storedContent,
-      url ?? null,
-      opts.skipTriage ? "idea" : null,
-      JSON.stringify(gated.tags),
-      meta ? JSON.stringify(meta) : null,
-      preSensitive ? 1 : 0,
-      preContentEnc
-    )
-    .run();
+  await stmt.run();
 
   const runTriage = async (retry: boolean): Promise<TriageResult | null> => {
     const topTags = await loadTopTags(c.env.DB, userId).catch(() => [] as string[]);
@@ -1338,11 +1255,16 @@ app.patch("/api/notes/:id", async (c) => {
   const body = await c.req.json<Record<string, unknown>>().catch(() => null);
   if (!body) return c.json({ error: "invalid body" }, 400);
 
+  // 编辑触发 AI 重算标题/复判，与新建同费：共用 note_write 限流桶
+  if (typeof body.content === "string" && !(await checkRateLimit(c.env.DB, "note_write", [userId], NOTE_WRITE_RATE_LIMIT_MAX))) {
+    return c.json({ error: "操作太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
+
   const existing = await c.env.DB.prepare(
-    "SELECT is_sensitive, content, content_enc, meta, tags, updated_at FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+    "SELECT is_sensitive, id, user_id, content, content_enc, meta, tags, updated_at FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
   )
     .bind(id, userId)
-    .first<{ is_sensitive: number; content: string; content_enc: string | null; meta: string | null; tags: string; updated_at: string }>();
+    .first<{ is_sensitive: number; id: string; user_id: string; content: string; content_enc: string | null; meta: string | null; tags: string; updated_at: string }>();
   if (!existing) return c.json({ error: "not found" }, 404);
 
   // optimistic lock: clients editing a loaded note send its updated_at back so
@@ -1352,101 +1274,64 @@ app.patch("/api/notes/:id", async (c) => {
     return conflictResponse(c, id);
   }
 
-  const wantSensitive =
-    typeof body.is_sensitive === "boolean" ? body.is_sensitive : !!existing.is_sensitive;
-
-  const sets: string[] = [];
-  const binds: unknown[] = [];
   if (typeof body.content === "string") {
     if (!body.content.trim()) return c.json({ error: "内容不能为空，如需删除请用删除操作" }, 400);
     const tooLong = contentTooLong(c, body.content);
     if (tooLong) return tooLong;
-    if (wantSensitive && c.env.SUINIAN_ENC_KEY) {
-      sets.push("content = ?", "content_enc = ?");
-      binds.push(ENC_PLACEHOLDER, await encryptContent(c.env.SUINIAN_ENC_KEY, body.content));
-    } else {
-      sets.push("content = ?", "content_enc = ?");
-      binds.push(body.content, null);
-    }
-  } else if (typeof body.is_sensitive === "boolean" && body.is_sensitive !== !!existing.is_sensitive) {
-    if (wantSensitive) {
-      // mark sensitive: encrypt the current plaintext at rest
-      if (c.env.SUINIAN_ENC_KEY) {
-        sets.push("content = ?", "content_enc = ?");
-        binds.push(ENC_PLACEHOLDER, await encryptContent(c.env.SUINIAN_ENC_KEY, existing.content));
-      }
-    } else {
-      // unmark sensitive: restore plaintext from ciphertext (or keep stored content)
-      const plain =
-        existing.content_enc && c.env.SUINIAN_ENC_KEY
-          ? await decryptContent(c.env.SUINIAN_ENC_KEY, existing.content_enc)
-          : null;
-      sets.push("content = ?", "content_enc = ?");
-      binds.push(plain ?? existing.content, null);
-    }
   }
-  if (typeof body.is_sensitive === "boolean") {
-    sets.push("is_sensitive = ?");
-    binds.push(body.is_sensitive ? 1 : 0);
-  }
-  // 转敏感时旧的 AI title/tags 可能已把秘密值明文带出（R120 P1-1）：
-  // 未显式提供新值时一并清洗，与 applyTriage 同一口径
-  if (body.is_sensitive === true && !existing.is_sensitive) {
-    if (typeof body.title !== "string") sets.push("title = NULL");
-    if (!Array.isArray(body.tags)) {
-      let oldTags: string[] = [];
-      try {
-        oldTags = (JSON.parse(existing.tags || "[]") as unknown[]).filter((t): t is string => typeof t === "string");
-      } catch {
-        oldTags = [];
-      }
-      sets.push("tags = ?");
-      binds.push(JSON.stringify(sanitizeSensitiveTags(oldTags)));
-    }
-  }
+
+  // 内容/标题/标签/敏感位的修改统一交给持久层 applyNotePatch 过敏感管道
+  //（R123 P1 结构性收口）；这里只组装非守护字段与 manual_override
+  const patch: {
+    content?: string;
+    title?: string;
+    tags?: string[];
+    is_sensitive?: boolean;
+    meta?: NoteMeta;
+  } = {};
+  if (typeof body.content === "string") patch.content = body.content;
+  if (typeof body.is_sensitive === "boolean") patch.is_sensitive = body.is_sensitive;
+  if (typeof body.title === "string") patch.title = body.title;
+  if (Array.isArray(body.tags)) patch.tags = body.tags.filter((t): t is string => typeof t === "string");
+
+  const extraSets: string[] = [];
+  const extraBinds: unknown[] = [];
   if (typeof body.todo_done === "boolean") {
-    sets.push("todo_done = ?", "done_at = ?");
-    binds.push(body.todo_done ? 1 : 0, body.todo_done ? new Date().toISOString() : null);
+    extraSets.push("todo_done = ?", "done_at = ?");
+    extraBinds.push(body.todo_done ? 1 : 0, body.todo_done ? new Date().toISOString() : null);
   }
   const override: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean } = {};
   if (typeof body.category === "string" && ["idea", "todo", "collect", "data", "expense", "income", "transfer"].includes(body.category)) {
-    sets.push("category = ?");
-    binds.push(body.category);
+    extraSets.push("category = ?");
+    extraBinds.push(body.category);
     override.category = true;
   }
-  if (Array.isArray(body.tags)) {
-    sets.push("tags = ?");
-    binds.push(JSON.stringify(body.tags.filter((t) => typeof t === "string")));
-    override.tags = true;
-  }
-  if (typeof body.title === "string") {
-    sets.push("title = ?");
-    binds.push(body.title);
-    override.title = true;
-  }
+  if (patch.tags) override.tags = true;
+  if (typeof patch.title === "string") override.title = true;
   if (typeof body.todo_due === "string" || body.todo_due === null) {
-    sets.push("todo_due = ?");
-    binds.push(normalizeTodoDue(body.todo_due));
+    extraSets.push("todo_due = ?");
+    extraBinds.push(normalizeTodoDue(body.todo_due));
     override.todo_due = true;
   }
   if (Object.keys(override).length > 0) {
     // remember the user's hand-set values so AI triage / cron never overwrites them
     const meta = parseNoteMeta(existing.meta) ?? {};
     meta.manual_override = { ...meta.manual_override, ...override };
-    sets.push("meta = ?");
-    binds.push(JSON.stringify(meta));
+    patch.meta = meta;
   }
-  if (sets.length === 0) return c.json({ error: "no updatable fields" }, 400);
-  sets.push("updated_at = datetime('now')");
+  if (
+    patch.content === undefined &&
+    patch.title === undefined &&
+    patch.tags === undefined &&
+    patch.is_sensitive === undefined &&
+    extraSets.length === 0
+  )
+    return c.json({ error: "no updatable fields" }, 400);
 
   // CAS on updated_at closes the read→write race window (another device
   // committing between our SELECT and this UPDATE)
-  const res = await c.env.DB.prepare(
-    `UPDATE notes SET ${sets.join(", ")} WHERE id = ? AND user_id = ? AND updated_at = ?`
-  )
-    .bind(...binds, id, userId, existing.updated_at)
-    .run();
-  if (!res.meta.changes) {
+  const result = await applyNotePatch(c.env, c.env.DB, existing, patch, { sets: extraSets, binds: extraBinds });
+  if (!result.changes) {
     const still = await c.env.DB.prepare(
       "SELECT id FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
     )
@@ -1457,15 +1342,25 @@ app.patch("/api/notes/:id", async (c) => {
   }
   const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
   c.executionCtx.waitUntil(capped(upsertNoteEmbedding(c.env, note!), PIPELINE_TIMEOUT_MS, `patch-embed note=${id}`));
-  const sensitivityChanged =
-    typeof body.is_sensitive === "boolean" && body.is_sensitive !== !!existing.is_sensitive;
+  const sensitivityChanged = result.sensitive !== !!existing.is_sensitive;
   // extractGraph purges graph rows for sensitive notes and (re-)extracts otherwise
   if (typeof body.content === "string" || sensitivityChanged)
     c.executionCtx.waitUntil(capped(extractGraph(c.env, note!), PIPELINE_TIMEOUT_MS, `patch-graph note=${id}`));
-  // content changed without an explicit title: recompute the AI title so
-  // search/export never keep showing the stale pre-edit title
-  if (typeof body.content === "string" && body.content !== existing.content && typeof body.title !== "string")
+  // 新内容疑似含密（fail-closed 预检加密待定论）：立即触发模型复判，
+  // 判非敏感时恢复明文，不用等 10 分钟的 cron 扫
+  if (result.needsRetriage && note) {
+    c.executionCtx.waitUntil(
+      capped(
+        retriageOne(c.env, { id, user_id: userId, content: note.content, content_enc: note.content_enc, created_at: note.created_at }),
+        PIPELINE_TIMEOUT_MS,
+        `patch-retriage note=${id}`
+      )
+    );
+  } else if (typeof body.content === "string" && body.content !== existing.content && typeof body.title !== "string") {
+    // content changed without an explicit title: recompute the AI title so
+    // search/export never keep showing the stale pre-edit title
     c.executionCtx.waitUntil(capped(recomputeTitle(c.env, id, body.content), PIPELINE_TIMEOUT_MS, `patch-title note=${id}`));
+  }
   return c.json({ note: await noteToJsonDecrypted(c.env, note!) });
 });
 
@@ -1479,7 +1374,7 @@ export async function recomputeTitle(env: Env, noteId: string, content: string):
   if (parseNoteMeta(row?.meta ?? null)?.manual_override?.title) return;
   const triage = await triageNote(content, env);
   if (!triage || !triage.title) return;
-  await env.DB.prepare("UPDATE notes SET title = ? WHERE id = ?").bind(triage.title, noteId).run();
+  await setNoteAiTitle(env.DB, noteId, triage.title);
 }
 
 /** Delete one owned note and its attachments/embedding/graph rows; caller reconciles threads. */
@@ -1767,10 +1662,10 @@ async function runBatchAction(
     const selected = await Promise.all(
       chunks.map((chunk) =>
         env.DB.prepare(
-          `SELECT id, tags, meta FROM notes WHERE user_id = ? AND deleted_at IS NULL AND id IN (${chunk.map(() => "?").join(",")})`
+          `SELECT id, tags, meta, is_sensitive FROM notes WHERE user_id = ? AND deleted_at IS NULL AND id IN (${chunk.map(() => "?").join(",")})`
         )
           .bind(userId, ...chunk)
-          .all<{ id: string; tags: string; meta: string | null }>()
+          .all<{ id: string; tags: string; meta: string | null; is_sensitive: number }>()
       )
     );
     const stmts: D1PreparedStatement[] = [];
@@ -1796,11 +1691,8 @@ async function runBatchAction(
             : current.filter((t) => !opts.tags.includes(t));
         if (next.length === current.length && next.every((t, i) => t === current[i])) continue;
         meta.manual_override = { ...meta.manual_override, tags: true };
-        stmts.push(
-          env.DB.prepare(
-            "UPDATE notes SET tags = ?, meta = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?"
-          ).bind(JSON.stringify(next), JSON.stringify(meta), row.id, userId)
-        );
+        // 敏感行的 tags 在持久层统一过严格过滤（R123 P1：批量打标曾能把秘密值写进敏感笔记的 tags）
+        stmts.push(prepareTagsUpdate(env.DB, { id: row.id, user_id: userId, is_sensitive: row.is_sensitive }, next, meta));
       }
       changedIds.push(row.id);
     }
@@ -1828,6 +1720,10 @@ app.post("/api/notes/batch", async (c) => {
   const action = body.action;
   if (action !== "delete" && action !== "add_tags" && action !== "remove_tags" && action !== "set_category")
     return c.json({ error: "invalid action" }, 400);
+  // 批量写操作同样限频（R123 P2：batch 曾完全不限流）
+  if (!(await checkRateLimit(c.env.DB, "batch_write", [userId], BATCH_WRITE_RATE_LIMIT_MAX))) {
+    return c.json({ error: "批量操作太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
   let ids = Array.isArray(body.ids) ? body.ids.filter((v): v is string => typeof v === "string") : [];
   const filter = body.filter && typeof body.filter === "object" ? (body.filter as Record<string, unknown>) : null;
   // matches beyond the BATCH_FILTER_MAX cap; lets the UI say "N more remain"
@@ -1952,10 +1848,10 @@ app.get("/api/tags", async (c) => {
 /** Replace/remove a tag across all of a user's notes; `to = null` removes it. Returns affected note count. */
 async function retagUser(env: Env, userId: string, from: string, to: string | null): Promise<number> {
   const { results } = await env.DB.prepare(
-    "SELECT id, tags FROM notes WHERE user_id = ? AND deleted_at IS NULL AND tags LIKE ?"
+    "SELECT id, tags, is_sensitive FROM notes WHERE user_id = ? AND deleted_at IS NULL AND tags LIKE ?"
   )
     .bind(userId, `%"${from}"%`)
-    .all<{ id: string; tags: string }>();
+    .all<{ id: string; tags: string; is_sensitive: number }>();
   let affected = 0;
   for (const row of results ?? []) {
     let current: string[] = [];
@@ -1966,9 +1862,7 @@ async function retagUser(env: Env, userId: string, from: string, to: string | nu
     }
     if (!current.includes(from)) continue; // LIKE can over-match substrings
     const next = [...new Set(current.map((t) => (t === from ? to : t)).filter((t): t is string => t !== null))];
-    await env.DB.prepare("UPDATE notes SET tags = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?")
-      .bind(JSON.stringify(next), row.id, userId)
-      .run();
+    await prepareTagsUpdate(env.DB, { id: row.id, user_id: userId, is_sensitive: row.is_sensitive }, next).run();
     affected++;
   }
   return affected;
@@ -2074,20 +1968,10 @@ app.post("/api/notes/:id/retry-media", async (c) => {
     return c.json({ error: "重试仍然失败，原件已保留，可稍后再试", retryable: true }, 502);
   }
 
-  // same fail-closed sensitive pre-check as createNote: the re-extracted text
-  // waits for AI triage, so possible secrets are encrypted from the first write
-  const gated = await sensitiveIngestGate(c.env, { content, title: null, tags: [], is_sensitive: false });
-  const storedContent = gated.content;
-  const contentEnc = gated.content_enc;
-  const sensitive = gated.is_sensitive && contentEnc !== null ? 1 : 0;
-  if (sensitive && newMeta.raw_transcript) delete newMeta.raw_transcript;
-  // category back to NULL: the placeholder's triage is meaningless for the
-  // real content — the async pipeline below re-sorts it like a fresh note
-  await c.env.DB.prepare(
-    "UPDATE notes SET content = ?, content_enc = ?, is_sensitive = ?, category = NULL, meta = ?, updated_at = datetime('now') WHERE id = ?"
-  )
-    .bind(storedContent, contentEnc, sensitive, JSON.stringify(newMeta), id)
-    .run();
+  // same fail-closed sensitive pre-check as createNote (持久层内置）；category
+  // back to NULL: the placeholder's triage is meaningless for the real
+  // content — the async pipeline below re-sorts it like a fresh note
+  const { storedContent, contentEnc } = await replaceNoteContent(c.env, c.env.DB, id, content, newMeta);
   c.executionCtx.waitUntil(
     capped(
       retriageOne(c.env, { id, user_id: note.user_id, content: storedContent, content_enc: contentEnc, created_at: note.created_at }),
@@ -2509,6 +2393,84 @@ app.post("/api/ask", async (c) => {
       ...(financeIntent === "fail_closed" ? { finance_fail_closed: true } : {}),
     });
   }
+  // 计数类问题同理走 SQL COUNT 精确统计（R124 P1-2：「记了多少条」曾被 LLM
+  // 从 top-k 召回窗口猜成 16，实为 210）；意图/时间同样以原始问题优先
+  const origCountIntent = countAggIntent(question);
+  const countIntent = origCountIntent ?? countAggIntent(recallQuestion);
+  if (countIntent) {
+    const cRange = (origCountIntent ? parseTimeRange(question) : null) ?? timeRange;
+    const cConds = ["user_id = ?", "deleted_at IS NULL"];
+    const cBinds: unknown[] = [userId];
+    if (cRange?.start) {
+      cConds.push("created_at >= ?");
+      cBinds.push(cRange.start);
+    }
+    if (cRange?.end) {
+      cConds.push("created_at < ?");
+      cBinds.push(cRange.end);
+    }
+    const where = cConds.join(" AND ");
+    const [totalRow, catRows] = await Promise.all([
+      c.env.DB.prepare(`SELECT COUNT(*) AS cnt, SUM(is_sensitive) AS sens FROM notes WHERE ${where}`)
+        .bind(...cBinds)
+        .first<{ cnt: number; sens: number | null }>(),
+      c.env.DB.prepare(`SELECT category, COUNT(*) AS cnt FROM notes WHERE ${where} GROUP BY category ORDER BY cnt DESC`)
+        .bind(...cBinds)
+        .all<{ category: string | null; cnt: number }>(),
+    ]);
+    const total = totalRow?.cnt ?? 0;
+    const sens = totalRow?.sens ?? 0;
+    const byCat = catRows.results ?? [];
+    const answer =
+      countIntent === "exact"
+        ? buildCountAnswer(total, byCat, sens, cRange?.phrase ?? null)
+        : buildCountFailClosedAnswer(total, byCat, sens, cRange?.phrase ?? null);
+    return c.json({ answer, references: [], notes: [], count_aggregate: countIntent === "exact", ...(countIntent === "fail_closed" ? { count_fail_closed: true } : {}) });
+  }
+  // 时间窗枚举（「上周都记了什么」）：窗口内 SQL 全量列举 + 精确总数，
+  // 不走 top-k 召回（R123：枚举不全且无总数口径）
+  if ((enumListIntent(question) || enumListIntent(recallQuestion)) && timeRange?.start) {
+    const eConds = ["user_id = ?", "deleted_at IS NULL", "created_at >= ?"];
+    const eBinds: unknown[] = [userId, timeRange.start];
+    if (timeRange.end) {
+      eConds.push("created_at < ?");
+      eBinds.push(timeRange.end);
+    }
+    const where = eConds.join(" AND ");
+    const ENUM_LIST_MAX = 50;
+    const [totalRow, listRows] = await Promise.all([
+      c.env.DB.prepare(`SELECT COUNT(*) AS cnt, SUM(is_sensitive) AS sens FROM notes WHERE ${where}`)
+        .bind(...eBinds)
+        .first<{ cnt: number; sens: number | null }>(),
+      c.env.DB.prepare(`SELECT * FROM notes WHERE ${where} ORDER BY created_at DESC LIMIT ${ENUM_LIST_MAX + 1}`)
+        .bind(...eBinds)
+        .all<NoteRow>(),
+    ]);
+    const total = totalRow?.cnt ?? 0;
+    const sens = totalRow?.sens ?? 0;
+    const rows = (listRows.results ?? []).slice(0, ENUM_LIST_MAX);
+    if (total === 0) {
+      return c.json({ answer: `${timeRange.phrase}你没有记录任何笔记。`, references: [], notes: [], enum_aggregate: true });
+    }
+    const lines = rows.map((n) => {
+      const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
+      if (n.is_sensitive) return `- ［${label}］（加密的敏感笔记）`;
+      const text = (n.title || n.content.split("\n")[0] || "").slice(0, 40);
+      return `- ［${label}］${text}`;
+    });
+    let answer = `${timeRange.phrase}你一共记了 ${total} 条笔记`;
+    if (sens > 0) answer += `（含 ${sens} 条加密的敏感笔记）`;
+    answer += `：\n\n${lines.join("\n")}`;
+    if (total > rows.length) answer += `\n\n……其余 ${total - rows.length} 条可在时间流按时间筛选查看。`;
+    answer += "\n\n以上为数据库精确列举（不含已删除笔记）。";
+    const refRows = rows.filter((n) => !n.is_sensitive).slice(0, 10);
+    return c.json({
+      answer,
+      references: refRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
+      notes: refRows.map((n) => noteToJson(n)),
+      enum_aggregate: true,
+    });
+  }
   let terms = extractAskTerms(recallQuestion, history);
   // unsegmented CJK clauses never LIKE-match: extract real keywords via LLM,
   // keeping any short naive terms; failures keep the naive terms untouched
@@ -2853,6 +2815,10 @@ function threadJobJson(job: {
 // up whatever is left, so 20-minute rebuilds survive the request lifetime.
 app.post("/api/threads/rebuild", async (c) => {
   const userId = c.get("userId");
+  // 全量重建是重 AI 负载（每条笔记都可能调嵌入/图谱）：泄露 token 不能无限触发
+  if (!(await checkRateLimit(c.env.DB, "thread_rebuild", [userId], THREAD_REBUILD_RATE_LIMIT_MAX))) {
+    return c.json({ error: "重建太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
   // mode=similarity re-clusters with the pre-graph embedding-only algorithm (A/B comparison & debugging)
   const body = await c.req.json<{ mode?: string }>().catch(() => null);
   const existing = await getActiveThreadJob(c.env, userId);

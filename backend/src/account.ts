@@ -32,13 +32,13 @@ export const NOTE_ID_TABLES = ["attachments", "note_embeddings"] as const;
  * itself. External stores (R2 media, Vectorize) are handled by the caller.
  */
 export async function deleteUserData(env: Env, userId: string): Promise<void> {
-  for (const t of NOTE_ID_TABLES) {
-    await env.DB.prepare(`DELETE FROM ${t} WHERE note_id IN (SELECT id FROM notes WHERE user_id = ?)`)
-      .bind(userId)
-      .run();
-  }
-  for (const t of USER_ID_TABLES) {
-    await env.DB.prepare(`DELETE FROM ${t} WHERE user_id = ?`).bind(userId).run();
-  }
-  await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(userId).run();
+  // single atomic batch: one D1 round trip, all-or-nothing — a mid-cascade
+  // failure can't leave the account half-deleted while the UI reports success
+  await env.DB.batch([
+    ...NOTE_ID_TABLES.map((t) =>
+      env.DB.prepare(`DELETE FROM ${t} WHERE note_id IN (SELECT id FROM notes WHERE user_id = ?)`).bind(userId)
+    ),
+    ...USER_ID_TABLES.map((t) => env.DB.prepare(`DELETE FROM ${t} WHERE user_id = ?`).bind(userId)),
+    env.DB.prepare("DELETE FROM users WHERE id = ?").bind(userId),
+  ]);
 }

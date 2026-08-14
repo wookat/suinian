@@ -270,7 +270,7 @@ export function stripMarkerNoise(content: string, triage: TriageResult): TriageR
     const tl = t.trim().toLowerCase();
     return !lower.some((m) => tl.includes(m) || m.includes(tl));
   });
-  let title = triage.title;
+  let title = triage.title ?? "";
   for (const m of markers) {
     title = title.split(`[${m}]`).join("").split(`【${m}】`).join("");
   }

@@ -26,6 +26,11 @@ function fakeDb(users: UserRow[]) {
   const db = {
     users,
     deleted,
+    async batch(stmts: { run(): Promise<unknown> }[]) {
+      const out: unknown[] = [];
+      for (const s of stmts) out.push(await s.run());
+      return out;
+    },
     prepare(sql: string) {
       let binds: unknown[] = [];
       const stmt = {

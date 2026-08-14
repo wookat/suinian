@@ -4,7 +4,7 @@
 import { Zip, ZipDeflate, ZipPassThrough, Unzip, UnzipInflate, strToU8, strFromU8 } from "fflate";
 import type { Env, NoteMeta, NoteRow, ThreadRow, WeeklyReportRow } from "./types";
 import { decryptContent, ENC_PLACEHOLDER } from "./crypto";
-import { sensitiveIngestGate } from "./ingest";
+import { prepareNoteInsert } from "./note-store";
 import { backfillEmbeddings } from "./semantic";
 import { backfillGraphExtracts } from "./graph";
 import { clusterNote } from "./threads";
@@ -414,12 +414,6 @@ export async function restoreBackup(
         }
         return false;
       };
-      const insert = env.DB.prepare(
-        `INSERT INTO notes (id, user_id, source, raw_type, content, url, url_title, url_summary, url_titles,
-           category, tags, title, is_sensitive, content_enc, todo_due, todo_done, done_at, amount, currency,
-           meta, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      );
       const stmts: D1PreparedStatement[] = [];
       for (const n of chunk) {
         // 脱敏备份的敏感笔记只剩占位符，无任何可恢复明文：静默导入会变成
@@ -446,44 +440,33 @@ export async function restoreBackup(
         for (const a of n.attachments ?? []) {
           if (a && typeof a.path === "string") attByPath.set(a.path, { oldNoteId: n.id, att: a });
         }
-        // 恢复入库与其它入口走同一敏感管道（R122 P1-1）：不再信任备份文件里的
-        // is_sensitive 定论——外来/篡改的 zip 可以带着明文密码 + is_sensitive:false
-        // + 既定 category 绕过整个敏感体系。疑似命中标 needs_retriage 交 cron 复判。
-        const gated = await sensitiveIngestGate(env, {
+        // 恢复入库走持久层统一敏感管道（R122 P1-1 / R124 P1-1 收口）：不再信任
+        // 备份文件里的 is_sensitive 定论——外来/篡改的 zip 可以带着明文密码 +
+        // is_sensitive:false + 既定 category 绕过整个敏感体系。
+        const { stmt } = await prepareNoteInsert(env, env.DB, {
+          id: newId,
+          user_id: userId,
+          source: typeof n.source === "string" ? n.source : "import",
+          raw_type: typeof n.raw_type === "string" ? n.raw_type : "text",
           content: n.content,
-          title: typeof n.title === "string" ? n.title : null,
+          url: typeof n.url === "string" ? n.url : null,
+          url_title: typeof n.url_title === "string" ? n.url_title : null,
+          url_summary: typeof n.url_summary === "string" ? n.url_summary : null,
+          url_titles: typeof n.url_titles === "string" ? n.url_titles : null,
+          category: typeof n.category === "string" ? n.category : null,
           tags: Array.isArray(n.tags) ? n.tags.filter((t): t is string => typeof t === "string").slice(0, 6) : [],
+          title: typeof n.title === "string" ? n.title : null,
           is_sensitive: n.is_sensitive === true,
+          todo_due: typeof n.todo_due === "string" ? n.todo_due : null,
+          todo_done: n.todo_done === true,
+          done_at: typeof n.done_at === "string" ? n.done_at : null,
+          amount: typeof n.amount === "number" ? n.amount : null,
+          currency: typeof n.currency === "string" ? n.currency : null,
+          meta: sanitizeMetaForRestore(typeof n.meta === "object" ? n.meta : null),
+          created_at: n.created_at,
+          updated_at: DATETIME_RE.test(n.updated_at ?? "") ? n.updated_at : n.created_at,
         });
-        const { content, content_enc: contentEnc } = gated;
-        const meta0 = sanitizeMetaForRestore(typeof n.meta === "object" ? n.meta : null);
-        const meta = gated.needs_retriage ? { ...(meta0 ?? {}), needs_retriage: true } : meta0;
-        stmts.push(
-          insert.bind(
-            newId,
-            userId,
-            typeof n.source === "string" ? n.source : "import",
-            typeof n.raw_type === "string" ? n.raw_type : "text",
-            content,
-            typeof n.url === "string" ? n.url : null,
-            typeof n.url_title === "string" ? n.url_title : null,
-            typeof n.url_summary === "string" ? n.url_summary : null,
-            typeof n.url_titles === "string" ? n.url_titles : null,
-            typeof n.category === "string" ? n.category : null,
-            JSON.stringify(gated.tags),
-            gated.title,
-            gated.is_sensitive ? 1 : 0,
-            contentEnc,
-            typeof n.todo_due === "string" ? n.todo_due : null,
-            n.todo_done === true ? 1 : 0,
-            typeof n.done_at === "string" ? n.done_at : null,
-            typeof n.amount === "number" ? n.amount : null,
-            typeof n.currency === "string" ? n.currency : null,
-            meta ? JSON.stringify(meta) : null,
-            n.created_at,
-            DATETIME_RE.test(n.updated_at ?? "") ? n.updated_at : n.created_at
-          )
-        );
+        stmts.push(stmt);
       }
       if (stmts.length > 0) await env.DB.batch(stmts);
       stats.notes_imported += stmts.length;

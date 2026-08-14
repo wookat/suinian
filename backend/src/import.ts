@@ -1,6 +1,6 @@
 // Import pipeline: parse Cubox / flomo / Markdown / plain-text export files
 // into normalized note items (content + original created time + tags + url).
-import { sensitiveIngestGate } from "./ingest";
+import { prepareNoteInsert } from "./note-store";
 
 export interface ImportAsset {
   name: string;
@@ -402,10 +402,6 @@ export async function runImport(
       const noTime = new Set((existing.results ?? []).map((r) => r.content));
       const stmts: D1PreparedStatement[] = [];
       const inserted: { id: string; item: ImportItem }[] = [];
-      const insert = db.prepare(
-        `INSERT INTO notes (id, user_id, source, raw_type, content, url, category, tags, title, is_sensitive, content_enc, meta, created_at, updated_at)
-         VALUES (?, ?, 'import', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`
-      );
       for (const item of chunk) {
         const createdAt = item.created_at ?? toUtcSql(new Date())!;
         const dup = item.created_at ? seen.has(`${createdAt}\u0000${item.content}`) : noTime.has(item.content);
@@ -415,39 +411,30 @@ export async function runImport(
         }
         seen.add(`${createdAt}\u0000${item.content}`);
         noTime.add(item.content);
-        const meta: Record<string, unknown> = {
-          import_source: source,
-          // notes keep their original created_at; lateness/triage hints must
-          // measure from when the note actually entered the queue
-          imported_at: new Date().toISOString(),
-        };
-        // 导入入库走写入层统一敏感管道（R122 P1-1）：疑似含密的历史笔记
-        // 同样 fail-closed 先加密，后续 cron 分拣复判（category 为 NULL 本就待分拣）
-        const gated = await sensitiveIngestGate(env, {
-          content: item.content,
-          title: null,
-          tags: item.tags,
-          is_sensitive: false,
-        });
-        if (item.tags.length > 0) meta.import_tags = gated.is_sensitive ? gated.tags : item.tags;
         const id = crypto.randomUUID();
         inserted.push({ id, item });
-        stmts.push(
-          insert.bind(
-            id,
-            userId,
-            item.url && item.content.startsWith(item.url) ? "link" : "text",
-            gated.content,
-            item.url,
-            JSON.stringify(gated.tags),
-            gated.title,
-            gated.is_sensitive ? 1 : 0,
-            gated.content_enc,
-            JSON.stringify(meta),
-            createdAt,
-            createdAt
-          )
-        );
+        // 导入入库走持久层统一敏感管道（R122 P1-1 / R124 P1-1 收口）：疑似含密的
+        // 历史笔记同样 fail-closed 先加密，后续 cron 分拣复判（category NULL 本就待分拣）
+        const { stmt } = await prepareNoteInsert(env, db, {
+          id,
+          user_id: userId,
+          source: "import",
+          raw_type: item.url && item.content.startsWith(item.url) ? "link" : "text",
+          content: item.content,
+          url: item.url,
+          category: null,
+          tags: item.tags,
+          meta: (gated) => ({
+            import_source: source,
+            // notes keep their original created_at; lateness/triage hints must
+            // measure from when the note actually entered the queue
+            imported_at: new Date().toISOString(),
+            ...(item.tags.length > 0 ? { import_tags: gated.is_sensitive ? gated.tags : item.tags } : {}),
+          }),
+          created_at: createdAt,
+          updated_at: createdAt,
+        });
+        stmts.push(stmt);
       }
       if (stmts.length > 0) await db.batch(stmts);
       stats.imported += stmts.length;

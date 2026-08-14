@@ -68,20 +68,13 @@ function fakeDb(rows: Row[]) {
         },
         async run() {
           if (sql.includes("INSERT INTO notes")) {
-            rows.push({
-              ...BASE_NOTE,
-              id: binds[0],
-              user_id: binds[1],
-              source: binds[2],
-              raw_type: binds[3],
-              content: binds[4],
-              url: binds[5],
-              category: binds[6],
-              tags: binds[7],
-              meta: binds[8],
-              is_sensitive: binds[9],
-              content_enc: binds[10],
-            });
+            const cols = sql
+              .match(/INSERT INTO notes \(([^)]+)\)/)![1]
+              .split(",")
+              .map((s) => s.trim());
+            const row: Row = { ...BASE_NOTE };
+            cols.forEach((col, i) => (row[col] = binds[i]));
+            rows.push(row);
             return { meta: { changes: 1 } };
           }
           if (sql.startsWith("UPDATE notes SET")) {

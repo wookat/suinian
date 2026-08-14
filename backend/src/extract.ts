@@ -3,6 +3,7 @@ import { parseHTML } from "linkedom";
 import { chatComplete } from "./ai";
 import { parseHtmlMeta, isBlockedTitle, ssrfSafeFetch, FETCH_PROFILES, fallbackTitleFromUrl } from "./linkmeta";
 import { sanitizeTags } from "./triage";
+import { prepareTagsUpdate } from "./note-store";
 import type { Env, NoteMeta, NoteRow } from "./types";
 
 const MAX_HTML_BYTES = 2 * 1024 * 1024; // 2MB
@@ -210,17 +211,11 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
     meta.link_status = extract ? "no_content" : "fetch_failed";
     meta.link_site = extract?.site ?? meta.link_site ?? hostnameOf(note.url) ?? undefined;
     const title = extract?.title ?? null;
-    const sets = ["meta = ?", "updated_at = datetime('now')"];
-    const binds: unknown[] = [JSON.stringify(meta)];
-    if (!note.url_title) {
-      const fallback = title ?? fallbackTitleFromUrl(note.url);
-      if (fallback) {
-        sets.unshift("url_title = ?");
-        binds.unshift(fallback);
-      }
-    }
-    await env.DB.prepare(`UPDATE notes SET ${sets.join(", ")} WHERE id = ?`)
-      .bind(...binds, noteId)
+    const fallback = note.url_title ? null : (title ?? fallbackTitleFromUrl(note.url));
+    await env.DB.prepare(
+      "UPDATE notes SET url_title = COALESCE(?, url_title), meta = ?, updated_at = datetime('now') WHERE id = ?"
+    )
+      .bind(fallback, JSON.stringify(meta), noteId)
       .run();
     return;
   }
@@ -237,16 +232,11 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
   });
   const summary = ai?.summary ?? extract.description ?? null;
 
-  const sets = ["meta = ?", "updated_at = datetime('now')"];
-  const binds: unknown[] = [JSON.stringify(meta)];
-  if (extract.title && !note.url_title) {
-    sets.unshift("url_title = ?");
-    binds.unshift(extract.title);
-  }
-  if (summary) {
-    sets.unshift("url_summary = ?");
-    binds.unshift(summary);
-  }
+  await env.DB.prepare(
+    "UPDATE notes SET url_title = COALESCE(?, url_title), url_summary = COALESCE(?, url_summary), meta = ?, updated_at = datetime('now') WHERE id = ?"
+  )
+    .bind(extract.title && !note.url_title ? extract.title : null, summary ?? null, JSON.stringify(meta), noteId)
+    .run();
   if (ai && ai.tags.length > 0) {
     const existing = (() => {
       try {
@@ -257,13 +247,10 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
     })();
     const merged = mergeTags(existing, ai.tags);
     if (merged.length !== existing.length) {
-      sets.unshift("tags = ?");
-      binds.unshift(JSON.stringify(merged));
+      // tags 写入统一走持久层（敏感行严格过滤）
+      await prepareTagsUpdate(env.DB, { id: note.id, user_id: note.user_id, is_sensitive: note.is_sensitive }, merged).run();
     }
   }
-  await env.DB.prepare(`UPDATE notes SET ${sets.join(", ")} WHERE id = ?`)
-    .bind(...binds, noteId)
-    .run();
 }
 
 /**

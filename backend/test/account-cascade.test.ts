@@ -55,6 +55,11 @@ describe("user deletion cascade coverage", () => {
 function fakeDb(rows: Record<string, { user_id?: string; note_id?: string; id?: string }[]>) {
   const db = {
     rows,
+    async batch(stmts: { run(): Promise<unknown> }[]) {
+      const out: unknown[] = [];
+      for (const s of stmts) out.push(await s.run());
+      return out;
+    },
     prepare(sql: string) {
       let binds: unknown[] = [];
       const stmt = {

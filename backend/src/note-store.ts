@@ -1,0 +1,402 @@
+// notes 内容字段的唯一持久层（R124 P1-1 结构性收口）：
+// R117→R119→R121→R123 连续四轮同型缺陷（「另一个入口」绕过敏感管道）的根因是
+// 每个入口各自手写 INSERT/UPDATE notes 的内容字段。本模块是全仓唯一允许出现
+// 对 notes 内容字段（content / content_enc / title / tags / is_sensitive）
+// INSERT/UPDATE SQL 的地方——敏感管道（sensitiveIngestGate / 元数据洗净 /
+// raw_transcript 洗净）内嵌在这里，业务代码只能带明文进来，绕不开口径。
+// 架构级单测 test/write-path-guard.test.ts 静态断言其余 src 文件不含此类 SQL。
+import type { NoteMeta, TriageResult } from "./types";
+import { sensitiveIngestGate, type GatedNoteFields } from "./ingest";
+import { sanitizeSensitiveTags } from "./triage";
+import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
+
+export function parseNoteMeta(raw: string | null): NoteMeta | null {
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw) as NoteMeta;
+    return typeof obj === "object" && obj !== null ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+// 守护列：这些列的写入只能发生在本模块内（见 write-path-guard 单测）
+const GUARDED_SET_RE = /(^|[^0-9A-Za-z_])(content|content_enc|title|tags|is_sensitive)\s*=/;
+
+/** 调用方附带的非守护字段 SET 子句绝不允许夹带守护列（纵深防御）。 */
+function assertUnguarded(sets: string[]): void {
+  for (const s of sets) {
+    if (GUARDED_SET_RE.test(s)) throw new Error(`note-store: guarded column in extra set: ${s}`);
+  }
+}
+
+export interface NoteInsertFields {
+  id: string;
+  user_id: string;
+  source: string;
+  raw_type: string;
+  content: string;
+  url?: string | null;
+  category?: string | null;
+  tags: string[];
+  title?: string | null;
+  is_sensitive?: boolean;
+  /** meta 对象，或基于管道结果延迟构造的回调（导入需按敏感与否决定 import_tags） */
+  meta?: NoteMeta | null | ((gated: GatedNoteFields) => NoteMeta | null);
+  url_title?: string | null;
+  url_summary?: string | null;
+  url_titles?: string | null;
+  todo_due?: string | null;
+  todo_done?: boolean;
+  done_at?: string | null;
+  amount?: number | null;
+  currency?: string | null;
+  /** 保留原始时间（导入/恢复）；缺省 datetime('now') */
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface NoteInsertOptions {
+  /** 是否有模型复判跟进（同 sensitiveIngestGate 的 rejudge 语义） */
+  rejudge: boolean;
+  /**
+   * is_sensitive 落库口径：
+   * - "always"（导入/恢复）：预检命中即标敏感（无密钥时明文仍被标记隔离）；
+   * - "onlyEncrypted"（速记 createNote 既有口径）：只有真正加密成功才标敏感，
+   *   无密钥环境交由模型主判，避免疑似命中永久卡在无定论状态。
+   */
+  markSensitive?: "always" | "onlyEncrypted";
+}
+
+/**
+ * 唯一的 notes 插入构造器：先过敏感管道，再产出可 batch 的预编译语句。
+ * 敏感时 meta.raw_transcript 一并洗净；仅疑似命中时把 needs_retriage 记入 meta
+ * 交 cron 复判。
+ */
+export async function prepareNoteInsert(
+  env: { SUINIAN_ENC_KEY?: string },
+  db: D1Database,
+  f: NoteInsertFields,
+  opts: NoteInsertOptions = { rejudge: true }
+): Promise<{ stmt: D1PreparedStatement; gated: GatedNoteFields; storedSensitive: boolean }> {
+  const gated = await sensitiveIngestGate(
+    env,
+    { content: f.content, title: f.title ?? null, tags: f.tags, is_sensitive: f.is_sensitive === true },
+    { rejudge: opts.rejudge }
+  );
+  const storedSensitive =
+    opts.markSensitive === "onlyEncrypted" ? gated.is_sensitive && gated.content_enc !== null : gated.is_sensitive;
+  let meta: NoteMeta | null = (typeof f.meta === "function" ? f.meta(gated) : f.meta) ?? null;
+  if (storedSensitive && meta?.raw_transcript) {
+    meta = { ...meta };
+    delete meta.raw_transcript;
+  }
+  if (gated.needs_retriage) meta = { ...(meta ?? {}), needs_retriage: true };
+  const stmt = db
+    .prepare(
+      `INSERT INTO notes (id, user_id, source, raw_type, content, url, url_title, url_summary, url_titles,
+         category, tags, title, is_sensitive, content_enc, todo_due, todo_done, done_at, amount, currency,
+         meta, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+         COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))`
+    )
+    .bind(
+      f.id,
+      f.user_id,
+      f.source,
+      f.raw_type,
+      gated.content,
+      f.url ?? null,
+      f.url_title ?? null,
+      f.url_summary ?? null,
+      f.url_titles ?? null,
+      f.category ?? null,
+      JSON.stringify(gated.tags),
+      storedSensitive ? gated.title : (f.title ?? gated.title),
+      storedSensitive ? 1 : 0,
+      gated.content_enc,
+      f.todo_due ?? null,
+      f.todo_done ? 1 : 0,
+      f.done_at ?? null,
+      f.amount ?? null,
+      f.currency ?? null,
+      meta ? JSON.stringify(meta) : null,
+      f.created_at ?? null,
+      f.updated_at ?? null
+    );
+  return { stmt, gated, storedSensitive };
+}
+
+export interface ExistingNoteState {
+  id: string;
+  user_id: string;
+  updated_at: string;
+  is_sensitive: number;
+  content: string;
+  content_enc: string | null;
+  tags: string;
+  meta: string | null;
+}
+
+export interface NotePatchInput {
+  content?: string;
+  title?: string;
+  tags?: string[];
+  is_sensitive?: boolean;
+  /** 调用方已合并好的 meta（manual_override 等）；给出即写入 */
+  meta?: NoteMeta;
+}
+
+export interface NotePatchResult {
+  changes: number;
+  /** 落库后的敏感状态 */
+  sensitive: boolean;
+  /** 疑似命中（fail-closed 预检）待模型复判 */
+  needsRetriage: boolean;
+}
+
+/**
+ * 唯一的用户编辑（PATCH）执行器：内容/标题/标签/敏感位的任何组合修改都在
+ * 这里统一过敏感口径——新内容即使调用方声明"非敏感"也要过 fail-closed 预检
+ * （R123 P1：PATCH 曾绕过管道把秘密值明文落库），敏感目标态下 title 一律置空、
+ * tags 严格过滤、meta.raw_transcript 洗净。CAS（updated_at）与调用方的
+ * 非守护字段 SET 一并执行。
+ */
+export async function applyNotePatch(
+  env: { SUINIAN_ENC_KEY?: string },
+  db: D1Database,
+  existing: ExistingNoteState,
+  p: NotePatchInput,
+  extra: { sets: string[]; binds: unknown[] } = { sets: [], binds: [] }
+): Promise<NotePatchResult> {
+  assertUnguarded(extra.sets);
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  const wantSensitive = p.is_sensitive ?? !!existing.is_sensitive;
+  let sensitive = !!existing.is_sensitive;
+  let needsRetriage = false;
+  let meta: NoteMeta | null = p.meta ?? null;
+  let metaChanged = p.meta !== undefined;
+
+  const existingTags = (): string[] => {
+    try {
+      return (JSON.parse(existing.tags || "[]") as unknown[]).filter((t): t is string => typeof t === "string");
+    } catch {
+      return [];
+    }
+  };
+
+  if (typeof p.content === "string") {
+    // 新内容统一过管道：显式敏感 or fail-closed 预检命中 → 加密落库
+    const gated = await sensitiveIngestGate(
+      env,
+      { content: p.content, title: null, tags: [], is_sensitive: wantSensitive },
+      { rejudge: true }
+    );
+    sensitive = gated.is_sensitive;
+    needsRetriage = gated.needs_retriage;
+    sets.push("content = ?", "content_enc = ?");
+    binds.push(gated.content, gated.content_enc);
+  } else if (typeof p.is_sensitive === "boolean" && p.is_sensitive !== !!existing.is_sensitive) {
+    if (p.is_sensitive) {
+      // 转敏感：现有明文就地加密
+      sensitive = true;
+      if (env.SUINIAN_ENC_KEY) {
+        sets.push("content = ?", "content_enc = ?");
+        binds.push(ENC_PLACEHOLDER, await encryptContent(env.SUINIAN_ENC_KEY, existing.content));
+      }
+    } else {
+      // 解除敏感：从密文恢复明文（无法解密则保留现存内容）
+      sensitive = false;
+      const plain =
+        existing.content_enc && env.SUINIAN_ENC_KEY
+          ? await decryptContent(env.SUINIAN_ENC_KEY, existing.content_enc)
+          : null;
+      sets.push("content = ?", "content_enc = ?");
+      binds.push(plain ?? existing.content, null);
+    }
+  } else if (typeof p.is_sensitive === "boolean") {
+    sensitive = p.is_sensitive;
+  }
+  if (typeof p.is_sensitive === "boolean" || sensitive !== !!existing.is_sensitive) {
+    sets.push("is_sensitive = ?");
+    binds.push(sensitive ? 1 : 0);
+  }
+
+  // title / tags：敏感目标态下永不落明文（显式提供也一样洗）
+  if (typeof p.title === "string") {
+    sets.push("title = ?");
+    binds.push(sensitive ? null : p.title);
+  } else if (sensitive && !existing.is_sensitive) {
+    sets.push("title = NULL");
+  }
+  if (Array.isArray(p.tags)) {
+    sets.push("tags = ?");
+    binds.push(JSON.stringify(sensitive ? sanitizeSensitiveTags(p.tags) : p.tags));
+  } else if (sensitive && !existing.is_sensitive) {
+    sets.push("tags = ?");
+    binds.push(JSON.stringify(sanitizeSensitiveTags(existingTags())));
+  }
+
+  // 敏感目标态：meta 里的派生明文（语音原始转写）一并洗净；疑似命中记
+  // needs_retriage 交 cron 复判
+  if (sensitive || needsRetriage) {
+    const base = meta ?? parseNoteMeta(existing.meta) ?? {};
+    let m: NoteMeta = base;
+    if (sensitive && m.raw_transcript) {
+      m = { ...m };
+      delete m.raw_transcript;
+      metaChanged = true;
+    }
+    if (needsRetriage && !m.needs_retriage) {
+      m = { ...m, needs_retriage: true };
+      metaChanged = true;
+    }
+    meta = m;
+  }
+  if (metaChanged && meta) {
+    sets.push("meta = ?");
+    binds.push(JSON.stringify(meta));
+  }
+
+  const allSets = [...sets, ...extra.sets];
+  if (allSets.length === 0) return { changes: 0, sensitive, needsRetriage };
+  allSets.push("updated_at = datetime('now')");
+  const res = await db
+    .prepare(`UPDATE notes SET ${allSets.join(", ")} WHERE id = ? AND user_id = ? AND updated_at = ?`)
+    .bind(...binds, ...extra.binds, existing.id, existing.user_id, existing.updated_at)
+    .run();
+  return { changes: res.meta.changes ?? 0, sensitive, needsRetriage };
+}
+
+/**
+ * 媒体重试（retry-media）唯一的内容替换入口：重提取文本过管道后整体替换，
+ * category 归零交回异步分拣。
+ */
+export async function replaceNoteContent(
+  env: { SUINIAN_ENC_KEY?: string },
+  db: D1Database,
+  noteId: string,
+  content: string,
+  meta: NoteMeta
+): Promise<{ storedContent: string; contentEnc: string | null; sensitive: boolean }> {
+  const gated = await sensitiveIngestGate(env, { content, title: null, tags: [], is_sensitive: false }, { rejudge: true });
+  const sensitive = gated.is_sensitive && gated.content_enc !== null;
+  const newMeta: NoteMeta = { ...meta };
+  if (sensitive && newMeta.raw_transcript) delete newMeta.raw_transcript;
+  if (gated.needs_retriage) newMeta.needs_retriage = true;
+  await db
+    .prepare(
+      "UPDATE notes SET content = ?, content_enc = ?, is_sensitive = ?, category = NULL, meta = ?, updated_at = datetime('now') WHERE id = ?"
+    )
+    .bind(gated.content, gated.content_enc, sensitive ? 1 : 0, JSON.stringify(newMeta), noteId)
+    .run();
+  return { storedContent: gated.content, contentEnc: gated.content_enc, sensitive };
+}
+
+/**
+ * 模型分拣结果落库（速记异步分拣 / cron 复判共用）。敏感判定为真时按统一口径
+ * 加密内容、title 置空、tags 严格过滤、raw_transcript 洗净；判非敏感时恢复
+ * fail-closed 预检加密的明文。用户手动改过的字段（manual_override）不覆盖。
+ */
+export async function applyTriage(
+  env: { DB: D1Database; SUINIAN_ENC_KEY?: string },
+  noteId: string,
+  triage: TriageResult,
+  content: string
+): Promise<void> {
+  // imported notes carry their original tags in meta.import_tags: keep them
+  // first and union in the AI-suggested ones
+  const row = await env.DB.prepare("SELECT meta, todo_due FROM notes WHERE id = ?")
+    .bind(noteId)
+    .first<{ meta: string | null; todo_due: string | null }>();
+  const meta = parseNoteMeta(row?.meta ?? null);
+  const override = meta?.manual_override;
+  const importTags = meta?.import_tags;
+  const newMeta: NoteMeta = { ...(meta ?? {}) };
+  let metaChanged = false;
+  if (newMeta.needs_retriage) {
+    delete newMeta.needs_retriage;
+    metaChanged = true;
+  }
+  const mergedTags = Array.isArray(importTags)
+    ? [...new Set([...importTags, ...triage.tags])].slice(0, 6)
+    : triage.tags;
+  // 敏感笔记派生字段与加密口径一致（R120 P1-1）：content 进 content_enc 后，
+  // AI title 可能把秘密值原样带出（如「todo密码是xxx」），title 一律置空，
+  // tags 走严格过滤只留纯主题词
+  const tags = triage.is_sensitive ? sanitizeSensitiveTags(mergedTags) : mergedTags;
+  // raw_transcript 是 content 的派生明文（语音原始转写），敏感时一并洗掉
+  if (triage.is_sensitive && newMeta.raw_transcript) {
+    delete newMeta.raw_transcript;
+    metaChanged = true;
+  }
+  const sets = ["is_sensitive = ?"];
+  const binds: unknown[] = [triage.is_sensitive ? 1 : 0];
+  // fields the user set by hand stay untouched
+  if (!override?.title) {
+    sets.push("title = ?");
+    binds.push(triage.is_sensitive ? null : triage.title || null);
+  }
+  if (!override?.todo_due) {
+    // AI only fills a missing due; an already-set due is never cleared or replaced
+    sets.push("todo_due = ?");
+    binds.push(row?.todo_due ?? triage.todo_due ?? null);
+  }
+  if (!override?.category) {
+    sets.push("category = ?", "amount = ?", "currency = ?");
+    binds.push(triage.category, triage.amount ?? null, triage.currency ?? null);
+    if (triage.merchant) {
+      newMeta.finance_merchant = triage.merchant;
+      metaChanged = true;
+    }
+  }
+  if (metaChanged) {
+    sets.push("meta = ?");
+    binds.push(JSON.stringify(newMeta));
+  }
+  if (!override?.tags) {
+    sets.push("tags = ?");
+    binds.push(JSON.stringify(tags));
+  }
+  if (triage.is_sensitive && env.SUINIAN_ENC_KEY) {
+    // encrypt-at-rest: ciphertext into content_enc, plaintext replaced by a placeholder
+    const enc = await encryptContent(env.SUINIAN_ENC_KEY, content);
+    sets.push("content = ?", "content_enc = ?");
+    binds.push(ENC_PLACEHOLDER, enc);
+  } else if (!triage.is_sensitive) {
+    // the fail-closed pre-check may have encrypted the pending note; the model
+    // (primary judge) says non-sensitive → restore plaintext, drop ciphertext
+    sets.push("content = ?", "content_enc = NULL");
+    binds.push(content);
+  }
+  await env.DB.prepare(`UPDATE notes SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?`)
+    .bind(...binds, noteId)
+    .run();
+}
+
+/** AI 重算标题的唯一落库口（敏感笔记 SQL 级兜底拒写，绝不带出秘密值）。 */
+export async function setNoteAiTitle(db: D1Database, noteId: string, title: string): Promise<void> {
+  await db.prepare("UPDATE notes SET title = ? WHERE id = ? AND is_sensitive = 0").bind(title, noteId).run();
+}
+
+/**
+ * tags 更新的唯一语句构造器（批量打标/去标、标签重命名/删除、链接摘要
+ * 建议标签合并共用）：敏感行的 tags 一律先过 sanitizeSensitiveTags。
+ */
+export function prepareTagsUpdate(
+  db: D1Database,
+  row: { id: string; user_id: string; is_sensitive: number | boolean },
+  tags: string[],
+  meta?: NoteMeta | null
+): D1PreparedStatement {
+  const stored = JSON.stringify(row.is_sensitive ? sanitizeSensitiveTags(tags) : tags);
+  if (meta !== undefined) {
+    return db
+      .prepare("UPDATE notes SET tags = ?, meta = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?")
+      .bind(stored, meta ? JSON.stringify(meta) : null, row.id, row.user_id);
+  }
+  return db
+    .prepare("UPDATE notes SET tags = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?")
+    .bind(stored, row.id, row.user_id);
+}

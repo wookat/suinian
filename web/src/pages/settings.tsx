@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   deleteAccount,
+  verifyAccountDeleted,
   getPreferences,
   updatePreferences,
   deleteTag,
@@ -848,6 +849,15 @@ export function SettingsPage() {
       window.location.hash = "#/"
       window.location.reload()
     } catch (e) {
+      // 请求超时/网络中断不代表服务端没删：探测 token 是否已失效，避免
+      // 「其实已注销却提示失败」或「以为成功其实没删」两种误导
+      const gone = await verifyAccountDeleted()
+      if (gone) {
+        saveSettings({ apiBaseUrl: "", apiToken: "", useMock: true, onboarded: false, tourSeen: true })
+        window.location.hash = "#/"
+        window.location.reload()
+        return
+      }
       setAccountMsg({ ok: false, text: e instanceof Error ? e.message : "注销失败，请稍后重试" })
       setDeleting(false)
     }
