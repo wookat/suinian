@@ -1075,7 +1075,7 @@ export function TimelinePage() {
           <EmptyState
             icon={SearchX}
             title="没有找到匹配的笔记"
-            description="换个关键词、标签或分类试试，或清除筛选条件查看全部碎念。删过的内容不在这里，可到「最近删除」找找。"
+            description={`换个关键词、标签或分类试试，或清除筛选条件查看全部碎念。删过的内容不在这里，可到「最近删除」找找。${search ? "敏感笔记正文已加密存储，不参与关键词搜索，可通过其标题或标签找到。" : ""}`}
             actionLabel="清除筛选"
             onAction={() => {
               setCategory("")
