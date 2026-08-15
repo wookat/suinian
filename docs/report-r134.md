@@ -39,7 +39,7 @@
 
 ## 回归与部署
 
-- backend：typecheck 过、单测 66 文件 724+ 全过（含本轮新增 P2-4/P2-5/D-1/D-3 用例）、ask-eval 见 PR 描述。
+- backend：typecheck 过、单测 66 文件 724 全过（含本轮新增 P2-4/P2-5/D-1/D-3 用例）；部署后全量 ask-eval `[生产实测]` **58/60（97%）**，仅剩失分即上表 q31/q54 类引用抖动（为什么依据 5/6、多跳 7/8），归纳型问法误路由（q12 类）已消除。
 - web：oxlint 过、tsc+vite build 过。
 - GitHub Actions 按公司规则保持禁用，本地全绿为验收标准。
 - worker `suinian-api` + Pages `suinian`（--branch main）部署上线；QA 用 `[QA-R134]` 独立账号全链路回归后注销并逐表核残留（明细见 PR 描述与录屏）。
