@@ -171,6 +171,61 @@ describe("zip robustness", () => {
   });
 });
 
+describe("drop/truncation observability (R130 P2-2/P2-3)", () => {
+  it("counts oversized images as assets_dropped while keeping the body marker", () => {
+    const big = new Uint8Array(5 * 1024 * 1024 + 1);
+    const files: Record<string, Uint8Array> = {
+      "note.md": new TextEncoder().encode("正文\n![大图](big.png)"),
+      "big.png": big,
+    };
+    const result = parseImportZip("apple-notes", zipSync(files));
+    expect(result.assets_dropped).toBe(1);
+    expect(result.items[0].content).toContain("【图片：big.png】");
+    expect(result.items[0].assets).toBeUndefined();
+  });
+
+  it("counts images beyond the per-note cap as dropped", () => {
+    const img = new Uint8Array([137, 80, 78, 71]);
+    const files: Record<string, Uint8Array> = {
+      "note.md": new TextEncoder().encode("![a](a.png)\n![b](b.png)\n![c](c.png)\n![d](d.png)"),
+      "a.png": img,
+      "b.png": img,
+      "c.png": img,
+      "d.png": img,
+    };
+    const result = parseImportZip("apple-notes", zipSync(files));
+    expect(result.items[0].assets).toHaveLength(3);
+    expect(result.assets_dropped).toBe(1);
+  });
+
+  it("flags truncation when the item cap is hit with entries remaining", () => {
+    const files: Record<string, Uint8Array> = {};
+    for (let i = 0; i < 2001; i++) files[`n-${i}.md`] = new TextEncoder().encode(`第 ${i} 条`);
+    const result = parseImportZip("obsidian", zipSync(files));
+    expect(result.items).toHaveLength(2000);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("notion CSV: same-title rows beyond the md-page count are still imported (P2-4)", () => {
+    const csv = "Name,Note\n买菜,第一次\n买菜,第二次\n";
+    const files: Record<string, Uint8Array> = {
+      "db abcdef0123456789abcdef0123456789/买菜 0123456789abcdef0123456789abcdef.md": new TextEncoder().encode("# 买菜\n\n第一次"),
+      "db_all.csv": new TextEncoder().encode(csv),
+    };
+    const result = parseImportZip("notion", zipSync(files));
+    const bodies = result.items.map((i) => i.content);
+    expect(bodies.filter((c) => c.startsWith("买菜"))).toHaveLength(2);
+    expect(bodies.some((c) => c.includes("第二次"))).toBe(true);
+  });
+
+  it("does not flag truncation for small imports", () => {
+    const files: Record<string, Uint8Array> = { "a.md": new TextEncoder().encode("一条") };
+    const result = parseImportZip("obsidian", zipSync(files));
+    expect(result.truncated).toBe(false);
+    expect(result.assets_dropped).toBe(0);
+  });
+});
+
 describe("parseFrontmatter", () => {
   it("returns body unchanged without frontmatter", () => {
     const fm = parseFrontmatter("no frontmatter here");

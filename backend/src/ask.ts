@@ -143,7 +143,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
 // 「X 时间一共花了多少钱」类合计问题必须走 SQL 精确聚合（与周报/月报同一
 // financeStats 口径），绝不能靠 LLM 对被 LIMIT 截断的召回片段心算。
 
-const FINANCE_WORD_RE = /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|用了?(?=[^？?。]{0,10}(?:多少|几))/;
+export const FINANCE_WORD_RE = /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|用了?(?=[^？?。]{0,10}(?:多少|几))/;
 const AGG_WORD_RE = /一共|总共|合计|总计|共计|加起来|多少钱|多少笔|几笔|平均每|总额|结余|收支|余额|多少|怎么样|怎样|如何|情况/;
 // sum-style wording that only makes sense as a books-level aggregate: when it
 // appears with a finance word but the question can't be routed to the exact
@@ -180,7 +180,7 @@ export function isFinanceAggQuestion(question: string): boolean {
 // which ones, when), not a books-level sum. Compound questions like「买的两本
 // 书叫什么，一共花了多少钱」must reach normal recall so the notes themselves
 // answer both parts — fail-closing them hides the answer (R117 P2-1).
-const FACT_QUERY_RE = /叫什么|是什么|什么名|名字|哪几?[本个件家部]|哪些|分别|各是|什么时候|在哪/;
+const FACT_QUERY_RE = /叫什么|是什么|什么名|名字|哪几?[本个件家部条]|哪些|分别|各是|什么时候|在哪|为什么|依据/;
 
 export function financeAggIntent(question: string): "exact" | "fail_closed" | null {
   if (isFinanceAggQuestion(question)) return "exact";
@@ -328,6 +328,92 @@ export const COUNT_SCOPE_LABELS: Record<string, string> = {
 /** 「这段时间都记了什么/记了哪些」——时间窗枚举，走 SQL 全量列举而非 top-k 召回。 */
 export function enumListIntent(question: string): boolean {
   return /都记[了过]?(?:些|哪些)?什么|记[了过](?:些什么|哪些)|都写[了过]?(?:些|哪些)?什么|都有哪些笔记|记录[了过](?:些什么|哪些|什么)/.test(question);
+}
+
+// ---- 主题枚举问答（R130 P1-1/P1-2）----
+// 「我看过什么书/存过哪些菜谱」这类枚举+主题词问题：宽泛主题词的语义 top-k
+// 在小语料下会被高频主题压过（R129 R8：问「书」召回全是健身笔记），必须先走
+// 关键词/标签 LIKE 全量筛选（与财务/计数/极值同一精确查询家族），语义召回只
+// 在关键词零命中时兜底。序数追问（「第二本讲什么」）依赖首轮枚举成功 + 既有
+// 历史改写解析，不为序数单独增加状态实体。
+
+const TOPIC_ENUM_RES: RegExp[] = [
+  // 「存过哪些菜谱」「看过什么书」——经历/收纳动词 + 些/哪些/什么 + 主题名词收尾
+  /[看读买去吃喝听学玩逛用聊提存记写收藏保]{1,2}[过了]{1,2}(?:些|哪些|什么|啥)([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)(?:的?(?:笔记|记录|内容))?(?:来着|呢|吗|么)?$/,
+  // 「关于健身的笔记有哪些」「有哪些关于健身的记录」
+  /(?:关于|有关)([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)的?(?:笔记|记录|内容)?(?:都)?有哪些/,
+  /有哪些(?:关于|有关)([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)的?(?:笔记|记录|内容)/,
+];
+
+// 泛指词不构成主题限定：落回时间窗枚举或普通召回
+const TOPIC_ENUM_GENERIC_RE = /^(?:东西|事情|事儿?|内容|笔记|记录|信息|什么|啥|的)$/;
+
+/** 识别「枚举+主题词」问题，返回用于 LIKE 全量筛选的主题词；非此类问题返回 null。 */
+export function topicEnumIntent(question: string): string | null {
+  if (FINANCE_WORD_RE.test(question)) return null;
+  if (extremeQueryIntent(question) || countQueryIntent(question)) return null;
+  const q = question.replace(/[？?。！!\s]+$/g, "").replace(STRIP_RES[0], "");
+  for (const re of TOPIC_ENUM_RES) {
+    const topic = q.match(re)?.[1]?.replace(/^的+|的+$/g, "");
+    if (topic && !TOPIC_ENUM_GENERIC_RE.test(topic)) return topic;
+  }
+  return null;
+}
+
+// ---- 财务口径澄清追问（R130 P2-1）----
+// 上一轮是精确合计答案时，「包括报销的差旅费吗」是一个是/否口径问题：找出
+// 限定项对应的记账笔记，按 category 直答计入/不计入，绝不复读合计（R129 R14）。
+
+/** 精确财务合计答案的标识（buildFinanceAggAnswer 尾注）。 */
+const FINANCE_AGG_MARK_RE = /口径与周报\/月报一致/;
+
+const FINANCE_CLARIFY_RE = /(?:包括|包含|算上了?|算进去?了?|算了)([\u4e00-\u9fa5A-Za-z0-9的]{2,16}?)(?:的钱|的?开销)?(?:吗|么|嘛|没有?|了吗|了没|不)?$/;
+
+/** 财务口径澄清追问的限定词（「包括报销的差旅费吗」→ [报销, 差旅费]）；非此类返回 null。 */
+export function financeClarifyTerms(question: string, lastAssistant: string | null): string[] | null {
+  if (!lastAssistant || !FINANCE_AGG_MARK_RE.test(lastAssistant)) return null;
+  const m = question.replace(/[？?。！!\s]+$/g, "").match(FINANCE_CLARIFY_RE);
+  if (!m?.[1]) return null;
+  const terms = m[1]
+    .split("的")
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 2 && !/^(?:费用|开销|支出|收入|这个|那个|这些|那些)$/.test(s));
+  return terms.length > 0 ? terms : null;
+}
+
+const CLARIFY_VERDICTS: Record<string, string> = {
+  expense: "已计入支出合计",
+  income: "已计入收入合计",
+  transfer: "不计入收支合计（报销/借还/内转等资金往来只计笔数）",
+};
+
+/** 口径澄清的确定性答案：先直答是/否，再逐条说明计入与否，最后附精确合计口径。 */
+export function buildFinanceClarifyAnswer(
+  terms: string[],
+  rows: Pick<NoteRow, "title" | "content" | "category" | "amount" | "currency">[],
+  stats: FinanceStats,
+  phrase: string | null
+): string {
+  let included = 0;
+  let excluded = 0;
+  const lines = rows.map((n, i) => {
+    const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+    const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : null;
+    let verdict: string;
+    if (n.category === "transfer") {
+      excluded++;
+      verdict = CLARIFY_VERDICTS.transfer;
+    } else if (!amount) {
+      excluded++;
+      verdict = "未识别出金额，未计入合计";
+    } else {
+      included++;
+      verdict = CLARIFY_VERDICTS[n.category ?? ""] ?? "已计入合计";
+    }
+    return `- ${text}${amount ? `（${amount}）` : ""}——${verdict} [${i + 1}]`;
+  });
+  const head = excluded === 0 ? "包括。" : included === 0 ? "不包括。" : "部分包括。";
+  return `${head}与「${terms.join("、")}」相关的记账记录：\n\n${lines.join("\n")}\n\n${buildFinanceAggAnswer(stats, phrase)}`;
 }
 
 const COUNT_CATEGORY_LABELS: Record<string, string> = {

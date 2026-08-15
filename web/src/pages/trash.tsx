@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card"
 import { NoteCard } from "@/components/note-card"
 import { EmptyState } from "@/components/empty-state"
 import { emptyTrash, getTrash, purgeNotes, restoreNotes, ApiError, NetworkError } from "@/lib/api"
+import { clearStoredPendingUndo, prunePendingUndoIds } from "@/lib/pending-undo"
 import { useSettingsVersion } from "@/lib/settings"
 import type { TrashNote } from "@/lib/types"
 
@@ -72,6 +73,7 @@ export function TrashPage() {
       void withBusy(note.id, async () => {
         try {
           const restored = await restoreNotes([note.id])
+          prunePendingUndoIds([note.id])
           setNotes((ns) => ns.filter((n) => n.id !== note.id))
           setMsg(restored > 0 ? "已恢复 1 条笔记" : "恢复失败：笔记可能已被清理")
         } catch (e) {
@@ -86,6 +88,7 @@ export function TrashPage() {
       void withBusy(note.id, async () => {
         try {
           await purgeNotes([note.id])
+          prunePendingUndoIds([note.id])
           setNotes((ns) => ns.filter((n) => n.id !== note.id))
           setMsg("已彻底删除 1 条笔记")
         } catch (e) {
@@ -99,6 +102,7 @@ export function TrashPage() {
     setEmptying(true)
     try {
       const purged = await emptyTrash()
+      clearStoredPendingUndo()
       setNotes([])
       setMsg(`已清空最近删除（彻底删除 ${purged} 条）`)
     } catch (e) {

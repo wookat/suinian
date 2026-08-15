@@ -598,6 +598,10 @@ export interface ImportStats {
   imported: number
   skipped: number
   failed: number
+  /** 图片资产超限被丢弃的数量（zip 导入） */
+  assets_dropped?: number
+  /** 达到单次 2000 条上限，超出部分未导入 */
+  truncated?: boolean
 }
 
 export interface ImportFailedItem {

@@ -48,7 +48,14 @@
 - R92：大语料敏感隔离专项验证（生产 102 条语料含 12 条敏感，8 个隔离面——图谱/线索/回顾/周报/洞察/问答/嵌入/默认导出——全部 0 泄漏且阳性对照成立，报告 qa-report-r92.md；月报未覆盖）+ 注册页密码不一致字段级红框/内联提示 + 【排查】[QA-R88]-repro 残留系会话未执行注销非接口缺陷；生产 ADMIN_TOKEN 已轮换
 - R94：AI 多 provider 降级链（R93 P0 DeepSeek 余额耗尽应对）——chatComplete 主模型失败自动 fallback 到 Workers AI llama-3.3-70b（`AI_FALLBACK_MODEL` 可换/`none` 关闭，每次先试主模型→充值后自动回主）；`GET /health?probe=ai` 探针（primary/fallback/503）；兑底 cron 扫 `needs_retriage`，pending 超 1h 落 FALLBACK_TRIAGE+标记；前端 pending 超 10min 显示「分拣延迟」；删除文案修正；注销改应用内确认（弃 window.prompt）。生产已删 AI_MODEL 手工覆盖，当前 provider=fallback；线上回归全过，ask-eval 42/44 (95%)、triage-eval category 21/21（todo_due 3/5，fallback 模型时区语义偏差）（PR #110）
 - R114：落实 R113 审查（PR #133 audit-r113.md）——①财务合计意图以原始问题为准（改写只服务召回，带历史不再误走 fail-closed），时间范围同理优先原始问题；②检索强命中却拒答时去历史重试一次（仍拒答才诚实「没找到」），拒答判定补「没提到/未提及」措辞；③重复线索合并对 0.62-0.76 边界相似度加 LLM 同题确认（与聚类同一把关，直并阈值不降）；④wecomKfConfigured 补 WECOM_KF_SECRET、清空对话加确认弹窗、报告页提示同周期重复生成覆盖；eval 新增 q67-69（多轮财务/长历史数字召回）+ forbidAnswerContains 校验
+- R130：落实 R129 审查（audit-r129.md）——①主题枚举精确路由（P1×2）：「我都存过哪些 X」类问题走关键词 LIKE 全量筛选（topicEnumIntent，与计数/财务精确路由同家族），精确总数+最多 50 条展示，敏感笔记只计数不露内容，0 命中回退语义召回；序数追问靠既有历史改写，不设序数状态实体；②财务口径澄清追问（P2）：上轮精确合计后问「包括 X 吗」直答 包括/不包括/部分包括 + 逐笔归因（financeClarifyTerms）；③FACT_QUERY_RE 补 哪几条/为什么/依据（q31 误路由计数 fail-closed 修复）；④导入可观测：图片超限 assets_dropped、2000 条截断 truncated 透出到 Web 完成文案；Notion CSV 同名行按 md 页计数去重不再误跳（P2-4）；⑤文案/视觉：Web 回收站操作后清理 pending-undo（P3-a）、标题正文完全相同只展示一次（P3-b）；Android 删除弹窗改 30 天可恢复（P2-b）、备份说明补默认脱敏口径（P2-c）、月报空态分段控件固定顶部（P3-c）、小组件加 initialLayout 占位避免「Can't load widget」（P3-d）；eval 新增 q87-q91（主题枚举/序数追问/财务澄清）
 - R55：CJK 长问句 LLM 关键词抽取（extractAskKeywords，eval 28/28 全过）、ask 召回排除敏感笔记（含标题）、新手引导 4 步 tour（settings.tourSeen，仅新注册）、空态一键丢入 #示例 笔记+一键清除、周报提示词升级（主线/想法关联/悬而未决）
+
+## Android/Web 功能奇偶性缺口计划（R129 清单，R130 评估）
+- 今日回顾时间流卡片（Android 降级）：需新增 Compose 卡片 + `/api/reviews/today` 接入与点评交互，估 1 个子会话；与下方导出/导入合并一轮 Android 对齐专项更划算
+- JSON/Markdown 导出（Android 缺失，仅备份 zip）：后端接口现成（`/api/export?format=json|md`），Android 需加设置页入口 + SAF 保存，低成本但非找回主线，并入对齐专项
+- 多源导入（Android 仅备份 zip 恢复）：解析全在后端（/api/import），Android 只需文件选择器+源选择 UI；但大文件上传/流式进度需适配，工程量中，入对齐专项
+- 上述三项建议合并为一轮「Android 对齐 R131+」专项（后端零改动，纯客户端）；R130 未动手，避免与本轮问答/导入改动互相干扰
 
 ## 已知问题 / 观察项
 - GitHub Actions 不运行（账号付款问题）——所有验证本地做

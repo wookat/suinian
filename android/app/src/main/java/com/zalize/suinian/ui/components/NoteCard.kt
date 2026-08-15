@@ -225,7 +225,7 @@ fun NoteCard(
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("删除这条笔记？") },
-            text = { Text("删除后不可恢复") },
+            text = { Text("将移入「最近删除」，30 天内可从设置页恢复") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false

@@ -352,6 +352,10 @@ export interface ImportStats {
   imported: number;
   skipped: number;
   failed: number;
+  /** 图片资产超限被丢弃的数量（zip 导入；R130 P2-2 丢弃可观测） */
+  assets_dropped?: number;
+  /** 达到单次 2000 条上限、尚有条目未导入（R130 P2-3） */
+  truncated?: boolean;
 }
 
 export interface ImportRunResult {

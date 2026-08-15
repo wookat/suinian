@@ -719,7 +719,7 @@ export function SettingsPage() {
       setImportFailed(result.failed_items)
       setImportMsg({
         ok: true,
-        text: `导入完成：共解析 ${stats.total} 条，成功 ${stats.imported} 条，跳过重复 ${stats.skipped} 条${stats.failed > 0 ? `，失败 ${stats.failed} 条` : ""}。AI 分拣会在后台排队完成（通常几分钟内），线索/图谱随后更新`,
+        text: `导入完成：共解析 ${stats.total} 条，成功 ${stats.imported} 条，跳过重复 ${stats.skipped} 条${stats.failed > 0 ? `，失败 ${stats.failed} 条` : ""}${(stats.assets_dropped ?? 0) > 0 ? `；${stats.assets_dropped} 张图片超出上限未导入（每条最多 3 张、单张 5MB、单次共 100 张），正文中占位标记对应的原图请单独上传` : ""}${stats.truncated ? "；已达单次 2000 条导入上限，如文件不止 2000 条，请拆分后分批导入剩余部分" : ""}。AI 分拣会在后台排队完成（通常几分钟内），线索/图谱随后更新`,
       })
     } catch (e) {
       setImportMsg({ ok: false, text: e instanceof Error ? e.message : "导入失败，请稍后重试" })

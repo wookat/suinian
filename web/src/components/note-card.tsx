@@ -435,6 +435,8 @@ export function NoteCard({
 
   const extraTags = note.tags.length - MAX_TAGS
   const longContent = note.content.length > CLAMP_THRESHOLD
+  // 标题与正文完全相同时（如短记账条）只展示一次，避免卡片重复
+  const bodySameAsTitle = !!note.title && note.content.trim() === note.title.trim()
 
   return (
     <Card
@@ -874,15 +876,17 @@ export function NoteCard({
           </div>
         ) : (
           <div className="min-w-0 flex-1">
-            <p
-              className={cn(
-                "whitespace-pre-wrap text-sm leading-relaxed",
-                done && "text-muted-foreground line-through",
-                longContent && !expanded && "line-clamp-6",
-              )}
-            >
-              {note.content}
-            </p>
+            {!bodySameAsTitle && (
+              <p
+                className={cn(
+                  "whitespace-pre-wrap text-sm leading-relaxed",
+                  done && "text-muted-foreground line-through",
+                  longContent && !expanded && "line-clamp-6",
+                )}
+              >
+                {note.content}
+              </p>
+            )}
             {longContent && (
               <button
                 onClick={() => setExpanded((x) => !x)}

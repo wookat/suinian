@@ -21,6 +21,10 @@ export type ZipImportSource = "notion" | "obsidian" | "apple-notes";
 export interface ZipParseResult {
   items: ImportItem[];
   failures: ImportFailure[];
+  /** 图片资产超限被丢弃的数量（R130 P2-2：丢弃必须可观测，口径同备份侧 attachments_redacted） */
+  assets_dropped: number;
+  /** 达到单次 MAX_IMPORT_ITEMS 上限、尚有条目未解析（R130 P2-3） */
+  truncated: boolean;
 }
 
 /** Per-note asset cap; keeps a single import from flooding R2. */
@@ -105,7 +109,7 @@ function collectImageRefs(
   body: string,
   mdDir: string,
   entries: Record<string, Uint8Array>,
-  totalSoFar: { count: number }
+  totalSoFar: { count: number; dropped: number }
 ): { body: string; assets: ImportAsset[] } {
   const assets: ImportAsset[] = [];
   const out = body.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (whole, _alt: string, rawRef: string) => {
@@ -116,14 +120,13 @@ function collectImageRefs(
     const mime = imageMime(path);
     const name = baseName(path);
     if (!data || !mime) return whole;
-    if (
-      assets.length < MAX_ASSETS_PER_NOTE &&
-      totalSoFar.count < MAX_TOTAL_ASSETS &&
-      data.length <= MAX_ASSET_BYTES &&
-      !assets.some((a) => a.name === name)
-    ) {
+    if (assets.some((a) => a.name === name)) return `【图片：${name}】`; // 同名已收集
+    if (assets.length < MAX_ASSETS_PER_NOTE && totalSoFar.count < MAX_TOTAL_ASSETS && data.length <= MAX_ASSET_BYTES) {
       assets.push({ name, mime, bytes: data });
       totalSoFar.count++;
+    } else {
+      // 超限丢弃必须可观测：正文占位标记仍在，但字节未入库
+      totalSoFar.dropped++;
     }
     return `【图片：${name}】`;
   });
@@ -145,15 +148,24 @@ const NOTION_URL_KEYS = ["url", "link", "链接", "网址"];
 export function parseNotionZip(entries: Record<string, Uint8Array>): ZipParseResult {
   const items: ImportItem[] = [];
   const failures: ImportFailure[] = [];
-  const total = { count: 0 };
+  const total = { count: 0, dropped: 0 };
+  let truncated = false;
 
-  // titles of md pages, used to skip duplicate CSV rows
-  const mdTitles = new Set<string>();
+  // md-page title counts, used to skip duplicate CSV rows. Counted (not a set)
+  // so that N same-title md pages only absorb N same-title rows — extra distinct
+  // rows that merely share the title still get imported.
+  const mdTitles = new Map<string, number>();
   const mdPaths = Object.keys(entries).filter((p) => p.toLowerCase().endsWith(".md"));
-  for (const p of mdPaths) mdTitles.add(stripNotionId(baseName(p)).replace(/\.md$/i, "").trim());
+  for (const p of mdPaths) {
+    const t = stripNotionId(baseName(p)).replace(/\.md$/i, "").trim();
+    mdTitles.set(t, (mdTitles.get(t) ?? 0) + 1);
+  }
 
   for (const path of mdPaths) {
-    if (items.length >= MAX_IMPORT_ITEMS) break;
+    if (items.length >= MAX_IMPORT_ITEMS) {
+      truncated = true;
+      break;
+    }
     try {
       const md = strFromU8(entries[path]);
       const lines = md.replace(/\r\n/g, "\n").split("\n");
@@ -207,7 +219,10 @@ export function parseNotionZip(entries: Record<string, Uint8Array>): ZipParseRes
     return !csvPaths.includes(p.replace(/\.csv$/i, "_all.csv"));
   });
   for (const path of preferred) {
-    if (items.length >= MAX_IMPORT_ITEMS) break;
+    if (items.length >= MAX_IMPORT_ITEMS) {
+      truncated = true;
+      break;
+    }
     try {
       const rows = parseCsv(strFromU8(entries[path]));
       if (rows.length < 2) continue;
@@ -217,9 +232,17 @@ export function parseNotionZip(entries: Record<string, Uint8Array>): ZipParseRes
       const tagCol = header.findIndex((h) => NOTION_TAG_KEYS.includes(h));
       const urlCol = header.findIndex((h) => NOTION_URL_KEYS.includes(h));
       for (const row of rows.slice(1)) {
-        if (items.length >= MAX_IMPORT_ITEMS) break;
+        if (items.length >= MAX_IMPORT_ITEMS) {
+          truncated = true;
+          break;
+        }
         const name = nameCol >= 0 ? row[nameCol]?.trim() ?? "" : "";
-        if (!name || mdTitles.has(name)) continue; // row exists as an .md page
+        if (!name) continue;
+        const dup = mdTitles.get(name) ?? 0;
+        if (dup > 0) {
+          mdTitles.set(name, dup - 1); // row exists as an .md page
+          continue;
+        }
         const extras = row
           .map((v, idx) => ({ v: (v ?? "").trim(), idx }))
           .filter(({ v, idx }) => v && idx !== nameCol && idx !== createdCol && idx !== tagCol && idx !== urlCol)
@@ -238,7 +261,7 @@ export function parseNotionZip(entries: Record<string, Uint8Array>): ZipParseRes
     }
   }
 
-  return { items, failures };
+  return { items, failures, assets_dropped: total.dropped, truncated };
 }
 
 // ---- Obsidian ----
@@ -297,14 +320,18 @@ const FILENAME_DATE_RE = /(\d{4}-\d{2}-\d{2})/;
 export function parseObsidianZip(entries: Record<string, Uint8Array>): ZipParseResult {
   const items: ImportItem[] = [];
   const failures: ImportFailure[] = [];
-  const total = { count: 0 };
+  const total = { count: 0, dropped: 0 };
+  let truncated = false;
   const paths = Object.keys(entries).filter((p) => {
     if (!p.toLowerCase().endsWith(".md")) return false;
     const parts = p.split("/");
     return !parts.some((seg) => seg === ".obsidian" || seg === ".trash");
   });
   for (const path of paths) {
-    if (items.length >= MAX_IMPORT_ITEMS) break;
+    if (items.length >= MAX_IMPORT_ITEMS) {
+      truncated = true;
+      break;
+    }
     try {
       const fm = parseFrontmatter(strFromU8(entries[path]));
       const name = baseName(path).replace(/\.md$/i, "").trim();
@@ -320,9 +347,13 @@ export function parseObsidianZip(entries: Record<string, Uint8Array>): ZipParseR
         const found =
           entries[rel] !== undefined ? rel : Object.keys(entries).find((p) => p === ref || p.endsWith(`/${ref}`));
         const assetName = baseName(ref);
-        if (found && entries[found].length <= MAX_ASSET_BYTES && assets.length < MAX_ASSETS_PER_NOTE && total.count < MAX_TOTAL_ASSETS && !assets.some((a) => a.name === assetName)) {
-          assets.push({ name: assetName, mime, bytes: entries[found] });
-          total.count++;
+        if (found && !assets.some((a) => a.name === assetName)) {
+          if (entries[found].length <= MAX_ASSET_BYTES && assets.length < MAX_ASSETS_PER_NOTE && total.count < MAX_TOTAL_ASSETS) {
+            assets.push({ name: assetName, mime, bytes: entries[found] });
+            total.count++;
+          } else {
+            total.dropped++;
+          }
         }
         return `【图片：${assetName}】`;
       });
@@ -347,7 +378,7 @@ export function parseObsidianZip(entries: Record<string, Uint8Array>): ZipParseR
       failures.push({ item: baseName(path), reason: e instanceof Error ? e.message : "解析失败" });
     }
   }
-  return { items, failures };
+  return { items, failures, assets_dropped: total.dropped, truncated };
 }
 
 // ---- Apple Notes (Exporter-style md/txt zip) ----
@@ -362,10 +393,14 @@ export function parseObsidianZip(entries: Record<string, Uint8Array>): ZipParseR
 export function parseAppleNotesZip(entries: Record<string, Uint8Array>): ZipParseResult {
   const items: ImportItem[] = [];
   const failures: ImportFailure[] = [];
-  const total = { count: 0 };
+  const total = { count: 0, dropped: 0 };
+  let truncated = false;
   const paths = Object.keys(entries).filter((p) => /\.(md|markdown|txt)$/i.test(p));
   for (const path of paths) {
-    if (items.length >= MAX_IMPORT_ITEMS) break;
+    if (items.length >= MAX_IMPORT_ITEMS) {
+      truncated = true;
+      break;
+    }
     try {
       const fm = parseFrontmatter(strFromU8(entries[path]));
       const rawName = baseName(path).replace(/\.(md|markdown|txt)$/i, "").trim();
@@ -399,7 +434,7 @@ export function parseAppleNotesZip(entries: Record<string, Uint8Array>): ZipPars
       failures.push({ item: baseName(path), reason: e instanceof Error ? e.message : "解析失败" });
     }
   }
-  return { items, failures };
+  return { items, failures, assets_dropped: total.dropped, truncated };
 }
 
 // ---- entry ----
@@ -409,7 +444,7 @@ export function parseImportZip(source: ZipImportSource, bytes: Uint8Array): ZipP
   try {
     entries = unzipEntries(bytes);
   } catch {
-    return { items: [], failures: [{ item: "zip", reason: "压缩包无法解压，请确认是有效的 zip 文件" }] };
+    return { items: [], failures: [{ item: "zip", reason: "压缩包无法解压，请确认是有效的 zip 文件" }], assets_dropped: 0, truncated: false };
   }
   switch (source) {
     case "notion":
