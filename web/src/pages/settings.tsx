@@ -619,8 +619,8 @@ function WechatBindingCard() {
       ) : status ? (
         <div className="space-y-3">
           <div className="space-y-1 text-xs text-muted-foreground">
-            <p>公众号通道：{status.configured ? "已开通 — 关注碎念公众号后发绑定码" : "即将开放"}</p>
-            <p>企微微信客服通道：{status.kf_configured ? "已开通 — 添加客服会话后发绑定码，可接收转发文章/文件" : "即将开放"}</p>
+            <p>公众号通道：{status.configured ? "已开通 — 关注碎念公众号后发绑定码" : "未开通"}</p>
+            <p>企微微信客服通道：{status.kf_configured ? "已开通 — 添加客服会话后发绑定码，可接收转发文章/文件" : "未开通"}</p>
           </div>
           {status.bound || status.kf_bound ? (
             <div className="space-y-2">

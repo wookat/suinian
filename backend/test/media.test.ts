@@ -9,6 +9,7 @@ import {
   parseImageExtraction,
   describeImage,
   withTimeout,
+  resolveAttachmentMime,
 } from "../src/media";
 
 /** Minimal Workers-AI-style env whose chat model returns `response`. */
@@ -70,6 +71,30 @@ describe("parseMediaRequest", () => {
     const huge = "A".repeat(Math.ceil((MAX_MEDIA_BYTES + 1024) / 0.75));
     const r = await parseMediaRequest(jsonRequest({ type: "audio", data_base64: huge }));
     expect("error" in r && r.status).toBe(413);
+  });
+});
+
+describe("resolveAttachmentMime", () => {
+  it("keeps an explicit non-generic mime", () => {
+    expect(resolveAttachmentMime("audio/mp4", "a.mp3", "audio")).toBe("audio/mp4");
+    expect(resolveAttachmentMime("image/png", undefined, "image")).toBe("image/png");
+  });
+
+  it("infers from extension when mime is missing or octet-stream", () => {
+    expect(resolveAttachmentMime("", "rec.m4a", "audio")).toBe("audio/mp4");
+    expect(resolveAttachmentMime("application/octet-stream", "voice.AMR", "audio")).toBe("audio/amr");
+    expect(resolveAttachmentMime(undefined, "pic.JPG", "image")).toBe("image/jpeg");
+    expect(resolveAttachmentMime(null, "doc.pdf", "file")).toBe("application/pdf");
+  });
+
+  it("resolves ambiguous webm by media type", () => {
+    expect(resolveAttachmentMime("", "rec.webm", "audio")).toBe("audio/webm");
+    expect(resolveAttachmentMime("", "clip.webm", "file")).toBe("video/webm");
+  });
+
+  it("falls back to octet-stream for unknown or missing extensions", () => {
+    expect(resolveAttachmentMime("", "data.xyz", "file")).toBe("application/octet-stream");
+    expect(resolveAttachmentMime("application/octet-stream", undefined, "audio")).toBe("application/octet-stream");
   });
 });
 

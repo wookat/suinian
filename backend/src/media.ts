@@ -75,6 +75,44 @@ export async function parseMediaRequest(req: Request): Promise<MediaIngestReques
   return { type, bytes, mime, fileName, source, clientId };
 }
 
+/** 扩展名 → mime 兜底表：仅收录客户端会内嵌渲染/播放的已知类型（R146 P2-1）。 */
+const EXT_MIME: Record<string, string> = {
+  m4a: "audio/mp4",
+  aac: "audio/aac",
+  mp3: "audio/mpeg",
+  amr: "audio/amr",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  oga: "audio/ogg",
+  opus: "audio/ogg",
+  flac: "audio/flac",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  heic: "image/heic",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  pdf: "application/pdf",
+  txt: "text/plain",
+  md: "text/markdown",
+};
+
+/**
+ * Resolve the attachment mime at the single ingestion boundary (storeOriginal):
+ * keep any explicit non-generic mime; otherwise infer from the file extension
+ * (`webm` is ambiguous — resolved by the declared media type).
+ */
+export function resolveAttachmentMime(mime: string | null | undefined, fileName?: string | null, type?: MediaType): string {
+  const m = (mime || "").trim();
+  if (m && m.toLowerCase() !== "application/octet-stream") return m;
+  const ext = /\.([A-Za-z0-9]{1,5})$/.exec(fileName || "")?.[1]?.toLowerCase();
+  if (ext === "webm") return type === "audio" ? "audio/webm" : "video/webm";
+  return (ext && EXT_MIME[ext]) || m || "application/octet-stream";
+}
+
 export function mediaTooLargeMessage(size: number): string {
   return `文件过大：最多 ${MAX_MEDIA_BYTES / 1024 / 1024}MB，当前约 ${(size / 1024 / 1024).toFixed(1)}MB。`;
 }
@@ -306,10 +344,11 @@ export async function storeOriginal(
   if (!env.MEDIA) return null;
   const safeName = (req.fileName || req.type).replace(/[^\w.\-\u4e00-\u9fff]/g, "_");
   const key = `media/${userId}/${noteId}/${Date.now()}-${safeName}`;
+  const mime = resolveAttachmentMime(req.mime, req.fileName, req.type);
   try {
-    await env.MEDIA.put(key, req.bytes, { httpMetadata: { contentType: req.mime } });
+    await env.MEDIA.put(key, req.bytes, { httpMetadata: { contentType: mime } });
     await env.DB.prepare("INSERT INTO attachments (id, note_id, r2_key, mime, size) VALUES (?, ?, ?, ?, ?)")
-      .bind(crypto.randomUUID(), noteId, key, req.mime, req.bytes.length)
+      .bind(crypto.randomUUID(), noteId, key, mime, req.bytes.length)
       .run();
     return key;
   } catch (err) {
