@@ -16,7 +16,7 @@ SUINIAN_API_TOKEN=<你的token> node dist/index.js
 | `SUINIAN_API_TOKEN` | ✅ | 你的碎念 API token（Web 设置页可复制） |
 | `SUINIAN_API_URL` | 否 | API 地址，默认 `https://suinian-api.zalize.com`，自部署填自己的 worker 地址 |
 
-工具集（与远程版一致）：`save_note` / `search_notes` / `ask` / `list_threads` / `get_thread` / `get_weekly_report` / `list_todos` / `complete_todo`。敏感笔记内容默认脱敏。
+工具集（与远程版一致，共 11 个）：`save_note` / `search_notes` / `ask` / `list_threads` / `get_thread` / `get_weekly_report` / `list_todos` / `complete_todo` / `set_todo_due` / `delete_note` / `restore_notes`。敏感笔记内容默认脱敏。
 
 各客户端配置片段见 [docs/mcp.md](../docs/mcp.md)。
 

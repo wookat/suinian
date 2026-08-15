@@ -3,7 +3,8 @@ import { Send, Loader2, Paperclip, Sparkles, Lock, Tag, CloudOff } from "lucide-
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { ApiError, NetworkError, createNote, ingestMedia, MAX_MEDIA_BYTES, SUPPORTED_FILE_EXTS } from "@/lib/api"
-import { enqueueNote, flushOutbox, onOutboxCount, onOutboxFlushed, startOutboxAutoFlush } from "@/lib/outbox"
+import { enqueueMedia, enqueueNote, flushOutbox, onOutboxCount, onOutboxFlushed, startOutboxAutoFlush } from "@/lib/outbox"
+import { VoiceRecorder, voiceSupported } from "@/components/voice-recorder"
 import { loadSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import type { Note } from "@/lib/types"
@@ -160,6 +161,27 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
     }
   }
 
+  async function uploadVoice(file: File) {
+    if (file.size > MAX_MEDIA_BYTES) {
+      setError(`录音过大：最多 ${MAX_MEDIA_BYTES / 1024 / 1024}MB`)
+      return
+    }
+    setUploading(true)
+    setError(null)
+    try {
+      const note = await ingestMedia(file, "audio")
+      onCreated(note)
+    } catch (e) {
+      // 离线/网络失败：录音进 IndexedDB 离线队列，联网后自动补传转写
+      if (e instanceof NetworkError && !loadSettings().useMock) {
+        if (await enqueueMedia(file, "audio", file.name)) return
+      }
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setUploading(false)
+    }
+  }
+
   return (
     <div
       className="rounded-xl border bg-card p-3 shadow-sm"
@@ -235,6 +257,9 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
           >
             {uploading ? <Loader2 className="animate-spin" /> : <Paperclip />}
           </Button>
+          {voiceSupported() && (
+            <VoiceRecorder onRecorded={(f) => void uploadVoice(f)} onError={setError} disabled={uploading} />
+          )}
           {length >= COUNTER_THRESHOLD && (
             <span
               className={cn(

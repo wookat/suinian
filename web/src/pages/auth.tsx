@@ -1,13 +1,91 @@
 import { useState } from "react"
-import { Loader2, CircleAlert, UserPlus, LogIn } from "lucide-react"
+import { Loader2, CircleAlert, UserPlus, LogIn, Download, Trash2 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { login, register } from "@/lib/api"
+import { createNote, login, register } from "@/lib/api"
+import { clearDemoNotes, userDemoNotes } from "@/lib/mock"
 import { defaultApiBase, loadSettings, saveSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
+import type { Note } from "@/lib/types"
 
 type Mode = "register" | "login"
+
+/**
+ * 登录/注册成功后的演示数据处置（D-2/D-3）：有用户自己记的演示笔记则
+ * 提示导入或清理，不再静默滞留 localStorage 明文。
+ */
+function DemoMigratePrompt({ notes }: { notes: Note[] }) {
+  const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+
+  function done() {
+    clearDemoNotes()
+    window.location.hash = "#/"
+  }
+
+  async function importAll() {
+    setBusy(true)
+    setError(null)
+    try {
+      for (const [i, n] of notes.entries()) {
+        await createNote({
+          source: "import",
+          raw_type: "text",
+          content: n.content,
+          url: n.url ?? undefined,
+          tags: n.tags.length > 0 ? n.tags : undefined,
+        })
+        setProgress(i + 1)
+      }
+      done()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-sm space-y-4">
+      <Card className="space-y-4 p-4">
+        <h2 className="text-base font-semibold">演示模式里还有 {notes.length} 条你记的笔记</h2>
+        <p className="text-sm text-muted-foreground">
+          这些笔记目前只存在本机浏览器里，不会自动同步到账号。可以一键导入新账号（AI 会重新分拣），或直接清理。
+        </p>
+        <ul className="max-h-40 space-y-1 overflow-y-auto rounded-md bg-secondary/50 p-2 text-xs text-muted-foreground">
+          {notes.map((n) => (
+            <li key={n.id} className="truncate">
+              {n.content}
+            </li>
+          ))}
+        </ul>
+        {error && (
+          <p className="flex items-center gap-1.5 text-sm text-destructive">
+            <CircleAlert className="size-4 shrink-0" />
+            导入失败（已导入 {progress}/{notes.length}）：{error}
+          </p>
+        )}
+        <div className="flex gap-2">
+          <Button onClick={() => void importAll()} disabled={busy} className="flex-1">
+            {busy ? (
+              <>
+                <Loader2 className="animate-spin" /> 导入中 {progress}/{notes.length}
+              </>
+            ) : (
+              <>
+                <Download /> 导入到账号
+              </>
+            )}
+          </Button>
+          <Button variant="outline" onClick={done} disabled={busy} className="flex-1">
+            <Trash2 /> 清理演示数据
+          </Button>
+        </div>
+      </Card>
+    </div>
+  )
+}
 
 export function AuthPage() {
   const [mode, setMode] = useState<Mode>(() =>
@@ -21,6 +99,7 @@ export function AuthPage() {
   const [slow, setSlow] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [mismatch, setMismatch] = useState(false)
+  const [demoNotes, setDemoNotes] = useState<Note[] | null>(null)
 
   async function submit() {
     if (busy) return
@@ -52,7 +131,14 @@ export function AuthPage() {
         // fresh registrations get the one-time feature tour on first timeline entry
         tourSeen: mode !== "register",
       })
-      window.location.hash = "#/"
+      const leftover = userDemoNotes()
+      if (leftover.length > 0) {
+        setDemoNotes(leftover)
+      } else {
+        // 只剩种子数据副本：静默清理，不打扰（D-3）
+        clearDemoNotes()
+        window.location.hash = "#/"
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "请求失败，请稍后重试"
       setError(mode === "register" ? `${msg}。可直接用相同用户名密码重试，不会重复创建账号。` : msg)
@@ -62,6 +148,8 @@ export function AuthPage() {
       setBusy(false)
     }
   }
+
+  if (demoNotes) return <DemoMigratePrompt notes={demoNotes} />
 
   return (
     <div className="mx-auto max-w-sm space-y-4">

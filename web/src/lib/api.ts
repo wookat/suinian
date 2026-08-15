@@ -153,13 +153,18 @@ export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 
 export const SUPPORTED_FILE_EXTS = ["pdf", "txt", "md", "markdown", "docx"]
 
-/** 图片/文件上传：走 /api/ingest/media，后端提取文字/描述/摘要后入库 */
-export async function ingestMedia(file: File, type: "image" | "file"): Promise<Note> {
+/** 图片/文件/语音上传：走 /api/ingest/media，后端提取文字/转写/摘要后入库 */
+export async function ingestMedia(file: File, type: "image" | "file" | "audio"): Promise<Note> {
   if (loadSettings().useMock) {
     return mockCreateNote({
       source: "web",
-      raw_type: type,
-      content: type === "image" ? `【图片】${file.name}（演示模式不做识别）` : `【文件】${file.name}（演示模式不做提取）`,
+      raw_type: type === "audio" ? "voice" : type,
+      content:
+        type === "image"
+          ? `【图片】${file.name}（演示模式不做识别）`
+          : type === "audio"
+            ? "【语音】录音已保存（演示模式不做转写）"
+            : `【文件】${file.name}（演示模式不做提取）`,
     })
   }
   const { apiBaseUrl, apiToken } = loadSettings()
@@ -542,7 +547,7 @@ export async function downloadBackup(includeSensitive: boolean): Promise<{ blob:
   }
   const blob = await res.blob()
   const date = new Date().toISOString().slice(0, 10)
-  return { blob, filename: `suinian-backup-${date}.zip` }
+  return { blob, filename: `suinian-backup-${date}${includeSensitive ? "-full" : ""}.zip` }
 }
 
 export interface RestoreStats {
