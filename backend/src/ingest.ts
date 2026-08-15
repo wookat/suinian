@@ -10,6 +10,26 @@
 // 每个入口各抄一份口径是 R117→R119→R121 连续三轮同型缺陷的根因，禁止再绕开。
 import { detectSensitive, maybeSensitive, sanitizeSensitiveTags } from "./triage";
 import { encryptContent, ENC_PLACEHOLDER } from "./crypto";
+import type { NoteMeta } from "./types";
+
+// 派生明文闭包（R126 P1-1，落实 R125 D1）：这些 meta 字段都是从正文派生出的
+// 明文（语音原始转写 / 图片描述 / 文件全文摘录 / 链接正文摘录），敏感笔记的
+// content 加密后它们必须一并洗净，否则导出/备份会从字段维度把秘密带出去。
+export const DERIVED_PLAINTEXT_META_KEYS = [
+  "raw_transcript",
+  "image_description",
+  "file_excerpt",
+  "link_excerpt",
+] as const satisfies readonly (keyof NoteMeta)[];
+
+/** 敏感笔记的派生明文 meta 字段统一洗净口径（写入层与导出/备份层共用）。 */
+export function scrubDerivedMeta(meta: NoteMeta | null): NoteMeta | null {
+  if (!meta) return null;
+  if (!DERIVED_PLAINTEXT_META_KEYS.some((k) => meta[k] !== undefined)) return meta;
+  const m = { ...meta };
+  for (const k of DERIVED_PLAINTEXT_META_KEYS) delete m[k];
+  return m;
+}
 
 export interface IncomingNoteFields {
   content: string;

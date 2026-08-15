@@ -50,9 +50,11 @@ function fakeEnv(note: NoteRow) {
         },
         async run() {
           if (sql.startsWith("UPDATE notes SET")) {
-            if (sql.includes("meta = ?")) {
-              // meta is the first bind before updated_at (bindings mirror the sets order)
-              state.note.meta = binds[binds.length - 2] as string;
+            if (sql.includes("json_patch(coalesce(meta, '{}'), ?)")) {
+              // 模拟 json_patch：只合并富化补丁里的键，保留既有 meta
+              const patch = JSON.parse(binds[binds.length - 2] as string) as Record<string, unknown>;
+              const existing = state.note.meta ? (JSON.parse(state.note.meta) as Record<string, unknown>) : {};
+              state.note.meta = JSON.stringify({ ...existing, ...patch });
             }
             return { meta: { changes: 1 } };
           }

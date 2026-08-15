@@ -148,7 +148,7 @@ describe("applyTriage never persists secret values in derived fields (R120 P1-1)
   }
 
   it("nulls the AI title and scrubs value-like tags for sensitive notes", async () => {
-    const note: Record<string, unknown> = { id: "n1", title: null, tags: "[]", meta: null, is_sensitive: 0 };
+    const note: Record<string, unknown> = { id: "n1", title: null, tags: "[]", meta: null, is_sensitive: 0, content: `服务器 root 密码是 ${SECRET}`, content_enc: null, updated_at: "2026-08-07 00:00:00" };
     const env = { DB: fakeDb(note), SUINIAN_ENC_KEY: KEY } as unknown as Env;
     const triage: TriageResult = {
       category: "data",
@@ -174,6 +174,9 @@ describe("applyTriage never persists secret values in derived fields (R120 P1-1)
       tags: "[]",
       meta: JSON.stringify({ raw_transcript: `服务器 root 密码是 ${SECRET}` }),
       is_sensitive: 0,
+      content: `服务器 root 密码是 ${SECRET}`,
+      content_enc: null,
+      updated_at: "2026-08-07 00:00:00",
     };
     const env = { DB: fakeDb(note), SUINIAN_ENC_KEY: KEY } as unknown as Env;
     const triage: TriageResult = {
@@ -192,7 +195,7 @@ describe("applyTriage never persists secret values in derived fields (R120 P1-1)
   });
 
   it("keeps normal notes' AI title untouched", async () => {
-    const note: Record<string, unknown> = { id: "n2", title: null, tags: "[]", meta: null, is_sensitive: 0 };
+    const note: Record<string, unknown> = { id: "n2", title: null, tags: "[]", meta: null, is_sensitive: 0, content: "周末想试试手冲咖啡", content_enc: null, updated_at: "2026-08-07 00:00:00" };
     const env = { DB: fakeDb(note), SUINIAN_ENC_KEY: KEY } as unknown as Env;
     const triage: TriageResult = {
       category: "idea",

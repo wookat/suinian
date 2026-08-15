@@ -10,6 +10,7 @@ import { backfillGraphExtracts } from "./graph";
 import { clusterNote } from "./threads";
 import { SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 import { maybeSensitive } from "./triage";
+import { scrubDerivedMeta } from "./ingest";
 
 export const BACKUP_FORMAT = "suinian-backup";
 export const BACKUP_VERSION = 1;
@@ -131,6 +132,10 @@ export async function buildBackupZip(
     let content = n.content;
     let title = n.title;
     let tags = safeParse<string[]>(n.tags) ?? [];
+    let meta = safeParse<NoteMeta>(n.meta);
+    let urlTitle = n.url_title;
+    let urlSummary = n.url_summary;
+    let urlTitles = n.url_titles;
     const pendingUncertain =
       !n.is_sensitive && !includeSensitive && n.category === null && maybeSensitive(n.content);
     if (n.is_sensitive || pendingUncertain) {
@@ -140,9 +145,15 @@ export async function buildBackupZip(
           if (plain !== null) content = plain;
         }
       } else {
+        // 脱敏备份覆盖派生明文闭包（R126 P1-1）：meta 里的转写/描述/摘录
+        // 与 url_title/url_summary 一并不出境
         content = SENSITIVE_EXPORT_PLACEHOLDER;
         title = SENSITIVE_EXPORT_PLACEHOLDER;
         tags = [];
+        meta = scrubDerivedMeta(meta);
+        urlTitle = null;
+        urlSummary = null;
+        urlTitles = null;
       }
     }
     const noteAtts = attsByNote.get(n.id) ?? [];
@@ -158,9 +169,9 @@ export async function buildBackupZip(
       raw_type: n.raw_type,
       content,
       url: n.url,
-      url_title: n.url_title,
-      url_summary: n.url_summary,
-      url_titles: n.url_titles,
+      url_title: urlTitle,
+      url_summary: urlSummary,
+      url_titles: urlTitles,
       category: n.category,
       tags,
       title,
@@ -170,7 +181,7 @@ export async function buildBackupZip(
       done_at: n.done_at,
       amount: n.amount,
       currency: n.currency,
-      meta: safeParse<NoteMeta>(n.meta),
+      meta,
       thread_title: n.thread_id ? (threadTitle.get(n.thread_id) ?? null) : null,
       created_at: n.created_at,
       updated_at: n.updated_at,
