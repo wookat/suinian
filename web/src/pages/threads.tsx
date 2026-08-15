@@ -20,6 +20,12 @@ import type { Thread, ThreadDetail, ThreadJob } from "@/lib/types"
 
 const JOB_POLL_MS = 3000
 
+// 重建耗时量级预期：生产实测约 2.5s/条（R139：1000 条 ≈ 42 分钟）
+function rebuildEta(total: number): string {
+  const min = Math.ceil((total * 2.6) / 60)
+  return min >= 2 ? `（预计约 ${min} 分钟，可离开本页稍后再看）` : ""
+}
+
 const PHASE_LABEL: Record<ThreadJob["phase"], string> = {
   reset: "准备中",
   cluster: "聚类中",
@@ -154,7 +160,7 @@ export function ThreadsPage() {
             {job.phase === "summarize" && job.summarize_total > 0
               ? `已生成摘要 ${Math.min(job.summarized, job.summarize_total)} / ${job.summarize_total} 条线索`
               : job.total > 0
-                ? `已处理 ${Math.min(job.processed, job.total)} / ${job.total} 条想法`
+                ? `已处理 ${Math.min(job.processed, job.total)} / ${job.total} 条想法${rebuildEta(job.total)}`
                 : "正在统计待处理的想法……"}
           </p>
         </div>
@@ -171,6 +177,14 @@ export function ThreadsPage() {
     ) : job?.status === "error" ? (
       <Card className="p-3">
         <p className="text-sm text-destructive">线索重建失败{job.error ? `：${job.error}` : ""}</p>
+      </Card>
+    ) : job?.status === "done" ? (
+      <Card className="p-3">
+        <p className="text-sm">
+          {job.summarize_total > 0
+            ? `线索重建完成，共聚成 ${job.summarize_total} 条线索。`
+            : "线索重建已完成，但现有想法暂未聚成线索（内容较少或主题分散），继续记录后可再试。"}
+        </p>
       </Card>
     ) : null
 

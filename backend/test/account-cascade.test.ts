@@ -52,7 +52,7 @@ describe("user deletion cascade coverage", () => {
 });
 
 // Stateful fake D1: rows per table keyed by user_id / note_id
-function fakeDb(rows: Record<string, { user_id?: string; note_id?: string; id?: string }[]>) {
+function fakeDb(rows: Record<string, { user_id?: string; note_id?: string; id?: string; name?: string; key?: string }[]>) {
   const db = {
     rows,
     async batch(stmts: { run(): Promise<unknown> }[]) {
@@ -67,7 +67,21 @@ function fakeDb(rows: Record<string, { user_id?: string; note_id?: string; id?: 
           binds = args;
           return stmt;
         },
+        async first() {
+          if (sql === "SELECT name FROM users WHERE id = ?") {
+            return (rows.users ?? []).find((r) => r.id === binds[0]) ?? null;
+          }
+          throw new Error(`unexpected first(): ${sql}`);
+        },
         async run() {
+          const rateLimitScoped = sql.match(/^DELETE FROM auth_rate_limits WHERE key LIKE '(.*)' \|\| \? ESCAPE '\\'$/);
+          if (rateLimitScoped) {
+            // emulate SQLite LIKE with ESCAPE '\': prefix wildcard + escaped literal suffix
+            const literal = String(binds[0]).replace(/\\(.)/g, "$1");
+            const suffix = rateLimitScoped[1].replace(/^%/, "") + literal;
+            rows.auth_rate_limits = (rows.auth_rate_limits ?? []).filter((r) => !(r.key ?? "").endsWith(suffix));
+            return { meta: { changes: 1 } };
+          }
           const noteScoped = sql.match(/^DELETE FROM (\w+) WHERE note_id IN \(SELECT id FROM notes WHERE user_id = \?\)$/);
           if (noteScoped) {
             const noteIds = new Set((rows.notes ?? []).filter((n) => n.user_id === binds[0]).map((n) => n.id));
@@ -107,8 +121,8 @@ function fakeDb(rows: Record<string, { user_id?: string; note_id?: string; id?: 
 
 describe("deleteUserData", () => {
   it("removes every row of the user (and only that user) across all tables", async () => {
-    const rows: Record<string, { user_id?: string; note_id?: string; id?: string }[]> = {
-      users: [{ id: "u1" }, { id: "u2" }],
+    const rows: Record<string, { user_id?: string; note_id?: string; id?: string; name?: string; key?: string }[]> = {
+      users: [{ id: "u1", name: "alice" }, { id: "u2", name: "bob" }],
       notes: [
         { id: "n1", user_id: "u1" },
         { id: "n2", user_id: "u2" },
@@ -126,10 +140,17 @@ describe("deleteUserData", () => {
       user_preferences: [{ user_id: "u1" }, { user_id: "u2" }],
       thread_jobs: [{ id: "j1", user_id: "u1" }, { id: "j2", user_id: "u2" }],
       thread_backfill: [{ user_id: "u1" }, { user_id: "u2" }],
+      auth_rate_limits: [
+        { key: "note_write:u1" },
+        { key: "login:acct:alice" },
+        { key: "note_write:u2" },
+        { key: "login:acct:bob" },
+        { key: "login:1.2.3.4" },
+      ],
     };
     const db = fakeDb(rows);
     await deleteUserData({ DB: db as unknown as D1Database } as Env, "u1");
-    expect(rows.users).toEqual([{ id: "u2" }]);
+    expect(rows.users).toEqual([{ id: "u2", name: "bob" }]);
     expect(rows.notes).toEqual([{ id: "n2", user_id: "u2" }]);
     expect(rows.attachments).toEqual([{ id: "a2", note_id: "n2" }]);
     expect(rows.note_embeddings).toEqual([{ note_id: "n2" }]);
@@ -143,5 +164,11 @@ describe("deleteUserData", () => {
     expect(rows.user_preferences).toEqual([{ user_id: "u2" }]);
     expect(rows.thread_jobs).toEqual([{ id: "j2", user_id: "u2" }]);
     expect(rows.thread_backfill).toEqual([{ user_id: "u2" }]);
+    // R140 P2-微：可归属到该账号的限流行一并清理，他人/纯 IP 维度的行保留
+    expect(rows.auth_rate_limits).toEqual([
+      { key: "note_write:u2" },
+      { key: "login:acct:bob" },
+      { key: "login:1.2.3.4" },
+    ]);
   });
 });

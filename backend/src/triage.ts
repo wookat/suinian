@@ -199,6 +199,19 @@ const SENSITIVE_KEY_LITERAL_RE =
   /\bsk-[A-Za-z0-9_\-]{16,}\b|\bAKIA[0-9A-Z]{16}\b|\bghp_[A-Za-z0-9]{20,}\b|\bxox[bap]-[A-Za-z0-9\-]{10,}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const ID_CARD_RE = /身份证[^\n]{0,10}\d{17}[\dXx]\b|\b\d{17}[Xx]\b/;
 const BANK_CARD_RE = /(银行卡|卡号|储蓄卡|信用卡)[^\n]{0,10}\d{12,19}\b/;
+const PHONE_RE = /(手机号?码?|电话号?码?|联系方式)[^\n]{0,10}(?:\+?86[\s-]?)?1[3-9]\d{9}\b/;
+
+// 数字类敏感值（卡号/证件号/手机号）的常见抄写格式是分组分隔（4-4-4-4 空格、
+// 连字符）或全角数字：归一化后再跑数字类正则，让分段变体与连续写法同判。
+const FULLWIDTH_DIGIT_RE = /[０-９]/g;
+const DIGIT_GROUP_SEP_RE = /(\d)[ \t\u3000\-‐‑‒–—―]{1,3}(?=\d)/g;
+
+/** Fold fullwidth digits to ASCII and collapse separators between digit groups. */
+export function normalizeDigitRuns(content: string): string {
+  return content
+    .replace(FULLWIDTH_DIGIT_RE, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(DIGIT_GROUP_SEP_RE, "$1");
+}
 // values that are placeholders/templates, not real secrets
 const PLACEHOLDER_VALUE_RE = /^(<|\{|\[|\*{2,}|x{3,}|你的|your[-_]?|占位)/i;
 
@@ -224,8 +237,11 @@ export function maybeSensitive(content: string): boolean {
 export function detectSensitive(content: string): boolean {
   const assign = content.match(SENSITIVE_ASSIGN_RE);
   if (assign && !PLACEHOLDER_VALUE_RE.test(assign[3])) return true;
-  return (
-    SENSITIVE_KEY_LITERAL_RE.test(content) || ID_CARD_RE.test(content) || BANK_CARD_RE.test(content)
+  if (SENSITIVE_KEY_LITERAL_RE.test(content)) return true;
+  // 数字类规则同时跑原文与归一化文本：空格/连字符/全角/分段变体不再绕过
+  const normalized = normalizeDigitRuns(content);
+  return [ID_CARD_RE, BANK_CARD_RE, PHONE_RE].some(
+    (re) => re.test(content) || re.test(normalized)
   );
 }
 
