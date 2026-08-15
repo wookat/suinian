@@ -919,6 +919,24 @@ const CATEGORY_LABEL: Record<string, string> = {
   transfer: "资金往来",
 };
 
+/**
+ * Render enumeration answer lines, folding notes that display identically
+ * (same category + same first line, e.g. re-saved duplicates or several
+ * encrypted rows) into one line with a ×N count.
+ */
+function enumNoteLines(rows: NoteRow[]): string[] {
+  const order: string[] = [];
+  const counts = new Map<string, number>();
+  for (const n of rows) {
+    const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
+    const text = n.is_sensitive ? "（加密的敏感笔记）" : (n.title || n.content.split("\n")[0] || "").slice(0, 40);
+    const line = "- ［" + label + "］" + text;
+    if (!counts.has(line)) order.push(line);
+    counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  return order.map((line) => (counts.get(line)! > 1 ? line + " ×" + counts.get(line) : line));
+}
+
 async function fetchLinkMetaInto(env: Env, noteId: string, urls: string[]): Promise<void> {
   if (urls.length === 0) return;
   const metas = await Promise.all(urls.map((u) => fetchLinkMeta(u)));
@@ -2584,14 +2602,14 @@ app.post("/api/ask", async (c) => {
   // LIKE 全量筛选（与计数/财务同一精确查询家族），语义 top-k 只在零命中时
   // 兜底（R129 R8：宽泛主题词的语义召回被高频主题压过，答非所问）。
   let enumTopic = topicEnumIntent(question) ?? topicEnumIntent(recallQuestion);
-  let ruleEnumList = enumListIntent(question) || enumListIntent(recallQuestion);
+  let enumList = enumListIntent(question) || enumListIntent(recallQuestion);
   // 统一意图分类（R132 P1，落实 R131 D-1）：规则全部未命中时才问 LLM 一次，
   // 只接受参数可严格校验的枚举/极值意图（主题词须出现在原问题中）；
   // 校验不过或 AI 不可用则回落普通召回，既有规则路由行为不变。
-  if (!enumTopic && !ruleEnumList) {
+  if (!enumTopic && !enumList) {
     const llmIntent = await classifyAskIntent(c.env, question);
     if (llmIntent?.intent === "topic_enum" && llmIntent.topic) enumTopic = llmIntent.topic;
-    else if (llmIntent?.intent === "enum_list") ruleEnumList = true;
+    else if (llmIntent?.intent === "enum_list") enumList = true;
     else if (llmIntent?.intent === "extreme" && llmIntent.extreme) return answerExtreme(llmIntent.extreme);
   }
   if (enumTopic) {
@@ -2620,12 +2638,7 @@ app.post("/api/ask", async (c) => {
     if (tTotal > 0) {
       const tSens = tTotalRow?.sens ?? 0;
       const tRows = tListRows.results ?? [];
-      const tLines = tRows.map((n) => {
-        const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
-        if (n.is_sensitive) return `- ［${label}］（加密的敏感笔记）`;
-        const text = (n.title || n.content.split("\n")[0] || "").slice(0, 40);
-        return `- ［${label}］${text}`;
-      });
+      const tLines = enumNoteLines(tRows);
       let answer = `${timeRange?.phrase ?? ""}和「${enumTopic}」相关的记录共 ${tTotal} 条`;
       if (tSens > 0) answer += `（含 ${tSens} 条加密的敏感笔记）`;
       answer += `：\n\n${tLines.join("\n")}`;
@@ -2644,7 +2657,7 @@ app.post("/api/ask", async (c) => {
   }
   // 时间窗枚举（「上周都记了什么」）：窗口内 SQL 全量列举 + 精确总数，
   // 不走 top-k 召回（R123：枚举不全且无总数口径）
-  if (ruleEnumList && timeRange?.start) {
+  if (enumList && timeRange?.start) {
     const eConds = ["user_id = ?", "deleted_at IS NULL", "created_at >= ?"];
     const eBinds: unknown[] = [userId, timeRange.start];
     if (timeRange.end) {
@@ -2667,12 +2680,7 @@ app.post("/api/ask", async (c) => {
     if (total === 0) {
       return c.json({ answer: `${timeRange.phrase}你没有记录任何笔记。`, references: [], notes: [], enum_aggregate: true });
     }
-    const lines = rows.map((n) => {
-      const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
-      if (n.is_sensitive) return `- ［${label}］（加密的敏感笔记）`;
-      const text = (n.title || n.content.split("\n")[0] || "").slice(0, 40);
-      return `- ［${label}］${text}`;
-    });
+    const lines = enumNoteLines(rows);
     let answer = `${timeRange.phrase}你一共记了 ${total} 条笔记`;
     if (sens > 0) answer += `（含 ${sens} 条加密的敏感笔记）`;
     answer += `：\n\n${lines.join("\n")}`;
@@ -3473,6 +3481,13 @@ export { app };
 
 /** Concurrent LLM triage calls per retriage round (IO-bound, well under provider limits). */
 const RETRIAGE_CONCURRENCY = 5;
+/**
+ * Retriage attempts after which a note stops being retried (R132, from
+ * audit-r131 §3.1: 9 corpus notes cycled 「分拣延迟，将自动重试」 forever). The
+ * note keeps its fallback category and needs_retriage is cleared so the sweep
+ * and the UI treat it as sorted; the user can still edit the category by hand.
+ */
+const RETRIAGE_MAX_ATTEMPTS = 8;
 
 
 async function retriageOne(
@@ -3495,12 +3510,16 @@ async function retriageOne(
   if (!triage) {
     // the whole AI chain is down: after a grace period stop showing the user a
     // spinner forever — give the note the fallback category and mark it so the
-    // sweep re-triages it (WHERE below matches it again) once AI recovers
+    // sweep re-triages it once AI recovers, but only up to RETRIAGE_MAX_ATTEMPTS
+    // times so a note the model can never triage reaches a terminal state
     if (Date.now() - Date.parse(`${row.created_at.replace(" ", "T")}Z`) > TRIAGE_DEGRADE_AFTER_MS) {
       await env.DB.prepare(
-        "UPDATE notes SET category = ?, meta = json_set(coalesce(meta, '{}'), '$.needs_retriage', json('true')), updated_at = datetime('now') WHERE id = ? AND category IS NULL"
+        `UPDATE notes SET category = coalesce(category, ?), meta = json_set(coalesce(meta, '{}'),
+           '$.retriage_attempts', coalesce(json_extract(meta, '$.retriage_attempts'), 0) + 1,
+           '$.needs_retriage', json(CASE WHEN coalesce(json_extract(meta, '$.retriage_attempts'), 0) + 1 >= ? THEN 'false' ELSE 'true' END)),
+           updated_at = datetime('now') WHERE id = ?`
       )
-        .bind(FALLBACK_TRIAGE.category, row.id)
+        .bind(FALLBACK_TRIAGE.category, RETRIAGE_MAX_ATTEMPTS, row.id)
         .run();
     }
     return false;
