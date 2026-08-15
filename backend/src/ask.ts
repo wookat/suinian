@@ -1,5 +1,6 @@
-import type { NoteRow } from "./types";
+import type { Env, NoteRow } from "./types";
 import { formatAmount, type FinanceStats } from "./reports";
+import { chatComplete } from "./ai";
 
 /**
  * Helpers for /api/ask retrieval quality (R54): deterministic time-range
@@ -358,6 +359,81 @@ export function topicEnumIntent(question: string): string | null {
     if (topic && !TOPIC_ENUM_GENERIC_RE.test(topic)) return topic;
   }
   return null;
+}
+
+// ---- 统一意图分类（R132 P1，落实 R131 D-1）----
+// 模型为主、规则兜底：既有正则家族保留为高精度第一道（命中即走精确路由，
+// 行为与历史轮完全一致）；正则全部未命中时才调用 LLM 意图分类补召回
+// （R131 实测 7/15 同义问法漏路由，全部是措辞变体，不再逐条堆正则）。
+// LLM 输出经严格校验（意图枚举 + 主题词须出现在原问题中且非泛指），校验
+// 不过或 AI 不可用即返回 null——fail-closed 回到普通召回，绝不误伤既有路由。
+// count/finance 不接受 LLM 补路由：其 exact/fail_closed 口径与参数只能由
+// 规则精确推导，误判会把「午饭花了多少钱」这类单项问题打成合计（R129 P2-a）。
+
+export interface AskIntentResult {
+  intent: "topic_enum" | "enum_list" | "extreme";
+  topic: string | null;
+  extreme: "earliest" | "latest" | "longest" | null;
+}
+
+const ASK_INTENT_SYSTEM = `你是个人笔记问答系统的意图分类器。用户在向自己的笔记库提问，请把问题分类为以下意图之一，只输出一行 JSON，不要输出任何其他文本：
+- topic_enum：要求列举与某个具体主题相关的笔记/记录（例：「我看过哪些书」「列一下我存过的菜谱」「AI 相关的记录都有什么」「给我一份读过的书的清单」）。输出 {"intent":"topic_enum","topic":"主题词"}；主题词必须是问题里出现的具体名词（1-8 个字，如 书/菜谱/AI），不能是「东西/内容/事情/笔记/记录」这类泛指词。
+- enum_list：要求列举某段时间记了什么，无主题限定（例：「上周都记了什么」「这个月的笔记清单」「最近记的都有什么」）。输出 {"intent":"enum_list"}
+- extreme：问最早/最新/最长的一条笔记（例：「我的第一条笔记是什么」）。输出 {"intent":"extreme","extreme":"earliest"}（或 latest / longest）
+- general：其他一切问题，包括：针对具体内容/事实的提问（是什么/为什么/什么时候）、数量统计、花销收入合计、单笔消费、闲聊。输出 {"intent":"general"}
+拿不准时一律输出 {"intent":"general"}。`;
+
+const ASK_INTENT_VALUES = new Set(["topic_enum", "enum_list", "extreme", "general"]);
+const ASK_EXTREME_VALUES = new Set(["earliest", "latest", "longest"]);
+
+/** 校验 LLM 给出的主题词：必须出现在原问题里、长度合理、非泛指词（fail-closed）。 */
+export function validAskEnumTopic(topic: unknown, question: string): topic is string {
+  return (
+    typeof topic === "string" &&
+    topic.length >= 1 &&
+    topic.length <= 12 &&
+    question.includes(topic) &&
+    !TOPIC_ENUM_GENERIC_RE.test(topic)
+  );
+}
+
+/**
+ * LLM 统一意图分类（仅在全部规则未命中时调用）：识别措辞变体的枚举/极值
+ * 问法。返回 null 表示 general、AI 不可用或输出未通过校验——调用方回落普通召回。
+ */
+export async function classifyAskIntent(
+  env: Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL">,
+  question: string
+): Promise<AskIntentResult | null> {
+  const out = await chatComplete(env, {
+    temperature: 0,
+    max_tokens: 60,
+    timeout_ms: 10_000,
+    messages: [
+      { role: "system", content: ASK_INTENT_SYSTEM },
+      { role: "user", content: question.slice(0, 300) },
+    ],
+  });
+  if (!out) return null;
+  const m = out.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  let parsed: { intent?: unknown; topic?: unknown; extreme?: unknown };
+  try {
+    parsed = JSON.parse(m[0]) as typeof parsed;
+  } catch {
+    return null;
+  }
+  if (typeof parsed.intent !== "string" || !ASK_INTENT_VALUES.has(parsed.intent)) return null;
+  if (parsed.intent === "general") return null;
+  if (parsed.intent === "topic_enum") {
+    if (!validAskEnumTopic(parsed.topic, question)) return null;
+    return { intent: "topic_enum", topic: parsed.topic, extreme: null };
+  }
+  if (parsed.intent === "extreme") {
+    if (typeof parsed.extreme !== "string" || !ASK_EXTREME_VALUES.has(parsed.extreme)) return null;
+    return { intent: "extreme", topic: null, extreme: parsed.extreme as "earliest" | "latest" | "longest" };
+  }
+  return { intent: "enum_list", topic: null, extreme: null };
 }
 
 // ---- 财务口径澄清追问（R130 P2-1）----

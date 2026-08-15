@@ -43,7 +43,7 @@ import {
   clientIp,
 } from "./auth";
 import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports, financeStats } from "./reports";
-import { getTodayReview, generateAllDailyReviews, readCronHeartbeats } from "./review";
+import { getTodayReview, generateAllDailyReviews, readCronHeartbeats, writeCronHeartbeat } from "./review";
 import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings, EMBED_BACKFILL_BUDGET_MS } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteNotesGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
 import { deleteUserData } from "./account";
@@ -63,7 +63,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMP
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, enumListIntent, topicEnumIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, enumListIntent, topicEnumIntent, classifyAskIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -174,6 +174,10 @@ function contentTooLong(c: { json: (o: object, s: 413) => Response }, content: s
   );
 }
 
+// bridge reports every ~60s; beyond this the process is presumed dead
+const BRIDGE_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
+const BRIDGE_STATUSES = new Set(["online", "waiting_scan", "starting"]);
+
 app.get("/", (c) => c.json({ name: "suinian-api", status: "ok" }));
 app.get("/health", async (c) => {
   // ?probe=ai runs one tiny completion through the degradation chain so external
@@ -181,6 +185,26 @@ app.get("/health", async (c) => {
   if (c.req.query("probe") === "ai") {
     const ai = await aiProbe(c.env);
     return c.json({ ok: true, ai }, ai.ok ? 200 : 503);
+  }
+  // ?probe=bridge reports the WeChat bridge state from its heartbeat so external
+  // monitoring sees the real login state (online / waiting_scan / stale) instead
+  // of just "the process is running"
+  if (c.req.query("probe") === "bridge") {
+    const hb = (await readCronHeartbeats(c.env, ["wechat_bridge"]))[0];
+    let stats: { status?: string; detail?: string } = {};
+    try {
+      stats = hb?.stats ? (JSON.parse(hb.stats) as typeof stats) : {};
+    } catch {
+      /* keep empty */
+    }
+    const ageMs = hb ? Date.now() - Date.parse(hb.last_run_at.replace(" ", "T") + "Z") : null;
+    const stale = ageMs === null || !Number.isFinite(ageMs) || ageMs > BRIDGE_HEARTBEAT_STALE_MS;
+    const status = hb ? (stale ? "stale" : (stats.status ?? "unknown")) : "never_reported";
+    const ok = status === "online";
+    return c.json(
+      { ok, bridge: { status, last_seen_at: hb?.last_run_at ?? null, detail: stats.detail ?? null } },
+      ok ? 200 : 503
+    );
   }
   return c.json({ ok: true });
 });
@@ -2058,6 +2082,19 @@ app.post("/api/ingest/wechat", async (c) => {
   return c.json({ note: await noteToJsonDecrypted(c.env, note), reply }, 201);
 });
 
+// ---- POST /api/bridge/heartbeat ----
+// The VPS bridge reports its login state every minute; /health?probe=bridge
+// (and UptimeRobot on it) reads this row, so a missing/stale heartbeat means
+// the bridge is down and "waiting_scan" means the boss needs to re-scan.
+app.post("/api/bridge/heartbeat", async (c) => {
+  const body = await c.req.json<{ status?: unknown; detail?: unknown }>().catch(() => null);
+  const status = typeof body?.status === "string" && BRIDGE_STATUSES.has(body.status) ? body.status : null;
+  if (!status) return c.json({ error: "status must be one of: " + [...BRIDGE_STATUSES].join("/") }, 400);
+  const detail = typeof body?.detail === "string" ? body.detail.slice(0, 200) : undefined;
+  await writeCronHeartbeat(c.env, "wechat_bridge", "bridge", { status, ...(detail ? { detail } : {}) });
+  return c.json({ ok: true });
+});
+
 // ---- WeChat binding (authed; shared by 公众号 and 企微客服 channels) ----
 // POST /api/wechat/bind-code: generate a fresh 6-digit binding code
 app.post("/api/wechat/bind-code", async (c) => {
@@ -2467,11 +2504,11 @@ app.post("/api/ask", async (c) => {
   // 极值/排序类统计（R126 P1-3）：「最早/最新/最长一条笔记」是一条
   // min/max/order-by SQL 就能精确回答的，绝不交 LLM 对 top-k 召回猜答
   const extremeKind = extremeQueryIntent(question) ?? extremeQueryIntent(recallQuestion);
-  if (extremeKind) {
+  const answerExtreme = async (kind: NonNullable<ReturnType<typeof extremeQueryIntent>>) => {
     const order =
-      extremeKind === "earliest"
+      kind === "earliest"
         ? "created_at ASC, id ASC"
-        : extremeKind === "latest"
+        : kind === "latest"
           ? "created_at DESC, id DESC"
           : "LENGTH(content) DESC, id ASC";
     const row = await c.env.DB.prepare(
@@ -2479,11 +2516,12 @@ app.post("/api/ask", async (c) => {
     )
       .bind(userId)
       .first<NoteRow>();
-    const answer = buildExtremeAnswer(extremeKind, row ?? null);
+    const answer = buildExtremeAnswer(kind, row ?? null);
     const refs = row && !row.is_sensitive ? [{ index: 1, note_id: row.id }] : [];
     const notes = row && !row.is_sensitive ? [noteToJson(row)] : [];
     return c.json({ answer, references: refs, notes, extreme_aggregate: true });
-  }
+  };
+  if (extremeKind) return answerExtreme(extremeKind);
   // 计数类问题同理走 SQL COUNT 精确统计（R124 P1-2：「记了多少条」曾被 LLM
   // 从 top-k 召回窗口猜成 16，实为 210）；意图/时间同样以原始问题优先。
   // R126：分类/敏感/日均限定也是可 SQL 化的精确计数，不再落 fail-closed
@@ -2545,7 +2583,17 @@ app.post("/api/ask", async (c) => {
   // 主题枚举（R130 P1-1）：「我看过什么书/存过哪些菜谱」先走关键词/标签
   // LIKE 全量筛选（与计数/财务同一精确查询家族），语义 top-k 只在零命中时
   // 兜底（R129 R8：宽泛主题词的语义召回被高频主题压过，答非所问）。
-  const enumTopic = topicEnumIntent(question) ?? topicEnumIntent(recallQuestion);
+  let enumTopic = topicEnumIntent(question) ?? topicEnumIntent(recallQuestion);
+  let ruleEnumList = enumListIntent(question) || enumListIntent(recallQuestion);
+  // 统一意图分类（R132 P1，落实 R131 D-1）：规则全部未命中时才问 LLM 一次，
+  // 只接受参数可严格校验的枚举/极值意图（主题词须出现在原问题中）；
+  // 校验不过或 AI 不可用则回落普通召回，既有规则路由行为不变。
+  if (!enumTopic && !ruleEnumList) {
+    const llmIntent = await classifyAskIntent(c.env, question);
+    if (llmIntent?.intent === "topic_enum" && llmIntent.topic) enumTopic = llmIntent.topic;
+    else if (llmIntent?.intent === "enum_list") ruleEnumList = true;
+    else if (llmIntent?.intent === "extreme" && llmIntent.extreme) return answerExtreme(llmIntent.extreme);
+  }
   if (enumTopic) {
     const like = `%${enumTopic}%`;
     const tConds = ["user_id = ?", "deleted_at IS NULL", "(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)"];
@@ -2596,7 +2644,7 @@ app.post("/api/ask", async (c) => {
   }
   // 时间窗枚举（「上周都记了什么」）：窗口内 SQL 全量列举 + 精确总数，
   // 不走 top-k 召回（R123：枚举不全且无总数口径）
-  if ((enumListIntent(question) || enumListIntent(recallQuestion)) && timeRange?.start) {
+  if (ruleEnumList && timeRange?.start) {
     const eConds = ["user_id = ?", "deleted_at IS NULL", "created_at >= ?"];
     const eBinds: unknown[] = [userId, timeRange.start];
     if (timeRange.end) {

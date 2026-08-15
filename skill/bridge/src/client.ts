@@ -85,6 +85,11 @@ export class SuinianClient {
     return this.post<MediaIngestResponse>('/api/ingest/media', payload)
   }
 
+  /** 上报桥接状态心跳，供 /health?probe=bridge 如实暴露登录状态 */
+  heartbeat(status: 'starting' | 'waiting_scan' | 'online', detail?: string): Promise<{ ok: boolean }> {
+    return this.post<{ ok: boolean }>('/api/bridge/heartbeat', { status, ...(detail ? { detail } : {}) })
+  }
+
   private post<T>(path: string, body: unknown): Promise<T> {
     return this.request<T>('POST', path, body)
   }
