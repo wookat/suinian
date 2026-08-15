@@ -2621,6 +2621,9 @@ app.post("/api/ask", async (c) => {
   // 兜底（R129 R8：宽泛主题词的语义召回被高频主题压过，答非所问）。
   let enumTopic = topicEnumIntent(question) ?? topicEnumIntent(recallQuestion);
   let enumList = enumListIntent(question) || enumListIntent(recallQuestion);
+  // 主题限定优先于时间窗全量枚举：「记过哪些关于 X 的想法」不被全量枚举劫持，
+  // 主题关键词零命中时落回普通召回（语义兜底）而非列出全部笔记
+  if (enumTopic) enumList = false;
   // 统一意图分类（R132 P1，落实 R131 D-1）：规则全部未命中时才问 LLM 一次，
   // 只接受参数可严格校验的枚举/极值意图（主题词须出现在原问题中）；
   // 校验不过或 AI 不可用则回落普通召回，既有规则路由行为不变。

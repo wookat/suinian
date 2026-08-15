@@ -43,11 +43,12 @@ const REQUEST_TIMEOUT_MS = 60_000
 async function realFetch<T>(
   path: string,
   init?: RequestInit,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<T> {
   const { apiBaseUrl, apiToken } = loadSettings()
   if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
   let res: Response
-  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
   try {
     res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}${path}`, {
       ...init,
@@ -60,11 +61,11 @@ async function realFetch<T>(
     })
   } catch (e) {
     if (e instanceof DOMException && e.name === "TimeoutError")
-      throw new NetworkError("请求超时，请重试")
+      throw new NetworkError("请求超时，请重试", true)
     if (e instanceof DOMException && e.name === "AbortError") {
       // AbortSignal.any 可能把超时也包装成 AbortError：调用方没主动取消时按超时处理
       if (init?.signal?.aborted) throw e
-      if (timeoutSignal.aborted) throw new NetworkError("请求超时，请重试")
+      if (timeoutSignal.aborted) throw new NetworkError("请求超时，请重试", true)
       throw e
     }
     throw new NetworkError("网络连接失败，请检查网络或 API 地址")
@@ -91,7 +92,14 @@ export class ApiError extends Error {
   }
 }
 
-export class NetworkError extends Error {}
+export class NetworkError extends Error {
+  /** true = 请求超时（而非连接失败）：服务端预算已耗尽，自动重试大概率同样超时 */
+  timeout: boolean
+  constructor(message: string, timeout = false) {
+    super(message)
+    this.timeout = timeout
+  }
+}
 
 // Backend returns booleans for is_sensitive/todo_done and wraps single notes in {note}
 function normalizeNote(raw: Record<string, unknown>): Note {
@@ -481,17 +489,20 @@ export async function ask(
   history: AskHistoryMessage[] = [],
 ): Promise<AskResponse> {
   if (loadSettings().useMock) return mockAsk(question)
+  // 问答服务端预算上限 40s：单次等待 45s 就够，超时直接报错交给重试按钮，
+  // 不自动重试叠加等待（避免用户盯着转圈两三分钟误以为卡死）
+  const ASK_TIMEOUT_MS = 45_000
   const doAsk = () =>
     realFetch<AskResponse>("/api/ask", {
       method: "POST",
       body: JSON.stringify(history.length > 0 ? { question, history } : { question }),
-    })
+    }, ASK_TIMEOUT_MS)
   let res: AskResponse
   try {
     res = await doAsk()
   } catch (e) {
-    // 服务端瞬时故障/网络抖动自动重试一次，避免偶发失败直接糊到用户脸上
-    const transient = e instanceof NetworkError || (e instanceof ApiError && (e.status === 503 || e.status >= 500))
+    // 服务端瞬时故障/网络抖动自动重试一次；超时不自动重试（大概率同样超时，只会加倍等待）
+    const transient = (e instanceof NetworkError && !e.timeout) || (e instanceof ApiError && (e.status === 503 || e.status >= 500))
     if (!transient) throw e
     await new Promise((r) => setTimeout(r, 1200))
     res = await doAsk()

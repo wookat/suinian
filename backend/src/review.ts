@@ -78,15 +78,17 @@ async function revisitCandidates(env: Env, userId: string, exclude: string[], li
   return results ?? [];
 }
 
-/** 降级候选：任意 1 天前创建、有实质内容的非敏感笔记（不限分类），新账号也能尽快有回顾 */
+/** 降级候选：任意 1 天前创建、有实质内容的非敏感笔记（不限分类），新账号也能尽快有回顾。
+ * 冷却窗口：近 7 天推过的笔记不再重复，小语料时宁可当天空着也不复读。 */
 async function relaxedCandidates(env: Env, userId: string, limit: number): Promise<NoteRow[]> {
   const { results } = await env.DB.prepare(
     `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL
        AND length(content) >= 10
        AND created_at < datetime('now', '-1 day')
+       AND id NOT IN (SELECT note_id FROM daily_reviews WHERE user_id = ? AND review_date >= date('now', '-7 days'))
      ORDER BY RANDOM() LIMIT ?`
   )
-    .bind(userId, limit)
+    .bind(userId, userId, limit)
     .all<NoteRow>();
   return results ?? [];
 }
@@ -106,10 +108,11 @@ async function recurringThemeCandidate(env: Env, userId: string, exclude: string
   const ph = exclude.map(() => "?").join(",");
   return await env.DB.prepare(
     `SELECT * FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL AND thread_id = ?
+       AND id NOT IN (SELECT note_id FROM daily_reviews WHERE user_id = ? AND review_date >= date('now', '-7 days'))
        ${exclude.length > 0 ? `AND id NOT IN (${ph})` : ""}
      ORDER BY created_at DESC LIMIT 1`
   )
-    .bind(userId, hot.thread_id, ...exclude)
+    .bind(userId, hot.thread_id, userId, ...exclude)
     .first<NoteRow>();
 }
 

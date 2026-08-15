@@ -340,10 +340,12 @@ export function enumListIntent(question: string): boolean {
 
 const TOPIC_ENUM_RES: RegExp[] = [
   // 「存过哪些菜谱」「看过什么书」——经历/收纳动词 + 些/哪些/什么 + 主题名词收尾
-  /[看读买去吃喝听学玩逛用聊提存记写收藏保]{1,2}[过了]{1,2}(?:些|哪些|什么|啥)([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)(?:的?(?:笔记|记录|内容))?(?:来着|呢|吗|么)?$/,
+  /[看读买去吃喝听学玩逛用聊提存记写收藏保]{1,2}[过了]{1,2}(?:些|哪些|什么|啥)([\u4e00-\u9fa5A-Za-z0-9 ]{1,12}?)(?:的?(?:笔记|记录|内容|想法|点子))?(?:来着|呢|吗|么)?$/,
+  // 「记过哪些关于 AI 创业的想法」——枚举措辞 + 关于/有关 + 主题词
+  /[过了]?(?:些|哪些|什么|啥)(?:关于|有关)([\u4e00-\u9fa5A-Za-z0-9 ]{1,12}?)的?(?:笔记|记录|内容|想法|点子|事)?$/,
   // 「关于健身的笔记有哪些」「有哪些关于健身的记录」
-  /(?:关于|有关)([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)的?(?:笔记|记录|内容)?(?:都)?有哪些/,
-  /有哪些(?:关于|有关)([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)的?(?:笔记|记录|内容)/,
+  /(?:关于|有关)([\u4e00-\u9fa5A-Za-z0-9 ]{1,12}?)的?(?:笔记|记录|内容)?(?:都)?有哪些/,
+  /有哪些(?:关于|有关)([\u4e00-\u9fa5A-Za-z0-9 ]{1,12}?)的?(?:笔记|记录|内容)/,
 ];
 
 // 泛指词不构成主题限定：落回时间窗枚举或普通召回
@@ -355,7 +357,7 @@ export function topicEnumIntent(question: string): string | null {
   if (extremeQueryIntent(question) || countQueryIntent(question)) return null;
   const q = question.replace(/[？?。！!\s]+$/g, "").replace(STRIP_RES[0], "");
   for (const re of TOPIC_ENUM_RES) {
-    const topic = q.match(re)?.[1]?.replace(/^的+|的+$/g, "");
+    const topic = q.match(re)?.[1]?.replace(/^(?:关于|有关)/, "").replace(/^的+|的+$/g, "").trim();
     if (topic && !TOPIC_ENUM_GENERIC_RE.test(topic)) return topic;
   }
   return null;
