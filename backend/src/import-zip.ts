@@ -1,6 +1,7 @@
 // Zip-based import parsers: Notion (Markdown & CSV export), Obsidian vault,
-// Apple Notes (Exporter-style md/txt zip). Each entry becomes a normalized
-// ImportItem; referenced local image assets are collected for R2 storage.
+// Apple Notes (Exporter-style md/txt zip), flomo (HTML export zip). Each
+// entry becomes a normalized ImportItem; referenced local image assets are
+// collected for R2 storage.
 
 import { unzipSync, strFromU8 } from "fflate";
 import {
@@ -9,6 +10,7 @@ import {
   type ImportFailure,
   normalizeImportDate,
   extractHashTags,
+  htmlToText,
   parseCsv,
   splitTags,
   firstUrl,
@@ -16,7 +18,7 @@ import {
   MAX_IMPORT_ITEMS,
 } from "./import";
 
-export type ZipImportSource = "notion" | "obsidian" | "apple-notes";
+export type ZipImportSource = "notion" | "obsidian" | "apple-notes" | "flomo";
 
 export interface ZipParseResult {
   items: ImportItem[];
@@ -437,6 +439,83 @@ export function parseAppleNotesZip(entries: Record<string, Uint8Array>): ZipPars
   return { items, failures, assets_dropped: total.dropped, truncated };
 }
 
+// ---- flomo (HTML export zip) ----
+
+/**
+ * flomo 导出 zip：根目录一个 HTML（memo 列表，结构同纯 HTML 导出）+ file/ 下的
+ * 图片附件。复用既有 zip 图片资产管线：<img src> 指向包内文件时收集字节入
+ * R2，正文留【图片：name】占位标记（口径同 Notion/Obsidian/Apple 导入）。
+ */
+export function parseFlomoZip(entries: Record<string, Uint8Array>): ZipParseResult {
+  const items: ImportItem[] = [];
+  const failures: ImportFailure[] = [];
+  const total = { count: 0, dropped: 0 };
+  let truncated = false;
+  const htmlPaths = Object.keys(entries).filter((p) => /\.html?$/i.test(p));
+  if (htmlPaths.length === 0) {
+    return {
+      items,
+      failures: [{ item: "zip", reason: "未找到 flomo 导出的 HTML 文件，请确认是 flomo 导出的完整 zip" }],
+      assets_dropped: 0,
+      truncated: false,
+    };
+  }
+  const markerRe = /【图片：[^】]+】/g;
+  for (const path of htmlPaths) {
+    if (truncated) break;
+    const html = strFromU8(entries[path]);
+    const blocks = html.split(/<div[^>]*class=["'][^"']*\bmemo\b[^"']*["'][^>]*>/i).slice(1);
+    for (const block of blocks) {
+      if (items.length >= MAX_IMPORT_ITEMS) {
+        truncated = true;
+        break;
+      }
+      try {
+        const timeM = block.match(/class=["'][^"']*\btime\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+        const assets: ImportAsset[] = [];
+        // 包内图片 -> 资产 + 占位标记；外链/无法解析的 img 直接去除
+        const withMarkers = block.replace(/<img[^>]*\bsrc=["']([^"']+)["'][^>]*\/?>/gi, (_whole, rawRef: string) => {
+          const ref = safeDecodeURI(rawRef.trim());
+          if (/^[a-z]+:/i.test(ref)) return "";
+          const p = resolvePath(dirName(path), ref);
+          const data = entries[p];
+          const mime = imageMime(p);
+          const name = baseName(p);
+          if (!data || !mime) return "";
+          if (assets.some((a) => a.name === name)) return `【图片：${name}】`;
+          if (assets.length < MAX_ASSETS_PER_NOTE && total.count < MAX_TOTAL_ASSETS && data.length <= MAX_ASSET_BYTES) {
+            assets.push({ name, mime, bytes: data });
+            total.count++;
+          } else {
+            total.dropped++;
+          }
+          return `【图片：${name}】`;
+        });
+        const contentM = withMarkers.match(/class=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+        let content = clipContent(htmlToText(contentM ? contentM[1] : withMarkers));
+        // flomo 把图片放在 content 之外的 files 区：只取 content 会丢标记，补附到正文末尾
+        const inBody = new Set(content.match(markerRe) ?? []);
+        const extra = [...new Set((withMarkers.match(markerRe) ?? []).filter((m) => !inBody.has(m)))];
+        if (extra.length > 0) content = clipContent([content, ...extra].filter(Boolean).join("\n"));
+        if (!content) continue;
+        items.push({
+          content,
+          created_at: normalizeImportDate(timeM ? htmlToText(timeM[1]) : null),
+          tags: extractHashTags(content),
+          url: firstUrl(content),
+          assets: assets.length > 0 ? assets : undefined,
+        });
+      } catch (e) {
+        failures.push({ item: baseName(path), reason: e instanceof Error ? e.message : "解析失败" });
+      }
+    }
+  }
+  if (items.length === 0 && failures.length === 0) {
+    failures.push({ item: "zip", reason: "HTML 中未解析到任何 memo，请确认是 flomo 导出的完整 zip" });
+  }
+  return { items, failures, assets_dropped: total.dropped, truncated };
+}
+
 // ---- entry ----
 
 export function parseImportZip(source: ZipImportSource, bytes: Uint8Array): ZipParseResult {
@@ -453,5 +532,7 @@ export function parseImportZip(source: ZipImportSource, bytes: Uint8Array): ZipP
       return parseObsidianZip(entries);
     case "apple-notes":
       return parseAppleNotesZip(entries);
+    case "flomo":
+      return parseFlomoZip(entries);
   }
 }

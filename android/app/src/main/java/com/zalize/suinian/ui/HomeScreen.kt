@@ -1,7 +1,11 @@
 package com.zalize.suinian.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -31,7 +35,11 @@ import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.snapshotFlow
@@ -68,9 +76,15 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.zalize.suinian.data.InlineCommand
 import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.parseInlineCommand
+import com.zalize.suinian.ui.components.MAX_RECORD_SECONDS
+import com.zalize.suinian.ui.components.VoiceRecorderController
+import kotlinx.coroutines.delay
+import java.io.File
 import androidx.compose.foundation.border
 import com.zalize.suinian.ui.components.DailyReviewCard
 import com.zalize.suinian.ui.components.FirstRunTour
@@ -177,6 +191,79 @@ fun HomeScreen(
                 null
             } ?: uri.lastPathSegment ?: "file"
             vm.uploadFile(bytes, mime, name)
+        }
+    }
+
+    // 图片直接入口：相册选图 / 拍照 → 既有图片管线（type=image，AI 视觉识别）
+    fun uploadImageUri(uri: Uri) {
+        val resolver = context.contentResolver
+        val bytes = try {
+            resolver.openInputStream(uri)?.use { it.readBytes() }
+        } catch (_: Exception) {
+            null
+        }
+        if (bytes == null || bytes.isEmpty()) {
+            vm.showToast("读取图片失败，请重试")
+            return
+        }
+        val mime = resolver.getType(uri) ?: "image/jpeg"
+        val name = uri.lastPathSegment?.substringAfterLast('/') ?: "image.jpg"
+        vm.uploadImage(bytes, mime, name)
+    }
+
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) uploadImageUri(uri)
+    }
+
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val uri = cameraUri
+        if (ok && uri != null) uploadImageUri(uri)
+        cameraUri = null
+    }
+    fun launchCamera() {
+        try {
+            val file = File.createTempFile("camera-", ".jpg", context.cacheDir)
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            cameraUri = uri
+            takePicture.launch(uri)
+        } catch (e: Exception) {
+            vm.showToast(e.message ?: "无法打开相机")
+        }
+    }
+
+    // 语音录音入口：对齐 Web 麦克风按钮 → 既有转写管线（type=audio，Whisper）
+    val voiceRecorder = remember { VoiceRecorderController(context) }
+    var recording by remember { mutableStateOf(false) }
+    var recordSeconds by remember { mutableStateOf(0) }
+    fun startRecording() {
+        try {
+            voiceRecorder.start()
+            recordSeconds = 0
+            recording = true
+        } catch (e: Exception) {
+            vm.showToast(e.message ?: "无法开始录音")
+        }
+    }
+    fun stopRecordingAndSend() {
+        recording = false
+        val result = voiceRecorder.stop()
+        if (result == null) {
+            vm.showToast("录音太短，请重试")
+            return
+        }
+        vm.uploadAudio(result.first, "audio/mp4", result.second)
+    }
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startRecording() else vm.showToast("需要麦克风权限才能录音，请在系统设置中开启")
+    }
+    LaunchedEffect(recording) {
+        while (recording) {
+            delay(1000)
+            recordSeconds++
+            if (recordSeconds >= MAX_RECORD_SECONDS) {
+                stopRecordingAndSend()
+            }
         }
     }
 
@@ -338,6 +425,35 @@ fun HomeScreen(
             is InlineCommand.Tags -> "手动打标：" + command.tags.joinToString(" ") { "#$it" }
             null -> null
         }
+        if (recording) {
+            // 录音中：替换速记框，显示计时 + 取消/停止（对齐 Web 录音条）
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Icon(Icons.Outlined.Mic, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "录音中 %d:%02d".format(recordSeconds / 60, recordSeconds % 60),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = {
+                        recording = false
+                        voiceRecorder.cancel()
+                    }) { Text("取消") }
+                    Button(onClick = { stopRecordingAndSend() }) {
+                        Icon(Icons.Outlined.Stop, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("停止并转写")
+                    }
+                }
+            }
+        } else {
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
@@ -357,8 +473,35 @@ fun HomeScreen(
                 }
                 else -> null
             },
+            leadingIcon = {
+                // 语音录音入口（对齐 Web 麦克风按钮）
+                IconButton(
+                    onClick = {
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                            startRecording()
+                        } else {
+                            micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
+                    enabled = !ui.sending,
+                ) {
+                    Icon(Icons.Outlined.Mic, contentDescription = "语音速记")
+                }
+            },
             trailingIcon = {
                 Row {
+                    IconButton(
+                        onClick = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                        enabled = !ui.sending,
+                    ) {
+                        Icon(Icons.Outlined.Image, contentDescription = "相册选图入库")
+                    }
+                    IconButton(
+                        onClick = { launchCamera() },
+                        enabled = !ui.sending,
+                    ) {
+                        Icon(Icons.Outlined.PhotoCamera, contentDescription = "拍照入库")
+                    }
                     IconButton(
                         onClick = {
                             filePicker.launch(
@@ -396,6 +539,7 @@ fun HomeScreen(
                 }
             },
         )
+        }
 
         Spacer(Modifier.height(8.dp))
 

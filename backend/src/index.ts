@@ -3353,9 +3353,15 @@ app.post("/api/import", async (c) => {
     } else {
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)) {
-        return c.json({ error: "该来源不支持 zip 文件，请选择 Notion / Obsidian / Apple 备忘录来源上传 zip" }, 400);
+        if (source === "flomo") {
+          // flomo 导出 zip（HTML + file/ 图片）：走 zip 解析管线，图片入 R2 不再丢弃
+          zipBytes = bytes;
+        } else {
+          return c.json({ error: "该来源不支持 zip 文件，请选择 flomo / Notion / Obsidian / Apple 备忘录来源上传 zip" }, 400);
+        }
+      } else {
+        text = new TextDecoder().decode(bytes);
       }
-      text = new TextDecoder().decode(bytes);
     }
   } else {
     const body = await c.req.json<{ source?: unknown; content?: unknown }>().catch(() => null);

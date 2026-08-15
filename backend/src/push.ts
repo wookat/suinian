@@ -142,9 +142,10 @@ export interface TodoReminderStats {
  * due — see todoReminderEpochMs) has been reached within the last 24h and
  * which are unfinished and not yet reminded. Once a delivery channel exists
  * (preference on + at least one subscription), the todo is marked reminded
- * exactly once before delivery is attempted, so a flaky push service can
- * never cause duplicate reminders. A user with no subscription keeps the
- * reminder unconsumed: it fires within the 24h lookback once they subscribe.
+ * before delivery is attempted (at-most-once when anything lands); if every
+ * delivery fails, the mark is released so the next cron retries within the
+ * 24h lookback window. A user with no subscription keeps the reminder
+ * unconsumed: it fires within the 24h lookback once they subscribe.
  */
 export async function sweepTodoReminders(env: Env, now: Date = new Date()): Promise<TodoReminderStats> {
   const stats: TodoReminderStats = { candidates: 0, reminded: 0, delivered: 0, skipped_pref: 0, skipped_no_sub: 0 };
@@ -204,6 +205,8 @@ export async function sweepTodoReminders(env: Env, now: Date = new Date()): Prom
     // mark before delivery: at-most-once even if delivery below fails midway
     await env.DB.prepare("UPDATE notes SET todo_reminded_at = datetime('now') WHERE id = ?").bind(n.id).run();
     stats.reminded++;
+    let okCount = 0;
+    let goneCount = 0;
     const label = n.is_sensitive ? "一条待办" : (n.title || n.content || "待办").slice(0, 60);
     const dueMs = todoDueEpochMs(n.todo_due, await userTz(n.user_id));
     const timing =
@@ -219,7 +222,28 @@ export async function sweepTodoReminders(env: Env, now: Date = new Date()): Prom
       tag: `todo-${n.id}`,
     };
     for (const s of subs) {
-      if ((await sendPush(env, s, payload)) === "ok") stats.delivered++;
+      const r = await sendPush(env, s, payload);
+      if (r === "ok") {
+        okCount++;
+        stats.delivered++;
+      } else if (r === "gone") {
+        goneCount++;
+      }
+    }
+    // 补投（R142 D-2）：全部投递失败时释放标记，让下一轮 cron 在 24h 回看窗口内
+    // 重试；只要有一条成功就保持已提醒（至多一次）。全部订阅已失效（gone，行已
+    // 删除）则回到"无渠道"语义：重新订阅后仍能收到这条提醒。站内兜底为待办页的
+    // 已过期/今天分组（Web/Android 均有），不依赖推送渠道。
+    if (okCount === 0) {
+      await env.DB.prepare("UPDATE notes SET todo_reminded_at = NULL WHERE id = ?")
+        .bind(n.id)
+        .run()
+        .catch(() => undefined);
+      stats.reminded--;
+      if (goneCount === subs.length) {
+        subCache.set(n.user_id, []);
+        stats.skipped_no_sub++;
+      }
     }
   }
   await writeCronHeartbeat(env, "todo_reminder:cron", "cron", stats);

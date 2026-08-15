@@ -59,7 +59,7 @@ import { cn } from "@/lib/utils"
 
 const IMPORT_SOURCES: { value: ImportSource; label: string; hint: string; accept: string }[] = [
   { value: "cubox", label: "Cubox", hint: "支持 Cubox 导出的 CSV / 书签 HTML / txt 文件", accept: ".csv,.html,.htm,.txt" },
-  { value: "flomo", label: "flomo", hint: "支持 flomo 导出压缩包里的 HTML 文件（如 index.html）", accept: ".html,.htm" },
+  { value: "flomo", label: "flomo", hint: "支持 flomo 导出的 zip 直接上传（图片自动入库），也支持解压后的 HTML 文件", accept: ".zip,.html,.htm" },
   { value: "notion", label: "Notion", hint: "支持 Notion「Markdown & CSV」导出的 zip（含嵌套页面 / 数据库 / 图片，图片自动入库）", accept: ".zip" },
   { value: "obsidian", label: "Obsidian", hint: "把整个 vault 文件夹压缩为 zip 上传；frontmatter 的 tags/created 会保留，[[内链]] 转为文本", accept: ".zip" },
   { value: "apple-notes", label: "Apple 备忘录", hint: "先用 Mac 免费工具 Exporter 导出 md，再把导出文件夹压缩为 zip 上传；文件夹名会变成标签", accept: ".zip" },
@@ -1241,7 +1241,7 @@ export function SettingsPage() {
             <ol className="list-decimal space-y-1 pl-4">
               <li>
                 <span className="font-medium">导出</span>：Cubox 在「共享/导出」选 CSV（推荐，书签 HTML / txt 也支持）；flomo
-                在「设置 → 账号详情 → 导出所有数据（HTML）」，解压后取其中的 HTML 文件；Notion 在页面菜单「导出 →
+                在「设置 → 账号详情 → 导出所有数据（HTML）」拿到 zip 直接上传（图片一并导入）；Notion 在页面菜单「导出 →
                 Markdown & CSV（含子页面）」拿到 zip 直接上传；Obsidian 把整个 vault 文件夹压缩为 zip；Apple 备忘录用 Mac App
                 Store 免费工具「Exporter」导出 Markdown 后压缩为 zip；其他工具导出 Markdown / 纯文本也可。
               </li>
@@ -1254,7 +1254,7 @@ export function SettingsPage() {
               </li>
             </ol>
             <p className="text-muted-foreground">
-              提示：flomo 压缩包里的图片暂不导入（正文文字全部保留）；Notion / Obsidian / Apple 备忘录 zip 里引用的图片会自动存入图床；来源选错时会提示「未能解析出笔记」，不会写入脏数据。
+              提示：flomo / Notion / Obsidian / Apple 备忘录 zip 里引用的图片会自动存入图床；来源选错时会提示「未能解析出笔记」，不会写入脏数据。
             </p>
           </div>
         )}

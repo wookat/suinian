@@ -188,7 +188,10 @@ async function deepseekPickNumber(env: Env, system: string, user: string, max: n
     ],
   });
   if (text === null) return null;
-  const n = parseInt(text.trim(), 10);
+  // 模型可能带前缀/标点（如「答案：3」「3.」）：取回复中第一个整数而非要求纯数字开头
+  const m = text.match(/\d+/);
+  if (!m) return null;
+  const n = parseInt(m[0], 10);
   return Number.isFinite(n) && n >= 0 && n <= max ? n : null;
 }
 
