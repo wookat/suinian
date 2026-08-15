@@ -208,6 +208,38 @@ export async function ingestMedia(file: File, type: "image" | "file" | "audio", 
 }
 
 /** 下载文件笔记的原件（鉴权本人，经 API 代理） */
+// 鉴权媒体取件（R144 P1-1）：带 Bearer 拉取 /api/notes/:id/file 并转成 object URL，
+// 按 note+attachment 缓存，避免重复下载；R2 保持私有，不暴露公链。
+const mediaUrlCache = new Map<string, Promise<string>>()
+
+export function fetchNoteMediaUrl(noteId: string, attachmentId?: string): Promise<string> {
+  const key = `${noteId}:${attachmentId ?? ""}`
+  const cached = mediaUrlCache.get(key)
+  if (cached) return cached
+  const p = (async () => {
+    const { apiBaseUrl, apiToken, useMock } = loadSettings()
+    if (useMock || !apiBaseUrl) throw new Error("演示模式不支持媒体预览")
+    const qs = attachmentId ? `?inline=1&att=${encodeURIComponent(attachmentId)}` : "?inline=1"
+    let res: Response
+    try {
+      res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/notes/${noteId}/file${qs}`, {
+        headers: { Authorization: `Bearer ${apiToken}` },
+      })
+    } catch {
+      throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "")
+      throw new ApiError(res.status, text || res.statusText)
+    }
+    const blob = await res.blob()
+    return URL.createObjectURL(blob)
+  })()
+  mediaUrlCache.set(key, p)
+  p.catch(() => mediaUrlCache.delete(key))
+  return p
+}
+
 export async function downloadNoteFile(noteId: string, fileName: string): Promise<void> {
   const { apiBaseUrl, apiToken, useMock } = loadSettings()
   if (useMock || !apiBaseUrl) throw new Error("演示模式不支持下载，请先配置真实 API")
@@ -904,6 +936,8 @@ export async function unbindWechat(): Promise<void> {
 export interface AuthResult {
   user: { id: string; name: string }
   api_token: string
+  /** 一次性恢复码：仅注册/找回成功时返回一次，服务端只存哈希 */
+  recovery_code?: string | null
 }
 
 const AUTH_TIMEOUT_MS = 30_000
@@ -942,6 +976,26 @@ export function register(baseUrl: string, name: string, password: string): Promi
 
 export function login(baseUrl: string, name: string, password: string): Promise<AuthResult> {
   return authPost(baseUrl, "/api/auth/login", { name, password })
+}
+
+/** 无密码找回：用户名 + 一次性恢复码 → 重置密码，返回新 token + 新恢复码 */
+export function recoverAccount(
+  baseUrl: string,
+  name: string,
+  recoveryCode: string,
+  newPassword: string,
+): Promise<AuthResult> {
+  return authPost(baseUrl, "/api/auth/recover", {
+    name,
+    recovery_code: recoveryCode,
+    new_password: newPassword,
+  })
+}
+
+/** 重新生成恢复码（作废旧码），返回新码明文，仅展示一次 */
+export async function regenerateRecoveryCode(): Promise<string> {
+  const res = await realFetch<{ recovery_code: string }>("/api/auth/recovery-code", { method: "POST" })
+  return res.recovery_code
 }
 
 export interface MeInfo {

@@ -43,6 +43,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { downloadNoteFile, refetchLink, retryMedia } from "@/lib/api"
+import { NoteAudio, NoteImage, isAudioAttachment, isImageAttachment } from "@/components/note-media"
 import { cn, formatTime, parseServerTime, parseDue, dueHasTime } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
 
@@ -357,6 +358,9 @@ export function NoteCard({
   const menuRef = useRef<HTMLDivElement>(null)
 
   const fileMeta = note.raw_type === "file" && note.meta?.file_name ? note.meta : null
+  // 附件原件（R144 P1-1）：取首个匹配类型的附件；遮缩态不渲染、不发媒体请求
+  const imageAtt = note.raw_type === "image" ? note.attachments?.find(isImageAttachment) : undefined
+  const audioAtt = note.raw_type === "voice" ? note.attachments?.find(isAudioAttachment) : undefined
 
   async function downloadFile() {
     if (downloading || !fileMeta?.file_name) return
@@ -895,6 +899,8 @@ export function NoteCard({
                 {expanded ? "收起" : "展开全文"}
               </button>
             )}
+            {imageAtt && <NoteImage noteId={note.id} attachment={imageAtt} alt={note.title || "笔记图片"} />}
+            {audioAtt && <NoteAudio noteId={note.id} attachment={audioAtt} className="mt-2" />}
             {mediaFailed && (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <CircleAlert className="size-3.5 shrink-0" />

@@ -63,6 +63,32 @@ export async function verifyPassword(password: string, stored: string): Promise<
   }
 }
 
+// Recovery code: 16 chars from a 31-char alphabet (no 0/O/1/I/L ambiguity)
+// ≈ 79 bits of entropy, displayed as XXXX-XXXX-XXXX-XXXX. Stored hashed with
+// the same PBKDF2 scheme as passwords; consumed (cleared) on successful use.
+const RECOVERY_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const RECOVERY_CODE_LEN = 16;
+
+export function generateRecoveryCode(): string {
+  // rejection sampling: only accept bytes below the largest multiple of the
+  // alphabet size, so every character is uniformly distributed (no modulo bias)
+  const limit = 256 - (256 % RECOVERY_ALPHABET.length);
+  const chars: string[] = [];
+  while (chars.length < RECOVERY_CODE_LEN) {
+    for (const b of crypto.getRandomValues(new Uint8Array(RECOVERY_CODE_LEN))) {
+      if (b < limit && chars.length < RECOVERY_CODE_LEN) chars.push(RECOVERY_ALPHABET[b % RECOVERY_ALPHABET.length]);
+    }
+  }
+  return `${chars.slice(0, 4).join("")}-${chars.slice(4, 8).join("")}-${chars.slice(8, 12).join("")}-${chars.slice(12, 16).join("")}`;
+}
+
+/** Canonical form for hashing/verifying: uppercase, separators stripped. */
+export function normalizeRecoveryCode(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const s = input.toUpperCase().replace(/[^A-Z2-9]/g, "");
+  return s.length === RECOVERY_CODE_LEN ? s : null;
+}
+
 export function generateToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(24));
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");

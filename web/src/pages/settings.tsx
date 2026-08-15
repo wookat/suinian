@@ -16,6 +16,7 @@ import {
   Upload,
   Bell,
   BellOff,
+  KeyRound,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -36,6 +37,7 @@ import {
   MAX_RESTORE_BYTES,
   renameTag,
   rotateToken,
+  regenerateRecoveryCode,
   testConnection,
   MAX_IMPORT_BYTES,
   type ImportSource,
@@ -52,6 +54,7 @@ import {
   type TestConnectionResult,
 } from "@/lib/api"
 import { detectPushSupport, currentSubscription, enablePush, disablePush } from "@/lib/push"
+import { RecoveryCodeCard } from "@/pages/auth"
 import type { TagCount } from "@/lib/types"
 import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
 import { loadTheme, setTheme, type ThemeMode } from "@/lib/theme"
@@ -674,6 +677,8 @@ export function SettingsPage() {
   const [copied, setCopied] = useState(false)
   const [curlCopied, setCurlCopied] = useState(false)
   const [rotating, setRotating] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
+  const [newRecoveryCode, setNewRecoveryCode] = useState<string | null>(null)
   const [accountMsg, setAccountMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
@@ -824,6 +829,20 @@ export function SettingsPage() {
       setAccountMsg({ ok: false, text: e instanceof Error ? e.message : "轮换失败，请稍后重试" })
     } finally {
       setRotating(false)
+    }
+  }
+
+  async function handleRegenerateRecovery() {
+    if (regenerating) return
+    if (!window.confirm("重新生成后旧恢复码立即作废，新码只显示一次。确定继续？")) return
+    setRegenerating(true)
+    setAccountMsg(null)
+    try {
+      setNewRecoveryCode(await regenerateRecoveryCode())
+    } catch (e) {
+      setAccountMsg({ ok: false, text: e instanceof Error ? e.message : "生成失败，请稍后重试" })
+    } finally {
+      setRegenerating(false)
     }
   }
 
@@ -1051,10 +1070,32 @@ export function SettingsPage() {
               </>
             )}
           </Button>
+          <Button
+            variant="outline"
+            onClick={() => void handleRegenerateRecovery()}
+            disabled={regenerating}
+            className="w-full sm:w-auto"
+          >
+            {regenerating ? (
+              <>
+                <Loader2 className="animate-spin" /> 生成中…
+              </>
+            ) : (
+              <>
+                <KeyRound /> 重新生成恢复码
+              </>
+            )}
+          </Button>
           <Button variant="outline" onClick={handleLogout} className="w-full sm:w-auto">
             <LogOut /> 退出登录
           </Button>
         </div>
+        {newRecoveryCode && (
+          <RecoveryCodeCard code={newRecoveryCode} onDone={() => setNewRecoveryCode(null)} />
+        )}
+        <p className="text-xs text-muted-foreground">
+          恢复码是忘记密码时找回账号的唯一方式，丢失或泄露时可在这里重新生成（旧码同时作废）
+        </p>
         <p className="text-xs text-muted-foreground">
           退出登录仅清除本机登录状态，云端数据不受影响，重新登录即可找回全部笔记
         </p>

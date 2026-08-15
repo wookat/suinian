@@ -1,15 +1,58 @@
 import { useState } from "react"
-import { Loader2, CircleAlert, UserPlus, LogIn, Download, Trash2 } from "lucide-react"
+import { Loader2, CircleAlert, UserPlus, LogIn, Download, Trash2, KeyRound, Copy, Check } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { createNote, login, register } from "@/lib/api"
+import { createNote, login, recoverAccount, register } from "@/lib/api"
 import { clearDemoNotes, userDemoNotes } from "@/lib/mock"
 import { defaultApiBase, loadSettings, saveSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import type { Note } from "@/lib/types"
 
-type Mode = "register" | "login"
+type Mode = "register" | "login" | "recover"
+
+/**
+ * 一次性恢复码展示（R144 P1-2）：服务端只存哈希，明文仅此处出现一次，
+ * 必须让用户主动确认已保存后才继续。
+ */
+export function RecoveryCodeCard({ code, onDone }: { code: string; onDone: () => void }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <Card className="space-y-4 p-4">
+      <h2 className="flex items-center gap-2 text-base font-semibold">
+        <KeyRound className="size-4" /> 请保存你的恢复码
+      </h2>
+      <p className="text-sm text-muted-foreground">
+        忘记密码时，这个恢复码是找回账号的唯一方式（产品不收集邮箱/手机号）。
+        它只显示这一次，服务端不保存明文，丢失后无法找回——请抄下来或存进密码管理器。
+      </p>
+      <div className="flex items-center gap-2 rounded-lg border bg-muted/40 p-3">
+        <code className="min-w-0 flex-1 select-all break-all font-mono text-sm font-semibold tracking-wide">
+          {code}
+        </code>
+        <button
+          onClick={() => {
+            void navigator.clipboard
+              .writeText(code)
+              .then(() => {
+                setCopied(true)
+                setTimeout(() => setCopied(false), 1500)
+              })
+              .catch(() => {})
+          }}
+          aria-label="复制恢复码"
+          title="复制恢复码"
+          className="shrink-0 rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+        </button>
+      </div>
+      <Button onClick={onDone} className="w-full">
+        我已安全保存，继续
+      </Button>
+    </Card>
+  )
+}
 
 /**
  * 登录/注册成功后的演示数据处置（D-2/D-3）：有用户自己记的演示笔记则
@@ -100,6 +143,19 @@ export function AuthPage() {
   const [error, setError] = useState<string | null>(null)
   const [mismatch, setMismatch] = useState(false)
   const [demoNotes, setDemoNotes] = useState<Note[] | null>(null)
+  const [recoveryInput, setRecoveryInput] = useState("")
+  const [recoveryCode, setRecoveryCode] = useState<string | null>(null)
+
+  function continueAfterAuth() {
+    const leftover = userDemoNotes()
+    if (leftover.length > 0) {
+      setDemoNotes(leftover)
+    } else {
+      // 只剩种子数据副本：静默清理，不打扰（D-3）
+      clearDemoNotes()
+      window.location.hash = "#/"
+    }
+  }
 
   async function submit() {
     if (busy) return
@@ -109,8 +165,9 @@ export function AuthPage() {
     const base = apiBaseUrl.trim()
     if (!base) return setError("请填写 API 地址")
     if (name.trim().length < 2) return setError("用户名至少 2 个字符")
-    if (password.length < 8) return setError("密码至少 8 个字符")
-    if (mode === "register" && password !== password2) {
+    if (mode === "recover" && recoveryInput.trim().length < 16) return setError("请填写注册时保存的恢复码")
+    if (password.length < 8) return setError(mode === "recover" ? "新密码至少 8 个字符" : "密码至少 8 个字符")
+    if (mode !== "login" && password !== password2) {
       // 只用确认框下的内联提示，不另发全局 error，避免同屏重复与修正后残留旧错误
       setMismatch(true)
       return
@@ -121,7 +178,9 @@ export function AuthPage() {
       const res =
         mode === "register"
           ? await register(base, name.trim(), password)
-          : await login(base, name.trim(), password)
+          : mode === "recover"
+            ? await recoverAccount(base, name.trim(), recoveryInput.trim(), password)
+            : await login(base, name.trim(), password)
       saveSettings({
         ...loadSettings(),
         apiBaseUrl: base,
@@ -131,13 +190,11 @@ export function AuthPage() {
         // fresh registrations get the one-time feature tour on first timeline entry
         tourSeen: mode !== "register",
       })
-      const leftover = userDemoNotes()
-      if (leftover.length > 0) {
-        setDemoNotes(leftover)
+      if (res.recovery_code) {
+        // 注册/找回成功：先展示一次性恢复码，用户确认保存后再进入应用
+        setRecoveryCode(res.recovery_code)
       } else {
-        // 只剩种子数据副本：静默清理，不打扰（D-3）
-        clearDemoNotes()
-        window.location.hash = "#/"
+        continueAfterAuth()
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "请求失败，请稍后重试"
@@ -149,6 +206,19 @@ export function AuthPage() {
     }
   }
 
+  if (recoveryCode)
+    return (
+      <div className="mx-auto max-w-sm space-y-4">
+        <RecoveryCodeCard
+          code={recoveryCode}
+          onDone={() => {
+            setRecoveryCode(null)
+            continueAfterAuth()
+          }}
+        />
+      </div>
+    )
+
   if (demoNotes) return <DemoMigratePrompt notes={demoNotes} />
 
   return (
@@ -159,6 +229,7 @@ export function AuthPage() {
             [
               { value: "register", label: "注册新账号", icon: UserPlus },
               { value: "login", label: "登录", icon: LogIn },
+              { value: "recover", label: "找回", icon: KeyRound },
             ] as const
           ).map((opt) => {
             const Icon = opt.icon
@@ -219,14 +290,36 @@ export function AuthPage() {
           />
         </div>
 
+        {mode === "recover" && (
+          <div className="space-y-1.5">
+            <label htmlFor="auth-recovery" className="text-sm font-medium">
+              恢复码
+            </label>
+            <Input
+              id="auth-recovery"
+              type="text"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="characters"
+              spellCheck={false}
+              placeholder="XXXX-XXXX-XXXX-XXXX（注册时保存的）"
+              value={recoveryInput}
+              onChange={(e) => setRecoveryInput(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              大小写不限，带不带连字符都可以；找回成功后旧恢复码作废，会发一个新的
+            </p>
+          </div>
+        )}
+
         <div className="space-y-1.5">
           <label htmlFor="auth-password" className="text-sm font-medium">
-            密码
+            {mode === "recover" ? "新密码" : "密码"}
           </label>
           <Input
             id="auth-password"
             type="password"
-            autoComplete={mode === "register" ? "new-password" : "current-password"}
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
             placeholder="至少 8 个字符"
             aria-invalid={mismatch || undefined}
             className={cn(mismatch && "border-destructive focus-visible:ring-destructive/40")}
@@ -241,10 +334,10 @@ export function AuthPage() {
           />
         </div>
 
-        {mode === "register" && (
+        {mode !== "login" && (
           <div className="space-y-1.5">
             <label htmlFor="auth-password2" className="text-sm font-medium">
-              确认密码
+              {mode === "recover" ? "确认新密码" : "确认密码"}
             </label>
             <Input
               id="auth-password2"
@@ -291,15 +384,32 @@ export function AuthPage() {
             </>
           ) : mode === "register" ? (
             "注册并开始使用"
+          ) : mode === "recover" ? (
+            "重置密码并登录"
           ) : (
             "登录"
           )}
         </Button>
 
+        {mode === "login" && (
+          <button
+            onClick={() => {
+              setMode("recover")
+              setError(null)
+              setMismatch(false)
+            }}
+            className="text-xs font-medium text-primary hover:underline"
+          >
+            忘记密码？用恢复码找回
+          </button>
+        )}
+
         <p className="text-xs leading-relaxed text-muted-foreground">
           {mode === "register"
-            ? "注册成功后会自动获得 API token 并写入本机配置，可在设置页查看/复制/轮换。"
-            : "登录成功后会取回你的 API token 并写入本机配置。老账号如未设置过密码，请在设置页直接填 token。"}
+            ? "注册成功后会获得一次性恢复码（忘记密码时的唯一找回方式，请务必保存），并自动获得 API token 写入本机配置，可在设置页查看/复制/轮换。"
+            : mode === "recover"
+              ? "验证通过后会重置密码并直接登录；旧 token 同时作废，其他设备需重新登录。"
+              : "登录成功后会取回你的 API token 并写入本机配置。老账号如未设置过密码，请在设置页直接填 token。"}
         </p>
       </Card>
     </div>

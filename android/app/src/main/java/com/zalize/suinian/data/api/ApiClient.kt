@@ -22,6 +22,7 @@ import com.zalize.suinian.data.StatsResponse
 import com.zalize.suinian.data.TrashResponse
 import com.zalize.suinian.data.RestoreStats
 import com.zalize.suinian.data.TodosTodayResponse
+import com.zalize.suinian.data.RecoveryCodeResponse
 import com.zalize.suinian.data.RotateTokenResponse
 import com.zalize.suinian.data.TagCount
 import com.zalize.suinian.data.TagsPage
@@ -359,6 +360,33 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
     }
 
+    /** GET /api/notes/:id/file?inline=1&att=：鉴权取附件原件字节（图片/语音内联展示用） */
+    suspend fun fetchNoteMedia(id: String, attachmentId: String): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
+        val url = "$baseUrl/api/notes/$id/file".toHttpUrl().newBuilder()
+            .addQueryParameter("inline", "1")
+            .addQueryParameter("att", attachmentId)
+            .build()
+        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val req = Request.Builder().url(url).header("Authorization", "Bearer $token").get().build()
+        val resp = try {
+            client60.newCall(req).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use {
+            if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
+            val bytes = it.body?.bytes() ?: throw ApiException("加载失败：附件内容为空")
+            val mime = it.header("Content-Type") ?: "application/octet-stream"
+            bytes to mime
+        }
+    }
+
+    /** POST /api/auth/recovery-code：重新生成恢复码（旧码作废，新码只显示一次） */
+    suspend fun regenerateRecoveryCode(): String = withContext(Dispatchers.IO) {
+        val body = "{}".toRequestBody(jsonMedia)
+        execute(request("/api/auth/recovery-code").post(body).build(), RecoveryCodeResponse.serializer()).recoveryCode
+    }
+
     /** POST /api/notes/restore：撤销软删（单次最多 1000 条，调用方已分批） */
     suspend fun restoreNotes(ids: List<String>): RestoreResponse = withContext(Dispatchers.IO) {
         val body = buildJsonObject {
@@ -604,6 +632,42 @@ class ApiClient(private val baseUrl: String, private val token: String) {
 
         suspend fun login(baseUrl: String, name: String, password: String): AuthResponse =
             authCall(baseUrl, "/api/auth/login", name, password)
+
+        /** 公开接口：POST /api/auth/recover 用恢复码重置密码（成功后 token 轮换、下发新恢复码） */
+        suspend fun recover(baseUrl: String, name: String, recoveryCode: String, newPassword: String): AuthResponse =
+            withContext(Dispatchers.IO) {
+                val body = buildJsonObject {
+                    put("name", name)
+                    put("recovery_code", recoveryCode)
+                    put("new_password", newPassword)
+                }.toString().toRequestBody(authMedia)
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(20, TimeUnit.SECONDS)
+                    .build()
+                val req = Request.Builder().url("${baseUrl.trimEnd('/')}/api/auth/recover").post(body).build()
+                val resp = try {
+                    client.newCall(req).execute()
+                } catch (e: IOException) {
+                    throw ApiException("网络连接失败，请检查网络后重试", e)
+                }
+                resp.use {
+                    val text = it.body?.string().orEmpty()
+                    if (!it.isSuccessful) {
+                        val msg = try {
+                            authJson.parseToJsonElement(text).jsonObject["error"]?.jsonPrimitive?.content
+                        } catch (_: Exception) {
+                            null
+                        }
+                        throw ApiException(msg ?: "请求失败（${it.code}），请稍后重试")
+                    }
+                    try {
+                        authJson.decodeFromString(AuthResponse.serializer(), text)
+                    } catch (e: Exception) {
+                        throw ApiException("服务器返回了无法识别的数据，请检查 API Base URL 是否正确", e)
+                    }
+                }
+            }
     }
 
     /** 后端可能返回 note 对象本身，或 {note: {...}}；两种都兼容 */

@@ -37,6 +37,8 @@ import {
   generateToken,
   validateName,
   validatePassword,
+  generateRecoveryCode,
+  normalizeRecoveryCode,
   registrationEnabled,
   checkRateLimit,
   sweepAuthRateLimits,
@@ -268,7 +270,56 @@ app.post("/api/auth/register", async (c) => {
     return c.json({ error: "注册失败（数据库写入出错），请重试", code: "DB_WRITE_FAILED" }, 500);
   }
   console.log(`register: created ${id} in ${Date.now() - started}ms`);
-  return c.json({ user: { id, name }, api_token: token }, 201);
+  // one-time recovery code (R144 P1-2): shown to the user exactly once here;
+  // only its hash is stored. Failure to set it never fails registration.
+  let recoveryCode: string | null = null;
+  try {
+    recoveryCode = generateRecoveryCode();
+    const rh = await hashPassword(normalizeRecoveryCode(recoveryCode)!);
+    await c.env.DB.prepare("UPDATE users SET recovery_hash = ? WHERE id = ?").bind(rh, id).run();
+  } catch (e) {
+    console.error("register: recovery code setup failed", e);
+    recoveryCode = null;
+  }
+  return c.json({ user: { id, name }, api_token: token, recovery_code: recoveryCode }, 201);
+});
+
+// ---- POST /api/auth/recover (public) ----
+// Passwordless account recovery: name + one-time recovery code -> set a new
+// password. On success the code is consumed, the API token is rotated (a
+// leaked token dies with the old password) and a fresh code is returned.
+app.post("/api/auth/recover", async (c) => {
+  const body = await c.req
+    .json<{ name?: unknown; recovery_code?: unknown; new_password?: unknown }>()
+    .catch(() => null);
+  const name = validateName(body?.name);
+  if (!(await checkRateLimit(c.env.DB, "recover", name ? [clientIp(c.req.raw), `acct:${name}`] : [clientIp(c.req.raw)]))) {
+    return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
+  }
+  const code = normalizeRecoveryCode(body?.recovery_code);
+  const newPassword = validatePassword(body?.new_password);
+  if (!newPassword) return c.json({ error: "新密码需 8-128 个字符" }, 400);
+  // uniform 401 for unknown name / no code set / wrong code: no account probing
+  if (!name || !code) return c.json({ error: "用户名或恢复码错误" }, 401);
+  const user = await c.env.DB.prepare("SELECT id, name, recovery_hash FROM users WHERE name = ?")
+    .bind(name)
+    .first<{ id: string; name: string; recovery_hash: string | null }>();
+  if (!user?.recovery_hash || !(await verifyPassword(code, user.recovery_hash))) {
+    return c.json({ error: "用户名或恢复码错误" }, 401);
+  }
+  const newToken = generateToken();
+  const nextCode = generateRecoveryCode();
+  const [passwordHash, nextHash] = await Promise.all([
+    hashPassword(newPassword),
+    hashPassword(normalizeRecoveryCode(nextCode)!),
+  ]);
+  // one-time consumption: the used code's hash is replaced atomically with the
+  // new one, so a captured code can never be replayed
+  await c.env.DB.prepare("UPDATE users SET password_hash = ?, api_token = ?, recovery_hash = ? WHERE id = ?")
+    .bind(passwordHash, newToken, nextHash, user.id)
+    .run();
+  console.log(`recover: password reset for ${user.id}`);
+  return c.json({ user: { id: user.id, name: user.name }, api_token: newToken, recovery_code: nextCode });
 });
 
 app.post("/api/auth/login", async (c) => {
@@ -853,6 +904,20 @@ app.post("/api/auth/rotate-token", async (c) => {
   return c.json({ api_token: token });
 });
 
+// ---- POST /api/auth/recovery-code ----
+// (Re)generate the account's recovery code; invalidates any previous code.
+// Rate-limited so a hijacked session can't grind PBKDF2 hashing for free.
+app.post("/api/auth/recovery-code", async (c) => {
+  const userId = c.get("userId");
+  if (!(await checkRateLimit(c.env.DB, "recovery_code", [userId]))) {
+    return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
+  }
+  const code = generateRecoveryCode();
+  const hash = await hashPassword(normalizeRecoveryCode(code)!);
+  await c.env.DB.prepare("UPDATE users SET recovery_hash = ? WHERE id = ?").bind(hash, userId).run();
+  return c.json({ recovery_code: code });
+});
+
 // self-serve account deletion: cascades all user data (notes/threads/reports/media)
 app.delete("/api/auth/me", async (c) => {
   const userId = c.get("userId");
@@ -908,6 +973,36 @@ async function decryptNoteRow(env: Env, n: NoteRow): Promise<NoteRow> {
 
 async function noteToJsonDecrypted(env: Env, n: NoteRow) {
   return noteToJson(await decryptNoteRow(env, n));
+}
+
+/**
+ * Batch-load attachment metadata for a page of note JSONs and merge it in as
+ * `attachments` (R144 P1-1), so clients can render originals (image/audio/file)
+ * through the authenticated /api/notes/:id/file proxy — no public R2 URLs.
+ */
+async function withAttachments<T extends { id: string }>(env: Env, notes: T[]): Promise<(T & { attachments?: { id: string; name: string; mime: string | null; size: number | null }[] })[]> {
+  if (notes.length === 0) return notes;
+  try {
+    const ph = notes.map(() => "?").join(",");
+    const { results } = await env.DB.prepare(
+      `SELECT id, note_id, r2_key, mime, size FROM attachments WHERE note_id IN (${ph}) ORDER BY rowid ASC`
+    )
+      .bind(...notes.map((n) => n.id))
+      .all<{ id: string; note_id: string; r2_key: string; mime: string | null; size: number | null }>();
+    if (!results || results.length === 0) return notes;
+    const byNote = new Map<string, { id: string; name: string; mime: string | null; size: number | null }[]>();
+    for (const a of results) {
+      const base = a.r2_key.split("/").pop() || "file";
+      const name = base.replace(/^\d{10,}-/, "");
+      const list = byNote.get(a.note_id) ?? [];
+      list.push({ id: a.id, name, mime: a.mime, size: a.size });
+      byNote.set(a.note_id, list);
+    }
+    return notes.map((n) => (byNote.has(n.id) ? { ...n, attachments: byNote.get(n.id) } : n));
+  } catch (e) {
+    console.error("withAttachments: failed", e);
+    return notes;
+  }
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -1258,12 +1353,15 @@ app.get("/api/notes", async (c) => {
       (semScore.get(n.id) ?? 0) +
       (kwIds.has(n.id) ? 0.75 : partialIds.has(n.id) ? 0.75 * (matchedTermCount(n, terms) / terms.length) : 0);
     merged.sort((a, b) => relevance(b) - relevance(a));
-    const notes = await Promise.all(
-      merged.map(async (n) => ({
-        ...(await noteToJsonDecrypted(c.env, n)),
-        match:
-          kwIds.has(n.id) || partialIds.has(n.id) ? (semScore.has(n.id) ? "both" : "keyword") : "semantic",
-      }))
+    const notes = await withAttachments(
+      c.env,
+      await Promise.all(
+        merged.map(async (n) => ({
+          ...(await noteToJsonDecrypted(c.env, n)),
+          match:
+            kwIds.has(n.id) || partialIds.has(n.id) ? (semScore.has(n.id) ? "both" : "keyword") : "semantic",
+        }))
+      )
     );
     return c.json({ notes, next_cursor: next });
   }
@@ -1281,7 +1379,7 @@ app.get("/api/notes", async (c) => {
     );
   }
 
-  const notes = await Promise.all(page.map((n) => noteToJsonDecrypted(c.env, n)));
+  const notes = await withAttachments(c.env, await Promise.all(page.map((n) => noteToJsonDecrypted(c.env, n))));
   return c.json({ notes, next_cursor: next });
 });
 
@@ -1878,7 +1976,8 @@ app.get("/api/notes/random", async (c) => {
     .bind(c.get("userId"))
     .first<NoteRow>();
   if (!note) return c.json({ error: "暂无可回看的笔记" }, 404);
-  return c.json({ note: noteToJson(note) });
+  const [withAtt] = await withAttachments(c.env, [noteToJson(note)]);
+  return c.json({ note: withAtt });
 });
 
 app.get("/api/tags", async (c) => {
@@ -2050,18 +2149,30 @@ app.get("/api/notes/:id/file", async (c) => {
     .first<{ id: string; meta: string | null }>();
   if (!note) return c.json({ error: "not found" }, 404);
   if (!c.env.MEDIA) return c.json({ error: "media storage not configured" }, 404);
-  const att = await c.env.DB.prepare("SELECT r2_key, mime FROM attachments WHERE note_id = ? ORDER BY rowid DESC LIMIT 1")
-    .bind(id)
-    .first<{ r2_key: string; mime: string | null }>();
+  // ?att=<attachment id> selects a specific attachment (imported notes can
+  // carry several); default stays the newest one. Ownership is enforced via
+  // the note_id join above — an att id from another user's note 404s.
+  const attId = c.req.query("att");
+  const att = attId
+    ? await c.env.DB.prepare("SELECT r2_key, mime FROM attachments WHERE id = ? AND note_id = ?")
+        .bind(attId, id)
+        .first<{ r2_key: string; mime: string | null }>()
+    : await c.env.DB.prepare("SELECT r2_key, mime FROM attachments WHERE note_id = ? ORDER BY rowid DESC LIMIT 1")
+        .bind(id)
+        .first<{ r2_key: string; mime: string | null }>();
   if (!att) return c.json({ error: "no attachment" }, 404);
   const obj = await c.env.MEDIA.get(att.r2_key);
   if (!obj) return c.json({ error: "attachment missing" }, 404);
   const fileName = parseNoteMeta(note.meta)?.file_name || att.r2_key.split("/").pop() || "file";
+  const mime = att.mime || obj.httpMetadata?.contentType || "application/octet-stream";
+  // inline rendering (R144 P1-1) only for safe media types the clients embed
+  // (<img>/<audio>); everything else keeps forced download semantics
+  const inline = c.req.query("inline") === "1" && /^(image|audio|video)\//.test(mime);
   return new Response(obj.body, {
     headers: {
-      "Content-Type": att.mime || obj.httpMetadata?.contentType || "application/octet-stream",
+      "Content-Type": mime,
       "Content-Length": String(obj.size),
-      "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(fileName)}`,
       "Cache-Control": "private, no-store",
     },
   });
@@ -3371,6 +3482,11 @@ app.post("/api/import", async (c) => {
     if (text.length > MAX_IMPORT_BYTES) return c.json({ error: "内容过大：最大支持 20MB" }, 413);
   }
   if (!IMPORT_SOURCES.includes(source as ImportSource)) {
+    // R143 P2-4: a source passed as a query parameter is silently ignored and
+    // used to produce a misleading "invalid source" error — call it out
+    if (!source && IMPORT_SOURCES.includes((c.req.query("source") ?? "") as ImportSource)) {
+      return c.json({ error: "source 需放在表单字段或 JSON body 中，不支持 query 参数" }, 400);
+    }
     return c.json({ error: "source 需为 cubox / flomo / markdown / text / notion / obsidian / apple-notes 之一" }, 400);
   }
 

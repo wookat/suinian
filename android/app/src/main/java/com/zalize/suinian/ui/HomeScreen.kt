@@ -779,6 +779,7 @@ fun HomeScreen(
                                 selected = note.id in ui.selectedIds,
                                 onSelectToggle = { vm.toggleSelect(it) },
                                 onLongPress = { vm.enterSelection(it) },
+                                fetchMedia = vm::fetchMedia,
                             )
                         }
                         if (ui.loadingMore) {

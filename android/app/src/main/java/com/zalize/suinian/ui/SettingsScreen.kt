@@ -41,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import android.content.Intent
@@ -67,6 +68,10 @@ fun SettingsScreen(
     var token by remember { mutableStateOf(settings.token) }
     var initialized by remember { mutableStateOf(false) }
     var confirmRotate by remember { mutableStateOf(false) }
+    var confirmRegenRecovery by remember { mutableStateOf(false) }
+    var regeneratingRecovery by remember { mutableStateOf(false) }
+    var newRecoveryCode by remember { mutableStateOf<String?>(null) }
+    var recoveryMessage by remember { mutableStateOf<String?>(null) }
     var confirmLogout by remember { mutableStateOf(false) }
     var rotating by remember { mutableStateOf(false) }
     var rotateMessage by remember { mutableStateOf<String?>(null) }
@@ -150,6 +155,51 @@ fun SettingsScreen(
                 }) { Text("轮换") }
             },
             dismissButton = { TextButton(onClick = { confirmRotate = false }) { Text("取消") } },
+        )
+    }
+
+    if (confirmRegenRecovery) {
+        AlertDialog(
+            onDismissRequest = { confirmRegenRecovery = false },
+            title = { Text("重新生成恢复码？") },
+            text = { Text("旧恢复码立即作废，新码只显示一次，请准备好安全保存") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRegenRecovery = false
+                    regeneratingRecovery = true
+                    recoveryMessage = null
+                    scope.launch {
+                        try {
+                            newRecoveryCode = vm.regenerateRecoveryCode()
+                        } catch (e: Exception) {
+                            recoveryMessage = e.message ?: "生成失败，请稍后重试"
+                        } finally {
+                            regeneratingRecovery = false
+                        }
+                    }
+                }) { Text("生成") }
+            },
+            dismissButton = { TextButton(onClick = { confirmRegenRecovery = false }) { Text("取消") } },
+        )
+    }
+
+    newRecoveryCode?.let { code ->
+        AlertDialog(
+            onDismissRequest = { /* 必须点确认，避免误触丢失唯一一次展示的恢复码 */ },
+            title = { Text("请保存新恢复码") },
+            text = {
+                Column {
+                    Text(
+                        "忘记密码时，恢复码是找回账号的唯一方式。它只显示这一次，服务端不存明文，丢失后无法找回——请抄下来或存进密码管理器。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(code, style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { newRecoveryCode = null }) { Text("我已安全保存") }
+            },
         )
     }
 
@@ -282,6 +332,23 @@ fun SettingsScreen(
             rotateMessage?.let {
                 Spacer(Modifier.height(4.dp))
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { confirmRegenRecovery = true },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !regeneratingRecovery && !settings.mockMode && settings.token.isNotBlank(),
+            ) { Text(if (regeneratingRecovery) "生成中…" else "重新生成恢复码") }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "恢复码是忘记密码时找回账号的唯一方式，丢失或泄露时可在此重新生成（旧码同时作废）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            recoveryMessage?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
 
             Spacer(Modifier.height(24.dp))

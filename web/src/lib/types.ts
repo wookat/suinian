@@ -25,6 +25,14 @@ export interface NoteMeta {
   imported_at?: string
 }
 
+/** 附件元数据（R144 P1-1）：仅元信息，取件走鉴权 API，不含任何直链 */
+export interface NoteAttachment {
+  id: string
+  name: string
+  mime: string | null
+  size: number | null
+}
+
 export interface Note {
   id: string
   user_id: string
@@ -46,6 +54,7 @@ export interface Note {
   amount?: number | null
   currency?: string | null
   meta?: NoteMeta | null
+  attachments?: NoteAttachment[] | null
   /** Search recall type when returned from a text search (semantic = no keyword hit). */
   match?: "keyword" | "semantic" | "both"
   created_at: string
