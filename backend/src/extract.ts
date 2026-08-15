@@ -194,26 +194,23 @@ function mergeTags(existing: string[], suggested: string[], max = 5): string[] {
 export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
   const note = await env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(noteId).first<NoteRow>();
   if (!note?.url) return;
+  // 敏感笔记不做链接富化：link_excerpt / url_summary 都是派生明文（R126 P1-1）
+  if (note.is_sensitive) return;
   const extract = await fetchArticle(note.url);
-  const meta: NoteMeta = (() => {
-    try {
-      return note.meta ? (JSON.parse(note.meta) as NoteMeta) : {};
-    } catch {
-      return {};
-    }
-  })();
-  meta.link_fetched_at = new Date().toISOString();
+  // 富化只 json_patch 自己的 link_* 派生键：整包写回会把慢网络/AI 期间的
+  // 用户 meta 编辑静默回滚（与分拣写后写竞态同类）
+  const meta: Partial<NoteMeta> = { link_fetched_at: new Date().toISOString() };
 
   if (!extract || !extract.excerpt) {
     // title-only fallback: keep the link + its domain and record a readable status;
     // when no title could be fetched at all, fall back to domain + readable path
     // so the card never shows just a bare URL
     meta.link_status = extract ? "no_content" : "fetch_failed";
-    meta.link_site = extract?.site ?? meta.link_site ?? hostnameOf(note.url) ?? undefined;
+    meta.link_site = extract?.site ?? hostnameOf(note.url) ?? undefined;
     const title = extract?.title ?? null;
     const fallback = note.url_title ? null : (title ?? fallbackTitleFromUrl(note.url));
     await env.DB.prepare(
-      "UPDATE notes SET url_title = COALESCE(?, url_title), meta = ?, updated_at = datetime('now') WHERE id = ?"
+      "UPDATE notes SET url_title = COALESCE(?, url_title), meta = json_patch(coalesce(meta, '{}'), ?), updated_at = datetime('now') WHERE id = ? AND is_sensitive = 0"
     )
       .bind(fallback, JSON.stringify(meta), noteId)
       .run();
@@ -233,7 +230,7 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
   const summary = ai?.summary ?? extract.description ?? null;
 
   await env.DB.prepare(
-    "UPDATE notes SET url_title = COALESCE(?, url_title), url_summary = COALESCE(?, url_summary), meta = ?, updated_at = datetime('now') WHERE id = ?"
+    "UPDATE notes SET url_title = COALESCE(?, url_title), url_summary = COALESCE(?, url_summary), meta = json_patch(coalesce(meta, '{}'), ?), updated_at = datetime('now') WHERE id = ? AND is_sensitive = 0"
   )
     .bind(extract.title && !note.url_title ? extract.title : null, summary ?? null, JSON.stringify(meta), noteId)
     .run();

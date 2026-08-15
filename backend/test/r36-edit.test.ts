@@ -88,7 +88,7 @@ function fakeDb(notes: Row[]) {
               targets = notes.filter((n) => n.user_id === whereBinds[0] && ids.includes(n.id as string));
             } else {
               targets = notes.filter(
-                (n) => n.id === whereBinds[0] && (whereBinds.length < 2 || n.user_id === whereBinds[1])
+                (n) => n.id === whereBinds[0] && (!wherePart.includes("user_id = ?") || n.user_id === whereBinds[1])
               );
             }
             if (wherePart.includes("updated_at = ?"))
@@ -258,7 +258,7 @@ describe("applyTriage respects manual_override", () => {
         meta: JSON.stringify({ manual_override: { category: true, tags: true } }),
       }),
     ];
-    await applyTriage(makeEnv(notes), "n1", triage, "x");
+    await applyTriage(makeEnv(notes), "n1", triage, "note n1");
     expect(notes[0].category).toBe("todo");
     expect(notes[0].tags).toBe('["手动"]');
     expect(notes[0].title).toBe("t");
@@ -266,7 +266,7 @@ describe("applyTriage respects manual_override", () => {
 
   it("applies category/tags without override", async () => {
     const notes = [baseNote("n1", { category: null })];
-    await applyTriage(makeEnv(notes), "n1", triage, "x");
+    await applyTriage(makeEnv(notes), "n1", triage, "note n1");
     expect(notes[0].category).toBe("collect");
     expect(notes[0].tags).toBe('["ai-tag"]');
   });

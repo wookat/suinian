@@ -6,7 +6,7 @@
 // raw_transcript 洗净）内嵌在这里，业务代码只能带明文进来，绕不开口径。
 // 架构级单测 test/write-path-guard.test.ts 静态断言其余 src 文件不含此类 SQL。
 import type { NoteMeta, TriageResult } from "./types";
-import { sensitiveIngestGate, type GatedNoteFields } from "./ingest";
+import { sensitiveIngestGate, scrubDerivedMeta, DERIVED_PLAINTEXT_META_KEYS, type GatedNoteFields } from "./ingest";
 import { sanitizeSensitiveTags } from "./triage";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 
@@ -87,10 +87,8 @@ export async function prepareNoteInsert(
   const storedSensitive =
     opts.markSensitive === "onlyEncrypted" ? gated.is_sensitive && gated.content_enc !== null : gated.is_sensitive;
   let meta: NoteMeta | null = (typeof f.meta === "function" ? f.meta(gated) : f.meta) ?? null;
-  if (storedSensitive && meta?.raw_transcript) {
-    meta = { ...meta };
-    delete meta.raw_transcript;
-  }
+  // 敏感落库：派生明文 meta（转写/图片描述/文件摘录/链接摘录）统一洗净
+  if (storedSensitive) meta = scrubDerivedMeta(meta);
   if (gated.needs_retriage) meta = { ...(meta ?? {}), needs_retriage: true };
   const stmt = db
     .prepare(
@@ -107,9 +105,10 @@ export async function prepareNoteInsert(
       f.raw_type,
       gated.content,
       f.url ?? null,
-      f.url_title ?? null,
-      f.url_summary ?? null,
-      f.url_titles ?? null,
+      // 链接派生明文（标题/AI 摘要）与 meta 派生字段同口径：敏感行不落明文
+      storedSensitive ? null : (f.url_title ?? null),
+      storedSensitive ? null : (f.url_summary ?? null),
+      storedSensitive ? null : (f.url_titles ?? null),
       f.category ?? null,
       JSON.stringify(gated.tags),
       storedSensitive ? gated.title : (f.title ?? gated.title),
@@ -238,21 +237,27 @@ export async function applyNotePatch(
     binds.push(JSON.stringify(sanitizeSensitiveTags(existingTags())));
   }
 
-  // 敏感目标态：meta 里的派生明文（语音原始转写）一并洗净；疑似命中记
-  // needs_retriage 交 cron 复判
+  // 敏感目标态：meta 里的派生明文（转写/图片描述/文件摘录/链接摘录）一并洗净；
+  // 疑似命中记 needs_retriage 交 cron 复判
   if (sensitive || needsRetriage) {
     const base = meta ?? parseNoteMeta(existing.meta) ?? {};
     let m: NoteMeta = base;
-    if (sensitive && m.raw_transcript) {
-      m = { ...m };
-      delete m.raw_transcript;
-      metaChanged = true;
+    if (sensitive) {
+      const scrubbed = scrubDerivedMeta(m);
+      if (scrubbed !== m) {
+        m = scrubbed ?? {};
+        metaChanged = true;
+      }
     }
     if (needsRetriage && !m.needs_retriage) {
       m = { ...m, needs_retriage: true };
       metaChanged = true;
     }
     meta = m;
+  }
+  // 转敏感时链接派生明文列一并清空（url_title/url_summary 可能含正文摘要）
+  if (sensitive && !existing.is_sensitive) {
+    sets.push("url_title = NULL", "url_summary = NULL", "url_titles = NULL");
   }
   if (metaChanged && meta) {
     sets.push("meta = ?");
@@ -282,8 +287,7 @@ export async function replaceNoteContent(
 ): Promise<{ storedContent: string; contentEnc: string | null; sensitive: boolean }> {
   const gated = await sensitiveIngestGate(env, { content, title: null, tags: [], is_sensitive: false }, { rejudge: true });
   const sensitive = gated.is_sensitive && gated.content_enc !== null;
-  const newMeta: NoteMeta = { ...meta };
-  if (sensitive && newMeta.raw_transcript) delete newMeta.raw_transcript;
+  const newMeta: NoteMeta = { ...(sensitive ? (scrubDerivedMeta(meta) ?? {}) : meta) };
   if (gated.needs_retriage) newMeta.needs_retriage = true;
   await db
     .prepare(
@@ -296,8 +300,13 @@ export async function replaceNoteContent(
 
 /**
  * 模型分拣结果落库（速记异步分拣 / cron 复判共用）。敏感判定为真时按统一口径
- * 加密内容、title 置空、tags 严格过滤、raw_transcript 洗净；判非敏感时恢复
+ * 加密内容、title 置空、tags 严格过滤、派生明文 meta 洗净；判非敏感时恢复
  * fail-closed 预检加密的明文。用户手动改过的字段（manual_override）不覆盖。
+ *
+ * 并发模型（R126 P0，落实 R125 D2）：分拣是基于分拣启动时快照的异步回写，
+ * 用户可能在窗口期内已编辑笔记。回写前比对当前库内明文与分拣快照，并以
+ * updated_at 做 CAS 条件更新：内容已变 / CAS 失败 → 不覆盖任何字段，只标
+ * needs_retriage 交 cron 用新内容重新分拣。用户编辑永远赢。
  */
 export async function applyTriage(
   env: { DB: D1Database; SUINIAN_ENC_KEY?: string },
@@ -307,10 +316,25 @@ export async function applyTriage(
 ): Promise<void> {
   // imported notes carry their original tags in meta.import_tags: keep them
   // first and union in the AI-suggested ones
-  const row = await env.DB.prepare("SELECT meta, todo_due FROM notes WHERE id = ?")
+  const row = await env.DB.prepare(
+    "SELECT meta, todo_due, content, content_enc, updated_at FROM notes WHERE id = ?"
+  )
     .bind(noteId)
-    .first<{ meta: string | null; todo_due: string | null }>();
-  const meta = parseNoteMeta(row?.meta ?? null);
+    .first<{ meta: string | null; todo_due: string | null; content: string; content_enc: string | null; updated_at: string }>();
+  if (!row) return;
+  // 库内当前明文（预检加密的 pending 笔记存的是密文）与分拣快照比对
+  let current = row.content;
+  if (row.content_enc && env.SUINIAN_ENC_KEY) {
+    const plain = await decryptContent(env.SUINIAN_ENC_KEY, row.content_enc);
+    if (plain !== null) current = plain;
+  }
+  if (current !== content) {
+    // 用户（或其它管道）已改过内容：这份分拣结果对应旧快照，丢弃并交
+    // cron 用新内容重分拣（不碰 updated_at，不干扰请求侧 CAS）
+    await markNeedsRetriage(env.DB, noteId);
+    return;
+  }
+  const meta = parseNoteMeta(row.meta);
   const override = meta?.manual_override;
   const importTags = meta?.import_tags;
   const newMeta: NoteMeta = { ...(meta ?? {}) };
@@ -326,10 +350,14 @@ export async function applyTriage(
   // AI title 可能把秘密值原样带出（如「todo密码是xxx」），title 一律置空，
   // tags 走严格过滤只留纯主题词
   const tags = triage.is_sensitive ? sanitizeSensitiveTags(mergedTags) : mergedTags;
-  // raw_transcript 是 content 的派生明文（语音原始转写），敏感时一并洗掉
-  if (triage.is_sensitive && newMeta.raw_transcript) {
-    delete newMeta.raw_transcript;
-    metaChanged = true;
+  // 派生明文 meta（转写/图片描述/文件摘录/链接摘录）敏感时一并洗掉
+  if (triage.is_sensitive) {
+    for (const k of DERIVED_PLAINTEXT_META_KEYS) {
+      if (newMeta[k] !== undefined) {
+        delete newMeta[k];
+        metaChanged = true;
+      }
+    }
   }
   const sets = ["is_sensitive = ?"];
   const binds: unknown[] = [triage.is_sensitive ? 1 : 0];
@@ -370,8 +398,25 @@ export async function applyTriage(
     sets.push("content = ?", "content_enc = NULL");
     binds.push(content);
   }
-  await env.DB.prepare(`UPDATE notes SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?`)
-    .bind(...binds, noteId)
+  if (triage.is_sensitive) {
+    // 敏感判定：链接派生明文列（标题/AI 摘要）同口径清空
+    sets.push("url_title = NULL", "url_summary = NULL", "url_titles = NULL");
+  }
+  // CAS：只有当行仍是分拣启动时的版本才允许回写；窗口期内被并发写入
+  // 抢先 → 放弃本次回写，标 needs_retriage 交 cron 重分拣
+  const res = await env.DB.prepare(
+    `UPDATE notes SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ? AND updated_at = ?`
+  )
+    .bind(...binds, noteId, row.updated_at)
+    .run();
+  if ((res.meta.changes ?? 0) === 0) await markNeedsRetriage(env.DB, noteId);
+}
+
+/** 分拣回写被并发编辑抢先时的处置：只标复判位，cron 用新内容重分拣。 */
+async function markNeedsRetriage(db: D1Database, noteId: string): Promise<void> {
+  await db
+    .prepare("UPDATE notes SET meta = json_set(coalesce(meta, '{}'), '$.needs_retriage', json('true')) WHERE id = ?")
+    .bind(noteId)
     .run();
 }
 

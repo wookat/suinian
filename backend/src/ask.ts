@@ -123,8 +123,8 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     return { start: toUtcSql(new Date(Date.UTC(sh.getUTCFullYear(), 0, 1) - SH_OFFSET_MS)), end: null, phrase: "今年" };
   }
 
-  // bare "X月" (e.g. 6月/十月): that month of the current year, or last year if in the future
-  if ((m = q.match(/(?:^|[^0-9个半上这本])(\d{1,2}|[一二三四五六七八九十]{1,2})月(?:份|初|中|底)?/))) {
+  // bare "X月" (e.g. 6月/十月/"7 月"): that month of the current year, or last year if in the future
+  if ((m = q.match(/(?:^|[^0-9个半上这本])(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?/))) {
     const n = parseNum(m[1]);
     if (n !== null && n >= 1 && n <= 12) {
       const sh = new Date(now.getTime() + SH_OFFSET_MS);
@@ -153,7 +153,7 @@ const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|�
 // meaningful text remains means the question is about a specific item
 // ("买咖啡花了多少钱"), not an overall aggregate — fall through to normal ask.
 const STRIP_RES: RegExp[] = [
-  /今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})月(?:份|初|中|底)?/g,
+  /今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?/g,
   /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
   /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|用了?|钱/g,
   /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|了|吗|呢|啊|呀|哦|是|都|在|有|和|与|？|\?|，|,|。|、|\s/g,
@@ -205,21 +205,125 @@ const COUNT_STRIP_RES: RegExp[] = [
   /请问|一下|来着|帮我数|数数|统计|我的?|了|过|吗|呢|啊|呀|哦|是|都|在|有|？|\?|，|,|。|、|\s/g,
 ];
 
+// 分类限定词 → category 列值（R126：分类计数是一条 WHERE category=? 就能精确
+// 回答的问题，不应落 fail-closed；R125 Q9/Q10/Q12）。支出/收入类计数已由
+// 财务聚合路径处理，不在此列。
+const COUNT_CATEGORY_WORDS: [RegExp, string][] = [
+  [/待办|代办|todo/i, "todo"],
+  [/想法|点子|灵感/, "idea"],
+  [/收藏/, "collect"],
+  [/资料/, "data"],
+];
+
+/** 计数问题的结构化意图：精确路径支持分类/敏感/日均限定（R126）。 */
+export interface CountQuery {
+  intent: "exact" | "fail_closed";
+  /** 分类限定（待办/想法/收藏/资料），WHERE category = ? 精确计数 */
+  category: string | null;
+  /** 「加密/敏感笔记有几条」：WHERE is_sensitive = 1 精确计数 */
+  sensitiveOnly: boolean;
+  /** 「平均每天记几条」：总数 ÷ 首条笔记至今天数，纯 SQL 可得 */
+  avgPerDay: boolean;
+}
+
+const COUNT_QUALIFIER_STRIP_RES: RegExp[] = [
+  /待办|代办|todo|想法|点子|灵感|收藏|资料/gi,
+  /加密|敏感/g,
+  /平均每天|平均|每天/g,
+  /类的?|这类|一类/g,
+];
+
 /**
  * How /api/ask should answer a note-count question:
- * - "exact": 无额外限定（或只有时间限定）→ SQL COUNT 精确回答。
- * - "fail_closed": 计数措辞但剩余主题/标签限定 → 拒绝猜数，给出可精确的总数。
- * - null: 不是计数问题。
+ * - exact：无额外限定，或只有时间/分类/敏感/日均这些可 SQL 化的限定 → 精确回答。
+ * - fail_closed：计数措辞但剩余主题/内容限定 → 拒绝猜数，给出可精确的总数。
+ * - null：不是计数问题。
  */
-export function countAggIntent(question: string): "exact" | "fail_closed" | null {
+export function countQueryIntent(question: string): CountQuery | null {
   if (!COUNT_Q_RE.test(question)) return null;
   // 金额/账目类计数（几笔支出、花了多少）由财务聚合路径处理
   if (FINANCE_WORD_RE.test(question)) return null;
   if (FACT_QUERY_RE.test(question)) return null;
+  const category = COUNT_CATEGORY_WORDS.find(([re]) => re.test(question))?.[1] ?? null;
+  const sensitiveOnly = !category && /加密|敏感/.test(question);
+  const avgPerDay = /平均每天|每天平均/.test(question);
   let residual = question;
   for (const re of COUNT_STRIP_RES) residual = residual.replace(re, "");
-  return residual.length < 2 ? "exact" : "fail_closed";
+  for (const re of COUNT_QUALIFIER_STRIP_RES) residual = residual.replace(re, "");
+  const intent = residual.length < 2 ? "exact" : "fail_closed";
+  return { intent, category: intent === "exact" ? category : null, sensitiveOnly: intent === "exact" && sensitiveOnly, avgPerDay: intent === "exact" && avgPerDay };
 }
+
+/** 兼容包装：只关心 exact/fail_closed/null 的调用方（召回重写路由等）。 */
+export function countAggIntent(question: string): "exact" | "fail_closed" | null {
+  return countQueryIntent(question)?.intent ?? null;
+}
+
+// ---- 极值/排序类统计（R126 P1-3）----
+// 「最早一条笔记是什么时候记的」类问题是一条 min/max/order-by SQL 就能精确
+// 回答的，绝不能交给 LLM 对 top-k 召回猜答（R125 Q3 非确定性错答）。
+
+export type ExtremeKind = "earliest" | "latest" | "longest";
+
+/** 识别极值/排序类笔记统计问题（最早/最新/最后/最长一条笔记）。 */
+export function extremeQueryIntent(question: string): ExtremeKind | null {
+  if (FINANCE_WORD_RE.test(question)) return null;
+  // 必须是在问笔记本身（而非笔记内容里的某个事实，如「最早的航班是几点」）
+  if (!/笔记|记录|[记写]的|[记写]了|一条/.test(question)) return null;
+  if (/最早|最先|第一条|头一条|最开始|最初/.test(question)) return "earliest";
+  if (/最晚|最后一条|最新的?一?条|最近的?一条|最新的笔记/.test(question)) return "latest";
+  if (/最长的?/.test(question)) return "longest";
+  return null;
+}
+
+/** UTC "YYYY-MM-DD HH:MM:SS" → 上海时区可读时间。 */
+function formatShanghai(utcSql: string): string {
+  const d = new Date(`${utcSql.replace(" ", "T")}Z`);
+  if (Number.isNaN(d.getTime())) return utcSql;
+  const sh = new Date(d.getTime() + SH_OFFSET_MS);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${sh.getUTCFullYear()}-${p(sh.getUTCMonth() + 1)}-${p(sh.getUTCDate())} ${p(sh.getUTCHours())}:${p(sh.getUTCMinutes())}`;
+}
+
+const EXTREME_LABELS: Record<ExtremeKind, string> = { earliest: "最早", latest: "最新", longest: "最长" };
+
+/** 极值查询的确定性答案（敏感笔记只报时间不露内容）。 */
+export function buildExtremeAnswer(
+  kind: ExtremeKind,
+  note: Pick<NoteRow, "id" | "title" | "content" | "created_at" | "is_sensitive"> | null
+): string {
+  if (!note) return "你还没有记录任何笔记。";
+  const when = formatShanghai(note.created_at);
+  const label = EXTREME_LABELS[kind];
+  const preview = note.is_sensitive
+    ? "（加密的敏感笔记，内容不在问答中展示）"
+    : `：${(note.title || note.content).replace(/\s+/g, " ").slice(0, 60)}`;
+  const cite = note.is_sensitive ? "" : " [1]";
+  return `你${label}的一条笔记记于 ${when}（北京时间）${cite}${preview}\n\n以上为数据库精确查询结果（不含已删除笔记）。`;
+}
+
+/** 分类/敏感限定计数的精确答案。 */
+export function buildScopedCountAnswer(cnt: number, scopeLabel: string, phrase: string | null): string {
+  const scope = phrase ?? "到目前为止";
+  if (cnt === 0) return `${scope}你没有${scopeLabel}。\n\n以上为数据库精确统计（不含已删除笔记）。`;
+  return `${scope}你共有 ${cnt} 条${scopeLabel}。\n\n以上为数据库精确统计（不含已删除笔记）。`;
+}
+
+/** 「平均每天记几条」的精确答案：总数 ÷ 首条笔记至今天数。 */
+export function buildAvgPerDayAnswer(total: number, firstCreatedAt: string | null, now: Date = new Date()): string {
+  if (total === 0 || !firstCreatedAt) return "你还没有记录任何笔记。";
+  const first = new Date(`${firstCreatedAt.replace(" ", "T")}Z`);
+  const days = Math.max(1, Math.ceil((now.getTime() - first.getTime()) / 86_400_000));
+  const avg = total / days;
+  return `从首条笔记（${formatShanghai(firstCreatedAt)}，北京时间）至今共 ${days} 天，记了 ${total} 条笔记，平均每天约 ${avg.toFixed(2)} 条。\n\n以上为数据库精确统计（不含已删除笔记）。`;
+}
+
+export const COUNT_SCOPE_LABELS: Record<string, string> = {
+  todo: "待办笔记",
+  idea: "想法笔记",
+  collect: "收藏笔记",
+  data: "资料笔记",
+};
 
 /** 「这段时间都记了什么/记了哪些」——时间窗枚举，走 SQL 全量列举而非 top-k 召回。 */
 export function enumListIntent(question: string): boolean {

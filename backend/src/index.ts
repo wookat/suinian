@@ -15,6 +15,7 @@ import {
   prepareTagsUpdate,
 } from "./note-store";
 export { applyTriage } from "./note-store";
+import { scrubDerivedMeta } from "./ingest";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
 import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads } from "./threads";
@@ -60,7 +61,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type Im
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countAggIntent, buildCountAnswer, buildCountFailClosedAnswer, enumListIntent, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, enumListIntent, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -898,8 +899,9 @@ async function fetchLinkMetaInto(env: Env, noteId: string, urls: string[]): Prom
   const first = metas[0];
   const urlTitles = urls.map((u, i) => ({ url: u, title: metas[i].title }));
   if (first.title || first.description || urlTitles.some((t) => t.title)) {
+    // 敏感行不落链接派生明文（与 note-store 同口径）
     await env.DB.prepare(
-      "UPDATE notes SET url_title = ?, url_summary = ?, url_titles = ?, updated_at = datetime('now') WHERE id = ?"
+      "UPDATE notes SET url_title = ?, url_summary = ?, url_titles = ?, updated_at = datetime('now') WHERE id = ? AND is_sensitive = 0"
     )
       .bind(first.title, first.description, JSON.stringify(urlTitles), noteId)
       .run();
@@ -943,12 +945,17 @@ async function createNote(
   const rawType = body.raw_type || (url && content === url ? "link" : "text");
   const manualTags = (body.tags ?? []).filter((t) => typeof t === "string" && t.trim()).map((t) => t.trim().replace(/^#/, "")).slice(0, 6);
   // skipTriage (`!` inline command): store as-is under 想法 and mark the fields
-  // manual so neither the sync triage nor the cron sweep re-sorts it
+  // manual so neither the sync triage nor the cron sweep re-sorts it. 敏感复判
+  // 不在豁免之列（R126 P1-2）：skip 只跳过分类/打标，全部字段标 manual 后，
+  // 疑似含密的内容仍走 fail-closed 预检 + 模型复判，只裁决敏感与否。
   const meta: NoteMeta | null =
     opts.skipTriage || manualTags.length > 0
       ? {
           ...(body.meta ?? {}),
-          manual_override: { ...(opts.skipTriage ? { category: true } : {}), ...(manualTags.length > 0 ? { tags: true } : {}) },
+          manual_override: {
+            ...(opts.skipTriage ? { category: true, tags: true, title: true, todo_due: true } : {}),
+            ...(manualTags.length > 0 ? { tags: true } : {}),
+          },
         }
       : (body.meta ?? null);
 
@@ -972,9 +979,9 @@ async function createNote(
       tags: manualTags,
       meta,
     },
-    // skipTriage notes never get a model verdict, so only the high-precision
-    // detector applies (a broad hint would stay encrypted forever)
-    { rejudge: !opts.skipTriage, markSensitive: "onlyEncrypted" }
+    // 敏感闸门对 skipTriage 同口径（R126 P1-2）：宽口径疑似命中也 fail-closed
+    // 加密并标 needs_retriage，cron 只复判敏感与否（分类/标签已标 manual）
+    { rejudge: true, markSensitive: "onlyEncrypted" }
   );
   await stmt.run();
 
@@ -1061,8 +1068,11 @@ app.post("/api/notes", async (c) => {
   }
   // skip_triage (`!` inline command): store as-is, never re-sorted
   const skipTriage = body.skip_triage === true;
+  // 客户端 meta 白名单（R126 P1-1）：只收标记位，不收任何可携带明文的
+  // 自由文本字段（否则 meta.* 成为绕过敏感管道的明文旁路）
+  const clientMeta: NoteMeta | null = body.meta?.from_ask === true ? { from_ask: true } : null;
   // returns immediately; triage + link fetch + clustering backfill asynchronously
-  const { note } = await createNote(c, userId, body, (p) => c.executionCtx.waitUntil(p), { syncTriage: false, skipTriage });
+  const { note } = await createNote(c, userId, { ...body, meta: clientMeta }, (p) => c.executionCtx.waitUntil(p), { syncTriage: false, skipTriage });
   return c.json({ note: await noteToJsonDecrypted(c.env, note) }, 201);
 });
 
@@ -2393,12 +2403,33 @@ app.post("/api/ask", async (c) => {
       ...(financeIntent === "fail_closed" ? { finance_fail_closed: true } : {}),
     });
   }
+  // 极值/排序类统计（R126 P1-3）：「最早/最新/最长一条笔记」是一条
+  // min/max/order-by SQL 就能精确回答的，绝不交 LLM 对 top-k 召回猜答
+  const extremeKind = extremeQueryIntent(question) ?? extremeQueryIntent(recallQuestion);
+  if (extremeKind) {
+    const order =
+      extremeKind === "earliest"
+        ? "created_at ASC, id ASC"
+        : extremeKind === "latest"
+          ? "created_at DESC, id DESC"
+          : "LENGTH(content) DESC, id ASC";
+    const row = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL ORDER BY ${order} LIMIT 1`
+    )
+      .bind(userId)
+      .first<NoteRow>();
+    const answer = buildExtremeAnswer(extremeKind, row ?? null);
+    const refs = row && !row.is_sensitive ? [{ index: 1, note_id: row.id }] : [];
+    const notes = row && !row.is_sensitive ? [noteToJson(row)] : [];
+    return c.json({ answer, references: refs, notes, extreme_aggregate: true });
+  }
   // 计数类问题同理走 SQL COUNT 精确统计（R124 P1-2：「记了多少条」曾被 LLM
-  // 从 top-k 召回窗口猜成 16，实为 210）；意图/时间同样以原始问题优先
-  const origCountIntent = countAggIntent(question);
-  const countIntent = origCountIntent ?? countAggIntent(recallQuestion);
-  if (countIntent) {
-    const cRange = (origCountIntent ? parseTimeRange(question) : null) ?? timeRange;
+  // 从 top-k 召回窗口猜成 16，实为 210）；意图/时间同样以原始问题优先。
+  // R126：分类/敏感/日均限定也是可 SQL 化的精确计数，不再落 fail-closed
+  const origCountQuery = countQueryIntent(question);
+  const countQuery = origCountQuery ?? countQueryIntent(recallQuestion);
+  if (countQuery) {
+    const cRange = (origCountQuery ? parseTimeRange(question) : null) ?? timeRange;
     const cConds = ["user_id = ?", "deleted_at IS NULL"];
     const cBinds: unknown[] = [userId];
     if (cRange?.start) {
@@ -2408,6 +2439,29 @@ app.post("/api/ask", async (c) => {
     if (cRange?.end) {
       cConds.push("created_at < ?");
       cBinds.push(cRange.end);
+    }
+    // 分类/敏感限定计数：单条 WHERE 精确回答（R125 Q9/Q10/Q12/Q15）
+    if (countQuery.intent === "exact" && (countQuery.category || countQuery.sensitiveOnly)) {
+      const scoped = [...cConds, countQuery.category ? "category = ?" : "is_sensitive = 1"];
+      const scopedBinds = countQuery.category ? [...cBinds, countQuery.category] : cBinds;
+      const r = await c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM notes WHERE ${scoped.join(" AND ")}`)
+        .bind(...scopedBinds)
+        .first<{ cnt: number }>();
+      const label = countQuery.category
+        ? (COUNT_SCOPE_LABELS[countQuery.category] ?? countQuery.category)
+        : "加密的敏感笔记";
+      const answer = buildScopedCountAnswer(r?.cnt ?? 0, label, cRange?.phrase ?? null);
+      return c.json({ answer, references: [], notes: [], count_aggregate: true });
+    }
+    // 日均计数（R125 Q4）：总数 ÷ 首条笔记至今天数，纯 SQL 可得
+    if (countQuery.intent === "exact" && countQuery.avgPerDay) {
+      const r = await c.env.DB.prepare(
+        "SELECT COUNT(*) AS cnt, MIN(created_at) AS first FROM notes WHERE user_id = ? AND deleted_at IS NULL"
+      )
+        .bind(userId)
+        .first<{ cnt: number; first: string | null }>();
+      const answer = buildAvgPerDayAnswer(r?.cnt ?? 0, r?.first ?? null);
+      return c.json({ answer, references: [], notes: [], count_aggregate: true });
     }
     const where = cConds.join(" AND ");
     const [totalRow, catRows] = await Promise.all([
@@ -2422,10 +2476,10 @@ app.post("/api/ask", async (c) => {
     const sens = totalRow?.sens ?? 0;
     const byCat = catRows.results ?? [];
     const answer =
-      countIntent === "exact"
+      countQuery.intent === "exact"
         ? buildCountAnswer(total, byCat, sens, cRange?.phrase ?? null)
         : buildCountFailClosedAnswer(total, byCat, sens, cRange?.phrase ?? null);
-    return c.json({ answer, references: [], notes: [], count_aggregate: countIntent === "exact", ...(countIntent === "fail_closed" ? { count_fail_closed: true } : {}) });
+    return c.json({ answer, references: [], notes: [], count_aggregate: countQuery.intent === "exact", ...(countQuery.intent === "fail_closed" ? { count_fail_closed: true } : {}) });
   }
   // 时间窗枚举（「上周都记了什么」）：窗口内 SQL 全量列举 + 精确总数，
   // 不走 top-k 召回（R123：枚举不全且无总数口径）
@@ -3158,13 +3212,27 @@ app.get("/api/export", async (c) => {
   // them yet, so plaintext must not leave this path either
   const exportable = notesR.results ?? [];
   const notes = await Promise.all(
-    exportable.map((n) =>
-      !includeSensitive && (n.is_sensitive || (n.category === null && maybeSensitive(n.content)))
-        ? Promise.resolve(
-            noteToJson({ ...n, content: SENSITIVE_EXPORT_PLACEHOLDER, title: SENSITIVE_EXPORT_PLACEHOLDER, tags: "[]", is_sensitive: 1 })
-          )
-        : noteToJsonDecrypted(c.env, n)
-    )
+    exportable.map((n) => {
+      if (!includeSensitive && (n.is_sensitive || (n.category === null && maybeSensitive(n.content)))) {
+        // 脱敏口径覆盖派生明文闭包（R126 P1-1）：正文/标题/标签之外，
+        // meta 里的转写/描述/摘录与 url_title/url_summary 一并不出境
+        const scrubbed = scrubDerivedMeta(parseNoteMeta(n.meta));
+        return Promise.resolve(
+          noteToJson({
+            ...n,
+            content: SENSITIVE_EXPORT_PLACEHOLDER,
+            title: SENSITIVE_EXPORT_PLACEHOLDER,
+            tags: "[]",
+            is_sensitive: 1,
+            url_title: null,
+            url_summary: null,
+            url_titles: null,
+            meta: scrubbed ? JSON.stringify(scrubbed) : null,
+          })
+        );
+      }
+      return noteToJsonDecrypted(c.env, n);
+    })
   );
   const threads = threadsR.results ?? [];
   const reports = reportsR.results ?? [];

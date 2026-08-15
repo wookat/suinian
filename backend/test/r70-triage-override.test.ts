@@ -62,12 +62,15 @@ function fakeDb(notes: Row[]) {
           if (sql.startsWith("UPDATE notes SET")) {
             const whereIdx = sql.indexOf(" WHERE ");
             const setPart = sql.slice(0, whereIdx);
+            const wherePart = sql.slice(whereIdx);
             const cols = [...setPart.matchAll(/(\w+) = \?/g)].map((m) => m[1]);
             const nowCols = [...setPart.matchAll(/(\w+) = datetime\('now'\)/g)].map((m) => m[1]);
             const whereBinds = binds.slice(cols.length) as string[];
-            const targets = notes.filter(
-              (n) => n.id === whereBinds[0] && (whereBinds.length < 2 || n.user_id === whereBinds[1])
+            let targets = notes.filter(
+              (n) => n.id === whereBinds[0] && (!wherePart.includes("user_id = ?") || n.user_id === whereBinds[1])
             );
+            if (wherePart.includes("updated_at = ?"))
+              targets = targets.filter((n) => n.updated_at === whereBinds[whereBinds.length - 1]);
             for (const note of targets) {
               cols.forEach((col, i) => (note[col] = binds[i]));
               nowCols.forEach((col) => (note[col] = "2026-08-07 00:00:01"));
@@ -151,7 +154,7 @@ describe("applyTriage never clobbers hand-set fields (manual edit -> async triag
         meta: JSON.stringify({ manual_override: { category: true, todo_due: true } }),
       }),
     ];
-    await applyTriage(makeEnv(notes), "n1", triageNoDue, "x");
+    await applyTriage(makeEnv(notes), "n1", triageNoDue, "note n1");
     expect(notes[0].todo_due).toBe("2026-08-09T14:00:00+08:00");
     expect(notes[0].category).toBe("todo");
   });
@@ -160,7 +163,7 @@ describe("applyTriage never clobbers hand-set fields (manual edit -> async triag
     const notes = [
       baseNote("n1", { meta: JSON.stringify({ manual_override: { todo_due: true } }) }),
     ];
-    await applyTriage(makeEnv(notes), "n1", { ...triageNoDue, todo_due: "2026-08-10" }, "x");
+    await applyTriage(makeEnv(notes), "n1", { ...triageNoDue, todo_due: "2026-08-10" }, "note n1");
     expect(notes[0].todo_due).toBeNull();
   });
 
@@ -168,19 +171,19 @@ describe("applyTriage never clobbers hand-set fields (manual edit -> async triag
     const notes = [
       baseNote("n1", { title: "手动标题", meta: JSON.stringify({ manual_override: { title: true } }) }),
     ];
-    await applyTriage(makeEnv(notes), "n1", triageNoDue, "x");
+    await applyTriage(makeEnv(notes), "n1", triageNoDue, "note n1");
     expect(notes[0].title).toBe("手动标题");
   });
 
   it("without override, an existing todo_due is never cleared by a null triage due", async () => {
     const notes = [baseNote("n1", { category: "todo", todo_due: "2026-08-09" })];
-    await applyTriage(makeEnv(notes), "n1", triageNoDue, "x");
+    await applyTriage(makeEnv(notes), "n1", triageNoDue, "note n1");
     expect(notes[0].todo_due).toBe("2026-08-09");
   });
 
   it("without override and no existing due, triage fills the due", async () => {
     const notes = [baseNote("n1", { category: null })];
-    await applyTriage(makeEnv(notes), "n1", { ...triageNoDue, category: "todo", todo_due: "2026-08-10" }, "x");
+    await applyTriage(makeEnv(notes), "n1", { ...triageNoDue, category: "todo", todo_due: "2026-08-10" }, "note n1");
     expect(notes[0].todo_due).toBe("2026-08-10");
     expect(notes[0].title).toBe("AI 标题");
   });
@@ -194,7 +197,7 @@ describe("applyTriage never clobbers hand-set fields (manual edit -> async triag
       env,
       ctx
     );
-    await applyTriage(env, "n1", triageNoDue, "x");
+    await applyTriage(env, "n1", triageNoDue, "note n1");
     expect(notes[0].category).toBe("todo");
     expect(notes[0].todo_due).toBe("2026-08-09T14:00:00+08:00");
   });

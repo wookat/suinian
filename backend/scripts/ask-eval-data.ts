@@ -110,7 +110,8 @@ export type QuestionCategory =
   | "演化脉络"
   | "为什么依据"
   | "数字细节"
-  | "财务聚合";
+  | "财务聚合"
+  | "统计聚合";
 
 export interface EvalQuestion {
   id: string;
@@ -346,5 +347,49 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAll: ["num1"],
     expectAnswerContains: ["8.5"],
     forbidAnswerContains: ["没找到", "没有相关"],
+  },
+
+  // —— R126（R125 P1-3 / 计数矩阵）：极值与限定计数必须走 SQL 精确路径 ——
+  {
+    id: "q80",
+    category: "统计聚合",
+    question: "我最早的一条笔记是什么时候记的？",
+    expectAnswerContains: ["最早的一条笔记记于", "数据库精确查询"],
+  },
+  {
+    id: "q81",
+    category: "统计聚合",
+    question: "我最新的一条笔记是什么？",
+    expectAnswerContains: ["最新的一条笔记记于"],
+  },
+  {
+    id: "q82",
+    category: "统计聚合",
+    question: "我的待办有多少条？",
+    expectAnswerContains: ["条待办笔记", "数据库精确统计"],
+  },
+  {
+    id: "q83",
+    category: "统计聚合",
+    question: "想法类的笔记有几条？",
+    expectAnswerContains: ["条想法笔记"],
+  },
+  {
+    id: "q84",
+    category: "统计聚合",
+    question: "我一共收藏了多少条？",
+    expectAnswerContains: ["条收藏笔记"],
+  },
+  {
+    id: "q85",
+    category: "统计聚合",
+    question: "加密的敏感笔记有几条？",
+    expectAnswerContains: ["加密的敏感笔记"],
+  },
+  {
+    id: "q86",
+    category: "统计聚合",
+    question: "我平均每天记几条笔记？",
+    expectAnswerContains: ["平均每天约"],
   },
 ];
