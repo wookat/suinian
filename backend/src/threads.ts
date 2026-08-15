@@ -125,6 +125,9 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
     const text = await chatComplete(env, {
       temperature: 0.3,
       max_tokens: 300,
+      // rebuild summarize runs inside short-lived waitUntil slices: the whole
+      // provider chain (primary retry + fallback) must fit one slice window
+      timeout_ms: 8_000,
       messages: [
         {
           role: "system",

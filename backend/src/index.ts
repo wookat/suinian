@@ -3103,8 +3103,10 @@ app.post("/api/threads/rebuild", async (c) => {
 /** A running job whose slice died (stale heartbeat) gets resumed opportunistically on poll. */
 function kickStaleJob(c: { env: Env; executionCtx: { waitUntil(p: Promise<unknown>): void } }, job: { id: string; status: string; updated_at: string }) {
   if (job.status !== "running" && job.status !== "queued") return;
+  // a slice lives at most ~30s (HTTP waitUntil window), so a 45s-old
+  // heartbeat means the last slice is dead and a new one can take over
   const ageMs = Date.now() - new Date(job.updated_at.replace(" ", "T") + "Z").getTime();
-  if (job.status === "queued" || ageMs > 2 * 60_000) {
+  if (job.status === "queued" || ageMs > 45_000) {
     c.executionCtx.waitUntil(runRebuildJobSlice(c.env, job.id, REBUILD_SLICE_BUDGET_MS));
   }
 }
