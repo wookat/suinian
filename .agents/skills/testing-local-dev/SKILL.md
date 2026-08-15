@@ -104,6 +104,12 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - bulk_ingest rate limit: import and restore share one 3/min bucket; 4th call in a minute → 429.
 - Offline queue (R122 P1-3): DevTools Network → Offline, quick-capture shows "N 条离线速记待同步"; back to No throttling auto-flushes (201s) — notes appear without reload.
 
+## Production testing tips (learned R126)
+- 竞态编辑 UI 手法：速记后在同一 computer-use action batch 内点 ⋯→编辑→Ctrl+A→粘贴→保存，可压到创建后 ~1-2s；若编辑落在分拣写回之后会弹 409 冲突面板（「这条笔记刚被其他设备修改…」），保留输入再点保存即可成功。
+- 分拣写回带 CAS（R126 P0）：窗口内编辑过的笔记内容永不回滚，但 AI 标题/分类可能延迟（meta.needs_retriage 交 cron 复判），「AI 分拣中…」徽标残留属设计内。
+- R2 残留核对：Cloudflare REST `GET /accounts/<id>/r2/buckets/suinian-media/objects?prefix=media/<uid>/`——WORKERS token 返回 10000 Authentication error，需用 `CLOUDFLARE_GLOBAL_API_TOKEN`。
+- ask 精确统计路由（R126）：极值（最早/最新/最长）、分类计数（待办/想法/收藏/资料）、敏感计数、日均、绝对月份「7 月」（可带空格）均走 SQL，答案带「数据库精确查询/统计」口径。
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.
 - `CLOUDFLARE_GLOBAL_API_TOKEN` (org) for Workers AI REST calls (`/ai/run/*`, used by thread-cross-eval.ts) and as fallback for wrangler d1.
