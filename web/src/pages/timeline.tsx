@@ -30,6 +30,7 @@ import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, bat
 import type { BatchFilter } from "@/lib/api"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
+import { PENDING_UNDO_KEY } from "@/lib/pending-undo"
 import { FirstRunTour } from "@/components/first-run-tour"
 import { cn, parseServerTime } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
@@ -94,7 +95,6 @@ const POLL_INTERVAL = 2000
 const POLL_MAX = 15
 // 批量撤销：待撤销操作存 localStorage + 时间流顶部驻留撤销条，慢返回/刷新后窗口内仍可撤销
 // （删除走服务端软删进「最近删除」，30 天后真删；标签操作记录实际变更的 ids 做逆操作）
-const PENDING_UNDO_KEY = "suinian:pending-undo"
 const PENDING_UNDO_TTL_MS = 5 * 60 * 1000
 
 type PendingUndo = {

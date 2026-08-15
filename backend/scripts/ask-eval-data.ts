@@ -392,4 +392,55 @@ export const QUESTIONS: EvalQuestion[] = [
     question: "我平均每天记几条笔记？",
     expectAnswerContains: ["平均每天约"],
   },
+
+  // —— R130（R129 R8 P1）：主题枚举必须走关键词全量筛选，不吃语义 top-k 亏 ——
+  {
+    id: "q87",
+    category: "主题枚举",
+    question: "我看过什么书",
+    expectAny: ["naval1", "naval2"],
+    expectAll: ["naval1", "naval2"],
+    expectAnswerContains: ["精确筛选"],
+  },
+  {
+    id: "q88",
+    category: "主题枚举",
+    question: "我都存过哪些菜谱？",
+    expectAny: ["nz2"],
+    expectAnswerContains: ["精确筛选"],
+  },
+  {
+    id: "q89",
+    category: "主题枚举",
+    question: "关于健身的笔记有哪些",
+    expectAny: ["fit1", "fit2"],
+    expectAll: ["fit1", "fit2"],
+    holdout: true,
+  },
+  // 首轮枚举成功后，序数追问靠既有历史改写解析（不设序数状态实体）
+  {
+    id: "q90",
+    category: "主题枚举",
+    question: "第一本讲什么",
+    history: [
+      { role: "user", content: "我看过什么书" },
+      { role: "assistant", content: "和「书」相关的记录共 2 条：\n\n- ［收藏］《纳瓦尔宝典》笔记：财富与运气\n- ［收藏］纳瓦尔 vs 芒格" },
+    ],
+    expectAny: ["naval1"],
+    holdout: true,
+  },
+
+  // —— R130（R129 R14 P2-1）：财务口径澄清追问直答是/否，不复读合计 ——
+  {
+    id: "q91",
+    category: "财务澄清",
+    question: "包括买跑鞋的钱吗",
+    history: [
+      { role: "user", content: "最近一个月花了多少钱" },
+      { role: "assistant", content: "最近一个月你记了 3 笔支出，合计 ¥1023.00。（以上为按记账笔记的数据库精确合计，口径与周报/月报一致）" },
+    ],
+    expectAny: ["nz20"],
+    expectAnswerContains: ["包括"],
+    forbidAnswerContains: ["不做心算合计"],
+  },
 ];

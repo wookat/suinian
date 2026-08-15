@@ -202,20 +202,25 @@ fun ReportsScreen(
             Spacer(Modifier.height(8.dp))
             AssistChip(onClick = { vm.refresh() }, label = { Text("重试") })
         }
+        // 空态时周报/月报切换保持与列表态相同的顶部位置，避免切换 tab 时上下跳动
         filtered.isEmpty() -> Column(
             modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
         ) {
             periodTabs()
-            Spacer(Modifier.height(12.dp))
-            Text(
-                if (isMonth) "还没有月报\n每月 1 日自动生成上月思考报告\n也可以随时手动生成"
-                else "还没有周报\n每周一自动生成本周思考报告\n也可以随时手动生成",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(12.dp))
-            generateButton()
+            Column(
+                Modifier.fillMaxWidth().weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    if (isMonth) "还没有月报\n每月 1 日自动生成上月思考报告\n也可以随时手动生成"
+                    else "还没有周报\n每周一自动生成本周思考报告\n也可以随时手动生成",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                generateButton()
+            }
         }
         else -> LazyColumn(
             modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),

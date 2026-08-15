@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Glance 首次组合完成前系统显示的占位（避免「Can't load widget」） -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center"
+    android:text="@string/widget_label"
+    android:textColor="#5B5B66"
+    android:textSize="14sp"
+    android:background="@android:color/white" />

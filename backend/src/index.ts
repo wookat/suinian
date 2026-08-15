@@ -59,11 +59,11 @@ import {
   IMAGE_FAILED_PLACEHOLDER,
 } from "./media";
 import { detectFileKind, buildFileNote, buildFileReply, FILE_FAILED_PLACEHOLDER } from "./files";
-import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, type ImportSource, type ImportItem, type ImportFailure } from "./import";
+import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMPORT_ITEMS, type ImportSource, type ImportItem, type ImportFailure } from "./import";
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, enumListIntent, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, enumListIntent, topicEnumIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -2362,10 +2362,69 @@ app.post("/api/ask", async (c) => {
   const timeRange = parseTimeRange(recallQuestion);
   // 财务/统计合计类问题走精确聚合（与周报/月报同一 financeStats 口径），
   // 绝不让 LLM 对被 LIMIT 截断的召回结果心算合计（R107 P1-2）。
+  // 财务口径澄清追问（R130 P2-1）：上一轮是精确合计时，「包括报销的差旅费
+  // 吗」应直答是/否+口径解释（按 category 判定计入与否），绝不复读合计（R129 R14）。
+  const lastAssistant = [...history].reverse().find((m) => m.role === "assistant")?.content ?? null;
+  const clarifyTerms = financeClarifyTerms(question, lastAssistant);
+  if (clarifyTerms) {
+    // 时间范围优先取本轮问题，否则沿用上一轮合计答案里的时间短语（口径一致）
+    const clRange = parseTimeRange(question) ?? timeRange ?? parseTimeRange(lastAssistant ?? "");
+    const ors = clarifyTerms.map(() => "(content LIKE ? OR title LIKE ? OR tags LIKE ?)").join(" OR ");
+    const clConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')", `(${ors})`];
+    const clBinds: unknown[] = [userId];
+    for (const t of clarifyTerms) {
+      const like = `%${t}%`;
+      clBinds.push(like, like, like);
+    }
+    if (clRange?.start) {
+      clConds.push("created_at >= ?");
+      clBinds.push(clRange.start);
+    }
+    if (clRange?.end) {
+      clConds.push("created_at < ?");
+      clBinds.push(clRange.end);
+    }
+    const clr = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE ${clConds.join(" AND ")} ORDER BY created_at DESC LIMIT 10`
+    )
+      .bind(...clBinds)
+      .all<NoteRow>();
+    // 敏感记账笔记绝不在澄清答案中露出内容/金额
+    const clRows = (clr.results ?? []).filter((n) => !n.is_sensitive);
+    if (clRows.length > 0) {
+      const fConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
+      const fBinds: unknown[] = [userId];
+      if (clRange?.start) {
+        fConds.push("created_at >= ?");
+        fBinds.push(clRange.start);
+      }
+      if (clRange?.end) {
+        fConds.push("created_at < ?");
+        fBinds.push(clRange.end);
+      }
+      const fr = await c.env.DB.prepare(
+        `SELECT * FROM notes WHERE ${fConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
+      )
+        .bind(...fBinds)
+        .all<NoteRow>();
+      const stats = financeStats(fr.results ?? []);
+      const answer = buildFinanceClarifyAnswer(clarifyTerms, clRows, stats, clRange?.phrase ?? null);
+      return c.json({
+        answer,
+        references: clRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
+        notes: clRows.map((n) => noteToJson(n)),
+        finance_clarify: true,
+      });
+    }
+    // 限定项没有对应记账笔记：落回普通召回，让 LLM 结合笔记原文解释
+  }
   // 意图判定以原始问题为准（R113 P1）：改写只服务于召回，带历史时改写器
   // 可能给普通合计补出限定成分，绝不能因此把 exact 打成 fail-closed。
+  // R129 P2-a：原问题带财务词但判定为 null（具体单项，如「午饭花了多少钱」）
+  // 时，改写补出的聚合措辞不得覆盖——单项问题必须走普通召回直答该项。
   const origFinanceIntent = financeAggIntent(question);
-  const financeIntent = origFinanceIntent ?? financeAggIntent(recallQuestion);
+  const financeIntent =
+    origFinanceIntent ?? (FINANCE_WORD_RE.test(question) ? null : financeAggIntent(recallQuestion));
   if (financeIntent) {
     // 时间范围同理优先取自原始问题；原始问题没带时间时才用改写结果
     // （代词追问「那上个月呢」靠历史补出时间是合法的）
@@ -2482,6 +2541,58 @@ app.post("/api/ask", async (c) => {
         ? buildCountAnswer(total, byCat, sens, cRange?.phrase ?? null)
         : buildCountFailClosedAnswer(total, byCat, sens, cRange?.phrase ?? null);
     return c.json({ answer, references: [], notes: [], count_aggregate: countQuery.intent === "exact", ...(countQuery.intent === "fail_closed" ? { count_fail_closed: true } : {}) });
+  }
+  // 主题枚举（R130 P1-1）：「我看过什么书/存过哪些菜谱」先走关键词/标签
+  // LIKE 全量筛选（与计数/财务同一精确查询家族），语义 top-k 只在零命中时
+  // 兜底（R129 R8：宽泛主题词的语义召回被高频主题压过，答非所问）。
+  const enumTopic = topicEnumIntent(question) ?? topicEnumIntent(recallQuestion);
+  if (enumTopic) {
+    const like = `%${enumTopic}%`;
+    const tConds = ["user_id = ?", "deleted_at IS NULL", "(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)"];
+    const tBinds: unknown[] = [userId, like, like, like, like];
+    if (timeRange?.start) {
+      tConds.push("created_at >= ?");
+      tBinds.push(timeRange.start);
+    }
+    if (timeRange?.end) {
+      tConds.push("created_at < ?");
+      tBinds.push(timeRange.end);
+    }
+    const tWhere = tConds.join(" AND ");
+    const TOPIC_ENUM_MAX = 50;
+    const [tTotalRow, tListRows] = await Promise.all([
+      c.env.DB.prepare(`SELECT COUNT(*) AS cnt, SUM(is_sensitive) AS sens FROM notes WHERE ${tWhere}`)
+        .bind(...tBinds)
+        .first<{ cnt: number; sens: number | null }>(),
+      c.env.DB.prepare(`SELECT * FROM notes WHERE ${tWhere} ORDER BY created_at DESC LIMIT ${TOPIC_ENUM_MAX}`)
+        .bind(...tBinds)
+        .all<NoteRow>(),
+    ]);
+    const tTotal = tTotalRow?.cnt ?? 0;
+    if (tTotal > 0) {
+      const tSens = tTotalRow?.sens ?? 0;
+      const tRows = tListRows.results ?? [];
+      const tLines = tRows.map((n) => {
+        const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
+        if (n.is_sensitive) return `- ［${label}］（加密的敏感笔记）`;
+        const text = (n.title || n.content.split("\n")[0] || "").slice(0, 40);
+        return `- ［${label}］${text}`;
+      });
+      let answer = `${timeRange?.phrase ?? ""}和「${enumTopic}」相关的记录共 ${tTotal} 条`;
+      if (tSens > 0) answer += `（含 ${tSens} 条加密的敏感笔记）`;
+      answer += `：\n\n${tLines.join("\n")}`;
+      if (tTotal > tRows.length) answer += `\n\n……其余 ${tTotal - tRows.length} 条可在时间流搜索「${enumTopic}」查看。`;
+      answer += `\n\n以上为按关键词「${enumTopic}」在全部笔记中精确筛选的结果（不含已删除笔记）；相关但没写到这个词的笔记可换个说法再问。`;
+      const tRefRows = tRows.filter((n) => !n.is_sensitive).slice(0, 10);
+      return c.json({
+        answer,
+        references: tRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
+        notes: tRefRows.map((n) => noteToJson(n)),
+        enum_aggregate: true,
+        enum_topic: enumTopic,
+      });
+    }
+    // 关键词零命中：落回普通召回（语义仍可能兜底），不 dead-end
   }
   // 时间窗枚举（「上周都记了什么」）：窗口内 SQL 全量列举 + 精确总数，
   // 不走 top-k 召回（R123：枚举不全且无总数口径）
@@ -3147,13 +3258,20 @@ app.post("/api/import", async (c) => {
 
   let items: ImportItem[];
   let parseFailures: ImportFailure[] = [];
+  // 丢弃可观测（R130 P2-2/P2-3）：超限图片与 2000 条截断都必须在结果里持平上报
+  let assetsDropped = 0;
+  let truncated = false;
   if (zipBytes) {
     const parsed = parseImportZip(source as ZipImportSource, zipBytes);
     items = parsed.items;
     parseFailures = parsed.failures;
+    assetsDropped = parsed.assets_dropped;
+    truncated = parsed.truncated;
   } else {
     if (!text.trim()) return c.json({ error: "文件内容为空" }, 400);
     items = parseImportFile(source as ImportSource, text);
+    // 文本解析器在上限处停止：恰好到顶即视为可能截断，提示分批导入
+    truncated = items.length >= MAX_IMPORT_ITEMS;
   }
   if (items.length === 0) {
     const reason = parseFailures[0]?.reason;
@@ -3176,7 +3294,7 @@ app.post("/api/import", async (c) => {
         // imported notes carry historical created_at behind the backfill
         // cursor, so rewind it to let cron clustering pick them up
         if (result.stats.imported > 0) await resetThreadBackfill(c.env, userId);
-        await writeLine({ stats: result.stats, failed_items: [...parseFailures, ...result.failures] });
+        await writeLine({ stats: { ...result.stats, assets_dropped: assetsDropped, truncated }, failed_items: [...parseFailures, ...result.failures] });
       } catch (e) {
         await writeLine({ error: e instanceof Error ? e.message : "导入失败" });
       } finally {
@@ -3195,7 +3313,7 @@ app.post("/api/import", async (c) => {
 
   const result = await runImport(c.env, userId, source as ImportSource, items);
   if (result.stats.imported > 0) await resetThreadBackfill(c.env, userId);
-  return c.json({ ...result.stats, failed_items: [...parseFailures, ...result.failures] }, 201);
+  return c.json({ ...result.stats, assets_dropped: assetsDropped, truncated, failed_items: [...parseFailures, ...result.failures] }, 201);
 });
 
 // ---- GET /api/export ----

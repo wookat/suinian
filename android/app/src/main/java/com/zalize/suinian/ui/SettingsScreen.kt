@@ -478,7 +478,7 @@ fun SettingsScreen(
                     onCheckedChange = { backupIncludeSensitive = it },
                     enabled = !settings.mockMode && !backingUp && !restoring,
                 )
-                Text("包含敏感内容（明文导出密码等加密笔记）", style = MaterialTheme.typography.bodyMedium)
+                Text("包含敏感内容（默认脱敏：敏感笔记正文以占位符替代、敏感附件原件不导出）", style = MaterialTheme.typography.bodyMedium)
             }
             if (backupIncludeSensitive) {
                 Text(
