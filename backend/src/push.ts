@@ -140,9 +140,11 @@ export interface TodoReminderStats {
 /**
  * Cron sweep: push a reminder for todos whose reminder time (ahead of the
  * due — see todoReminderEpochMs) has been reached within the last 24h and
- * which are unfinished and not yet reminded. Each todo is marked reminded
- * exactly once, before delivery is attempted, so a flaky push service can
- * never cause duplicate reminders.
+ * which are unfinished and not yet reminded. Once a delivery channel exists
+ * (preference on + at least one subscription), the todo is marked reminded
+ * exactly once before delivery is attempted, so a flaky push service can
+ * never cause duplicate reminders. A user with no subscription keeps the
+ * reminder unconsumed: it fires within the 24h lookback once they subscribe.
  */
 export async function sweepTodoReminders(env: Env, now: Date = new Date()): Promise<TodoReminderStats> {
   const stats: TodoReminderStats = { candidates: 0, reminded: 0, delivered: 0, skipped_pref: 0, skipped_no_sub: 0 };
@@ -178,9 +180,6 @@ export async function sweepTodoReminders(env: Env, now: Date = new Date()): Prom
   const subCache = new Map<string, PushSubRow[]>();
   const prefCache = new Map<string, boolean>();
   for (const n of dueRows) {
-    // mark first: at-most-once even if delivery below fails midway
-    await env.DB.prepare("UPDATE notes SET todo_reminded_at = datetime('now') WHERE id = ?").bind(n.id).run();
-    stats.reminded++;
     if (!prefCache.has(n.user_id)) {
       const p = await env.DB.prepare("SELECT todo_reminder_push FROM user_preferences WHERE user_id = ?")
         .bind(n.user_id)
@@ -188,15 +187,23 @@ export async function sweepTodoReminders(env: Env, now: Date = new Date()): Prom
       prefCache.set(n.user_id, p ? p.todo_reminder_push === 1 : true);
     }
     if (!prefCache.get(n.user_id)) {
+      // the user explicitly turned reminders off: consuming the slot is intended
+      await env.DB.prepare("UPDATE notes SET todo_reminded_at = datetime('now') WHERE id = ?").bind(n.id).run();
+      stats.reminded++;
       stats.skipped_pref++;
       continue;
     }
     if (!subCache.has(n.user_id)) subCache.set(n.user_id, await userSubscriptions(env, n.user_id));
     const subs = subCache.get(n.user_id)!;
     if (subs.length === 0) {
+      // no delivery channel: leave todo_reminded_at unset so the reminder can
+      // still fire once the user subscribes, instead of burning it silently
       stats.skipped_no_sub++;
       continue;
     }
+    // mark before delivery: at-most-once even if delivery below fails midway
+    await env.DB.prepare("UPDATE notes SET todo_reminded_at = datetime('now') WHERE id = ?").bind(n.id).run();
+    stats.reminded++;
     const label = n.is_sensitive ? "一条待办" : (n.title || n.content || "待办").slice(0, 60);
     const dueMs = todoDueEpochMs(n.todo_due, await userTz(n.user_id));
     const timing =
@@ -251,10 +258,11 @@ export interface DailyPushStats {
 }
 
 /**
- * Cron sweep: once per user per local day, from 08:00 local time (timezone of
- * the user's most recent subscription), push one daily-review summary.
- * Respects the daily_review_push preference; logs even empty days so the
- * 10-minute cron doesn't regenerate reviews all day.
+ * Cron sweep: once per user per local day, from 08:00 local time in the
+ * user's preference timezone (same source as review generation, so the push
+ * "today" and the review "today" can never disagree), push one daily-review
+ * summary. Respects the daily_review_push preference; logs even empty days so
+ * the 10-minute cron doesn't regenerate reviews all day.
  */
 export async function sweepDailyReviewPush(env: Env, now: Date = new Date()): Promise<DailyPushStats> {
   const stats: DailyPushStats = { users: 0, pushed: 0, delivered: 0, empty: 0, not_time: 0, already: 0 };
@@ -271,7 +279,7 @@ export async function sweepDailyReviewPush(env: Env, now: Date = new Date()): Pr
     try {
       const subs = await userSubscriptions(env, userId);
       if (subs.length === 0) continue;
-      const { date, hour } = localDateHour(subs[0].tz, now);
+      const { date, hour } = localDateHour(await loadUserTz(env, userId), now);
       if (hour < DAILY_PUSH_HOUR) {
         stats.not_time++;
         continue;
@@ -291,7 +299,8 @@ export async function sweepDailyReviewPush(env: Env, now: Date = new Date()): Pr
         continue;
       }
       const first = review.items[0];
-      const snippet = (first.note.title || first.note.content || "").slice(0, 60);
+      // same masking as todo reminders: sensitive rows never leak into a push
+      const snippet = first.note.is_sensitive ? "一条记录" : (first.note.title || first.note.content || "").slice(0, 60);
       const payload: PushPayload = {
         title: "☀️ 今日回顾",
         body: `${first.kind_label}：${snippet}`,

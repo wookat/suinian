@@ -8,7 +8,7 @@ Web 速记框 ─────────┘        │
                      ┌───────┼────────┐
                      D1(notes/threads) KV(缓存/会话) Queues/cron
                      │
-              DeepSeek API（分拣/标签/摘要/聚类/周报/问答）
+     Workers AI（分拣/标签/摘要/聚类/周报/问答主力）←可选 DeepSeek/OpenAI 兼容 API 为第一链位
                      │
         Web 端(React PWA) / Android 查看端 / 微信内问答回复
 ```
@@ -42,12 +42,12 @@ note_embeddings(note_id, vector)  -- 语义检索/聚类 embedding（JSON 数组
 - `GET /api/notes?category=&tag=&q=&cursor=` 时间流+筛选+混合搜索（首页无筛选时：关键词 LIKE + 语义召回去重合并按相关度排序，返回的 note 带 `match: keyword|semantic|both`；语义失败自动降级纯关键词）
 - `GET /api/threads` / `GET /api/threads/:id`（含碎片列表）
 - `POST /api/ask` 自然语言问答（检索+LLM 汇总，返回引用 note ids）
-- `GET /api/reports` / `GET /api/reports/:id` 周报；`POST /api/reports/generate` 手动触发（可传 `{"week":"this"}`）
+- `GET /api/reports` / `GET /api/reports/:id` 周报；`POST /api/reports/generate` 手动触发（空参默认当前周期，与 Web「生成本周报告」同口径；传 `{"which":"last"}` 生成上一完整周期，`{"period":"month"}` 生成月报）
 - `GET /api/export` 全量导出（JSON，`?format=markdown` 转 markdown 附件）
 - `POST /api/ingest/wechat` ClawBot 桥接入口（bot 实例回调，分拣同步以便回确认文案；其余入口分拣/抓取/聚类全异步）
 - cron：每周一 08:00 Asia/Shanghai（UTC 00:00）生成周报；每日 04:00 重整 thread 标题/摘要
 
-## AI 管线（DeepSeek，OpenAI-compatible）
+## AI 管线（两层 provider 链：可选外部 OpenAI 兼容 API → Workers AI 基线主力；外部链位失败自动切换、恢复后自动切回）
 1. **分拣**：单条 prompt（注入今日日期+星期、用户 top50 已有标签）输出 {category, tags[≤3], title, is_sensitive, todo_due?}；敏感判定另有正则兜底，敏感值禁入 tags
 2. **链接抓取**：Workers fetch → readability 抽正文 → 摘要（公众号/小红书后续专项）
 3. **线索聚类**：新想法入库时与近 90 天 idea 类做 embedding 相似度（Workers AI `@cf/baai/bge-m3`，余弦阈值 0.78，向量存 note_embeddings 表；不可用时降级 DeepSeek 按标题判断），超阈值归入已有 thread 或建新 thread；每日 cron 重整 thread 标题/摘要

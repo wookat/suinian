@@ -14,10 +14,13 @@ const WORKERS_AI_PREFIX = "workers-ai:";
 const MOCK_MODEL = "mock";
 
 /**
- * Default fallback when the primary provider fails (network error, timeout,
- * 4xx/5xx incl. insufficient balance). Workers AI runs on the account's own
- * binding, so it stays available even when every external key is dead.
- * Override with AI_FALLBACK_MODEL; set it to "none" to disable the chain.
+ * Second layer of the provider chain, used when the configured primary
+ * (external OpenAI-compatible API) fails: network error, timeout, 4xx/5xx
+ * incl. insufficient balance. Workers AI runs on the account's own binding,
+ * so it stays available even when every external key is dead — it is the
+ * service baseline, not a degraded mode (R134: production has run on it
+ * long-term with full quality on discriminative tasks). Override with
+ * AI_FALLBACK_MODEL; set it to "none" to disable the chain.
  */
 const DEFAULT_FALLBACK_MODEL = "workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
@@ -110,16 +113,18 @@ function fallbackModelFor(env: AiEnv, primary: string): string | null {
 }
 
 /**
- * Model-agnostic chat completion with a degradation chain. `AI_MODEL` selects
- * the primary backend:
+ * Model-agnostic chat completion with a two-layer provider chain. `AI_MODEL`
+ * selects the first layer:
  * - `mock` returns deterministic offline responses (local dev, no key needed)
  * - `workers-ai:<model>` runs on the Workers AI binding (`env.AI`)
  * - anything else goes to the OpenAI-compatible endpoint at
  *   `AI_BASE_URL || DEEPSEEK_BASE_URL` with `DEEPSEEK_API_KEY`.
- * When the primary fails (balance exhausted, outage, timeout) the call falls
- * back to `AI_FALLBACK_MODEL` (default: Workers AI llama-3.3-70b). The primary
- * is always tried first, so service reverts automatically once it recovers.
- * Returns the assistant message content, or null when every provider failed.
+ * When the first layer fails (balance exhausted, outage, timeout) the call
+ * moves to `AI_FALLBACK_MODEL` (default: Workers AI llama-3.3-70b, the
+ * service baseline). The first layer is always tried first, so service
+ * reverts automatically once it recovers — running on Workers AI is normal
+ * operation, not an outage. Returns the assistant message content, or null
+ * when every provider failed.
  */
 export async function chatComplete(env: AiEnv, opts: ChatOptions): Promise<string | null> {
   const model = env.AI_MODEL || "deepseek-chat";
@@ -134,8 +139,11 @@ export async function chatComplete(env: AiEnv, opts: ChatOptions): Promise<strin
 
 /**
  * Lightweight liveness probe for /health?probe=ai: one tiny completion against
- * the primary, then the fallback. Reports which layer answered so external
- * monitoring can alert on both "AI down" and "running degraded".
+ * the first chain layer, then the second. `provider` reports which layer
+ * answered (chain position, not service quality): "fallback" means Workers AI
+ * — the normal baseline while no external key is funded — so external
+ * monitoring should alert on `ok:false` only, and may separately watch
+ * `provider` to observe cutovers (e.g. DeepSeek recovering).
  */
 export async function aiProbe(env: AiEnv): Promise<{ ok: boolean; provider: "primary" | "fallback" | "mock" | null; model: string | null }> {
   const model = env.AI_MODEL || "deepseek-chat";

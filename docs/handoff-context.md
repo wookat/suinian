@@ -65,7 +65,7 @@
 - 【R89 观察】生产 `/api/notes/batch?stream=1` 偶发 40-60s 才返回——R90 已做撤销入口持久化覆盖慢请求场景；R91 回归未复现慢请求（10 条 ~2s），继续观察；内联 #tag 打标非 100% 保真（AI 分拣偶改标签）
 - 【R92】敏感隔离大语料专项已验证全过（见 qa-report-r92.md）；月报隔离未覆盖（生产尚无月报周期数据），待有月报后抽查；`/api/graph`、`/api/insights` 非实际路由，图谱/洞察数据经线索详情与 /api/stats 验证
 
-- 【R94】DeepSeek 仍欠费，生产跑 Workers AI fallback；充值后无需改配置自动回主，可用 `/health?probe=ai` 确认 provider 回到 primary；todo_due 在 fallback 下偶有时区语义偏差（回主后应消失，观察）
+- 【R94/R134】DeepSeek 长期欠费停摆，生产主力=Workers AI（`/health?probe=ai` 报 `provider:"fallback"` 是常态基线而非降级，告警只看 `ok:false`，R134 口径已写入文档/代码注释）；DeepSeek 充值后无需改配置自动切回（每次调用先试第一链位），可用 `/health?probe=ai` 观察 provider 回到 primary；todo_due 在 Workers AI 下偶有时区语义偏差（切回后应消失，观察）
 
 ## 等老板事项
 - GitHub Actions 付款问题（恢复后 CI 才会跑）

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyAskIntent, validAskEnumTopic } from "../src/ask";
+import { classifyAskIntent, validAskEnumTopic, mediaTypeIntent } from "../src/ask";
 
 type AiEnv = Parameters<typeof classifyAskIntent>[0];
 
@@ -108,5 +108,26 @@ describe("classifyAskIntent", () => {
   it("fails closed when the AI is unavailable", async () => {
     const env: AiEnv = { DEEPSEEK_API_KEY: "", DEEPSEEK_BASE_URL: "", AI_MODEL: "", AI_BASE_URL: "" };
     expect(await classifyAskIntent(env, "问题")).toBeNull();
+  });
+
+  it("accepts 盘点 as an enumeration cue (R134 D-1)", async () => {
+    expect(await classifyAskIntent(fakeAiEnv('{"intent":"topic_enum","topic":"菜谱"}'), "盘点一下我记过的菜谱")).toEqual({
+      intent: "topic_enum",
+      topic: "菜谱",
+      extreme: null,
+    });
+  });
+});
+
+describe("mediaTypeIntent (R134 D-3)", () => {
+  it("maps modality words to raw_type", () => {
+    expect(mediaTypeIntent("语音里我让自己提醒什么事")).toBe("voice");
+    expect(mediaTypeIntent("我拍的照片里有什么")).toBe("image");
+    expect(mediaTypeIntent("上传的文件都讲了什么")).toBe("file");
+  });
+
+  it("returns null when no modality word is present", () => {
+    expect(mediaTypeIntent("上周都记了什么")).toBeNull();
+    expect(mediaTypeIntent("健身计划是什么")).toBeNull();
   });
 });

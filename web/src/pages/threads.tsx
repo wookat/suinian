@@ -326,7 +326,7 @@ export function ThreadsPage() {
       <EmptyState
         icon={GitBranch}
         title="线索还在酝酿"
-        description="你已经记了一些想法，但还没有串成线索。可以手动触发一次重建，让 AI 立即把同主题的想法串起来。"
+        description="你已经记了一些想法，但还没有串成线索——同一主题通常要积累 2-3 条相关想法才会聚成线索，第一周线索少是正常的。也可以手动触发一次重建，让 AI 立即把同主题的想法串起来。"
         actionLabel="重建线索"
         onAction={() => void onRebuild()}
       />
@@ -334,7 +334,7 @@ export function ThreadsPage() {
       <EmptyState
         icon={GitBranch}
         title="线索还在酝酿"
-        description="AI 会把分散数周的同题想法碎片自动串成线索。持续记录，线索会自然浮现。"
+        description="AI 会把分散数周的同题想法碎片自动串成线索——同一主题通常要积累 2-3 条相关想法才会聚成，刚开始的第一周还没有线索是正常的。持续记录，线索会自然浮现。"
         actionLabel="去首页记点想法"
         onAction={() => {
           window.location.hash = "#/"
