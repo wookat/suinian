@@ -9,6 +9,14 @@ export const REBUILD_CRON_BUDGET_MS = 3 * 60_000;
 export const CLUSTER_BACKFILL_BUDGET_MS = 2 * 60_000;
 /** A running job whose heartbeat is older than this is considered stale (its slice died). */
 const JOB_STALE_MINUTES = 3;
+/**
+ * Hard lifetime cap: a job still not done this long after creation is marked
+ * error instead of being resumed again. A healthy thousand-note rebuild
+ * finishes well within this; anything older means the state machine is
+ * looping without progress, and 'error' is the only way the user (and the
+ * next audit) can see that instead of an eternal 'running'.
+ */
+export const JOB_MAX_AGE_MINUTES = 60;
 
 export interface ThreadJobRow {
   id: string;
@@ -79,6 +87,19 @@ export async function runRebuildJobSlice(env: Env, jobId: string, timeBudgetMs: 
   try {
     const job = await env.DB.prepare("SELECT * FROM thread_jobs WHERE id = ?").bind(jobId).first<ThreadJobRow>();
     if (!job || job.status === "done" || job.status === "error") return;
+    const expired = await env.DB.prepare(
+      `SELECT 1 AS x FROM thread_jobs WHERE id = ? AND created_at < datetime('now', '-${JOB_MAX_AGE_MINUTES} minutes')`
+    )
+      .bind(jobId)
+      .first<{ x: number }>();
+    if (expired) {
+      await env.DB.prepare(
+        "UPDATE thread_jobs SET status = 'error', error = ?, updated_at = datetime('now') WHERE id = ?"
+      )
+        .bind(`重建超过 ${JOB_MAX_AGE_MINUTES} 分钟未完成，已终止（可重新发起）`, jobId)
+        .run();
+      return;
+    }
     let state: RebuildState;
     try {
       state = job.state ? (JSON.parse(job.state) as RebuildState) : newRebuildState();

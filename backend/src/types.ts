@@ -84,6 +84,8 @@ export interface TriageResult {
 
 /** Optional per-note metadata stored as JSON in notes.meta. */
 export interface NoteMeta {
+  /** Client-generated idempotency key for media re-uploads (outbox replays). */
+  client_id?: string;
   /** Original Whisper transcript before LLM correction (audio notes). */
   raw_transcript?: string;
   /** Result of the last transcription/extraction attempt (voice/image notes). */

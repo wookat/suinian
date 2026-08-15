@@ -14,6 +14,19 @@ const WORKERS_AI_PREFIX = "workers-ai:";
 const MOCK_MODEL = "mock";
 
 /**
+ * Race a promise against a timeout; rejects with an Error on expiry. The
+ * canonical guard for every Workers AI binding call (`env.AI.run` has no
+ * abort signal and can hang indefinitely on cold starts), shared by all
+ * AI call sites so no provider path runs unbounded.
+ */
+export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ]);
+}
+
+/**
  * Second layer of the provider chain, used when the configured primary
  * (external OpenAI-compatible API) fails: network error, timeout, 4xx/5xx
  * incl. insufficient balance. Workers AI runs on the account's own binding,
@@ -53,17 +66,28 @@ function mockChatResponse(opts: ChatOptions): string {
 
 async function runWorkersAi(env: AiEnv, model: string, opts: ChatOptions): Promise<string | null> {
   if (!env.AI) return null;
-  try {
-    const out = (await env.AI.run(model as Parameters<Ai["run"]>[0], {
-      messages: opts.messages,
-      temperature: opts.temperature,
-      max_tokens: opts.max_tokens,
-    })) as { response?: string; choices?: { message?: { content?: string } }[] };
-    return out.choices?.[0]?.message?.content ?? out.response ?? null;
-  } catch (err) {
-    console.error("chatComplete: workers-ai failed", model, err);
-    return null;
+  // same retry policy as the fetch path: transient failures get one retry,
+  // timeouts don't (a second slow attempt would double the latency)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const out = (await withTimeout(
+        env.AI.run(model as Parameters<Ai["run"]>[0], {
+          messages: opts.messages,
+          temperature: opts.temperature,
+          max_tokens: opts.max_tokens,
+        }) as Promise<{ response?: string; choices?: { message?: { content?: string } }[] }>,
+        opts.timeout_ms ?? 20_000,
+        `workers-ai ${model}`
+      )) as { response?: string; choices?: { message?: { content?: string } }[] };
+      return out.choices?.[0]?.message?.content ?? out.response ?? null;
+    } catch (err) {
+      console.error("chatComplete: workers-ai failed", model, err);
+      const timedOut = err instanceof Error && err.message.includes("timed out");
+      if (attempt === 0 && !timedOut) continue;
+      return null;
+    }
   }
+  return null;
 }
 
 async function runOpenAiCompat(env: AiEnv, model: string, opts: ChatOptions): Promise<string | null> {

@@ -7,7 +7,12 @@
  * 且同步阻塞）；Background Sync API 只有 Chromium 支持且 iOS PWA 不可用，
  * 用 online 事件 + 启动重放这一成熟组合覆盖全平台，不新增服务端实体。
  */
-import { createNote, ingestMedia, NetworkError } from "./api"
+import { ApiError, createNote, ingestMedia, NetworkError } from "./api"
+
+/** 429/5xx 是服务端瞬时故障：条目必须留队等下次重放，不能当毒丸丢弃 */
+function isTransient(e: unknown): boolean {
+  return e instanceof NetworkError || (e instanceof ApiError && (e.status === 429 || e.status >= 500))
+}
 import type { CreateNotePayload, Note } from "./types"
 
 const DB_NAME = "suinian-outbox"
@@ -27,6 +32,8 @@ export interface MediaOutboxItem {
   type: "audio" | "image" | "file"
   fileName: string
   queued_at: string
+  /** 入队时生成的幂等键：重放时服务端按它去重，响应丢失不会重复建笔记 */
+  client_id?: string
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -106,7 +113,7 @@ export async function enqueueNote(payload: CreateNotePayload): Promise<boolean> 
 /** 离线录音进队列；入队成功返回 true。 */
 export async function enqueueMedia(blob: Blob, type: MediaOutboxItem["type"], fileName: string): Promise<boolean> {
   try {
-    await tx("readwrite", (s) => s.add({ blob, type, fileName, queued_at: new Date().toISOString() }), MEDIA_STORE)
+    await tx("readwrite", (s) => s.add({ blob, type, fileName, queued_at: new Date().toISOString(), client_id: crypto.randomUUID() }), MEDIA_STORE)
     void notifyCount()
     return true
   } catch {
@@ -117,9 +124,9 @@ export async function enqueueMedia(blob: Blob, type: MediaOutboxItem["type"], fi
 let flushing = false
 
 /**
- * 重放队列：逐条按入队顺序补发，成功即删；再次网络失败立即停（留队列等
- * 下次 online）。服务端按「内容+时间」去重，响应丢失导致的重复补发不会
- * 产生重复笔记。
+ * 重放队列：逐条按入队顺序补发，成功即删；网络失败/429/5xx 立即停（留队列
+ * 等下次 online 重放）。文字笔记服务端按「内容+时间」去重，media 按入队时
+ * 生成的 client_id 幂等，响应丢失导致的重复补发不会产生重复笔记。
  */
 export async function flushOutbox(): Promise<void> {
   if (flushing) return
@@ -135,8 +142,8 @@ export async function flushOutbox(): Promise<void> {
         void notifyCount()
         for (const l of flushListeners) l(note)
       } catch (e) {
-        if (e instanceof NetworkError) return
-        // 非网络错误（如内容超长被 413 拒绝）：这条永远发不出去，丢弃出队
+        if (isTransient(e)) return
+        // 确定性 4xx（如内容超长被 413 拒绝）：这条永远发不出去，丢弃出队
         // 避免卡死整个队列，其余条目继续
         await tx("readwrite", (s) => s.delete(item.id!))
         void notifyCount()
@@ -148,12 +155,12 @@ export async function flushOutbox(): Promise<void> {
       const item = items[0]
       try {
         const file = new File([item.blob], item.fileName, { type: item.blob.type || "application/octet-stream" })
-        const note = await ingestMedia(file, item.type)
+        const note = await ingestMedia(file, item.type, item.client_id)
         await tx("readwrite", (s) => s.delete(item.id!), MEDIA_STORE)
         void notifyCount()
         for (const l of flushListeners) l(note)
       } catch (e) {
-        if (e instanceof NetworkError) return
+        if (isTransient(e)) return
         await tx("readwrite", (s) => s.delete(item.id!), MEDIA_STORE)
         void notifyCount()
       }

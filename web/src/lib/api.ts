@@ -154,7 +154,7 @@ export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 export const SUPPORTED_FILE_EXTS = ["pdf", "txt", "md", "markdown", "docx"]
 
 /** 图片/文件/语音上传：走 /api/ingest/media，后端提取文字/转写/摘要后入库 */
-export async function ingestMedia(file: File, type: "image" | "file" | "audio"): Promise<Note> {
+export async function ingestMedia(file: File, type: "image" | "file" | "audio", clientId?: string): Promise<Note> {
   if (loadSettings().useMock) {
     return mockCreateNote({
       source: "web",
@@ -172,6 +172,7 @@ export async function ingestMedia(file: File, type: "image" | "file" | "audio"):
   const form = new FormData()
   form.set("type", type)
   form.set("source", "web")
+  if (clientId) form.set("client_id", clientId)
   form.set("file", file)
   let res: Response
   try {

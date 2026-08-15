@@ -1130,7 +1130,9 @@ export function searchTerms(q: string): string[] {
   return q.split(/\s+/).filter(Boolean).slice(0, 5);
 }
 
-const KEYWORD_FIELDS = ["content", "title", "url_title", "url_summary"] as const;
+// tags 参与关键词命中：ask 敏感提示推荐的搜索词可能只出现在标签里，
+// 时间流搜索必须能搜到同一批笔记（与 ask 召回/敏感计数口径对齐）
+const KEYWORD_FIELDS = ["content", "title", "url_title", "url_summary", "tags"] as const;
 
 function termCond(): string {
   return `(${KEYWORD_FIELDS.map((f) => `${f} LIKE ?`).join(" OR ")})`;
@@ -1138,10 +1140,10 @@ function termCond(): string {
 
 /** How many of the query terms a note matches across the searchable fields. */
 export function matchedTermCount(
-  note: { content: string; title: string | null; url_title: string | null; url_summary: string | null },
+  note: { content: string; title: string | null; url_title: string | null; url_summary: string | null; tags?: string | null },
   terms: string[]
 ): number {
-  const hay = [note.content, note.title, note.url_title, note.url_summary]
+  const hay = [note.content, note.title, note.url_title, note.url_summary, note.tags]
     .filter(Boolean)
     .join("\n")
     .toLowerCase();
@@ -1172,7 +1174,7 @@ function noteFilterConds(filter: {
     for (const term of searchTerms(filter.q)) {
       conds.push(termCond());
       const like = `%${term}%`;
-      binds.push(like, like, like, like);
+      for (let i = 0; i < KEYWORD_FIELDS.length; i++) binds.push(like);
     }
   }
   if (typeof filter.source === "string" && filter.source) {
@@ -1229,7 +1231,7 @@ app.get("/api/notes", async (c) => {
     if (terms.length > 1) {
       const pf = noteFilterConds({ category, tag, source, from, to });
       const orTerms = terms.map(() => termCond()).join(" OR ");
-      const termBinds = terms.flatMap((t) => Array(4).fill(`%${t}%`) as string[]);
+      const termBinds = terms.flatMap((t) => Array(KEYWORD_FIELDS.length).fill(`%${t}%`) as string[]);
       const where = [`user_id = ?`, ...pf.conds, `(${orTerms})`].join(" AND ");
       const r = await c.env.DB.prepare(
         `SELECT * FROM notes WHERE ${where} ORDER BY created_at DESC LIMIT 30`
@@ -2176,6 +2178,19 @@ app.post("/api/ingest/media", async (c) => {
   const parsed = await parseMediaRequest(c.req.raw);
   if ("error" in parsed) return c.json({ error: parsed.error }, parsed.status);
 
+  // 幂等：同一 client_id 的补传重放（响应丢失后 outbox 重发）返回已建笔记，
+  // 不重复转写建新笔记
+  if (parsed.clientId) {
+    const dup = await c.env.DB.prepare(
+      "SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND json_extract(meta, '$.client_id') = ? LIMIT 1"
+    )
+      .bind(c.get("userId"), parsed.clientId)
+      .first<NoteRow>();
+    if (dup) {
+      return c.json({ note: noteToJson(dup), text: dup.content, transcribed: true, reply: "已记录（重复补传，返回已有笔记）" }, 200);
+    }
+  }
+
   if (parsed.type === "file") {
     const fileName = parsed.fileName || "file";
     const kind = detectFileKind(parsed.fileName, parsed.mime);
@@ -2186,6 +2201,7 @@ app.post("/api/ingest/media", async (c) => {
     const tooLongFile = contentTooLong(c, result.content);
     if (tooLongFile) return tooLongFile;
     const meta: NoteMeta = {
+      ...(parsed.clientId ? { client_id: parsed.clientId } : {}),
       file_name: fileName,
       file_mime: parsed.mime,
       file_size: parsed.bytes.length,
@@ -2236,6 +2252,7 @@ app.post("/api/ingest/media", async (c) => {
   const tooLong = contentTooLong(c, content);
   if (tooLong) return tooLong;
 
+  if (parsed.clientId) meta = { ...(meta ?? {}), client_id: parsed.clientId };
   const { note } = await createNote(
     c,
     c.get("userId"),

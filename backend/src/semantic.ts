@@ -1,4 +1,5 @@
 import type { Env, NoteRow } from "./types";
+import { withTimeout } from "./ai";
 import { cosineSim } from "./threads";
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
@@ -9,13 +10,9 @@ export const SEMANTIC_MIN_SCORE = 0.45;
 // Workers AI cold starts can hang tens of seconds; interactive search/ask
 // must degrade to keyword recall instead of blocking on the embedding
 const EMBED_TIMEOUT_MS = 8_000;
-
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
-  ]);
-}
+// batch embedding runs in background pipelines (retriage, migration), where a
+// longer window beats losing the whole batch to a cold start
+const EMBED_BATCH_TIMEOUT_MS = 30_000;
 
 export async function embedText(env: Env, text: string, timeoutMs = EMBED_TIMEOUT_MS): Promise<number[] | null> {
   if (!env.AI) return null;
@@ -152,9 +149,11 @@ export const EMBED_BACKFILL_BUDGET_MS = 60_000;
 export async function embedTexts(env: Env, texts: string[]): Promise<(number[] | null)[]> {
   if (!env.AI || texts.length === 0) return texts.map(() => null);
   try {
-    const res = (await env.AI.run(EMBED_MODEL, { text: texts.map((t) => t.slice(0, 1000)) })) as {
-      data?: number[][];
-    };
+    const res = (await withTimeout(
+      env.AI.run(EMBED_MODEL, { text: texts.map((t) => t.slice(0, 1000)) }) as Promise<{ data?: number[][] }>,
+      EMBED_BATCH_TIMEOUT_MS,
+      "batch embed"
+    )) as { data?: number[][] };
     return texts.map((_, i) => {
       const v = res?.data?.[i];
       return Array.isArray(v) && v.length > 0 ? v : null;

@@ -49,6 +49,76 @@ export function escapeMdText(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/`/g, "'");
 }
 
+/**
+ * 期段聚合行（按 分类×币种 分组）：总数/分类计数/收支合计的权威口径。
+ * 统计走 SQL 聚合而非 LIMIT 截断后的笔记数组，重度用户（>1000 条/月）
+ * 的月报金额不再无提示低估；LIMIT 只约束展示摘要。
+ */
+export interface PeriodAggRow {
+  category: string;
+  currency: string;
+  cnt: number;
+  sensitive: number;
+  todo_done_cnt: number;
+  amount_total: number;
+  unknown_amount: number;
+}
+
+export async function aggregatePeriod(
+  env: Env,
+  userId: string,
+  tzModifier: string,
+  start: string,
+  end: string
+): Promise<PeriodAggRow[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT COALESCE(category, 'idea') AS category, COALESCE(currency, 'CNY') AS currency,
+            COUNT(*) AS cnt, SUM(is_sensitive) AS sensitive,
+            SUM(CASE WHEN todo_done = 1 THEN 1 ELSE 0 END) AS todo_done_cnt,
+            SUM(CASE WHEN amount IS NOT NULL THEN amount ELSE 0 END) AS amount_total,
+            SUM(CASE WHEN category IN ('expense','income') AND amount IS NULL THEN 1 ELSE 0 END) AS unknown_amount
+     FROM notes WHERE user_id = ? AND deleted_at IS NULL
+       AND datetime(created_at, ?) >= datetime(? || ' 00:00:00')
+       AND datetime(created_at, ?) <= datetime(? || ' 23:59:59')
+     GROUP BY 1, 2`
+  )
+    .bind(userId, tzModifier, start, tzModifier, end)
+    .all<PeriodAggRow>();
+  return results ?? [];
+}
+
+export function financeStatsFromAgg(rows: PeriodAggRow[]): FinanceStats {
+  const stats: FinanceStats = { expenseCount: 0, incomeCount: 0, transferCount: 0, totals: {}, unknownAmount: 0 };
+  for (const r of rows) {
+    if (r.category === "transfer") {
+      stats.transferCount += r.cnt;
+      continue;
+    }
+    if (r.category !== "expense" && r.category !== "income") continue;
+    if (r.category === "expense") stats.expenseCount += r.cnt;
+    else stats.incomeCount += r.cnt;
+    stats.unknownAmount += r.unknown_amount;
+    const counted = r.cnt - r.unknown_amount;
+    if (counted > 0) {
+      if (!stats.totals[r.currency]) stats.totals[r.currency] = { expense: 0, income: 0 };
+      stats.totals[r.currency][r.category as "expense" | "income"] += r.amount_total;
+    }
+  }
+  return stats;
+}
+
+export function categoryCountsFromAgg(rows: PeriodAggRow[]): { total: number; counts: Map<string, number>; sensitive: number } {
+  const counts = new Map<string, number>();
+  let total = 0;
+  let sensitive = 0;
+  for (const r of rows) {
+    counts.set(r.category, (counts.get(r.category) ?? 0) + r.cnt);
+    total += r.cnt;
+    sensitive += r.sensitive;
+  }
+  return { total, counts, sensitive };
+}
+
 export interface TodoStats {
   created: number;
   createdDone: number;
@@ -169,10 +239,13 @@ export function fallbackMarkdown(
   weekStart: string,
   weekEnd: string,
   allNotes: NoteRow[],
-  periodLabel: "week" | "month" = "week"
+  periodLabel: "week" | "month" = "week",
+  agg?: { total: number; counts: Map<string, number>; sensitive: number }
 ): string {
-  // 口径统一：敏感笔记计入总数与分类计数，但正文（标题/内容）绝不展示
-  const { counts, sensitive } = categoryCounts(allNotes);
+  // 口径统一：敏感笔记计入总数与分类计数，但正文（标题/内容）绝不展示；
+  // 传入 agg 时计数用 SQL 聚合口径（allNotes 可能被 LIMIT 截断，只用于列表展示）
+  const { counts, sensitive } = agg ?? categoryCounts(allNotes);
+  const total = agg?.total ?? allNotes.length;
   const byCat = new Map<string, NoteRow[]>();
   for (const n of allNotes) {
     const k = n.category ?? "idea";
@@ -181,7 +254,7 @@ export function fallbackMarkdown(
   }
   const label = periodLabel === "month" ? "月报" : "周报";
   const unit = periodLabel === "month" ? "本月" : "本周";
-  let md = `# 碎念${label}（${weekStart} ~ ${weekEnd}）\n\n${unit}共记录 ${allNotes.length} 条${sensitive > 0 ? `（含 ${sensitive} 条敏感记录，仅计数不展示内容）` : ""}。\n`;
+  let md = `# 碎念${label}（${weekStart} ~ ${weekEnd}）\n\n${unit}共记录 ${total} 条${sensitive > 0 ? `（含 ${sensitive} 条敏感记录，仅计数不展示内容）` : ""}。\n`;
   for (const [cat, rows] of byCat) {
     md += `\n## ${CATEGORY_LABEL[cat] ?? cat}（${counts.get(cat) ?? rows.length}）\n`;
     const hidden = rows.filter((n) => n.is_sensitive).length;
@@ -232,12 +305,19 @@ export async function generatePeriodReport(
   // no notes this week: don't store an empty "0 条" report
   if (notes.length === 0) return null;
 
+  // 权威统计口径：SQL 聚合覆盖期段内全部笔记，LIMIT 只影响展示摘要
+  const aggRows = await aggregatePeriod(env, userId, tzModifier, weekStart, weekEnd).catch((): PeriodAggRow[] => []);
+  const agg = aggRows.length > 0 ? categoryCountsFromAgg(aggRows) : undefined;
   const stats = await todoStatsForWeek(env, userId, weekStart, weekEnd, notes, tzModifier).catch(
     (): TodoStats => ({ created: 0, createdDone: 0, doneInWeek: 0, openTitles: [], doneTitles: [] })
   );
-  const finance = financeStats(notes);
+  if (agg) {
+    stats.created = agg.counts.get("todo") ?? 0;
+    stats.createdDone = aggRows.filter((r) => r.category === "todo").reduce((s, r) => s + r.todo_done_cnt, 0);
+  }
+  const finance = aggRows.length > 0 ? financeStatsFromAgg(aggRows) : financeStats(notes);
   const finMd = financeSection(finance);
-  let md = fallbackMarkdown(weekStart, weekEnd, notes, period) + todoSection(stats) + finMd;
+  let md = fallbackMarkdown(weekStart, weekEnd, notes, period, agg) + todoSection(stats) + finMd;
   {
     try {
       const digest = notes
@@ -264,12 +344,13 @@ export async function generatePeriodReport(
         finance.expenseCount + finance.incomeCount > 0
           ? `、收支合计（直接使用这份统计，不要自己重算：${finMd.replace(/\n/g, " ").trim()}）`
           : "";
-      // 口径统一：把权威计数（含敏感）交给 AI，避免它从摘要里自行数出对不上的总数
-      const { counts, sensitive } = categoryCounts(notes);
+      // 口径统一：把权威计数（含敏感，SQL 聚合口径）交给 AI，避免它从摘要里自行数出对不上的总数
+      const { counts, sensitive } = agg ?? categoryCounts(notes);
+      const total = agg?.total ?? notes.length;
       const countsLine = [...counts.entries()]
         .map(([cat, n]) => `${CATEGORY_LABEL[cat] ?? cat} ${n} 条`)
         .join("、");
-      const countsHint = `${unit}共记录 ${notes.length} 条（${countsLine}${sensitive > 0 ? `；其中 ${sensitive} 条为敏感记录，已计入以上计数但未提供内容，正文不得提及其内容` : ""}）。总数与分类计数直接使用这份统计，不要自己重算。`;
+      const countsHint = `${unit}共记录 ${total} 条（${countsLine}${sensitive > 0 ? `；其中 ${sensitive} 条为敏感记录，已计入以上计数但未提供内容，正文不得提及其内容` : ""}）。总数与分类计数直接使用这份统计，不要自己重算。`;
       const text = (
         await chatComplete(env, {
           temperature: 0.4,
