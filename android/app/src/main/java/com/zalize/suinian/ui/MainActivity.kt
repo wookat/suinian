@@ -13,6 +13,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -189,6 +190,12 @@ fun SuinianNavHost(focusQuickNoteSignal: Int, navigateRouteSignal: Pair<String, 
                         )
                     },
                     actions = {
+                        // 回收站一级入口（对齐 Web），仅首页显示，避免各 tab 顶栏拥挤
+                        if (currentRoute == "home") {
+                            IconButton(onClick = { navController.navigate("trash") }) {
+                                Icon(Icons.Outlined.DeleteOutline, contentDescription = "最近删除")
+                            }
+                        }
                         IconButton(onClick = { navController.navigate("insights") }) {
                             Icon(Icons.Outlined.BarChart, contentDescription = "洞察")
                         }

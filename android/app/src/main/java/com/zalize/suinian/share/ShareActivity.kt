@@ -168,6 +168,7 @@ class ShareActivity : ComponentActivity() {
             var failed = 0
             var uploadedImages = 0
             var uploadedFiles = 0
+            val failReasons = mutableListOf<String>()
             for (item in items) {
                 if (item.imageUri != null) {
                     // 图片：读字节 -> POST /api/ingest/media type=image（后端视觉识别成文字笔记）
@@ -175,11 +176,12 @@ class ShareActivity : ComponentActivity() {
                         val bytes = contentResolver.openInputStream(item.imageUri)?.use { it.readBytes() }
                         if (bytes == null || bytes.isEmpty()) {
                             failed++
+                            failReasons.add("读取图片失败")
                             continue
                         }
                         if (bytes.size > MAX_IMAGE_BYTES) {
-                            Toast.makeText(this@ShareActivity, "图片过大：最多 10MB", Toast.LENGTH_SHORT).show()
                             failed++
+                            failReasons.add("图片过大：最多 10MB")
                             continue
                         }
                         val mime = contentResolver.getType(item.imageUri) ?: "image/jpeg"
@@ -193,6 +195,7 @@ class ShareActivity : ComponentActivity() {
                         }
                     } catch (e: Exception) {
                         failed++
+                        failReasons.add(e.message ?: "图片上传失败")
                     }
                     continue
                 }
@@ -202,11 +205,12 @@ class ShareActivity : ComponentActivity() {
                         val bytes = contentResolver.openInputStream(item.fileUri)?.use { it.readBytes() }
                         if (bytes == null || bytes.isEmpty()) {
                             failed++
+                            failReasons.add("读取文件失败")
                             continue
                         }
                         if (bytes.size > MAX_FILE_BYTES) {
-                            Toast.makeText(this@ShareActivity, "文件过大：最多 10MB", Toast.LENGTH_SHORT).show()
                             failed++
+                            failReasons.add("文件过大：最多 10MB")
                             continue
                         }
                         val mime = contentResolver.getType(item.fileUri) ?: "application/octet-stream"
@@ -220,6 +224,7 @@ class ShareActivity : ComponentActivity() {
                         }
                     } catch (e: Exception) {
                         failed++
+                        failReasons.add(e.message ?: "文件上传失败")
                     }
                     continue
                 }
@@ -229,16 +234,19 @@ class ShareActivity : ComponentActivity() {
                 )
                 if (result is SendResult.Queued) queued = true
             }
+            // 失败不静默：带上具体原因，部分成功时同时报成功与失败条数
+            val reason = failReasons.firstOrNull()?.let { "：$it" } ?: ""
+            val okCount = uploadedImages + uploadedFiles
             val msg = when {
-                failed > 0 && uploadedImages == 0 && uploadedFiles == 0 && items.all { it.imageUri != null || it.fileUri != null } -> "上传失败，请检查网络后重试"
-                failed > 0 -> "部分内容上传失败（$failed 条）"
+                failed > 0 && okCount == 0 && items.all { it.imageUri != null || it.fileUri != null } -> "上传失败$reason"
+                failed > 0 -> "$okCount 条已上传，$failed 条失败$reason"
                 queued -> "网络不佳，已暂存稍后自动重试"
                 uploadedFiles > 0 -> "已上传，AI 正在提取文件内容"
                 uploadedImages > 0 -> "已上传，AI 正在识别图片文字"
                 items.size > 1 -> "已存 ${items.size} 条到碎念"
                 else -> "已存到碎念"
             }
-            Toast.makeText(this@ShareActivity, msg, Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@ShareActivity, msg, if (failed > 0) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
             finish()
         }
     }

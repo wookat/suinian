@@ -242,3 +242,55 @@ describe("parseFrontmatter", () => {
     expect(fm.body).toBe("body");
   });
 });
+
+describe("parseImportZip: flomo", () => {
+  const enc = (s: string) => new TextEncoder().encode(s);
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const html = [
+    "<html><body>",
+    '<div class="memo"><div class="time">2023-06-01 08:30:00</div>',
+    '<div class="content"><p>第一条 #灵感 想法</p></div>',
+    '<div class="files"><img src="file/photo.png"/></div></div>',
+    '<div class="memo"><div class="time">2023-06-02 09:00:00</div>',
+    '<div class="content"><p>第二条 无图 https://example.com/a</p></div></div>',
+    '<div class="memo"><div class="time">2023-06-03 10:00:00</div>',
+    '<div class="content"><p>外链图 <img src="https://cdn.example.com/x.png"/> 保正文</p></div></div>',
+    "</body></html>",
+  ].join("\n");
+
+  const result = parseImportZip(
+    "flomo",
+    zipSync({ "index.html": enc(html), "file/photo.png": png })
+  );
+
+  it("parses memos with time / tags / url", () => {
+    expect(result.items).toHaveLength(3);
+    expect(result.failures).toEqual([]);
+    const first = result.items.find((i) => i.content.startsWith("第一条"))!;
+    expect(first.created_at).toBe("2023-06-01 00:30:00");
+    expect(first.tags).toEqual(["灵感"]);
+    const second = result.items.find((i) => i.content.startsWith("第二条"))!;
+    expect(second.url).toBe("https://example.com/a");
+  });
+
+  it("collects in-zip images into assets with body markers", () => {
+    const first = result.items.find((i) => i.content.startsWith("第一条"))!;
+    expect(first.content).toContain("【图片：photo.png】");
+    expect(first.assets).toHaveLength(1);
+    expect(first.assets![0].mime).toBe("image/png");
+    expect(first.assets![0].bytes.length).toBe(png.length);
+  });
+
+  it("drops external image refs without collecting assets", () => {
+    const third = result.items.find((i) => i.content.startsWith("外链图"))!;
+    expect(third.assets).toBeUndefined();
+    expect(third.content).toContain("保正文");
+    expect(third.content).not.toContain("cdn.example.com");
+  });
+
+  it("reports a failure for a zip without html", () => {
+    const bad = parseImportZip("flomo", zipSync({ "file/only.png": png }));
+    expect(bad.items).toEqual([]);
+    expect(bad.failures[0].reason).toContain("HTML");
+  });
+});

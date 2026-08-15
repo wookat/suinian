@@ -153,7 +153,7 @@ function fakeEnv(state: FakeState, vapid: { publicKey: string; privateKey: strin
         async run() {
           if (sql.includes("UPDATE notes SET todo_reminded_at")) {
             const n = state.notes.find((x) => x.id === binds[0]);
-            if (n) n.todo_reminded_at = new Date().toISOString();
+            if (n) n.todo_reminded_at = sql.includes("= NULL") ? null : new Date().toISOString();
           }
           if (sql.includes("DELETE FROM push_subscriptions WHERE id")) {
             state.subs = state.subs.filter((s) => s.id !== binds[0]);
@@ -320,6 +320,32 @@ describe("sweepTodoReminders", () => {
     const stats = await sweepTodoReminders(fakeEnv(state, vapid), now);
     expect(stats.delivered).toBe(0);
     expect(state.subs.length).toBe(0);
+    // all subscriptions gone: back to no-channel semantics, reminder unconsumed
+    expect(stats.reminded).toBe(0);
+    expect(state.notes[0].todo_reminded_at).toBeNull();
+  });
+
+  it("releases the mark and retries next sweep when every delivery fails (R142 D-2)", async () => {
+    pushStatus = 500;
+    const now = new Date("2026-08-08T02:00:00Z");
+    const state = makeState({ notes: [todoNote("n1", "u1", "2026-08-08T09:30:00+08:00")] });
+    const env = fakeEnv(state, vapid);
+    const first = await sweepTodoReminders(env, now);
+    expect(first.reminded).toBe(0);
+    expect(first.delivered).toBe(0);
+    expect(state.notes[0].todo_reminded_at).toBeNull();
+    expect(pushCalls.length).toBe(1);
+    // push service recovers: the next sweep retries and consumes the reminder
+    pushStatus = 201;
+    const second = await sweepTodoReminders(env, now);
+    expect(second.reminded).toBe(1);
+    expect(second.delivered).toBe(1);
+    expect(state.notes[0].todo_reminded_at).not.toBeNull();
+    expect(pushCalls.length).toBe(2);
+    // and never again after success
+    const third = await sweepTodoReminders(env, now);
+    expect(third.reminded).toBe(0);
+    expect(pushCalls.length).toBe(2);
   });
 
   it("does nothing when VAPID keys are not configured", async () => {

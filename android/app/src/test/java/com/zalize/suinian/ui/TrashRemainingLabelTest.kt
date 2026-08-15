@@ -9,8 +9,10 @@ class TrashRemainingLabelTest {
     private val now: Instant = Instant.parse("2026-08-09T00:00:00Z")
 
     @Test
-    fun `days remaining`() {
-        assertEquals("剩 29 天", trashRemainingLabel("2026-09-07 12:00:00", now))
+    fun `days remaining rounds up like web`() {
+        // 29 天 12 小时 → 向上取整 30 天（对齐 Web Math.ceil，刚删除即显示完整保留期）
+        assertEquals("剩 30 天", trashRemainingLabel("2026-09-07 12:00:00", now))
+        assertEquals("剩 30 天", trashRemainingLabel("2026-09-08 00:00:00", now))
     }
 
     @Test

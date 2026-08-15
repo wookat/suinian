@@ -309,6 +309,42 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 从相册/拍照上传图片：POST /api/ingest/media type=image */
+    fun uploadImage(bytes: ByteArray, mime: String, fileName: String) {
+        if (bytes.size > 10 * 1024 * 1024) {
+            _ui.value = _ui.value.copy(toast = "图片过大：最多 10MB")
+            return
+        }
+        _ui.value = _ui.value.copy(sending = true)
+        viewModelScope.launch {
+            try {
+                repo.sendImage(bytes, mime, fileName)
+                _ui.value = _ui.value.copy(sending = false, toast = "已上传，AI 正在识别图片内容")
+                refresh()
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(sending = false, toast = e.message ?: "图片上传失败")
+            }
+        }
+    }
+
+    /** 录音上传：POST /api/ingest/media type=audio（Whisper 转写） */
+    fun uploadAudio(bytes: ByteArray, mime: String, fileName: String) {
+        if (bytes.size > 10 * 1024 * 1024) {
+            _ui.value = _ui.value.copy(toast = "录音过大：最多 10MB")
+            return
+        }
+        _ui.value = _ui.value.copy(sending = true)
+        viewModelScope.launch {
+            try {
+                repo.sendAudio(bytes, mime, fileName)
+                _ui.value = _ui.value.copy(sending = false, toast = "已上传，AI 正在转写录音")
+                refresh()
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(sending = false, toast = e.message ?: "录音上传失败")
+            }
+        }
+    }
+
     /** 下载文件笔记原件到系统下载目录 */
     fun downloadFile(note: Note) {
         val fileName = note.meta?.fileName ?: "suinian-file"
@@ -479,6 +515,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         val stats = repo.restoreBackup(bytes, fileName)
         refresh()
         return stats
+    }
+
+    fun showToast(message: String) {
+        _ui.value = _ui.value.copy(toast = message)
     }
 
     fun consumeToast() {

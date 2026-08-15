@@ -46,14 +46,14 @@ import com.zalize.suinian.ui.components.parseInstantLenient
 import kotlinx.coroutines.launch
 import java.time.Instant
 
-/** 剩余保留时间文案：不足一天按小时（对齐 Web remainingLabel） */
+/** 剩余保留时间文案：天数向上取整，刚删除即显示完整保留天数；不足一天按小时（对齐 Web remainingLabel） */
 fun trashRemainingLabel(purgeAt: String?, now: Instant = Instant.now()): String {
     if (purgeAt.isNullOrBlank()) return ""
     val t = parseInstantLenient(purgeAt) ?: return ""
     val ms = t.toEpochMilli() - now.toEpochMilli()
     if (ms <= 0) return "即将清理"
-    val days = ms / 86_400_000
-    if (days >= 1) return "剩 $days 天"
+    val days = (ms + 86_399_999) / 86_400_000
+    if (days > 1) return "剩 $days 天"
     val hours = ms / 3_600_000
     return if (hours >= 1) "剩 $hours 小时" else "剩不足 1 小时"
 }
