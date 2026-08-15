@@ -274,7 +274,8 @@ export async function buildBackupZip(
   return new Response(readable, {
     headers: {
       "Content-Type": "application/zip",
-      "Content-Disposition": `attachment; filename="suinian-backup-${date}.zip"`,
+      // 明文包文件名带 -full 后缀，桌面上与脱敏包肉眼可分
+      "Content-Disposition": `attachment; filename="suinian-backup-${date}${includeSensitive ? "-full" : ""}.zip"`,
       "Cache-Control": "private, no-store",
     },
   });

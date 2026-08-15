@@ -175,6 +175,29 @@ const seedNotes: Note[] = [
   },
 ]
 
+const seedIds = new Set(seedNotes.map((n) => n.id))
+
+/** 用户在演示模式下自己记的笔记（去掉种子数据）：注册/登录后提示导入或清理（D-2） */
+export function userDemoNotes(): Note[] {
+  try {
+    const raw = localStorage.getItem(MOCK_KEY)
+    if (!raw) return []
+    const notes = JSON.parse(raw) as Note[]
+    return notes.filter((n) => !seedIds.has(n.id))
+  } catch {
+    return []
+  }
+}
+
+/** 清空演示数据（整个 localStorage 键），同时消除明文滞留（D-3） */
+export function clearDemoNotes(): void {
+  try {
+    localStorage.removeItem(MOCK_KEY)
+  } catch {
+    // ignore
+  }
+}
+
 function loadMockNotes(): Note[] {
   try {
     const raw = localStorage.getItem(MOCK_KEY)
