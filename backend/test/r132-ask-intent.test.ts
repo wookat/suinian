@@ -87,6 +87,18 @@ describe("classifyAskIntent", () => {
     });
   });
 
+  it("fails closed on enum intents without an enumeration cue in the question", async () => {
+    // content-style question misclassified as topic_enum must not enumerate
+    expect(await classifyAskIntent(fakeAiEnv('{"intent":"topic_enum","topic":"置身事内"}'), "置身事内讲了什么")).toBeNull();
+    expect(await classifyAskIntent(fakeAiEnv('{"intent":"enum_list"}'), "最近过得怎么样")).toBeNull();
+    // explicit enumeration cue passes
+    expect(await classifyAskIntent(fakeAiEnv('{"intent":"enum_list"}'), "列出我所有的笔记")).toEqual({
+      intent: "enum_list",
+      topic: null,
+      extreme: null,
+    });
+  });
+
   it("fails closed on unknown intent / broken JSON / empty output", async () => {
     expect(await classifyAskIntent(fakeAiEnv('{"intent":"finance_agg"}'), "问题")).toBeNull();
     expect(await classifyAskIntent(fakeAiEnv('{"intent":'), "问题")).toBeNull();

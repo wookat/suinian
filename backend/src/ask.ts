@@ -384,6 +384,10 @@ const ASK_INTENT_SYSTEM = `你是个人笔记问答系统的意图分类器。�
 拿不准时一律输出 {"intent":"general"}。`;
 
 const ASK_INTENT_VALUES = new Set(["topic_enum", "enum_list", "extreme", "general"]);
+
+// 枚举意图必须带显式列举措辞（fail-closed）：拦下 LLM 把「置身事内讲了什么」
+// 这类内容型提问误判成 topic_enum 的假阳性——列举问法一定带列举线索词。
+export const ASK_ENUM_CUE_RE = /哪些|列一下|列出|罗列|清单|列表|都有(?:什么|啥)|都记|都存|都写|所有|全部/;
 const ASK_EXTREME_VALUES = new Set(["earliest", "latest", "longest"]);
 
 /** 校验 LLM 给出的主题词：必须出现在原问题里、长度合理、非泛指词（fail-closed）。 */
@@ -425,6 +429,7 @@ export async function classifyAskIntent(
   }
   if (typeof parsed.intent !== "string" || !ASK_INTENT_VALUES.has(parsed.intent)) return null;
   if (parsed.intent === "general") return null;
+  if ((parsed.intent === "topic_enum" || parsed.intent === "enum_list") && !ASK_ENUM_CUE_RE.test(question)) return null;
   if (parsed.intent === "topic_enum") {
     if (!validAskEnumTopic(parsed.topic, question)) return null;
     return { intent: "topic_enum", topic: parsed.topic, extreme: null };

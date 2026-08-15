@@ -2655,12 +2655,17 @@ app.post("/api/ask", async (c) => {
     }
     // 关键词零命中：落回普通召回（语义仍可能兜底），不 dead-end
   }
-  // 时间窗枚举（「上周都记了什么」）：窗口内 SQL 全量列举 + 精确总数，
-  // 不走 top-k 召回（R123：枚举不全且无总数口径）
-  if (enumList && timeRange?.start) {
-    const eConds = ["user_id = ?", "deleted_at IS NULL", "created_at >= ?"];
-    const eBinds: unknown[] = [userId, timeRange.start];
-    if (timeRange.end) {
+  // 时间窗/全量枚举（「上周都记了什么」「列出我所有的笔记」）：SQL 全量列举 +
+  // 精确总数，不走 top-k 召回（R123：枚举不全且无总数口径）；无时间限定时
+  // 枚举全部笔记（R132：同义问法实测「列出所有笔记」无精确路由可走）
+  if (enumList) {
+    const eConds = ["user_id = ?", "deleted_at IS NULL"];
+    const eBinds: unknown[] = [userId];
+    if (timeRange?.start) {
+      eConds.push("created_at >= ?");
+      eBinds.push(timeRange.start);
+    }
+    if (timeRange?.end) {
       eConds.push("created_at < ?");
       eBinds.push(timeRange.end);
     }
@@ -2677,11 +2682,12 @@ app.post("/api/ask", async (c) => {
     const total = totalRow?.cnt ?? 0;
     const sens = totalRow?.sens ?? 0;
     const rows = (listRows.results ?? []).slice(0, ENUM_LIST_MAX);
+    const phrase = timeRange?.start ? timeRange.phrase : "";
     if (total === 0) {
-      return c.json({ answer: `${timeRange.phrase}你没有记录任何笔记。`, references: [], notes: [], enum_aggregate: true });
+      return c.json({ answer: `${phrase}你没有记录任何笔记。`, references: [], notes: [], enum_aggregate: true });
     }
     const lines = enumNoteLines(rows);
-    let answer = `${timeRange.phrase}你一共记了 ${total} 条笔记`;
+    let answer = `${phrase}你一共记了 ${total} 条笔记`;
     if (sens > 0) answer += `（含 ${sens} 条加密的敏感笔记）`;
     answer += `：\n\n${lines.join("\n")}`;
     if (total > rows.length) answer += `\n\n……其余 ${total - rows.length} 条可在时间流按时间筛选查看。`;
