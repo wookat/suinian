@@ -101,6 +101,19 @@ const CORRECT_TIMEOUT_MS = 10_000;
 
 export { withTimeout } from "./ai";
 
+/**
+ * Whisper hallucinates canned closing phrases on (near-)silent audio
+ * (R143 P2-3): a short transcript that is exactly one of these boilerplate
+ * lines is treated as "no speech" rather than user content.
+ */
+const WHISPER_HALLUCINATION_RE =
+  /^(thank you( for watching)?|thanks for watching|please subscribe.*|谢谢(大家|观看|收看)?|请不吝点赞.*|字幕制作.*|字幕by.*|amara\.org.*)[\s.。!！]*$/i;
+
+export function isWhisperHallucination(text: string): boolean {
+  const t = text.trim();
+  return t.length <= 24 && WHISPER_HALLUCINATION_RE.test(t);
+}
+
 /** Whisper transcription via Workers AI; returns null on any failure. */
 export async function transcribeAudio(env: Pick<Env, "AI">, bytes: Uint8Array): Promise<string | null> {
   if (!env.AI) return null;
@@ -113,6 +126,10 @@ export async function transcribeAudio(env: Pick<Env, "AI">, bytes: Uint8Array): 
       "whisper"
     )) as { text?: string };
     const text = (out.text ?? "").trim();
+    if (isWhisperHallucination(text)) {
+      console.warn("transcribeAudio: hallucinated boilerplate on silent audio, dropping", text);
+      return null;
+    }
     return text || null;
   } catch (err) {
     console.error("transcribeAudio: failed", err);
@@ -171,7 +188,7 @@ export async function correctTranscript(
 const IMAGE_PROMPT =
   "你会看到一张图片。请按下面格式输出两部分，用中文回答，不要客套话，不要 markdown 格式（不要星号、井号）：\n" +
   "文字：<图片中的所有文字，保持原文不要翻译；若图中没有文字则输出「无」>\n" +
-  "描述：<对图片内容的完整描述>";
+  "描述：<用一到两句话简洁描述图片内容，不要逐句重复图中文字>";
 
 /** Remove markdown emphasis/heading noise the vision model tends to emit. */
 export function stripMarkdown(text: string): string {

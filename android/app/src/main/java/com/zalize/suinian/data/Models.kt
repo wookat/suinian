@@ -53,6 +53,15 @@ data class NoteMeta(
     @SerialName("finance_merchant") val financeMerchant: String? = null,
 )
 
+/** 附件元信息（不含 R2 key）；原件通过 GET /api/notes/:id/file?att= 鉴权获取 */
+@Serializable
+data class NoteAttachment(
+    val id: String,
+    val name: String = "",
+    val mime: String? = null,
+    val size: Long? = null,
+)
+
 /** Note，字段形状与 docs/SPEC.md D1 notes 表一致 */
 @Serializable
 data class Note(
@@ -79,6 +88,7 @@ data class Note(
     @Serializable(with = FlexibleBooleanSerializer::class)
     val todoDone: Boolean? = null,
     val meta: NoteMeta? = null,
+    val attachments: List<NoteAttachment>? = null,
     /** 搜索召回方式（与 Web 一致）：keyword|semantic|both */
     val match: String? = null,
     @SerialName("deleted_at") val deletedAt: String? = null,
@@ -213,6 +223,14 @@ data class AuthUser(
 data class AuthResponse(
     val user: AuthUser,
     @SerialName("api_token") val apiToken: String = "",
+    /** 注册/恢复成功时一次性下发的恢复码（仅此一次，服务端不存明文） */
+    @SerialName("recovery_code") val recoveryCode: String? = null,
+)
+
+/** POST /api/auth/recovery-code 响应 */
+@Serializable
+data class RecoveryCodeResponse(
+    @SerialName("recovery_code") val recoveryCode: String = "",
 )
 
 /** POST /api/auth/rotate-token 响应 */

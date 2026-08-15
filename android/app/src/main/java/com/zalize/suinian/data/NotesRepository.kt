@@ -252,6 +252,13 @@ class NotesRepository(
         return client.downloadNoteFile(id)
     }
 
+    /** 鉴权取附件原件字节（图片/语音内联展示）：返回字节 + mime */
+    suspend fun fetchNoteMedia(noteId: String, attachmentId: String): Pair<ByteArray, String> {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.fetchNoteMedia(noteId, attachmentId)
+    }
+
     /** 下载全量备份 zip：返回字节 + 文件名。includeSensitive=true 时敏感笔记含明文 */
     suspend fun downloadBackup(includeSensitive: Boolean = false): Pair<ByteArray, String> {
         val (client, mock) = api()
@@ -331,6 +338,13 @@ class NotesRepository(
         val newToken = client.rotateToken().apiToken
         if (newToken.isNotBlank()) settingsRepo.setToken(newToken)
         return newToken
+    }
+
+    /** 重新生成恢复码（旧码作废，新码只显示一次） */
+    suspend fun regenerateRecoveryCode(): String {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用")
+        return client.regenerateRecoveryCode()
     }
 
     /** 重试队列：全部成功返回 true */

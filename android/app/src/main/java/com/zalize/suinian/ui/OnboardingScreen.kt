@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -24,6 +25,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.zalize.suinian.data.SettingsRepository
@@ -35,7 +37,7 @@ import kotlinx.coroutines.withContext
 
 private const val DEFAULT_BASE_URL = "https://suinian-api.zalize.com"
 
-private enum class OnboardingMode { Register, Login, Token }
+private enum class OnboardingMode { Register, Login, Token, Recover }
 
 /** 首次打开引导：注册新账号 / 登录已有账号 / 直接填已有 token */
 @Composable
@@ -49,8 +51,14 @@ fun OnboardingScreen(
     var name by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var token by rememberSaveable { mutableStateOf("") }
+    var recoveryInput by rememberSaveable { mutableStateOf("") }
     var busy by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
+    // 注册/恢复成功后一次性展示的恢复码（确认保存后才进入主界面）
+    var pendingCode by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingToken by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingName by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingTour by rememberSaveable { mutableStateOf(false) }
 
     fun finish(savedToken: String, savedName: String?, showTour: Boolean = false) {
         scope.launch {
@@ -85,20 +93,33 @@ fun OnboardingScreen(
                     }
                 }
             }
-            OnboardingMode.Register, OnboardingMode.Login -> {
+            OnboardingMode.Register, OnboardingMode.Login, OnboardingMode.Recover -> {
                 if (name.isBlank() || password.isBlank()) {
-                    error = "请填写用户名和密码"
+                    error = if (mode == OnboardingMode.Recover) "请填写用户名和新密码" else "请填写用户名和密码"
+                    return
+                }
+                if (mode == OnboardingMode.Recover && recoveryInput.isBlank()) {
+                    error = "请填写恢复码"
                     return
                 }
                 busy = true
                 scope.launch {
                     try {
-                        val res = if (mode == OnboardingMode.Register) {
-                            ApiClient.register(baseUrl.trim(), name.trim(), password)
-                        } else {
-                            ApiClient.login(baseUrl.trim(), name.trim(), password)
+                        val res = when (mode) {
+                            OnboardingMode.Register -> ApiClient.register(baseUrl.trim(), name.trim(), password)
+                            OnboardingMode.Recover -> ApiClient.recover(baseUrl.trim(), name.trim(), recoveryInput.trim(), password)
+                            else -> ApiClient.login(baseUrl.trim(), name.trim(), password)
                         }
-                        finish(res.apiToken, res.user.name, showTour = mode == OnboardingMode.Register)
+                        val code = res.recoveryCode
+                        if (code != null) {
+                            // 恢复码只下发这一次：先让用户确认保存再进入主界面
+                            pendingCode = code
+                            pendingToken = res.apiToken
+                            pendingName = res.user.name
+                            pendingTour = mode == OnboardingMode.Register
+                        } else {
+                            finish(res.apiToken, res.user.name, showTour = mode == OnboardingMode.Register)
+                        }
                     } catch (e: ApiException) {
                         error = e.message
                     } catch (e: Exception) {
@@ -130,14 +151,15 @@ fun OnboardingScreen(
 
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
             listOf(
-                OnboardingMode.Register to "注册新账号",
+                OnboardingMode.Register to "注册",
                 OnboardingMode.Login to "登录",
-                OnboardingMode.Token to "已有 Token",
+                OnboardingMode.Token to "Token",
+                OnboardingMode.Recover to "找回",
             ).forEachIndexed { i, (m, label) ->
                 SegmentedButton(
                     selected = mode == m,
                     onClick = { mode = m; error = null },
-                    shape = SegmentedButtonDefaults.itemShape(index = i, count = 3),
+                    shape = SegmentedButtonDefaults.itemShape(index = i, count = 4),
                 ) { Text(label) }
             }
         }
@@ -171,15 +193,41 @@ fun OnboardingScreen(
                     label = { Text("用户名（2-32 个字符）") },
                     singleLine = true,
                 )
+                if (mode == OnboardingMode.Recover) {
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = recoveryInput,
+                        onValueChange = { recoveryInput = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("恢复码（注册时保存的 XXXX-XXXX-XXXX-XXXX）") },
+                        singleLine = true,
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text(if (mode == OnboardingMode.Register) "密码（至少 8 位）" else "密码") },
+                    label = {
+                        Text(
+                            when (mode) {
+                                OnboardingMode.Register -> "密码（至少 8 位）"
+                                OnboardingMode.Recover -> "新密码（至少 8 位）"
+                                else -> "密码"
+                            }
+                        )
+                    },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                 )
+                if (mode == OnboardingMode.Recover) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "用注册时保存的恢复码重置密码。成功后旧恢复码作废，会下发一个新恢复码，请重新保存。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
@@ -199,6 +247,7 @@ fun OnboardingScreen(
                     busy -> "请稍候…"
                     mode == OnboardingMode.Register -> "注册并开始使用"
                     mode == OnboardingMode.Login -> "登录"
+                    mode == OnboardingMode.Recover -> "重置密码并登录"
                     else -> "开始使用"
                 }
             )
@@ -213,5 +262,36 @@ fun OnboardingScreen(
             Text("先跳过，用 Mock 模式体验")
         }
         Spacer(Modifier.height(32.dp))
+    }
+
+    val code = pendingCode
+    if (code != null) {
+        AlertDialog(
+            onDismissRequest = { /* 必须点确认，避免误触丢失唯一一次展示的恢复码 */ },
+            title = { Text("请保存你的恢复码") },
+            text = {
+                Column {
+                    Text(
+                        "忘记密码时，这个恢复码是找回账号的唯一方式（产品不收集邮箱/手机号）。" +
+                            "它只显示这一次，服务端不存明文，丢失后无法找回——请抄下来或存进密码管理器。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        code,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val t = pendingToken
+                    val n = pendingName
+                    pendingCode = null
+                    if (t != null) finish(t, n, showTour = pendingTour)
+                }) { Text("我已安全保存，继续") }
+            },
+        )
     }
 }

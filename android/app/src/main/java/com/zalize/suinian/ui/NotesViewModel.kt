@@ -202,6 +202,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     /** 设置页轮换 API token（成功后新 token 已保存到本机） */
     suspend fun rotateApiToken(): String = repo.rotateToken()
 
+    /** 重新生成恢复码（旧码作废，新码只显示一次） */
+    suspend fun regenerateRecoveryCode(): String = repo.regenerateRecoveryCode()
+
     /** 推送偏好（与 Web Push 共用，存后端） */
     suspend fun getPushPreferences() = repo.getPreferences()
 
@@ -344,6 +347,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    /** 鉴权取附件原件字节（图片/语音内联展示），供 NoteCard 使用 */
+    suspend fun fetchMedia(noteId: String, attachmentId: String): Pair<ByteArray, String> =
+        repo.fetchNoteMedia(noteId, attachmentId)
 
     /** 下载文件笔记原件到系统下载目录 */
     fun downloadFile(note: Note) {
