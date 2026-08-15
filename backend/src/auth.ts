@@ -126,6 +126,26 @@ export async function checkRateLimit(db: D1Database, action: string, dims: strin
   }
 }
 
+/** Retain expired limiter rows briefly for postmortems, then sweep. */
+export const RATE_LIMIT_RETENTION_HOURS = 24;
+
+/**
+ * Delete rate-limit rows whose fixed window closed more than a day ago.
+ * The window key is minute-granularity ISO ("YYYY-MM-DDTHH:MM"), so a plain
+ * string comparison against the cutoff is correct. Errors are swallowed —
+ * the sweep is best-effort housekeeping, never on a request path.
+ */
+export async function sweepAuthRateLimits(db: D1Database): Promise<number> {
+  const cutoff = new Date(Date.now() - RATE_LIMIT_RETENTION_HOURS * 3600_000).toISOString().slice(0, 16);
+  try {
+    const res = await db.prepare("DELETE FROM auth_rate_limits WHERE window_start < ?").bind(cutoff).run();
+    return res.meta.changes ?? 0;
+  } catch (e) {
+    console.error("rate limit sweep failed", e);
+    return 0;
+  }
+}
+
 export function clientIp(req: Request): string {
   return req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
 }

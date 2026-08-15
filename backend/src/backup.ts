@@ -68,7 +68,7 @@ export interface BackupManifest {
   version: number;
   exported_at: string;
   include_sensitive: boolean;
-  counts: { notes: number; threads: number; reports: number; attachments: number };
+  counts: { notes: number; threads: number; reports: number; attachments: number; attachments_redacted: number };
 }
 
 function safeParse<T>(raw: string | null): T | null {
@@ -122,6 +122,7 @@ export async function buildBackupZip(
   const threadTitle = new Map(threads.map((t) => [t.id, t.title]));
   const backupNotes: BackupNote[] = [];
   const mediaEntries: { path: string; r2_key: string }[] = [];
+  let attachmentsRedacted = 0;
   // every note goes into the backup, including ones still waiting for AI
   // triage (category stays null and gets sorted after restore). Fail-closed:
   // besides confirmed-sensitive notes, a redacted (default) backup also
@@ -138,6 +139,7 @@ export async function buildBackupZip(
     let urlTitles = n.url_titles;
     const pendingUncertain =
       !n.is_sensitive && !includeSensitive && n.category === null && maybeSensitive(n.content);
+    let redacted = false;
     if (n.is_sensitive || pendingUncertain) {
       if (includeSensitive) {
         if (n.content_enc && env.SUINIAN_ENC_KEY) {
@@ -147,6 +149,7 @@ export async function buildBackupZip(
       } else {
         // 脱敏备份覆盖派生明文闭包（R126 P1-1）：meta 里的转写/描述/摘录
         // 与 url_title/url_summary 一并不出境
+        redacted = true;
         content = SENSITIVE_EXPORT_PLACEHOLDER;
         title = SENSITIVE_EXPORT_PLACEHOLDER;
         tags = [];
@@ -157,12 +160,20 @@ export async function buildBackupZip(
       }
     }
     const noteAtts = attsByNote.get(n.id) ?? [];
-    const backupAtts: BackupAttachment[] = noteAtts.map((a, i) => {
-      const name = attachmentName(a.r2_key, i);
-      const path = `media/${n.id}/${name}`;
-      mediaEntries.push({ path, r2_key: a.r2_key });
-      return { path, name, mime: a.mime, size: a.size };
-    });
+    // 敏感闭包覆盖附件原件：敏感定义源往往就是附件本身（截图里的密码、
+    // 文件里的凭据），脱敏备份不打包其 R2 原件，仅在 manifest 计数说明；
+    // 勾选 include_sensitive 时才随明文一并导出
+    let backupAtts: BackupAttachment[] = [];
+    if (redacted) {
+      attachmentsRedacted += noteAtts.length;
+    } else {
+      backupAtts = noteAtts.map((a, i) => {
+        const name = attachmentName(a.r2_key, i);
+        const path = `media/${n.id}/${name}`;
+        mediaEntries.push({ path, r2_key: a.r2_key });
+        return { path, name, mime: a.mime, size: a.size };
+      });
+    }
     backupNotes.push({
       id: n.id,
       source: n.source,
@@ -194,7 +205,13 @@ export async function buildBackupZip(
     version: BACKUP_VERSION,
     exported_at: new Date().toISOString(),
     include_sensitive: includeSensitive,
-    counts: { notes: backupNotes.length, threads: threads.length, reports: reports.length, attachments: mediaEntries.length },
+    counts: {
+      notes: backupNotes.length,
+      threads: threads.length,
+      reports: reports.length,
+      attachments: mediaEntries.length,
+      attachments_redacted: attachmentsRedacted,
+    },
   };
 
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();

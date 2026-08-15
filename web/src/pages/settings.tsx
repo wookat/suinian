@@ -1084,7 +1084,7 @@ export function SettingsPage() {
         <div>
           <h2 className="text-sm font-medium">导出数据</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            导出全部笔记（含待分拣）/线索/周报。敏感笔记默认脱敏，勾选后才会明文导出
+            导出全部笔记（含待分拣）/线索/周报。敏感笔记默认脱敏（正文打码，其语音/图片/文件原件也不打包），勾选后才会明文导出
           </p>
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
@@ -1092,7 +1092,7 @@ export function SettingsPage() {
             checked={includeSensitive}
             onCheckedChange={(v) => setIncludeSensitive(v === true)}
           />
-          包含敏感内容（明文导出密码等加密笔记）
+          包含敏感内容（明文导出密码等加密笔记，含其附件原件）
         </label>
         {includeSensitive && (
           <p className="flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400">
@@ -1150,7 +1150,7 @@ export function SettingsPage() {
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          完整备份包含全部笔记字段与语音/图片/文件原件，可在下方「从完整备份恢复」无损搬家到新账号/新实例
+          完整备份包含全部笔记字段与语音/图片/文件原件（敏感笔记的附件原件仅在勾选敏感内容时打包），可在下方「从完整备份恢复」无损搬家到新账号/新实例
         </p>
         {exportMsg && (
           <p
