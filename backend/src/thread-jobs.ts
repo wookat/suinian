@@ -9,6 +9,15 @@ export const REBUILD_CRON_BUDGET_MS = 3 * 60_000;
 export const CLUSTER_BACKFILL_BUDGET_MS = 2 * 60_000;
 /** A running job whose heartbeat is older than this is considered stale (its slice died). */
 const JOB_STALE_MINUTES = 3;
+/**
+ * Hard lifetime cap: a job still not done this long after creation is marked
+ * error instead of being resumed again. A healthy thousand-note rebuild
+ * finishes in ~15-20 minutes; the cap leaves headroom for a degraded provider
+ * chain (primary down, every call falling back). Anything older means the
+ * state machine is looping without progress, and 'error' is the only way the
+ * user (and the next audit) can see that instead of an eternal 'running'.
+ */
+export const JOB_MAX_AGE_MINUTES = 120;
 
 export interface ThreadJobRow {
   id: string;
@@ -79,17 +88,36 @@ export async function runRebuildJobSlice(env: Env, jobId: string, timeBudgetMs: 
   try {
     const job = await env.DB.prepare("SELECT * FROM thread_jobs WHERE id = ?").bind(jobId).first<ThreadJobRow>();
     if (!job || job.status === "done" || job.status === "error") return;
+    const expired = await env.DB.prepare(
+      `SELECT 1 AS x FROM thread_jobs WHERE id = ? AND created_at < datetime('now', '-${JOB_MAX_AGE_MINUTES} minutes')`
+    )
+      .bind(jobId)
+      .first<{ x: number }>();
+    if (expired) {
+      await env.DB.prepare(
+        "UPDATE thread_jobs SET status = 'error', error = ?, updated_at = datetime('now') WHERE id = ?"
+      )
+        .bind(`重建超过 ${JOB_MAX_AGE_MINUTES} 分钟未完成，已终止（可重新发起）`, jobId)
+        .run();
+      return;
+    }
     let state: RebuildState;
     try {
       state = job.state ? (JSON.parse(job.state) as RebuildState) : newRebuildState();
     } catch {
       state = newRebuildState();
     }
-    await saveJobProgress(env, jobId, state, "running");
+    // only mark queued→running up front: refreshing the heartbeat before any
+    // real progress would hide a repeatedly-dying slice from the cron's
+    // staleness check
+    if (job.status === "queued") await saveJobProgress(env, jobId, state, "running");
     while (state.phase !== "done" && Date.now() < deadline) {
       // each step is bounded internally; checkpoint after every step so a
-      // dead slice loses at most one batch of work
-      state = await rebuildStep(env, job.user_id, state, Math.min(deadline, Date.now() + 30_000));
+      // dead slice loses at most one batch of work. The bound must leave the
+      // step time to return and checkpoint inside an HTTP waitUntil window
+      // (~30s): with a 10s bound even a step whose last AI call runs the full
+      // provider chain still persists its progress before the isolate ends.
+      state = await rebuildStep(env, job.user_id, state, Math.min(deadline, Date.now() + 10_000));
       await saveJobProgress(env, jobId, state, state.phase === "done" ? "done" : "running");
     }
     if (state.phase === "done") {

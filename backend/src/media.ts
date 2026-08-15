@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import { chatComplete } from "./ai";
+import { chatComplete, withTimeout } from "./ai";
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
 
@@ -17,6 +17,8 @@ export interface MediaIngestRequest {
   mime: string;
   fileName?: string;
   source?: string;
+  /** Client-generated idempotency key: replays of the same upload return the existing note. */
+  clientId?: string;
 }
 
 /** Parse /api/ingest/media body: multipart/form-data (file+type) or JSON base64. */
@@ -27,12 +29,14 @@ export async function parseMediaRequest(req: Request): Promise<MediaIngestReques
   let mime = "application/octet-stream";
   let fileName: string | undefined;
   let source: string | undefined;
+  let clientId: string | undefined;
 
   if (contentType.includes("multipart/form-data")) {
     const form = await req.formData().catch(() => null);
     if (!form) return { error: "invalid multipart body", status: 400 };
     type = (form.get("type") as string) || undefined;
     source = (form.get("source") as string) || undefined;
+    clientId = (form.get("client_id") as string) || undefined;
     const file = form.get("file") as unknown as File | string | null;
     if (!file || typeof file === "string" || typeof file.arrayBuffer !== "function") {
       return { error: "file required", status: 400 };
@@ -43,7 +47,7 @@ export async function parseMediaRequest(req: Request): Promise<MediaIngestReques
     fileName = file.name || undefined;
   } else {
     const body = await req
-      .json<{ type?: string; data_base64?: string; mime?: string; file_name?: string; source?: string }>()
+      .json<{ type?: string; data_base64?: string; mime?: string; file_name?: string; source?: string; client_id?: string }>()
       .catch(() => null);
     if (!body?.data_base64) return { error: "data_base64 required", status: 400 };
     // base64 length * 3/4 approximates decoded size; reject before decoding huge payloads
@@ -60,13 +64,15 @@ export async function parseMediaRequest(req: Request): Promise<MediaIngestReques
     mime = body.mime || mime;
     fileName = body.file_name;
     source = body.source;
+    clientId = body.client_id;
   }
 
   if (type !== "audio" && type !== "image" && type !== "file") {
     return { error: "type must be audio, image or file", status: 400 };
   }
   if (!bytes || bytes.length === 0) return { error: "empty file", status: 400 };
-  return { type, bytes, mime, fileName, source };
+  if (clientId && !/^[\w-]{1,64}$/.test(clientId)) clientId = undefined;
+  return { type, bytes, mime, fileName, source, clientId };
 }
 
 export function mediaTooLargeMessage(size: number): string {
@@ -93,13 +99,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 const AI_RUN_TIMEOUT_MS = 25_000;
 const CORRECT_TIMEOUT_MS = 10_000;
 
-/** Race a promise against a timeout; rejects with an Error on expiry. */
-export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
-  ]);
-}
+export { withTimeout } from "./ai";
 
 /** Whisper transcription via Workers AI; returns null on any failure. */
 export async function transcribeAudio(env: Pick<Env, "AI">, bytes: Uint8Array): Promise<string | null> {

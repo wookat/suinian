@@ -1,5 +1,5 @@
 import type { Env, NoteRow } from "./types";
-import { chatComplete } from "./ai";
+import { chatComplete, withTimeout } from "./ai";
 import { findGraphThreadMate } from "./graph";
 
 /** bge-m3 cosine similarity above which two ideas join the same thread directly. */
@@ -16,6 +16,9 @@ const SIM_CONFIRM_FLOOR = 0.62;
 /** Categories that participate in thread clustering: thoughts and the articles they react to. */
 export const THREAD_CATEGORIES = "('idea','collect')";
 const EMBED_MODEL = "@cf/baai/bge-m3";
+// clustering runs in background slices; a hung cold start must fail the one
+// note, not the whole slice (see thread-jobs.ts checkpointing)
+const EMBED_TIMEOUT_MS = 15_000;
 
 const CJK = "\\u4e00-\\u9fff\\u3400-\\u4dbf";
 const CJK_BEFORE_LATIN = new RegExp(`([${CJK}])([A-Za-z0-9])`, "g");
@@ -52,9 +55,11 @@ export function cosineSim(a: number[], b: number[]): number {
 async function embed(env: Env, text: string): Promise<number[] | null> {
   if (!env.AI) return null;
   try {
-    const res = (await env.AI.run(EMBED_MODEL, { text: [text.slice(0, 1000)] })) as {
-      data?: number[][];
-    };
+    const res = (await withTimeout(
+      env.AI.run(EMBED_MODEL, { text: [text.slice(0, 1000)] }) as Promise<{ data?: number[][] }>,
+      EMBED_TIMEOUT_MS,
+      "threads embed"
+    )) as { data?: number[][] };
     const v = res?.data?.[0];
     if (!Array.isArray(v) || v.length === 0) {
       console.error("threads: embed returned no vector", JSON.stringify(res).slice(0, 200));
@@ -120,6 +125,9 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
     const text = await chatComplete(env, {
       temperature: 0.3,
       max_tokens: 300,
+      // rebuild summarize runs inside short-lived waitUntil slices: the whole
+      // provider chain (primary retry + fallback) must fit one slice window
+      timeout_ms: 8_000,
       messages: [
         {
           role: "system",

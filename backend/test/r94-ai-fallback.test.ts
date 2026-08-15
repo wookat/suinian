@@ -106,7 +106,24 @@ describe("chatComplete degradation chain", () => {
       OPTS
     );
     expect(out).toBeNull();
-    expect(ai.run).toHaveBeenCalledTimes(1);
+    // transient errors get exactly one in-provider retry; no extra fallback pass
+    expect(ai.run).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry Workers AI after a timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const ai = { run: vi.fn(() => new Promise(() => {})) } as unknown as Ai;
+      const p = chatComplete(
+        { AI: ai, DEEPSEEK_API_KEY: "", DEEPSEEK_BASE_URL: "", AI_MODEL: "workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
+        { ...OPTS, timeout_ms: 1_000 }
+      );
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(await p).toBeNull();
+      expect(ai.run).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
