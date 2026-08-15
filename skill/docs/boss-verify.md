@@ -26,4 +26,4 @@
 | 扫码成功但发消息无回复 | 看日志是否有「后端返回 4xx/5xx」；检查 `/etc/suinian-bridge.env` 里 SUINIAN_TOKEN 是否正确后 `systemctl restart suinian-bridge` |
 | 回复「token 无效」 | `/etc/suinian-bridge.env` 的 SUINIAN_TOKEN 配错，改后重启服务 |
 | 服务状态/重启 | `systemctl status suinian-bridge` / `systemctl restart suinian-bridge`；崩溃自动拉起、开机自启已配置 |
-| 24h 会话过期 | SDK 自动重连免扫码；若日志再次出现二维码说明凭证失效，需重新扫码（`suinian-qr`） |
+| 24h 会话过期 | SDK 尝试用已存凭证重登；凭证失效则无法自动恢复，需重新扫码（`suinian-qr`）。可查 `https://suinian-api.zalize.com/health?probe=bridge`：`online` 正常、`waiting_scan` 等扫码、`stale/never_reported` 桥进程未上报 |

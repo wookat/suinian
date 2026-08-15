@@ -43,7 +43,7 @@ import {
   clientIp,
 } from "./auth";
 import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports, financeStats } from "./reports";
-import { getTodayReview, generateAllDailyReviews, readCronHeartbeats } from "./review";
+import { getTodayReview, generateAllDailyReviews, readCronHeartbeats, writeCronHeartbeat } from "./review";
 import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings, EMBED_BACKFILL_BUDGET_MS } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteNotesGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
 import { deleteUserData } from "./account";
@@ -63,7 +63,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMP
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, enumListIntent, topicEnumIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, enumListIntent, topicEnumIntent, classifyAskIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -174,6 +174,10 @@ function contentTooLong(c: { json: (o: object, s: 413) => Response }, content: s
   );
 }
 
+// bridge reports every ~60s; beyond this the process is presumed dead
+const BRIDGE_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
+const BRIDGE_STATUSES = new Set(["online", "waiting_scan", "starting"]);
+
 app.get("/", (c) => c.json({ name: "suinian-api", status: "ok" }));
 app.get("/health", async (c) => {
   // ?probe=ai runs one tiny completion through the degradation chain so external
@@ -181,6 +185,26 @@ app.get("/health", async (c) => {
   if (c.req.query("probe") === "ai") {
     const ai = await aiProbe(c.env);
     return c.json({ ok: true, ai }, ai.ok ? 200 : 503);
+  }
+  // ?probe=bridge reports the WeChat bridge state from its heartbeat so external
+  // monitoring sees the real login state (online / waiting_scan / stale) instead
+  // of just "the process is running"
+  if (c.req.query("probe") === "bridge") {
+    const hb = (await readCronHeartbeats(c.env, ["wechat_bridge"]))[0];
+    let stats: { status?: string; detail?: string } = {};
+    try {
+      stats = hb?.stats ? (JSON.parse(hb.stats) as typeof stats) : {};
+    } catch {
+      /* keep empty */
+    }
+    const ageMs = hb ? Date.now() - Date.parse(hb.last_run_at.replace(" ", "T") + "Z") : null;
+    const stale = ageMs === null || !Number.isFinite(ageMs) || ageMs > BRIDGE_HEARTBEAT_STALE_MS;
+    const status = hb ? (stale ? "stale" : (stats.status ?? "unknown")) : "never_reported";
+    const ok = status === "online";
+    return c.json(
+      { ok, bridge: { status, last_seen_at: hb?.last_run_at ?? null, detail: stats.detail ?? null } },
+      ok ? 200 : 503
+    );
   }
   return c.json({ ok: true });
 });
@@ -894,6 +918,24 @@ const CATEGORY_LABEL: Record<string, string> = {
   income: "收入",
   transfer: "资金往来",
 };
+
+/**
+ * Render enumeration answer lines, folding notes that display identically
+ * (same category + same first line, e.g. re-saved duplicates or several
+ * encrypted rows) into one line with a ×N count.
+ */
+function enumNoteLines(rows: NoteRow[]): string[] {
+  const order: string[] = [];
+  const counts = new Map<string, number>();
+  for (const n of rows) {
+    const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
+    const text = n.is_sensitive ? "（加密的敏感笔记）" : (n.title || n.content.split("\n")[0] || "").slice(0, 40);
+    const line = "- ［" + label + "］" + text;
+    if (!counts.has(line)) order.push(line);
+    counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  return order.map((line) => (counts.get(line)! > 1 ? line + " ×" + counts.get(line) : line));
+}
 
 async function fetchLinkMetaInto(env: Env, noteId: string, urls: string[]): Promise<void> {
   if (urls.length === 0) return;
@@ -2058,6 +2100,19 @@ app.post("/api/ingest/wechat", async (c) => {
   return c.json({ note: await noteToJsonDecrypted(c.env, note), reply }, 201);
 });
 
+// ---- POST /api/bridge/heartbeat ----
+// The VPS bridge reports its login state every minute; /health?probe=bridge
+// (and UptimeRobot on it) reads this row, so a missing/stale heartbeat means
+// the bridge is down and "waiting_scan" means the boss needs to re-scan.
+app.post("/api/bridge/heartbeat", async (c) => {
+  const body = await c.req.json<{ status?: unknown; detail?: unknown }>().catch(() => null);
+  const status = typeof body?.status === "string" && BRIDGE_STATUSES.has(body.status) ? body.status : null;
+  if (!status) return c.json({ error: "status must be one of: " + [...BRIDGE_STATUSES].join("/") }, 400);
+  const detail = typeof body?.detail === "string" ? body.detail.slice(0, 200) : undefined;
+  await writeCronHeartbeat(c.env, "wechat_bridge", "bridge", { status, ...(detail ? { detail } : {}) });
+  return c.json({ ok: true });
+});
+
 // ---- WeChat binding (authed; shared by 公众号 and 企微客服 channels) ----
 // POST /api/wechat/bind-code: generate a fresh 6-digit binding code
 app.post("/api/wechat/bind-code", async (c) => {
@@ -2467,11 +2522,11 @@ app.post("/api/ask", async (c) => {
   // 极值/排序类统计（R126 P1-3）：「最早/最新/最长一条笔记」是一条
   // min/max/order-by SQL 就能精确回答的，绝不交 LLM 对 top-k 召回猜答
   const extremeKind = extremeQueryIntent(question) ?? extremeQueryIntent(recallQuestion);
-  if (extremeKind) {
+  const answerExtreme = async (kind: NonNullable<ReturnType<typeof extremeQueryIntent>>) => {
     const order =
-      extremeKind === "earliest"
+      kind === "earliest"
         ? "created_at ASC, id ASC"
-        : extremeKind === "latest"
+        : kind === "latest"
           ? "created_at DESC, id DESC"
           : "LENGTH(content) DESC, id ASC";
     const row = await c.env.DB.prepare(
@@ -2479,11 +2534,12 @@ app.post("/api/ask", async (c) => {
     )
       .bind(userId)
       .first<NoteRow>();
-    const answer = buildExtremeAnswer(extremeKind, row ?? null);
+    const answer = buildExtremeAnswer(kind, row ?? null);
     const refs = row && !row.is_sensitive ? [{ index: 1, note_id: row.id }] : [];
     const notes = row && !row.is_sensitive ? [noteToJson(row)] : [];
     return c.json({ answer, references: refs, notes, extreme_aggregate: true });
-  }
+  };
+  if (extremeKind) return answerExtreme(extremeKind);
   // 计数类问题同理走 SQL COUNT 精确统计（R124 P1-2：「记了多少条」曾被 LLM
   // 从 top-k 召回窗口猜成 16，实为 210）；意图/时间同样以原始问题优先。
   // R126：分类/敏感/日均限定也是可 SQL 化的精确计数，不再落 fail-closed
@@ -2545,7 +2601,17 @@ app.post("/api/ask", async (c) => {
   // 主题枚举（R130 P1-1）：「我看过什么书/存过哪些菜谱」先走关键词/标签
   // LIKE 全量筛选（与计数/财务同一精确查询家族），语义 top-k 只在零命中时
   // 兜底（R129 R8：宽泛主题词的语义召回被高频主题压过，答非所问）。
-  const enumTopic = topicEnumIntent(question) ?? topicEnumIntent(recallQuestion);
+  let enumTopic = topicEnumIntent(question) ?? topicEnumIntent(recallQuestion);
+  let enumList = enumListIntent(question) || enumListIntent(recallQuestion);
+  // 统一意图分类（R132 P1，落实 R131 D-1）：规则全部未命中时才问 LLM 一次，
+  // 只接受参数可严格校验的枚举/极值意图（主题词须出现在原问题中）；
+  // 校验不过或 AI 不可用则回落普通召回，既有规则路由行为不变。
+  if (!enumTopic && !enumList) {
+    const llmIntent = await classifyAskIntent(c.env, question);
+    if (llmIntent?.intent === "topic_enum" && llmIntent.topic) enumTopic = llmIntent.topic;
+    else if (llmIntent?.intent === "enum_list") enumList = true;
+    else if (llmIntent?.intent === "extreme" && llmIntent.extreme) return answerExtreme(llmIntent.extreme);
+  }
   if (enumTopic) {
     const like = `%${enumTopic}%`;
     const tConds = ["user_id = ?", "deleted_at IS NULL", "(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)"];
@@ -2572,12 +2638,7 @@ app.post("/api/ask", async (c) => {
     if (tTotal > 0) {
       const tSens = tTotalRow?.sens ?? 0;
       const tRows = tListRows.results ?? [];
-      const tLines = tRows.map((n) => {
-        const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
-        if (n.is_sensitive) return `- ［${label}］（加密的敏感笔记）`;
-        const text = (n.title || n.content.split("\n")[0] || "").slice(0, 40);
-        return `- ［${label}］${text}`;
-      });
+      const tLines = enumNoteLines(tRows);
       let answer = `${timeRange?.phrase ?? ""}和「${enumTopic}」相关的记录共 ${tTotal} 条`;
       if (tSens > 0) answer += `（含 ${tSens} 条加密的敏感笔记）`;
       answer += `：\n\n${tLines.join("\n")}`;
@@ -2594,12 +2655,17 @@ app.post("/api/ask", async (c) => {
     }
     // 关键词零命中：落回普通召回（语义仍可能兜底），不 dead-end
   }
-  // 时间窗枚举（「上周都记了什么」）：窗口内 SQL 全量列举 + 精确总数，
-  // 不走 top-k 召回（R123：枚举不全且无总数口径）
-  if ((enumListIntent(question) || enumListIntent(recallQuestion)) && timeRange?.start) {
-    const eConds = ["user_id = ?", "deleted_at IS NULL", "created_at >= ?"];
-    const eBinds: unknown[] = [userId, timeRange.start];
-    if (timeRange.end) {
+  // 时间窗/全量枚举（「上周都记了什么」「列出我所有的笔记」）：SQL 全量列举 +
+  // 精确总数，不走 top-k 召回（R123：枚举不全且无总数口径）；无时间限定时
+  // 枚举全部笔记（R132：同义问法实测「列出所有笔记」无精确路由可走）
+  if (enumList) {
+    const eConds = ["user_id = ?", "deleted_at IS NULL"];
+    const eBinds: unknown[] = [userId];
+    if (timeRange?.start) {
+      eConds.push("created_at >= ?");
+      eBinds.push(timeRange.start);
+    }
+    if (timeRange?.end) {
       eConds.push("created_at < ?");
       eBinds.push(timeRange.end);
     }
@@ -2616,16 +2682,12 @@ app.post("/api/ask", async (c) => {
     const total = totalRow?.cnt ?? 0;
     const sens = totalRow?.sens ?? 0;
     const rows = (listRows.results ?? []).slice(0, ENUM_LIST_MAX);
+    const phrase = timeRange?.start ? timeRange.phrase : "";
     if (total === 0) {
-      return c.json({ answer: `${timeRange.phrase}你没有记录任何笔记。`, references: [], notes: [], enum_aggregate: true });
+      return c.json({ answer: `${phrase}你没有记录任何笔记。`, references: [], notes: [], enum_aggregate: true });
     }
-    const lines = rows.map((n) => {
-      const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
-      if (n.is_sensitive) return `- ［${label}］（加密的敏感笔记）`;
-      const text = (n.title || n.content.split("\n")[0] || "").slice(0, 40);
-      return `- ［${label}］${text}`;
-    });
-    let answer = `${timeRange.phrase}你一共记了 ${total} 条笔记`;
+    const lines = enumNoteLines(rows);
+    let answer = `${phrase}你一共记了 ${total} 条笔记`;
     if (sens > 0) answer += `（含 ${sens} 条加密的敏感笔记）`;
     answer += `：\n\n${lines.join("\n")}`;
     if (total > rows.length) answer += `\n\n……其余 ${total - rows.length} 条可在时间流按时间筛选查看。`;
@@ -3425,6 +3487,13 @@ export { app };
 
 /** Concurrent LLM triage calls per retriage round (IO-bound, well under provider limits). */
 const RETRIAGE_CONCURRENCY = 5;
+/**
+ * Retriage attempts after which a note stops being retried (R132, from
+ * audit-r131 §3.1: 9 corpus notes cycled 「分拣延迟，将自动重试」 forever). The
+ * note keeps its fallback category and needs_retriage is cleared so the sweep
+ * and the UI treat it as sorted; the user can still edit the category by hand.
+ */
+const RETRIAGE_MAX_ATTEMPTS = 8;
 
 
 async function retriageOne(
@@ -3447,12 +3516,16 @@ async function retriageOne(
   if (!triage) {
     // the whole AI chain is down: after a grace period stop showing the user a
     // spinner forever — give the note the fallback category and mark it so the
-    // sweep re-triages it (WHERE below matches it again) once AI recovers
+    // sweep re-triages it once AI recovers, but only up to RETRIAGE_MAX_ATTEMPTS
+    // times so a note the model can never triage reaches a terminal state
     if (Date.now() - Date.parse(`${row.created_at.replace(" ", "T")}Z`) > TRIAGE_DEGRADE_AFTER_MS) {
       await env.DB.prepare(
-        "UPDATE notes SET category = ?, meta = json_set(coalesce(meta, '{}'), '$.needs_retriage', json('true')), updated_at = datetime('now') WHERE id = ? AND category IS NULL"
+        `UPDATE notes SET category = coalesce(category, ?), meta = json_set(coalesce(meta, '{}'),
+           '$.retriage_attempts', coalesce(json_extract(meta, '$.retriage_attempts'), 0) + 1,
+           '$.needs_retriage', json(CASE WHEN coalesce(json_extract(meta, '$.retriage_attempts'), 0) + 1 >= ? THEN 'false' ELSE 'true' END)),
+           updated_at = datetime('now') WHERE id = ?`
       )
-        .bind(FALLBACK_TRIAGE.category, row.id)
+        .bind(FALLBACK_TRIAGE.category, RETRIAGE_MAX_ATTEMPTS, row.id)
         .run();
     }
     return false;

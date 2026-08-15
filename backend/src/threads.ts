@@ -681,12 +681,32 @@ export async function reconcileThreads(
 export async function mergeDuplicateThreads(env: Env, userId: string, aroundThreadId?: string): Promise<number> {
   try {
     const { results } = await env.DB.prepare(
-      "SELECT id, created_at FROM threads WHERE user_id = ? AND note_count > 0 ORDER BY created_at ASC LIMIT 100"
+      "SELECT id, created_at, title FROM threads WHERE user_id = ? AND note_count > 0 ORDER BY created_at ASC LIMIT 100"
     )
       .bind(userId)
-      .all<{ id: string; created_at: string }>();
+      .all<{ id: string; created_at: string; title: string }>();
     let threads = results ?? [];
     if (threads.length < 2) return 0;
+    let merged = 0;
+    // identical-title fold first (R132 D-4): two threads carrying the exact
+    // same LLM-generated title are the same topic even when their newest
+    // representatives drift below the embedding confirm band
+    for (let i = 0; i < threads.length; i++) {
+      for (let j = threads.length - 1; j > i; j--) {
+        const a = threads[i];
+        const b = threads[j];
+        if (!a.title || a.title === "未命名线索" || a.title !== b.title) continue;
+        await env.DB.prepare("UPDATE notes SET thread_id = ?, updated_at = datetime('now') WHERE thread_id = ?")
+          .bind(a.id, b.id)
+          .run();
+        await env.DB.prepare("DELETE FROM threads WHERE id = ?").bind(b.id).run();
+        await reconcileThread(env, a.id);
+        threads = threads.filter((x) => x.id !== b.id);
+        merged++;
+        console.log(`threads: merged same-title thread ${b.id} into ${a.id} (user=${userId}, title=${a.title})`);
+      }
+    }
+    if (threads.length < 2) return merged;
     type Rep = { vector: number[] | null; text: string };
     const reps = new Map<string, Rep | null>();
     const repOf = async (threadId: string): Promise<Rep | null> => {
@@ -718,7 +738,6 @@ export async function mergeDuplicateThreads(env: Env, userId: string, aroundThre
       }
       return reps.get(threadId)!;
     };
-    let merged = 0;
     // a scoped merge can leave the surviving thread with further duplicates
     // (3+ concurrent saves): keep re-scanning around the survivor until stable
     let scope = aroundThreadId;

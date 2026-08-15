@@ -47,7 +47,7 @@ docker compose run --rm suinian-wechat-bridge   # 首次：终端扫码
 docker compose up -d                            # 之后：凭证已持久化，免扫码
 ```
 
-凭证存在 named volume `wechatbot-creds`，重启不需要重新扫码；iLink 会话 24h 过期后 SDK 自动重连（详见 [docs/clawbot-limits.md](docs/clawbot-limits.md)）。
+凭证存在 named volume `wechatbot-creds`，重启不需要重新扫码；iLink 会话 24h 过期后 SDK 会尝试用已存凭证重新登录，但凭证失效时**无法自动恢复**，需要人工重新扫码（生产上 `/health?probe=bridge` 会以 `waiting_scan` 状态如实暴露，详见 [docs/clawbot-limits.md](docs/clawbot-limits.md)）。
 
 ### 生产部署（国内服务器 · systemd 常驻）
 

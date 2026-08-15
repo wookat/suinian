@@ -40,8 +40,36 @@ const loginCallbacks = {
   onExpired: () => console.log('二维码已过期，正在刷新…'),
 }
 
-bot.on('session:expired', () => console.warn('[suinian] iLink 会话过期，SDK 正在自动重新登录…'))
-bot.on('session:restored', () => console.log('[suinian] 会话已恢复'))
+// ---- 状态心跳：把真实登录状态上报后端，/health?probe=bridge 如实暴露 ----
+const HEARTBEAT_INTERVAL_MS = 60_000
+type BridgeStatus = 'starting' | 'waiting_scan' | 'online'
+let bridgeStatus: BridgeStatus = 'starting'
+let bridgeDetail: string | undefined
+
+function setBridgeStatus(status: BridgeStatus, detail?: string): void {
+  bridgeStatus = status
+  bridgeDetail = detail
+  void sendHeartbeat()
+}
+
+async function sendHeartbeat(): Promise<void> {
+  try {
+    await client.heartbeat(bridgeStatus, bridgeDetail)
+  } catch (err) {
+    console.warn('[suinian] 心跳上报失败：', err instanceof Error ? err.message : err)
+  }
+}
+
+setInterval(() => void sendHeartbeat(), HEARTBEAT_INTERVAL_MS).unref?.()
+
+bot.on('session:expired', () => {
+  console.warn('[suinian] iLink 会话过期，SDK 正在自动重新登录…')
+  setBridgeStatus('waiting_scan', 'session expired')
+})
+bot.on('session:restored', () => {
+  console.log('[suinian] 会话已恢复')
+  setBridgeStatus('online')
+})
 bot.on('error', (err: unknown) => console.error('[suinian] bot error:', err))
 
 bot.onMessage(async (msg: IncomingMessage) => {
@@ -114,7 +142,7 @@ function guessMime(type: NormalizedMessage['type'], fileName?: string): string {
 }
 
 /** 扫码可能超过单轮二维码有效期（约 60s），失败自动换新码重试 */
-async function loginWithRetry(maxAttempts = 10): Promise<void> {
+async function loginWithRetry(maxAttempts = 3): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       await bot.login({ callbacks: loginCallbacks })
@@ -127,12 +155,33 @@ async function loginWithRetry(maxAttempts = 10): Promise<void> {
   }
 }
 
+/**
+ * 登录直到成功：登录失效需要人工扫码，进程不退出（退出只会让 systemd 无限
+ * 重启刷日志），而是上报 waiting_scan 心跳并按递增间隔刷新二维码等待扫码。
+ */
+async function loginUntilSuccess(): Promise<void> {
+  for (let round = 1; ; round++) {
+    try {
+      await loginWithRetry()
+      return
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const delayMs = Math.min(60_000 * 2 ** Math.min(round - 1, 4), 16 * 60_000)
+      setBridgeStatus('waiting_scan', `login attempt round ${round} failed: ${msg}`)
+      console.warn(`[suinian] 登录未完成（第 ${round} 轮：${msg}），等待扫码；${Math.round(delayMs / 1000)}s 后刷新二维码（ssh 后运行 suinian-qr 查看）`)
+      await new Promise((r) => setTimeout(r, delayMs))
+    }
+  }
+}
+
 async function main() {
   console.log('[suinian] wechat bridge 启动，后端：' + cfg.apiUrl)
-  await loginWithRetry()
+  setBridgeStatus('starting')
+  await loginUntilSuccess()
   await bot.start()
   reviewPusher.start()
   todoPusher.start()
+  setBridgeStatus('online')
   console.log('[suinian] 已上线，等待微信消息…（? 开头问答，其余入库；每日 ' + reviewPusher.pushHour + ' 点推今日回顾、' + todoPusher.pushHour + ' 点推待办提醒）')
 }
 
