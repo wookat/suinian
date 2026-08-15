@@ -9,7 +9,7 @@
 修复（`skill/bridge/src/index.ts`）：
 1. **不再崩溃**：`loginUntilSuccess()` 登录失败不退出进程，上报 `waiting_scan` 心跳并按递增间隔（1→16 分钟封顶）刷新二维码等扫码；非登录类启动错误仍退出交给 systemd。
 2. **真实状态心跳**：bridge 每 60s `POST /api/bridge/heartbeat`（走既有 Bearer 鉴权，复用既有 `cron_heartbeats` 表，勿增新实体），状态机 `starting / waiting_scan / online`，`session:expired/restored` 事件同步更新。
-3. **如实暴露**：`/health?probe=bridge` 读心跳——`online` 返回 200；`waiting_scan`、心跳超 5 分钟（`stale`）、从未上报（`never_reported`）一律 503。UptimeRobot 按既有 /health 口径加一个该 URL 的监控即可告警，不伪称在线。
+3. **如实暴露**：`/health?probe=bridge` 读心跳——`online` 返回 200；`waiting_scan`、心跳超 5 分钟（`stale`）、从未上报（`never_reported`）一律 503。已按既有 /health 口径新增 UptimeRobot 监控「Suinian bridge probe」（该 URL，5 分钟间隔，邮件告警同既有监控）`[生产实测]`。部署后实测：bridge 进程存活、`NRestarts=0`（不再崩溃循环），probe 如实返回 503 `waiting_scan`（需老板扫码后才会转 online，不伪称在线）。
 4. 文档纠偏（R131 P2-9）：`skill/README.md`、`skill/docs/boss-verify.md` 删除「自动重连」不实表述，改为「凭证失效需人工扫码 + probe 暴露 waiting_scan」。
 
 ## P1：枚举同义问法漏路由 7/15（R131 P1-3 / D-1）
@@ -18,8 +18,10 @@
 
 - 既有确定性规则（财务/计数/极值/主题枚举/时间窗枚举）**先行、行为不变**；全部未命中时才调用一次 LLM 意图分类（temperature 0，单行 JSON）。
 - **fail-closed 严格校验**：意图必须在白名单（topic_enum/enum_list/extreme/general）；`topic_enum` 的主题词必须逐字出现在原问题中、长度 1-12、非泛指词（复用 `TOPIC_ENUM_GENERIC_RE`）；校验不过、JSON 不合法、AI 不可用一律回落普通召回。财务/计数精确语义**不经 LLM**，保持纯规则（涉钱涉数零容错）。
-- 单测 13 项覆盖幻觉主题词、泛指词、非法 JSON、未知意图、AI 不可用等回落路径（`backend/test/r132-ask-intent.test.ts`）。
-- 误路由/漏路由各 15 问实测：见附录 A（部署后生产实测）。
+- **列举线索词闸门**（第一轮生产实测发现 1 例误路由后补）：LLM 判为 topic_enum/enum_list 时，原问题必须含显式列举线索（哪些/列出/清单/都有什么…，`ASK_ENUM_CUE_RE`），否则回落普通召回；「置身事内讲了什么」这类内容问题不再被枚举拦截。
+- `enum_list` 支持无时间限定的全量枚举（「列出我所有的笔记」），仍走 SQL 精确总数口径。
+- 单测 14 项覆盖幻觉主题词、泛指词、无列举线索、非法 JSON、未知意图、AI 不可用等回落路径（`backend/test/r132-ask-intent.test.ts`）。
+- 误路由/漏路由各 15 问生产实测 `[生产实测]`：**漏路由 1/15、误路由 0/15**（R131 基线漏 7/15），明细见附录 A。
 
 ## P1：36% 笔记不入线索归因（R131 P1-2）
 
@@ -57,6 +59,21 @@
 
 见 PR 描述与附录（本地 typecheck/单测/eval、web lint/build、QA-R132 账号全链路、bridge VPS 部署验证、worker+Pages 上线）。
 
-## 附录 A：意图路由 15+15 实测
+## 附录 A：意图路由 15+15 实测 `[生产实测]`
 
-（部署后生产实测填充）
+方法：临时 QA 账号（[QA-R132]-routing-*，测完即注销）植入 20 条笔记，对生产 API `/api/ask` 逐问，按应答 `enum_aggregate`/枚举口径标识判定路由。
+
+第一轮（仅 LLM 分类 + 主题词校验）：漏 4/15、误 1/15（「置身事内讲了什么」被判枚举）→ 补列举线索词闸门 + enum_list 全量枚举后复测：
+
+漏路由 15 问（期望进精确枚举）：14 PASS / 1 MISS
+
+- PASS：列一下我记过的书 / 我的书单都有什么 / 给我一个我收藏的菜谱清单 / 把我存的菜谱都列出来 / 帮我列出关于咖啡的笔记 / 我想去的地方都列一下 / 我记过的电影都有什么 / 把我关于跑步的记录列出来 / 列出我所有的笔记 / 我最近记了什么，都列一下 / 给我一份我全部笔记的清单 / 我记过的菜都有什么 / 关于英语的笔记帮我列一下 / 我的咖啡笔记清单
+- MISS：「我记的健身内容都有什么」（LLM 分类未命中，回落普通召回仍可回答，fail-closed 预期内）
+
+误路由 15 问（期望不进精确路由）：15/15 PASS（含第一轮误判的「置身事内讲了什么」，其余：我为什么膝盖不舒服 / 妈妈生日送什么好 / 我什么时候去医院复诊 / 英语学习用什么方法 / 可乐鸡翅怎么做更入味 / 杭州哪家茶馆不错 / 咖啡豆推荐哪种 / 季度报告要发给谁 / 跑步之后膝盖疼怎么办 / 手冲咖啡用多少度的水 / 番茄牛腩要焞多久 / 跑鞋买贵了吗 / 深蹲的时候要注意什么 / 明朝那些事儿好看吗）
+
+summary：missed=1/15、false=0/15（脚本与完整日志保存于会话机，未入库）。
+
+## 附录 B：backend ask-eval `[生产实测]`
+
+临时 eval 账号全量 81 问：dev 58/60（97%）、holdout 19/21（90%）、ALL 77/81（95%），与 R131 基线持平不回退；账号测完已注销。
