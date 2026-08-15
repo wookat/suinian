@@ -361,6 +361,26 @@ export function topicEnumIntent(question: string): string | null {
   return null;
 }
 
+// ---- 元属性检索线索（R134 D-3，P2-1 根因）----
+// 「语音里我让自己提醒什么事」这类按输入形态找回的问法：「语音」二字
+// 通常不在转写正文里，语义检索也不把 raw_type 当线索。规则识别形态词后，
+// 召回阶段把 raw_type 匹配的笔记并入候选（只增补、不排除，答案仍由 LLM
+// 依据内容给出），不动召回架构。
+
+export type MediaType = "voice" | "image" | "file";
+
+const MEDIA_TYPE_CUES: [RegExp, MediaType][] = [
+  [/语音|录音|口述/, "voice"],
+  [/图片|照片|截图|拍的/, "image"],
+  [/文件|文档|附件/, "file"],
+];
+
+/** 问题里的输入形态词（语音/图片/文件）→ raw_type；无形态词返回 null。 */
+export function mediaTypeIntent(question: string): MediaType | null {
+  for (const [re, t] of MEDIA_TYPE_CUES) if (re.test(question)) return t;
+  return null;
+}
+
 // ---- 统一意图分类（R132 P1，落实 R131 D-1）----
 // 模型为主、规则兜底：既有正则家族保留为高精度第一道（命中即走精确路由，
 // 行为与历史轮完全一致）；正则全部未命中时才调用 LLM 意图分类补召回
@@ -377,17 +397,17 @@ export interface AskIntentResult {
 }
 
 const ASK_INTENT_SYSTEM = `你是个人笔记问答系统的意图分类器。用户在向自己的笔记库提问，请把问题分类为以下意图之一，只输出一行 JSON，不要输出任何其他文本：
-- topic_enum：要求列举与某个具体主题相关的笔记/记录（例：「我看过哪些书」「列一下我存过的菜谱」「AI 相关的记录都有什么」「给我一份读过的书的清单」）。输出 {"intent":"topic_enum","topic":"主题词"}；主题词必须是问题里出现的具体名词（1-8 个字，如 书/菜谱/AI），不能是「东西/内容/事情/笔记/记录」这类泛指词。
+- topic_enum：要求列举与某个具体主题相关的笔记/记录（例：「我看过哪些书」「列一下我存过的菜谱」「盘点一下我记过的菜谱」「AI 相关的记录都有什么」「给我一份读过的书的清单」）。输出 {"intent":"topic_enum","topic":"主题词"}；主题词必须是问题里出现的具体词（1-8 个字，如 书/菜谱/AI），不能是「东西/内容/事情/笔记/记录」这类泛指词；主题是「想去的地方」这类描述时，取笔记里最可能写到的词（「列一下我想去的地方」→ {"intent":"topic_enum","topic":"想去"}）。
 - enum_list：要求列举某段时间记了什么，无主题限定（例：「上周都记了什么」「这个月的笔记清单」「最近记的都有什么」）。输出 {"intent":"enum_list"}
 - extreme：问最早/最新/最长的一条笔记（例：「我的第一条笔记是什么」）。输出 {"intent":"extreme","extreme":"earliest"}（或 latest / longest）
-- general：其他一切问题，包括：针对具体内容/事实的提问（是什么/为什么/什么时候）、数量统计、花销收入合计、单笔消费、闲聊。输出 {"intent":"general"}
+- general：其他一切问题，包括：针对具体内容/事实的提问（是什么/为什么/什么时候）、要求归纳/梳理某主题的内容（「这个项目做过哪些关键决定」「健身计划有哪些调整」——问的是笔记里写了什么，不是要笔记清单）、数量统计、花销收入合计、单笔消费、闲聊。输出 {"intent":"general"}
 拿不准时一律输出 {"intent":"general"}。`;
 
 const ASK_INTENT_VALUES = new Set(["topic_enum", "enum_list", "extreme", "general"]);
 
 // 枚举意图必须带显式列举措辞（fail-closed）：拦下 LLM 把「置身事内讲了什么」
 // 这类内容型提问误判成 topic_enum 的假阳性——列举问法一定带列举线索词。
-export const ASK_ENUM_CUE_RE = /哪些|列一下|列出|罗列|清单|列表|都有(?:什么|啥)|都记|都存|都写|所有|全部/;
+export const ASK_ENUM_CUE_RE = /哪些|列一下|列出|罗列|盘点|清单|列表|都有(?:什么|啥)|都记|都存|都写|所有|全部/;
 const ASK_EXTREME_VALUES = new Set(["earliest", "latest", "longest"]);
 
 /** 校验 LLM 给出的主题词：必须出现在原问题里、长度合理、非泛指词（fail-closed）。 */

@@ -66,9 +66,9 @@ flowchart LR
     subgraph Cloudflare
         API[backend<br/>Workers + Hono]
         D1[(D1 notes/threads/reports)]
-        AI2[Workers AI<br/>bge-m3 embedding]
+        AI2[Workers AI<br/>分拣/摘要/周报/问答主力<br/>+ bge-m3 embedding]
     end
-    DS[DeepSeek API<br/>分拣/摘要/周报/问答]
+    DS[DeepSeek/OpenAI 兼容 API<br/>可选外部主链，失败自动切 Workers AI]
     WX --> API
     AND --> API
     WEB --> API
@@ -106,7 +106,7 @@ cd web && npm install && cp .env.example .env.local && npm run dev   # 另开终
 
 | 目录 | 内容 | 技术栈 |
 |---|---|---|
-| [`backend/`](backend/) | notes API、DeepSeek 分拣管线、线索聚类、周报、加密 | Cloudflare Workers + Hono + D1 |
+| [`backend/`](backend/) | notes API、AI 分拣管线（Workers AI 主力，可接 DeepSeek/OpenAI 兼容 API）、线索聚类、周报、加密 | Cloudflare Workers + Hono + D1 |
 | [`web/`](web/) | 时间流 / 待办 / 线索 / 周报视图，PWA | React 19 + Vite + Tailwind v4 + shadcn/ui |
 | [`extension/`](extension/) | 浏览器剪藏扩展：一键存页 / 划词保存 / 备注标签 | WXT + Manifest V3 + Readability |
 | [`skill/`](skill/) | 微信 bot 桥（独立进程）+ OpenClaw skill | Node.js / Docker |

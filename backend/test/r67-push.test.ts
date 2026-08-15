@@ -301,6 +301,18 @@ describe("sweepTodoReminders", () => {
     expect(pushCalls.length).toBe(0);
   });
 
+  it("does not consume the reminder when the user has no subscription (R134 P2-4)", async () => {
+    const now = new Date("2026-08-08T02:00:00Z");
+    const state = makeState({ notes: [todoNote("n1", "u1", "2026-08-08T09:30:00+08:00")] });
+    state.subs = [];
+    const env = fakeEnv(state, vapid);
+    const stats = await sweepTodoReminders(env, now);
+    expect(stats.reminded).toBe(0);
+    expect(stats.skipped_no_sub).toBe(1);
+    expect(state.notes[0].todo_reminded_at).toBeNull();
+    expect(pushCalls.length).toBe(0);
+  });
+
   it("deletes the subscription when the push service returns 410", async () => {
     pushStatus = 410;
     const now = new Date("2026-08-08T02:00:00Z");
@@ -428,8 +440,9 @@ describe("sweepDailyReviewPush", () => {
     expect(pushCalls.length).toBe(0);
   });
 
-  it("uses the subscription timezone (New York morning != Shanghai morning)", async () => {
-    const state = makeState("America/New_York");
+  it("uses the user preference timezone, same source as review generation (R134 P2-5)", async () => {
+    const state = makeState("Asia/Shanghai"); // stale subscription tz must NOT win
+    state.prefs.set("u1", { daily_review_push: 1, todo_reminder_push: 1, tz: "America/New_York" });
     const now = new Date("2026-08-08T01:00:00Z"); // 21:00 previous day NY -> pushes for NY's local date
     const stats = await sweepDailyReviewPush(fakeEnv(state, vapid), now);
     expect(stats.pushed).toBe(1);

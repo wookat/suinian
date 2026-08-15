@@ -63,7 +63,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMP
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, enumListIntent, topicEnumIntent, classifyAskIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, enumListIntent, topicEnumIntent, classifyAskIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -180,8 +180,9 @@ const BRIDGE_STATUSES = new Set(["online", "waiting_scan", "starting"]);
 
 app.get("/", (c) => c.json({ name: "suinian-api", status: "ok" }));
 app.get("/health", async (c) => {
-  // ?probe=ai runs one tiny completion through the degradation chain so external
-  // monitoring can distinguish healthy / degraded (fallback) / AI down
+  // ?probe=ai runs one tiny completion through the provider chain. provider
+  // 报告的是链位而非服务质量：fallback=Workers AI 是当前主力基线（DeepSeek 未
+  // 充值期间的常态），不是降级——外部告警只看 ok:false（R134 口径）
   if (c.req.query("probe") === "ai") {
     const ai = await aiProbe(c.env);
     return c.json({ ok: true, ai }, ai.ok ? 200 : 503);
@@ -2744,6 +2745,31 @@ app.post("/api/ask", async (c) => {
     .all<NoteRow>();
   let notes = results ?? [];
 
+  // 元属性召回（R134 D-3，P2-1）：问题按输入形态提问（语音/图片/文件）时，
+  // 把该 raw_type 的最近笔记并入候选——形态词不在转写正文里，关键词与语义都够不着
+  const mediaType = mediaTypeIntent(question) ?? mediaTypeIntent(recallQuestion);
+  if (mediaType) {
+    const mConds = ["user_id = ?", "is_sensitive = 0", "deleted_at IS NULL", "raw_type = ?"];
+    const mBinds: unknown[] = [userId, mediaType];
+    if (timeRange?.start) {
+      mConds.push("created_at >= ?");
+      mBinds.push(timeRange.start);
+    }
+    if (timeRange?.end) {
+      mConds.push("created_at < ?");
+      mBinds.push(timeRange.end);
+    }
+    const mr = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE ${mConds.join(" AND ")} ORDER BY created_at DESC LIMIT 10`
+    )
+      .bind(...mBinds)
+      .all<NoteRow>();
+    const haveIds = new Set(notes.map((n) => n.id));
+    const mediaExtras = (mr.results ?? []).filter((n) => !haveIds.has(n.id));
+    // 形态命中排在前面，与关键词命中共享 20 条上限
+    if (mediaExtras.length > 0) notes = [...mediaExtras, ...notes].slice(0, 20);
+  }
+
   // hybrid recall: add semantic hits (same query-rewritten question) that the
   // keyword LIKE recall missed; failures silently degrade to keyword-only
   const semHits = await semanticRecall(c.env, userId, recallQuestion, 10);
@@ -3263,7 +3289,9 @@ app.get("/api/reports/:id", async (c) => {
 app.post("/api/reports/generate", async (c) => {
   const body = await c.req.json<{ week?: string; period?: string; which?: string }>().catch(() => null);
   const period = body?.period === "month" ? "month" : "week";
-  const which = (body?.which ?? body?.week) === "this" ? "this" : "last";
+  // 空参默认生成当前周期，与 Web「生成本周报告」同口径（R134 P2-3）；
+  // 传 "last" 才生成上一完整周期（周一凌晨 cron 走的是 reports.ts 默认值，不受此影响）
+  const which = (body?.which ?? body?.week) === "last" ? "last" : "this";
   const generated = await generatePeriodReport(c.env, c.get("userId"), new Date(), which, period);
   if (!generated) {
     const unit = period === "month" ? (which === "this" ? "本月" : "上个月") : which === "this" ? "本周" : "上周";
