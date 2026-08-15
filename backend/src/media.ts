@@ -231,6 +231,54 @@ export async function describeImage(env: Pick<Env, "AI">, bytes: Uint8Array): Pr
   }
 }
 
+/** Objects newer than this are never treated as orphans (in-flight uploads: R2 put lands before the attachments row). */
+export const RECONCILE_GRACE_MS = 48 * 3600_000;
+/** Per-run object budget — keeps the daily sweep well inside cron limits. */
+const RECONCILE_MAX_OBJECTS = 2000;
+const RECONCILE_CHUNK = 50;
+
+/**
+ * R2↔attachments reconciliation (R127 P2-3 / D2): the upload / note-delete /
+ * account-delete paths each touch R2 best-effort (fire-and-forget deletes),
+ * so a failed leg leaves permanent orphan objects nobody notices. This daily
+ * sweep lists the bucket, diffs keys against the attachments table, and
+ * deletes objects past the grace period with no owning row. attachments is
+ * the source of truth: an object without a row is unreachable by any user.
+ */
+export async function reconcileMediaOrphans(env: Env): Promise<number> {
+  if (!env.MEDIA) return 0;
+  let deleted = 0;
+  let cursor: string | undefined;
+  let seen = 0;
+  const now = Date.now();
+  try {
+    for (;;) {
+      const page = await env.MEDIA.list({ prefix: "media/", cursor, limit: 500 });
+      const candidates = page.objects.filter((o) => now - o.uploaded.getTime() > RECONCILE_GRACE_MS);
+      for (let i = 0; i < candidates.length; i += RECONCILE_CHUNK) {
+        const chunk = candidates.slice(i, i + RECONCILE_CHUNK);
+        const ph = chunk.map(() => "?").join(",");
+        const rows = await env.DB.prepare(`SELECT r2_key FROM attachments WHERE r2_key IN (${ph})`)
+          .bind(...chunk.map((o) => o.key))
+          .all<{ r2_key: string }>();
+        const known = new Set((rows.results ?? []).map((r) => r.r2_key));
+        const orphans = chunk.filter((o) => !known.has(o.key)).map((o) => o.key);
+        if (orphans.length > 0) {
+          await env.MEDIA.delete(orphans);
+          deleted += orphans.length;
+          console.warn(`reconcileMediaOrphans: deleted ${orphans.length} orphan object(s)`, orphans);
+        }
+      }
+      seen += page.objects.length;
+      if (page.truncated && seen < RECONCILE_MAX_OBJECTS) cursor = page.cursor;
+      else break;
+    }
+  } catch (e) {
+    console.error("reconcileMediaOrphans: failed", e);
+  }
+  return deleted;
+}
+
 /** Store the original media file in R2 (if bound) and record it in attachments. */
 export async function storeOriginal(
   env: Env,

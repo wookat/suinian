@@ -60,6 +60,8 @@ const IMAGE_NOTE = {
 };
 
 const ATTACHMENT = { id: "a1", note_id: "n3", r2_key: "media/u1/n3/123-pic.png", mime: "image/png", size: 4 };
+// R128 P1: sensitive note's original attachment (e.g. a txt holding a password)
+const SENSITIVE_ATTACHMENT = { id: "a2", note_id: "n2", r2_key: "media/u1/n2/456-deploy.txt", mime: "text/plain", size: 5 };
 
 interface Recorded {
   sql: string;
@@ -143,12 +145,15 @@ async function collectZip(env: Env, includeSensitive = false): Promise<Map<strin
 }
 
 describe("buildBackupZip", () => {
-  const media = new Map([[ATTACHMENT.r2_key, new Uint8Array([1, 2, 3, 4])]]);
+  const media = new Map([
+    [ATTACHMENT.r2_key, new Uint8Array([1, 2, 3, 4])],
+    [SENSITIVE_ATTACHMENT.r2_key, strToU8("s3cr3t")],
+  ]);
   const env = {
     DB: fakeDb({
       notes: [NOTE, SENSITIVE_NOTE, IMAGE_NOTE],
       threads: [{ id: "t1", user_id: "u1", title: "产品思考", summary: null, note_count: 1, updated_at: "2026-08-01 00:00:00" }],
-      attachments: [ATTACHMENT],
+      attachments: [ATTACHMENT, SENSITIVE_ATTACHMENT],
     }),
     MEDIA: fakeR2(media),
     DEEPSEEK_API_KEY: "",
@@ -159,7 +164,7 @@ describe("buildBackupZip", () => {
     const entries = await collectZip(env);
     const manifest = JSON.parse(strFromU8(entries.get("manifest.json")!)) as BackupManifest;
     expect(manifest.format).toBe(BACKUP_FORMAT);
-    expect(manifest.counts).toEqual({ notes: 3, threads: 1, reports: 0, attachments: 1 });
+    expect(manifest.counts).toEqual({ notes: 3, threads: 1, reports: 0, attachments: 1, attachments_redacted: 1 });
 
     const notes = JSON.parse(strFromU8(entries.get("notes.json")!)) as BackupNote[];
     expect(notes).toHaveLength(3);
@@ -175,6 +180,13 @@ describe("buildBackupZip", () => {
     expect(n2.title).toBe(SENSITIVE_EXPORT_PLACEHOLDER);
     expect(n2.tags).toEqual([]);
     expect(n2.is_sensitive).toBe(true);
+    // R128 P1: sensitive attachment originals stay out of a redacted backup
+    expect(n2.attachments).toEqual([]);
+    for (const [name, data] of entries) {
+      expect(name.startsWith("media/n2/")).toBe(false);
+      if (name.endsWith(".json")) continue;
+      expect(strFromU8(data)).not.toContain("s3cr3t");
+    }
 
     // media original present, referenced from the note
     const n3 = notes.find((n) => n.id === "n3")!;
@@ -191,6 +203,14 @@ describe("buildBackupZip", () => {
     expect(n2.content).toBe("服务器密码 abc");
     expect(n2.title).toBe("服务器 root 密码");
     expect(n2.tags).toEqual(["密码"]);
+    // R128 P1: attachment originals ride along only with include_sensitive
+    expect(n2.attachments).toHaveLength(1);
+    const path = n2.attachments[0].path;
+    expect(path.startsWith("media/n2/")).toBe(true);
+    expect(strFromU8(entries.get(path)!)).toBe("s3cr3t");
+    const manifest = JSON.parse(strFromU8(entries.get("manifest.json")!)) as BackupManifest;
+    expect(manifest.counts.attachments).toBe(2);
+    expect(manifest.counts.attachments_redacted).toBe(0);
   });
 });
 

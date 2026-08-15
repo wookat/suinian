@@ -39,6 +39,7 @@ import {
   validatePassword,
   registrationEnabled,
   checkRateLimit,
+  sweepAuthRateLimits,
   clientIp,
 } from "./auth";
 import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports, financeStats } from "./reports";
@@ -53,6 +54,7 @@ import {
   describeImage,
   storeOriginal,
   buildMediaReply,
+  reconcileMediaOrphans,
   AUDIO_FAILED_PLACEHOLDER,
   IMAGE_FAILED_PLACEHOLDER,
 } from "./media";
@@ -3416,10 +3418,14 @@ export default {
       // web push: todo due reminders (at most once per todo) + daily review push (once per user per local day)
       ctx.waitUntil(sweepTodoReminders(env));
       ctx.waitUntil(sweepDailyReviewPush(env));
+      // drop auth rate-limit rows whose fixed window closed over a day ago
+      ctx.waitUntil(sweepAuthRateLimits(env.DB));
     } else {
       // daily thread title/summary refresh + daily review generation
       ctx.waitUntil(refreshThreads(env));
       ctx.waitUntil(generateAllDailyReviews(env));
+      // daily R2↔attachments reconciliation: GC orphan media objects
+      ctx.waitUntil(reconcileMediaOrphans(env));
     }
   },
 };
