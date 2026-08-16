@@ -5,6 +5,12 @@ description: How to run and test suinian (backend Worker + web SPA) fully locall
 
 # Local dev testing for suinian
 
+## Production testing tips (learned R148)
+- Token-only login (no password, e.g. qa.json with `token`): launch Chrome with `--remote-debugging-port=9222 --remote-allow-origins=*` (without the allow-origins flag CDP websocket handshakes are rejected 403, and the `browser_console` tool may fail to connect with a custom `--user-data-dir` — use a python `websocket-client` CDP script against `localhost:9222/json` instead). Then set `localStorage['suinian.settings'] = JSON.stringify({apiBaseUrl:'https://suinian-api.zalize.com', apiToken:TOKEN, useMock:false, onboarded:true, tourSeen:true})` and reload — lands directly on the logged-in timeline.
+- Objective first-load timing: read `performance.getEntriesByType('navigation'/'resource')` via CDP and report `/api/notes` duration instead of eyeballing.
+- Console shows one expected 404 on `GET /api/threads/rebuild/latest` for accounts that never ran a thread rebuild (backend/src/index.ts ~L3400) — not a bug.
+- Ask-route phrasing matters: 「我记录过几次房租」 hits the exact-SQL count route (deterministic 「共记录了 N 条」), while 「我交过几次房租」 may fall to the LLM route and hallucinate a count that disagrees with its citations — test both phrasings when validating count questions.
+
 ## Start services
 - Backend: `cd backend && npm ci && cp .dev.vars.example .dev.vars && npm run dev:init && npm run dev` → http://127.0.0.1:8787 (`/health` returns `{"ok":true}`). `.dev.vars` default `AI_MODEL=mock` gives deterministic triage: category `idea` + tag `本地开发` (see backend/src/ai.ts mockChatResponse).
 - Web: `cd web && npm ci && cp .env.example .env.local && npm run dev` → http://localhost:5173.

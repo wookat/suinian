@@ -219,6 +219,8 @@ const MAX_TAGS = 3
 const CLAMP_THRESHOLD = 180
 /** 未分拣笔记超过这个时长仍无分类时，从「分拣中」转为诚实的延迟提示（后端 cron 会自动补拣）。 */
 const PENDING_LATE_MS = 10 * 60_000
+/** 批量导入的笔记排队分拣属于正常积压（非故障），用更宽的阈值再报延迟。 */
+const IMPORT_PENDING_LATE_MS = 60 * 60_000
 const MAX_LINK_CARDS = 3
 const MAX_EDIT_TAGS = 6
 
@@ -328,8 +330,13 @@ export function NoteCard({
   const pending = note.category === null
   // 分拣正常几秒内完成；超过阈值说明 AI 侧出了问题，诚实告知而不是永久转圈。
   // 导入笔记保留原 created_at，延迟从实际入库时间（imported_at）起算
+  // 批量导入的积压是排队而非故障（R147 P2-2：数百条橙色告警角标噪音），
+  // 用更宽阈值 + 中性文案；普通笔记仍按原阈值诚实报延迟
+  const imported = note.meta?.imported_at != null
   const pendingSince = note.meta?.imported_at ?? note.created_at
-  const pendingLate = pending && Date.now() - parseServerTime(pendingSince).getTime() > PENDING_LATE_MS
+  const pendingLate =
+    pending &&
+    Date.now() - parseServerTime(pendingSince).getTime() > (imported ? IMPORT_PENDING_LATE_MS : PENDING_LATE_MS)
   const sensitive = note.is_sensitive === 1
 
   const [menuOpen, setMenuOpen] = useState(false)
@@ -475,7 +482,7 @@ export function NoteCard({
             ) : (
               <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
                 <Loader2 className="size-3 animate-spin" />
-                AI 分拣中…
+                {imported ? "排队分拣中…" : "AI 分拣中…"}
               </span>
             )
           ) : (
