@@ -2484,12 +2484,14 @@ export async function extractAskKeywords(
     ],
   });
   if (!out) return [];
-  return out
+  const kw = out
     .trim()
     .split(/[\s,，、。/|;；:：]+/)
     .map((t) => capBytes(t.trim(), 45))
     .filter((t) => t.length >= 2 && t.length <= 12)
     .slice(0, 6);
+  console.log(`ask keywords: ${JSON.stringify(kw)} <- ${question.slice(0, 60)}`);
+  return kw;
 }
 
 const ASK_REWRITE_SYSTEM =
@@ -2995,6 +2997,9 @@ app.post("/api/ask", async (c) => {
   // sensitive (encrypted) notes never enter the ask context — not even their titles
   const conds: string[] = ["user_id = ?", "is_sensitive = 0"];
   const binds: unknown[] = [userId];
+  // 多词召回按命中词数排序（命中多的先进 20 条窗口）：高频词（「学习」）
+  // 的海量命中会把稀有词（「日本語」）的唯一命中挤出 created_at 窗口
+  let orderBy = "created_at DESC";
   if (terms.length > 0) {
     const ors = terms.map(() => "(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)");
     conds.push(`(${ors.join(" OR ")})`);
@@ -3011,8 +3016,19 @@ app.post("/api/ask", async (c) => {
     conds.push("created_at < ?");
     binds.push(timeRange.end);
   }
+  // ORDER BY 的占位符位于 WHERE 之后，其绑定值也必须排在最后
+  if (terms.length > 1) {
+    const score = terms
+      .map(() => "(CASE WHEN content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ? THEN 1 ELSE 0 END)")
+      .join(" + ");
+    orderBy = `(${score}) DESC, created_at DESC`;
+    for (const t of terms) {
+      const like = `%${t}%`;
+      binds.push(like, like, like, like);
+    }
+  }
   const { results } = await c.env.DB.prepare(
-    `SELECT * FROM notes WHERE ${conds.join(" AND ")} AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 20`
+    `SELECT * FROM notes WHERE ${conds.join(" AND ")} AND deleted_at IS NULL ORDER BY ${orderBy} LIMIT 20`
   )
     .bind(...binds)
     .all<NoteRow>();
