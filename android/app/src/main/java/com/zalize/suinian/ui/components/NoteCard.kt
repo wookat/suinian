@@ -718,7 +718,8 @@ fun NoteCard(
                 }
             }
 
-            if (note.tags.isNotEmpty()) {
+            // 遮罩态不外显派生标签（R154 P2-3）：与标题/正文同口径，揭示后才展示
+            if (!masked && note.tags.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     note.tags.take(5).forEach { tag ->

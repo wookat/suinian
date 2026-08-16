@@ -77,9 +77,14 @@ export async function sensitiveIngestGate(
     try {
       contentEnc = await encryptContent(env.SUINIAN_ENC_KEY, n.content);
       content = ENC_PLACEHOLDER;
-    } catch {
+    } catch (e) {
+      // fail-open（R153 D-1）：密钥无效时敏感内容仍明文落库（仅 UI 遮罩），
+      // 大声记录供 /health enc_key 与日志告警发现
+      console.error("sensitiveIngestGate: encryption failed, sensitive content stored in PLAINTEXT", e);
       contentEnc = null;
     }
+  } else if (n.content !== ENC_PLACEHOLDER && !env.SUINIAN_ENC_KEY) {
+    console.warn("sensitiveIngestGate: SUINIAN_ENC_KEY missing, sensitive content stored in PLAINTEXT");
   }
   return {
     content,

@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** 删除后可撤销：服务端软删进「最近删除」，保留 30 天后真删，期间可恢复 */
@@ -65,6 +66,13 @@ data class NotesUiState(
 
 /** 空态一键示例笔记（与 Web 同内容同标签） */
 const val SAMPLE_TAG = "示例"
+/** 上传体积上限（与后端 MAX_MEDIA_BYTES 同值） */
+const val MAX_MEDIA_BYTES = 10 * 1024 * 1024
+
+/** 上传前超限的统一友好文案（R154 P2-1）：明确上限 + 当前大小，与 Web 同口径 */
+fun mediaTooLargeToast(kind: String, size: Int): String =
+    "${kind}过大：最多 ${MAX_MEDIA_BYTES / 1024 / 1024}MB，当前约 ${"%.1f".format(size / 1024.0 / 1024.0)}MB"
+
 val SAMPLE_NOTES = listOf(
     "周末想试试手冲咖啡，先从 V60 滤杯开始研究，豆子买浅烘的",
     "明天下午三点前给牙医回电话，预约洗牙",
@@ -139,6 +147,39 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 throw e
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(loading = false, error = e.message ?: "加载失败")
+            }
+        }
+    }
+
+    private var triagePollJob: Job? = null
+
+    /**
+     * 分拣结论出来后自动刷新（R154 P2-4，对齐 Web timeline 的 pollTriage）：
+     * 新笔记 category 为空时每 2s 拉一次当前筛选下的首页，最多 15 次，
+     * 全部出分类即提前停止；失败静默跳过本次。
+     */
+    fun pollTriage() {
+        triagePollJob?.cancel()
+        triagePollJob = viewModelScope.launch {
+            // 等 refresh 拉到含新笔记的列表后再判断是否有待分拣项
+            refreshJob?.join()
+            if (_ui.value.notes.none { it.category == null }) return@launch
+            repeat(15) {
+                delay(2000)
+                if (_ui.value.notes.none { it.category == null }) return@launch
+                try {
+                    val s = _ui.value
+                    val page = repo.list(
+                        category = s.category,
+                        tag = s.filterTag,
+                        q = s.query.ifBlank { null },
+                        source = s.filterSource,
+                        from = s.filterTime?.fromParam(),
+                    )
+                    val fresh = page.notes.associateBy { it.id }
+                    _ui.value = _ui.value.copy(notes = _ui.value.notes.map { fresh[it.id] ?: it })
+                } catch (_: Exception) {
+                }
             }
         }
     }
@@ -296,8 +337,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 从文件选择器上传文档：POST /api/ingest/media type=file */
     fun uploadFile(bytes: ByteArray, mime: String, fileName: String) {
-        if (bytes.size > 10 * 1024 * 1024) {
-            _ui.value = _ui.value.copy(toast = "文件过大：最多 10MB")
+        if (bytes.size > MAX_MEDIA_BYTES) {
+            _ui.value = _ui.value.copy(toast = mediaTooLargeToast("文件", bytes.size))
             return
         }
         _ui.value = _ui.value.copy(sending = true)
@@ -306,6 +347,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 repo.sendFile(bytes, mime, fileName)
                 _ui.value = _ui.value.copy(sending = false, toast = "已上传，AI 正在提取文件内容")
                 refresh()
+                pollTriage()
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(sending = false, toast = e.message ?: "文件上传失败")
             }
@@ -314,8 +356,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 从相册/拍照上传图片：POST /api/ingest/media type=image */
     fun uploadImage(bytes: ByteArray, mime: String, fileName: String) {
-        if (bytes.size > 10 * 1024 * 1024) {
-            _ui.value = _ui.value.copy(toast = "图片过大：最多 10MB")
+        if (bytes.size > MAX_MEDIA_BYTES) {
+            _ui.value = _ui.value.copy(toast = mediaTooLargeToast("图片", bytes.size))
             return
         }
         _ui.value = _ui.value.copy(sending = true)
@@ -324,6 +366,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 repo.sendImage(bytes, mime, fileName)
                 _ui.value = _ui.value.copy(sending = false, toast = "已上传，AI 正在识别图片内容")
                 refresh()
+                pollTriage()
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(sending = false, toast = e.message ?: "图片上传失败")
             }
@@ -332,8 +375,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 录音上传：POST /api/ingest/media type=audio（Whisper 转写） */
     fun uploadAudio(bytes: ByteArray, mime: String, fileName: String) {
-        if (bytes.size > 10 * 1024 * 1024) {
-            _ui.value = _ui.value.copy(toast = "录音过大：最多 10MB")
+        if (bytes.size > MAX_MEDIA_BYTES) {
+            _ui.value = _ui.value.copy(toast = mediaTooLargeToast("录音", bytes.size))
             return
         }
         _ui.value = _ui.value.copy(sending = true)
@@ -342,6 +385,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 repo.sendAudio(bytes, mime, fileName)
                 _ui.value = _ui.value.copy(sending = false, toast = "已上传，AI 正在转写录音")
                 refresh()
+                pollTriage()
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(sending = false, toast = e.message ?: "录音上传失败")
             }
@@ -464,6 +508,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             }
             _ui.value = _ui.value.copy(sending = false, toast = toast)
             refresh()
+            pollTriage()
         }
     }
 
@@ -487,6 +532,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 _ui.value = _ui.value.copy(seedingSamples = false, toast = "已丢入 ${SAMPLE_NOTES.size} 条示例，AI 正在自动分拣…")
                 refresh()
+                pollTriage()
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(seedingSamples = false, toast = e.message ?: "示例创建失败")
             }

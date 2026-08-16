@@ -1,5 +1,6 @@
 import type { Env } from "./types";
 import { chatComplete, withTimeout } from "./ai";
+import { encryptBytes, decryptBytes, isEncryptedAttachment } from "./crypto";
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
 
@@ -340,7 +341,11 @@ export async function reconcileMediaOrphans(env: Env): Promise<number> {
   return deleted;
 }
 
-/** Store the original media file in R2 (if bound) and record it in attachments. */
+/**
+ * Store the original media file in R2 (if bound) and record it in attachments.
+ * 敏感笔记的原件（R154 P2-2）以 AES-GCM 信封（SNE1 + IV + 密文）落 R2；
+ * 分拣异步转敏感的窗口由 syncAttachmentEncryption 收口。
+ */
 export async function storeOriginal(
   env: Env,
   userId: string,
@@ -352,7 +357,21 @@ export async function storeOriginal(
   const key = `media/${userId}/${noteId}/${Date.now()}-${safeName}`;
   const mime = resolveAttachmentMime(req.mime, req.fileName, req.type);
   try {
-    await env.MEDIA.put(key, req.bytes, { httpMetadata: { contentType: mime } });
+    let body: Uint8Array = req.bytes;
+    let encrypted = false;
+    if (env.SUINIAN_ENC_KEY) {
+      const row = await env.DB.prepare("SELECT is_sensitive FROM notes WHERE id = ?")
+        .bind(noteId)
+        .first<{ is_sensitive: number }>();
+      if (row?.is_sensitive) {
+        body = await encryptBytes(env.SUINIAN_ENC_KEY, req.bytes);
+        encrypted = true;
+      }
+    }
+    await env.MEDIA.put(key, body, {
+      httpMetadata: { contentType: mime },
+      ...(encrypted ? { customMetadata: { enc: "1" } } : {}),
+    });
     await env.DB.prepare("INSERT INTO attachments (id, note_id, r2_key, mime, size) VALUES (?, ?, ?, ?, ?)")
       .bind(crypto.randomUUID(), noteId, key, mime, req.bytes.length)
       .run();
@@ -361,4 +380,83 @@ export async function storeOriginal(
     console.error("storeOriginal: failed", err);
     return null;
   }
+}
+
+/**
+ * 读取附件原件字节：按 SNE1 magic 自动识别加密信封并解密；明文存量对象原样
+ * 返回。加密对象在无密钥/密钥不符时返回 null（fail-closed，不吐密文）。
+ */
+export async function loadOriginal(env: Env, r2Key: string): Promise<Uint8Array | null> {
+  if (!env.MEDIA) return null;
+  const obj = await env.MEDIA.get(r2Key);
+  if (!obj) return null;
+  const bytes = new Uint8Array(await obj.arrayBuffer());
+  if (!isEncryptedAttachment(bytes)) return bytes;
+  if (!env.SUINIAN_ENC_KEY) return null;
+  return decryptBytes(env.SUINIAN_ENC_KEY, bytes);
+}
+
+/**
+ * 笔记转敏感时的附件加密收口（异步分拣/手动标敏/媒体重试共用）：把该笔记
+ * 名下仍为明文的 R2 原件就地重写为加密信封。幂等，失败只记日志（下一次
+ * 日常 sweep 兜底）。
+ */
+export async function syncAttachmentEncryption(
+  env: { MEDIA?: R2Bucket; DB: D1Database; SUINIAN_ENC_KEY?: string },
+  noteId: string
+): Promise<void> {
+  if (!env.MEDIA || !env.SUINIAN_ENC_KEY) return;
+  try {
+    const rows = await env.DB.prepare("SELECT r2_key, mime FROM attachments WHERE note_id = ?")
+      .bind(noteId)
+      .all<{ r2_key: string; mime: string | null }>();
+    for (const a of rows.results ?? []) {
+      const obj = await env.MEDIA.get(a.r2_key);
+      if (!obj) continue;
+      const bytes = new Uint8Array(await obj.arrayBuffer());
+      if (isEncryptedAttachment(bytes)) continue;
+      const enc = await encryptBytes(env.SUINIAN_ENC_KEY, bytes);
+      await env.MEDIA.put(a.r2_key, enc, {
+        httpMetadata: { contentType: a.mime || "application/octet-stream" },
+        customMetadata: { enc: "1" },
+      });
+    }
+  } catch (err) {
+    console.error("syncAttachmentEncryption: failed", noteId, err);
+  }
+}
+
+/**
+ * 存量敏感附件迁移 sweep（每日 cron）：把所有敏感笔记名下仍为明文的 R2 原件
+ * 加密重写。已加密对象靠 customMetadata.enc 的 head 检查跳过（存量手工对象
+ * 兜底看 magic），幂等且限额，可反复运行直至清零。
+ */
+export async function sweepUnencryptedSensitiveAttachments(env: Env, limit = 100): Promise<number> {
+  if (!env.MEDIA || !env.SUINIAN_ENC_KEY) return 0;
+  let migrated = 0;
+  try {
+    const rows = await env.DB.prepare(
+      "SELECT a.r2_key, a.mime, a.note_id FROM attachments a JOIN notes n ON a.note_id = n.id WHERE n.is_sensitive = 1 LIMIT ?"
+    )
+      .bind(limit)
+      .all<{ r2_key: string; mime: string | null; note_id: string }>();
+    for (const a of rows.results ?? []) {
+      const head = await env.MEDIA.head(a.r2_key);
+      if (!head || head.customMetadata?.enc === "1") continue;
+      const obj = await env.MEDIA.get(a.r2_key);
+      if (!obj) continue;
+      const bytes = new Uint8Array(await obj.arrayBuffer());
+      if (isEncryptedAttachment(bytes)) continue;
+      const enc = await encryptBytes(env.SUINIAN_ENC_KEY, bytes);
+      await env.MEDIA.put(a.r2_key, enc, {
+        httpMetadata: { contentType: a.mime || "application/octet-stream" },
+        customMetadata: { enc: "1" },
+      });
+      migrated++;
+    }
+    if (migrated > 0) console.warn(`sweepUnencryptedSensitiveAttachments: migrated ${migrated} object(s)`);
+  } catch (err) {
+    console.error("sweepUnencryptedSensitiveAttachments: failed", err);
+  }
+  return migrated;
 }

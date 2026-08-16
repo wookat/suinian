@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Send, Loader2, Paperclip, Sparkles, Lock, Tag, CloudOff } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
-import { ApiError, NetworkError, createNote, ingestMedia, MAX_MEDIA_BYTES, SUPPORTED_FILE_EXTS } from "@/lib/api"
+import { ApiError, NetworkError, createNote, ingestMedia, MAX_MEDIA_BYTES, mediaTooLargeText, SUPPORTED_FILE_EXTS } from "@/lib/api"
 import { enqueueMedia, enqueueNote, flushOutbox, onOutboxCount, onOutboxFlushed, startOutboxAutoFlush } from "@/lib/outbox"
 import { VoiceRecorder, voiceSupported } from "@/components/voice-recorder"
 import { loadSettings } from "@/lib/settings"
@@ -146,7 +146,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
       return
     }
     if (file.size > MAX_MEDIA_BYTES) {
-      setError(`文件过大：最多 ${MAX_MEDIA_BYTES / 1024 / 1024}MB`)
+      setError(mediaTooLargeText("文件", file.size))
       return
     }
     setUploading(true)
@@ -163,7 +163,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
 
   async function uploadVoice(file: File) {
     if (file.size > MAX_MEDIA_BYTES) {
-      setError(`录音过大：最多 ${MAX_MEDIA_BYTES / 1024 / 1024}MB`)
+      setError(mediaTooLargeText("录音", file.size))
       return
     }
     setUploading(true)

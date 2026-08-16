@@ -159,6 +159,11 @@ export async function createNote(payload: CreateNotePayload): Promise<Note> {
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 
+/** 上传前超限的统一友好文案（R154 P2-1）：明确上限 + 当前大小，Web/Android 同口径 */
+export function mediaTooLargeText(kind: string, size: number): string {
+  return `${kind}过大：最多 ${MAX_MEDIA_BYTES / 1024 / 1024}MB，当前约 ${(size / 1024 / 1024).toFixed(1)}MB`
+}
+
 export const SUPPORTED_FILE_EXTS = ["pdf", "txt", "md", "markdown", "docx"]
 
 /** 图片/文件/语音上传：走 /api/ingest/media，后端提取文字/转写/摘要后入库 */
