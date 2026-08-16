@@ -255,10 +255,16 @@ export function parseImageExtraction(raw: string): ImageExtraction {
   const bare = text.replace(/^[<《【「(（\[]+/, "").replace(/[>》】」)）\]]+$/, "").trim();
   const hasText = bare.length > 0 && !/^(无|没有|无文字|N\/A|none)。?$/i.test(bare);
   if (hasText) return { content: bare, description: desc || cleaned };
-  // no text in image: fall back to the first sentence of the description
+  // no text in image: fall back to the first sentence of the description;
+  // the fallback itself may be a bracketed placeholder too ("<无>" as the
+  // whole output) — never surface it as note content
   const fallback = desc || cleaned;
-  const firstSentence = fallback.split(/(?<=[。！？!?])/)[0]?.trim() || fallback;
-  return { content: firstSentence, description: fallback };
+  const bareFallback = fallback.replace(/^[<《【「(（\[]+/, "").replace(/[>》】」)）\]]+$/, "").trim();
+  if (bareFallback.length === 0 || /^(无|没有|无文字|N\/A|none)。?$/i.test(bareFallback)) {
+    return { content: "（图片，未识别出文字内容）", description: "" };
+  }
+  const firstSentence = bareFallback.split(/(?<=[。！？!?])/)[0]?.trim() || bareFallback;
+  return { content: firstSentence, description: bareFallback };
 }
 
 /** Vision model: text extraction (primary) + full description; returns null on any failure. */

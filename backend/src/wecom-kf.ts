@@ -148,9 +148,16 @@ const SYNC_MAX_PAGES = 10;
 
 /**
  * Pull new customer messages via kf/sync_msg, resuming from the persisted
- * cursor so each message is delivered exactly once across Worker isolates.
+ * cursor. 游标在 onPage 处理完成后才持久化（R150 D-1）：Worker 在「已拉取、
+ * 未入库」之间超时/崩溃时旧游标保留，下次回调重放这一页（at-least-once），
+ * 重复消息由调用方按 msgid 幂等跳过，不再静默丢消息。
  */
-export async function syncKfMessages(env: Env, syncToken: string | undefined, openKfId: string | undefined): Promise<KfMessage[]> {
+export async function syncKfMessages(
+  env: Env,
+  syncToken: string | undefined,
+  openKfId: string | undefined,
+  onPage?: (msgs: KfMessage[]) => Promise<void>
+): Promise<KfMessage[]> {
   const accessToken = await getWecomAccessToken(env);
   if (!accessToken) {
     console.error("wecom kf: sync skipped — corp access_token unavailable (WECOM_KF_SECRET configured?)");
@@ -180,7 +187,17 @@ export async function syncKfMessages(env: Env, syncToken: string | undefined, op
       console.error("wecom kf: sync_msg failed", data.errcode, data.errmsg);
       break;
     }
-    out.push(...(data.msg_list ?? []));
+    const msgs = data.msg_list ?? [];
+    out.push(...msgs);
+    // 先处理后推进游标：onPage 抛错/超时则游标不前移，整页可重放
+    if (onPage && msgs.length > 0) {
+      try {
+        await onPage(msgs);
+      } catch (e) {
+        console.error("wecom kf: page processing failed, cursor not advanced", e);
+        break;
+      }
+    }
     if (data.next_cursor) {
       cursor = data.next_cursor;
       await setKfState(env.DB, cursorKey, cursor);

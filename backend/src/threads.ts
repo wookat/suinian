@@ -321,8 +321,9 @@ export async function clusterNote(
       } catch (err) {
         console.error("threads: thread representatives query failed", err);
       }
-      let best: { id: string; thread_id: string | null; category: string; title: string | null; content: string; sim: number } | null =
-        null;
+      type Best = { id: string; thread_id: string | null; category: string; title: string | null; content: string; sim: number };
+      let best: Best | null = null;
+      let bestThreaded: Best | null = null;
       let backfilled = 0;
       for (const r of candidates) {
         let v: number[] | null = null;
@@ -340,9 +341,14 @@ export async function clusterNote(
         }
         if (!v) continue;
         const sim = cosineSim(vector, v);
-        if (!best || sim > best.sim)
-          best = { id: r.id, thread_id: r.thread_id, category: r.category, title: r.title, content: r.content, sim };
+        const cand: Best = { id: r.id, thread_id: r.thread_id, category: r.category, title: r.title, content: r.content, sim };
+        if (!best || sim > best.sim) best = cand;
+        if (r.thread_id && (!bestThreaded || sim > bestThreaded.sim)) bestThreaded = cand;
       }
+      // 已有线索优先（R150 P1-3）：当某条已入线索的笔记本身就达到直连阈值时，
+      // 直接并入它的线索；否则一条相似度略高的游离笔记会抢先另起新线索，
+      // 同主题被拆成两条（历史回填逐条顺序聚类下的确定性分裂源）。
+      if (bestThreaded && bestThreaded.sim >= SIM_JOIN) best = bestThreaded;
       if (best) {
         const direct = best.sim >= SIM_JOIN;
         const confirmed =
@@ -565,6 +571,9 @@ export async function rebuildStep(env: Env, userId: string, state: RebuildState,
         .all<{ id: string }>();
       const rows = results ?? [];
       if (rows.length === 0) {
+        // 摘要齐全后统一折叠重复线索（R150 P1-3）：重建过程中分裂出的同主题
+        // 线索此刻标题/代表已就绪，不再等日更周期
+        await mergeDuplicateThreads(env, userId);
         const cnt = await env.DB.prepare(
           "SELECT COUNT(*) AS c FROM threads WHERE user_id = ? AND note_count > 0"
         )
@@ -689,7 +698,12 @@ export async function reconcileThreads(
  * one freshly-touched thread (ingest pipeline); without it every thread of
  * the user is scanned (cron sweeps). Never throws.
  */
-export async function mergeDuplicateThreads(env: Env, userId: string, aroundThreadId?: string): Promise<number> {
+export async function mergeDuplicateThreads(
+  env: Env,
+  userId: string,
+  aroundThreadId?: string,
+  opts?: { titleOnly?: boolean }
+): Promise<number> {
   try {
     const { results } = await env.DB.prepare(
       "SELECT id, created_at, title FROM threads WHERE user_id = ? AND note_count > 0 ORDER BY created_at ASC LIMIT 100"
@@ -717,7 +731,7 @@ export async function mergeDuplicateThreads(env: Env, userId: string, aroundThre
         console.log(`threads: merged same-title thread ${b.id} into ${a.id} (user=${userId}, title=${a.title})`);
       }
     }
-    if (threads.length < 2) return merged;
+    if (opts?.titleOnly || threads.length < 2) return merged;
     type Rep = { vector: number[] | null; text: string };
     const reps = new Map<string, Rep | null>();
     const repOf = async (threadId: string): Promise<Rep | null> => {
@@ -846,4 +860,8 @@ export async function refreshThreads(env: Env): Promise<void> {
       /* per-thread failures shouldn't stop the sweep */
     }
   }
+  // 摘要刷新后再跑一遍同标题折叠（R150 P1-3）：上面的 merge 跑在 summarize
+  // 之前，刚生成的重复标题要等下一个周期才能被折叠，重复线索会在线索页
+  // 可见整整一天；标题比对零成本，此处只跑 titleOnly 避免重复 embedding 扫描。
+  for (const u of users ?? []) await mergeDuplicateThreads(env, u.user_id, undefined, { titleOnly: true });
 }

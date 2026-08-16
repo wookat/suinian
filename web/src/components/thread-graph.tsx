@@ -174,7 +174,14 @@ export function ThreadGraphView({
       )
       .force("charge", forceManyBody().strength(-160))
       .force("center", forceCenter(size.w / 2, size.h / 2))
-      .force("collide", forceCollide<GraphNode>().radius((d) => d.radius + 14))
+      .force(
+        "collide",
+        // 标签画在节点下方且宽于节点本体：碰撞半径按标签近似宽度取值（R150
+        // P2-5），否则布局只避开圆点、标签互相压字不可读
+        forceCollide<GraphNode>().radius(
+          (d) => Math.max(d.radius, (d.label.length * (d.kind === "entity" ? 12 : 10)) / 2) + 14,
+        ),
+      )
       .on("tick", () => {
         setTick((t) => t + 1)
         // early centering as soon as the layout roughly stabilizes

@@ -247,6 +247,24 @@ describe("wecom kf token / api calls (mocked fetch)", () => {
     expect(log.syncCalls[1]).toMatchObject({ cursor: "CUR1" });
   });
 
+  it("advances the cursor only after onPage succeeds (R150 D-1)", async () => {
+    const state = freshState();
+    const env = makeEnv(state);
+    log.msgQueue.push(textMsg("extU1", "hello"));
+    await syncKfMessages(env, "SYNCTOKEN", "wkAAA", async () => {
+      throw new Error("boom");
+    });
+    // processing failed: cursor must NOT move so the page replays next callback
+    expect(state.kfState.get("cursor:wkAAA")).toBeUndefined();
+    log.msgQueue.push(textMsg("extU1", "hello again"));
+    const seen: string[] = [];
+    await syncKfMessages(env, "SYNCTOKEN", "wkAAA", async (msgs) => {
+      for (const m of msgs) seen.push(m.text!.content);
+    });
+    expect(seen).toEqual(["hello again"]);
+    expect(state.kfState.get("cursor:wkAAA")).toBe("CUR1");
+  });
+
   it("sendKfText posts to send_msg", async () => {
     const env = makeEnv(freshState());
     expect(await sendKfText(env, "wkAAA", "extU1", "hi")).toBe(true);
@@ -340,6 +358,28 @@ describe("/wechat/kf endpoint", () => {
     expect(log.sent.at(-1)!.content).toContain("已存");
     expect(state.notes).toHaveLength(1);
     expect(state.notes[0]).toMatchObject({ user_id: "u_qa", source: "wechat", content: "买牛奶 #生活" });
+  });
+
+  it("replayed page is skipped idempotently by msgid (R150 D-1)", async () => {
+    const state = freshState();
+    state.bindings.set("extU1", "u_qa");
+    const env = makeEnv(state);
+    const m1 = textMsg("extU1", "第一条");
+    const m2 = textMsg("extU1", "第二条");
+    log.msgQueue.push(m1, m2);
+    await postKf(env);
+    expect(state.notes).toHaveLength(2);
+    const replies = log.sent.length;
+    // crash-window replay: same page delivered again → no duplicate notes/replies
+    log.msgQueue.push(m1, m2);
+    await postKf(env);
+    expect(state.notes).toHaveLength(2);
+    expect(log.sent.length).toBe(replies);
+    // a genuinely new message after the replayed ones still ingests
+    log.msgQueue.push(m1, m2, textMsg("extU1", "第三条"));
+    await postKf(env);
+    expect(state.notes).toHaveLength(3);
+    expect(state.notes.at(-1)!.content).toBe("第三条");
   });
 
   it("link message ingests as a link note", async () => {

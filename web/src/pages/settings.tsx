@@ -173,6 +173,7 @@ function TagManagerCard() {
   const [renameValue, setRenameValue] = useState("")
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [showLongTail, setShowLongTail] = useState(false)
   const settingsVersion = useSettingsVersion()
 
   useEffect(() => {
@@ -251,7 +252,11 @@ function TagManagerCard() {
         <p className="text-sm text-muted-foreground">还没有标签，AI 分拣或手动编辑后会出现在这里</p>
       ) : (
         <ul className="divide-y">
-          {tags.map(({ tag, count }) => (
+          {/* 长尾折叠（R150 P2-7）：只用过一次的标签数量多时折叠，避免上百行滚动噪音 */}
+          {(showLongTail || tags.filter((t) => t.count <= 1).length <= 10
+            ? tags
+            : tags.filter((t) => t.count > 1)
+          ).map(({ tag, count }) => (
             <li key={tag} className="flex flex-wrap items-center gap-2 py-2">
               {editingTag === tag ? (
                 <>
@@ -299,6 +304,16 @@ function TagManagerCard() {
               )}
             </li>
           ))}
+          {!showLongTail && tags.filter((t) => t.count <= 1).length > 10 && (
+            <li className="py-2">
+              <button
+                onClick={() => setShowLongTail(true)}
+                className="text-xs font-medium text-muted-foreground hover:text-foreground"
+              >
+                展开 {tags.filter((t) => t.count <= 1).length} 个只用过一次的标签
+              </button>
+            </li>
+          )}
         </ul>
       )}
       {msg && (
@@ -569,8 +584,15 @@ function WechatBindingCard() {
 
   const s = loadSettings()
   if (s.useMock || !s.apiBaseUrl || !s.apiToken) return null
-  // 两条微信通道都未开通时整卡隐藏，不再挂「即将开放」占位承诺
-  if (status && !status.configured && !status.kf_configured) return null
+  // 两条微信通道都未开通时保留一行说明（R150 D-3）：让用户知道通道存在，
+  // 但不挂绑定入口，不做「即将开放」承诺
+  if (status && !status.configured && !status.kf_configured)
+    return (
+      <Card className="p-4">
+        <h2 className="text-sm font-medium">微信绑定</h2>
+        <p className="mt-1 text-xs text-muted-foreground">微信随手记通道暂未开通，开通后可在这里绑定微信直接发消息记碎念。</p>
+      </Card>
+    )
   // 状态请求失败（如 token 失效）时能力未知，按未开通处理整卡隐藏（fail closed）
   if (status === null && loadFailed) return null
 
