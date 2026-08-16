@@ -2490,7 +2490,6 @@ export async function extractAskKeywords(
     .map((t) => capBytes(t.trim(), 45))
     .filter((t) => t.length >= 2 && t.length <= 12)
     .slice(0, 6);
-  console.log(`ask keywords: ${JSON.stringify(kw)} <- ${question.slice(0, 60)}`);
   return kw;
 }
 
