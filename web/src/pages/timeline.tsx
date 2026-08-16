@@ -725,8 +725,11 @@ export function TimelinePage() {
 
   const allTags = useMemo(() => {
     const count = new Map<string, number>()
-    for (const n of notes)
+    // 敏感笔记的派生标签不进公开标签面（与 /api/tags、标签管理口径一致）
+    for (const n of notes) {
+      if (n.is_sensitive === 1) continue
       for (const t of n.tags) count.set(t, (count.get(t) ?? 0) + 1)
+    }
     return [...count.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t)
   }, [notes])
 

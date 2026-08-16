@@ -381,6 +381,20 @@ export function parseObsidianZip(entries: Record<string, Uint8Array>): ZipParseR
         return `【图片：${assetName}】`;
       });
       body = body.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2").replace(/\[\[([^\]]+)\]\]/g, "$1");
+      // 标准 markdown 图片 ![](path) 与 ![[wikilink]] 同样入库（Obsidian 导出两种写法都常见）
+      const collected = collectImageRefs(body, dirName(path), entries, total);
+      body = collected.body;
+      for (const a of collected.assets) {
+        if (assets.some((x) => x.name === a.name)) {
+          total.count--; // collectImageRefs 已计数，同名重复回退
+          continue;
+        }
+        if (assets.length < MAX_ASSETS_PER_NOTE) assets.push(a);
+        else {
+          total.count--;
+          total.dropped++;
+        }
+      }
       const title = fm.title ?? name;
       const content = clipContent(
         body.startsWith(`# ${title}`) || body.split("\n")[0]?.trim() === title

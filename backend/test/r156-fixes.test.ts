@@ -8,7 +8,7 @@ import { join, relative } from "node:path";
 import { capBytes, likeContains, tagLikePattern, searchTerms } from "../src/index";
 import { contentFingerprint, isEncryptedAttachment, ENC_PLACEHOLDER } from "../src/crypto";
 import { runImport, sweepImportDedupe, type ImportItem } from "../src/import";
-import { unzipEntries, parseCuboxZip } from "../src/import-zip";
+import { unzipEntries, parseCuboxZip, parseObsidianZip } from "../src/import-zip";
 
 const KEY = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
 const enc = new TextEncoder();
@@ -146,6 +146,20 @@ describe("R156 P2-2/P2-3：zip 文件名乱码纠正 + Cubox zip", () => {
     const r = parseCuboxZip(entries);
     expect(r.failures).toEqual([]);
     expect(r.items.map((i) => i.content.split("\n")[0]).sort()).toEqual(["# 收藏A", "收藏B"]);
+  });
+  it("md 中标准 ![](path) 图片引用与 ![[wikilink]] 一样收集为资产", () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+    const entries: Record<string, Uint8Array> = {
+      "笔记.md": enc.encode("正文\n![截图](pin.png)\n![[embed.png]]"),
+      "pin.png": png,
+      "embed.png": png,
+    };
+    const r = parseObsidianZip(entries);
+    expect(r.failures).toEqual([]);
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0].assets?.map((a) => a.name).sort()).toEqual(["embed.png", "pin.png"]);
+    expect(r.items[0].content).toContain("【图片：pin.png】");
+    expect(r.assets_dropped).toBe(0);
   });
 });
 
