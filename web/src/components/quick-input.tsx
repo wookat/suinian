@@ -85,6 +85,9 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
   const length = value.length
   const overLimit = length > MAX_CONTENT_CHARS
   const command = useMemo(() => parseInlineCommand(value), [value])
+  // 以问号结尾的疑问句（R159 D-3）：?前缀指令很难被发现，疑问句直接回车会
+  // 存成笔记（往往分拣成 todo）。给一个可点的内联提示，不改变回车行为
+  const questionLike = !command && /[？?]\s*$/.test(value) && value.trim().length > 1
 
   async function submit() {
     const content = value.trim()
@@ -229,6 +232,14 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
           <span className="inline-flex min-w-0 items-center gap-1 truncate text-xs font-medium text-primary">
             <Tag className="size-3.5 shrink-0" /> 手动打标：{command.tags.map((t) => `#${t}`).join(" ")}
           </span>
+        ) : questionLike ? (
+          <button
+            onClick={() => setValue((v) => `?${v.trimStart()}`)}
+            className="inline-flex min-w-0 items-center gap-1 truncate text-xs font-medium text-primary hover:underline"
+            title="加上 ? 前缀切换到问答模式；不点的话回车仍会存为笔记"
+          >
+            <Sparkles className="size-3.5 shrink-0" /> 像是在提问？点此改为向笔记提问（回车仍会存为笔记）
+          </button>
         ) : (
           <span className="min-w-0 truncate text-xs text-muted-foreground">
             想法 / 待办 / 链接 / 图片 / 文件，AI 自动分拣；?提问 !原样存 #打标

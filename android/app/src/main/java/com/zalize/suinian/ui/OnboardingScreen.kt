@@ -59,6 +59,8 @@ fun OnboardingScreen(
     var pendingToken by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingName by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingTour by rememberSaveable { mutableStateOf(false) }
+    // 注册/找回成功但服务端恢复码生成失败（降级返回 null）：需明确告知去设置页补生成
+    var pendingCodeMissing by rememberSaveable { mutableStateOf(false) }
 
     fun finish(savedToken: String, savedName: String?, showTour: Boolean = false) {
         scope.launch {
@@ -114,6 +116,13 @@ fun OnboardingScreen(
                         if (code != null) {
                             // 恢复码只下发这一次：先让用户确认保存再进入主界面
                             pendingCode = code
+                            pendingToken = res.apiToken
+                            pendingName = res.user.name
+                            pendingTour = mode == OnboardingMode.Register
+                        } else if (mode != OnboardingMode.Login) {
+                            // 恢复码生成失败：先明确告知再进主界面，否则用户直到
+                            // 忘密码那天才发现自己没有任何找回途径
+                            pendingCodeMissing = true
                             pendingToken = res.apiToken
                             pendingName = res.user.name
                             pendingTour = mode == OnboardingMode.Register
@@ -262,6 +271,28 @@ fun OnboardingScreen(
             Text("先跳过，用 Mock 模式体验")
         }
         Spacer(Modifier.height(32.dp))
+    }
+
+    if (pendingCodeMissing) {
+        AlertDialog(
+            onDismissRequest = { /* 必须点确认，确保用户看到恢复码缺失提示 */ },
+            title = { Text("恢复码未能生成") },
+            text = {
+                Text(
+                    "操作已成功，但服务端未能生成恢复码。恢复码是忘记密码时找回账号的唯一方式，" +
+                        "请进入应用后尽快在设置页点「重新生成恢复码」并安全保存。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val t = pendingToken
+                    val n = pendingName
+                    pendingCodeMissing = false
+                    if (t != null) finish(t, n, showTour = pendingTour)
+                }) { Text("我知道了，进入应用后去生成") }
+            },
+        )
     }
 
     val code = pendingCode

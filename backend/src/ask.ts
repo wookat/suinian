@@ -524,6 +524,18 @@ export const COUNT_SCOPE_LABELS: Record<string, string> = {
   data: "资料笔记",
 };
 
+// 枚举主题词命中分类名（「列出我所有的待办」）时，LIKE '%待办%' 会漏掉
+// 正文里没写这两个字的待办笔记；这类问题改按 category 精确筛选全集。
+// 只收录与分类一一对应的确切名词，避免把真在找关键词的问题误改口径。
+export const ENUM_TOPIC_CATEGORIES: Record<string, string> = {
+  待办: "todo",
+  待办事项: "todo",
+  想法: "idea",
+  点子: "idea",
+  收藏: "collect",
+  资料: "data",
+};
+
 /** 「这段时间都记了什么/记了哪些」——时间窗枚举，走 SQL 全量列举而非 top-k 召回。 */
 export function enumListIntent(question: string): boolean {
   return /都记[了过]?(?:些|哪些)?什么|记[了过](?:些什么|哪些)|都写[了过]?(?:些|哪些)?什么|都有哪些笔记|记录[了过](?:些什么|哪些|什么)/.test(question);

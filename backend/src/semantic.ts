@@ -4,8 +4,16 @@ import { cosineSim } from "./threads";
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
 
-/** Cosine similarity above which a note counts as a semantic match for search/ask recall. */
-export const SEMANTIC_MIN_SCORE = 0.45;
+/**
+ * Cosine similarity above which a note counts as a semantic match for
+ * search/ask recall. Calibrated in R160 (scripts/semantic-threshold-eval.ts):
+ * paraphrase queries against a realistic corpus score ≥0.503 on their target
+ * notes, while garbage/off-corpus queries peak at 0.496 once zero-signal
+ * (pure emoji/symbol) notes are excluded from the vector store — 0.5 keeps
+ * paraphrase recall intact and drops the noise that made every query return
+ * 「语义匹配」 hits.
+ */
+export const SEMANTIC_MIN_SCORE = 0.5;
 
 // Small corpora (R151 P2-3): with only a handful of notes, everything is "the
 // closest match" and 0.45 lets unrelated notes surface as 语义匹配 (e.g. a
@@ -43,6 +51,17 @@ export async function embedText(env: Env, text: string, timeoutMs = EMBED_TIMEOU
   }
 }
 
+/**
+ * Whether text carries enough semantic signal to embed. Pure emoji/symbol
+ * notes (no letters or digits in any script) produce degenerate bge-m3
+ * vectors that sit ~0.45–0.59 from ANY query — including garbage like
+ * `zzzz9999` — so they poison semantic recall for the whole account. They
+ * stay findable via keyword search; they just never enter the vector store.
+ */
+export function hasSemanticSignal(text: string): boolean {
+  return /[\p{L}\p{N}]/u.test(text);
+}
+
 /** The text a note is embedded from: title + content + link metadata. */
 export function noteEmbedText(n: Pick<NoteRow, "title" | "content" | "url_title" | "url_summary">): string {
   return [n.title, n.content, n.url_title, n.url_summary].filter(Boolean).join("\n");
@@ -56,12 +75,13 @@ export function noteEmbedText(n: Pick<NoteRow, "title" | "content" | "url_title"
  */
 export async function upsertNoteEmbedding(env: Env, note: NoteRow): Promise<void> {
   try {
-    if (note.is_sensitive) {
+    const embedTextValue = noteEmbedText(note);
+    if (note.is_sensitive || !hasSemanticSignal(embedTextValue)) {
       await deleteNoteEmbedding(env, note.id);
       return;
     }
     // background pipeline: allow a longer window than interactive queries
-    const vector = await embedText(env, noteEmbedText(note), 30_000);
+    const vector = await embedText(env, embedTextValue, 30_000);
     if (!vector) return;
     await env.DB.prepare("INSERT OR REPLACE INTO note_embeddings (note_id, vector) VALUES (?, ?)")
       .bind(note.id, JSON.stringify(vector))
@@ -119,7 +139,7 @@ export async function semanticRecall(
     // with the query embedding instead of adding a serial D1 round-trip
     const cntPromise = env.VECTORIZE
       ? env.DB.prepare(
-          "SELECT COUNT(*) AS cnt FROM note_embeddings e JOIN notes n ON n.id = e.note_id WHERE n.user_id = ? AND n.is_sensitive = 0"
+          "SELECT COUNT(*) AS cnt FROM note_embeddings e JOIN notes n ON n.id = e.note_id WHERE n.user_id = ? AND n.is_sensitive = 0 AND e.vector != '[]'"
         )
           .bind(userId)
           .first<{ cnt: number }>()
@@ -151,7 +171,7 @@ export async function semanticRecall(
       const { results } = await env.DB.prepare(
         `SELECT e.note_id, e.vector FROM note_embeddings e
          JOIN notes n ON n.id = e.note_id
-         WHERE n.user_id = ? AND n.is_sensitive = 0
+         WHERE n.user_id = ? AND n.is_sensitive = 0 AND e.vector != '[]'
          ORDER BY n.created_at DESC LIMIT ? OFFSET ?`
       )
         .bind(userId, BATCH, offset)
@@ -178,6 +198,43 @@ export async function semanticRecall(
     console.error("semantic: recall failed", err);
     return [];
   }
+}
+
+/**
+ * One-shot maintenance: evict already-stored vectors of zero-signal notes
+ * (pure emoji/symbol — see hasSemanticSignal). Their rows become the '[]'
+ * sentinel so the backfill never re-embeds them, and the Vectorize mirror is
+ * cleaned up. Idempotent; safe to re-run.
+ */
+export async function purgeLowSignalEmbeddings(env: Env): Promise<number> {
+  let purged = 0;
+  const BATCH = 400;
+  for (let offset = 0; ; offset += BATCH) {
+    const { results } = await env.DB.prepare(
+      `SELECT n.id, n.title, n.content, n.url_title, n.url_summary FROM notes n
+       JOIN note_embeddings e ON e.note_id = n.id
+       WHERE e.vector != '[]' AND n.is_sensitive = 0
+       ORDER BY n.created_at ASC LIMIT ? OFFSET ?`
+    )
+      .bind(BATCH, offset)
+      .all<Pick<NoteRow, "id" | "title" | "content" | "url_title" | "url_summary">>();
+    const rows = results ?? [];
+    const bad = rows.filter((n) => !hasSemanticSignal(noteEmbedText(n)));
+    if (bad.length > 0) {
+      const mark = env.DB.prepare("UPDATE note_embeddings SET vector = '[]' WHERE note_id = ?");
+      for (const n of bad) await mark.bind(n.id).run();
+      if (env.VECTORIZE) {
+        await env.VECTORIZE.deleteByIds(bad.map((n) => n.id)).catch((err) =>
+          console.error("semantic: vectorize purge failed", err)
+        );
+      }
+      purged += bad.length;
+      // marked rows leave the vector != '[]' result set, shifting later pages
+      offset -= bad.length;
+    }
+    if (rows.length < BATCH) break;
+  }
+  return purged;
 }
 
 /** Wall-clock budget for the cron embedding backfill (batched, so this drains thousands per run). */
@@ -221,8 +278,21 @@ export async function backfillEmbeddings(env: Env, limit = 20, timeBudgetMs = 0)
     )
       .bind(limit)
       .all<NoteRow>();
-    const rows = results ?? [];
-    if (rows.length === 0) break;
+    const fetched = results ?? [];
+    if (fetched.length === 0) break;
+    // zero-signal notes must not enter the vector store, but they must not
+    // stall the backfill loop either: give them a sentinel empty vector row
+    // so the NOT EXISTS query stops re-selecting them
+    const noSignal = fetched.filter((n) => !hasSemanticSignal(noteEmbedText(n)));
+    if (noSignal.length > 0) {
+      const mark = env.DB.prepare("INSERT OR REPLACE INTO note_embeddings (note_id, vector) VALUES (?, '[]')");
+      for (const n of noSignal) await mark.bind(n.id).run();
+    }
+    const rows = fetched.filter((n) => hasSemanticSignal(noteEmbedText(n)));
+    if (rows.length === 0) {
+      if (fetched.length < limit) break;
+      continue;
+    }
     const vectors = await embedTexts(env, rows.map((n) => noteEmbedText(n)));
     const embedded: { note: NoteRow; vector: number[] }[] = [];
     vectors.forEach((v, i) => {
@@ -239,7 +309,7 @@ export async function backfillEmbeddings(env: Env, limit = 20, timeBudgetMs = 0)
       ).catch((err) => console.error("semantic: vectorize bulk upsert failed", err));
     }
     done += embedded.length;
-    if (rows.length < limit || embedded.length < rows.length) break;
+    if (fetched.length < limit || embedded.length < rows.length) break;
     if (Date.now() - started >= timeBudgetMs) break;
   }
   if (done > 0) console.log(`semantic: backfilled ${done} embeddings`);

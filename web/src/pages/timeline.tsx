@@ -341,11 +341,18 @@ export function TimelinePage() {
       setBatchProgress(null)
       // 服务端单次上限 1000 条：自动续删到全部匹配清完，累计 ids 供一次性撤销
       void (async () => {
+        // 时间快照边界：续删循环期间（微信/API）异步新写入且命中过滤条件的
+        // 笔记不能被顺手删掉——用户确认删除时从未见过它们
+        const snapshotTo = new Date().toISOString().slice(0, 19).replace("T", " ")
+        const base0 = currentFilter()
+        // 用户已有的 to（date-only 时服务端按当天 23:59:59 解释）与快照取更早者
+        const userTo = base0.to ? (base0.to.length === 10 ? `${base0.to} 23:59:59` : base0.to) : null
+        const filter: BatchFilter = { ...base0, to: userTo && userTo <= snapshotTo ? userTo : snapshotTo }
         const allIds: string[] = []
         let base = 0
         let extraRemaining = 0
         for (;;) {
-          const res = await batchNotesByFilter("delete", currentFilter(), undefined, (done, total) =>
+          const res = await batchNotesByFilter("delete", filter, undefined, (done, total) =>
             setBatchProgress({ done: base + done, total: base + total + extraRemaining }),
           )
           allIds.push(...res.ids)
