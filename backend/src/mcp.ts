@@ -71,6 +71,7 @@ export function buildMcpServer(api: ApiCall): McpServer {
       });
       if (created.status !== 201) return errorResult(created.status, created.body);
       let note = (created.body as { note: { id: string } }).note;
+      let warning: string | undefined;
       if (category) {
         const patched = await api(`/api/notes/${note.id}`, {
           method: "PATCH",
@@ -78,8 +79,13 @@ export function buildMcpServer(api: ApiCall): McpServer {
           body: JSON.stringify({ category }),
         });
         if (patched.status === 200) note = (patched.body as { note: typeof note }).note;
+        else warning = `笔记已保存，但指定分类「${category}」设置失败（HTTP ${patched.status}），已按 AI 自动分拣的分类保留`;
       }
-      return jsonResult({ saved: true, note: redactNote(note as { is_sensitive?: unknown; content?: unknown }) });
+      return jsonResult({
+        saved: true,
+        ...(warning ? { warning } : {}),
+        note: redactNote(note as { is_sensitive?: unknown; content?: unknown }),
+      });
     }
   );
 

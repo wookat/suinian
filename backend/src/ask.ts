@@ -144,7 +144,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
 // 「X 时间一共花了多少钱」类合计问题必须走 SQL 精确聚合（与周报/月报同一
 // financeStats 口径），绝不能靠 LLM 对被 LIMIT 截断的召回片段心算。
 
-export const FINANCE_WORD_RE = /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|用了?(?=[^？?。]{0,10}(?:多少|几))/;
+export const FINANCE_WORD_RE = /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|缴费|交费|[缴交用]了?(?=[^？?。]{0,10}(?:多少|几))/;
 const AGG_WORD_RE = /一共|总共|合计|总计|共计|加起来|多少钱|多少笔|几笔|平均每|总额|结余|收支|余额|多少|怎么样|怎样|如何|情况/;
 // sum-style wording that only makes sense as a books-level aggregate: when it
 // appears with a finance word but the question can't be routed to the exact
@@ -156,7 +156,7 @@ const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|�
 const STRIP_RES: RegExp[] = [
   /今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?/g,
   /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
-  /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|用了?|钱/g,
+  /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|[缴交用]了?|钱/g,
   /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|了|吗|呢|啊|呀|哦|是|都|在|有|和|与|？|\?|，|,|。|、|\s/g,
 ];
 
@@ -275,7 +275,7 @@ export interface FinanceExtremeQuery {
 export function financeExtremeIntent(question: string): FinanceExtremeQuery | null {
   if (!FINANCE_WORD_RE.test(question) && !/买/.test(question)) return null;
   const direction: "expense" | "income" = /收入|进账|入账|赚|挣/.test(question) ? "income" : "expense";
-  if (/最贵|最高|最大的?一?[笔项]|金额最[大高]|花得?最多|数额最大/.test(question)) return { kind: "max", direction };
+  if (/最贵|最高|最大的?一?[笔项]|金额最[大高]|花得?最多|花钱最[狠多猛]|最狠的?一[笔次]|数额最大/.test(question)) return { kind: "max", direction };
   if (/最便宜|最低|最小的?一?[笔项]|金额最[小低]|花得?最少|数额最小/.test(question)) return { kind: "min", direction };
   return null;
 }
@@ -514,8 +514,9 @@ const TOPIC_ENUM_RES: RegExp[] = [
   /有哪些(?:关于|有关)([\u4e00-\u9fa5A-Za-z0-9 ]{1,12}?)的?(?:笔记|记录|内容)/,
 ];
 
-// 泛指词不构成主题限定：落回时间窗枚举或普通召回
-const TOPIC_ENUM_GENERIC_RE = /^(?:东西|事情|事儿?|内容|笔记|记录|信息|什么|啥|的)$/;
+// 泛指词不构成主题限定：落回时间窗枚举或普通召回。「什/啥/么/哪些」这类
+// 疑问代词碎片（R150 P1-1：「都记了些什么」被捕出单字「什」）同属泛指。
+const TOPIC_ENUM_GENERIC_RE = /^(?:东西|事情|事儿?|内容|笔记|记录|信息|什么|什|啥|么|哪些?|的)$/;
 
 /** 识别「枚举+主题词」问题，返回用于 LIKE 全量筛选的主题词；非此类问题返回 null。 */
 export function topicEnumIntent(question: string): string | null {
@@ -523,7 +524,12 @@ export function topicEnumIntent(question: string): string | null {
   if (extremeQueryIntent(question) || countQueryIntent(question)) return null;
   const q = question.replace(/[？?。！!\s]+$/g, "").replace(STRIP_RES[0], "");
   for (const re of TOPIC_ENUM_RES) {
-    const topic = q.match(re)?.[1]?.replace(/^(?:关于|有关)/, "").replace(/^的+|的+$/g, "").trim();
+    const topic = q
+      .match(re)?.[1]
+      ?.replace(/^(?:关于|有关)/, "")
+      .replace(/^(?:什么|哪些|啥|些)+/, "")
+      .replace(/^的+|的+$/g, "")
+      .trim();
     if (topic && !TOPIC_ENUM_GENERIC_RE.test(topic)) return topic;
   }
   return null;
@@ -627,6 +633,40 @@ export async function classifyAskIntent(
     return { intent: "extreme", topic: null, extreme: parsed.extreme as "earliest" | "latest" | "longest" };
   }
   return { intent: "enum_list", topic: null, extreme: null };
+}
+
+// ---- 枚举家族统一入口（R150 P1-1）----
+// 主题枚举与时间窗枚举是唯一一对会在同一问句上同时命中的正则家族（「都记了
+// 些什么」既像无主题枚举又可能被捕出主题碎片）。单独命中时保持正则直路由
+// （行为与历史轮一致、零额外成本）；两个家族同时命中即视为跨规则歧义，交
+// R132 统一分类器主判，正则偏好只做 LLM 不可用/校验不过时的 fail-closed 兜底。
+// 两个正则都未命中时沿用 R132 的 LLM 补路由。财务/计数家族不参与：其参数与
+// exact/fail_closed 口径只能由规则精确推导（见上），且从不与枚举家族互相误捕。
+
+export interface AskEnumRoute {
+  topic: string | null;
+  list: boolean;
+  extreme: "earliest" | "latest" | "longest" | null;
+}
+
+export async function resolveAskEnumIntent(
+  env: Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL">,
+  question: string,
+  recallQuestion: string
+): Promise<AskEnumRoute> {
+  const reTopic = topicEnumIntent(question) ?? topicEnumIntent(recallQuestion);
+  const reList = enumListIntent(question) || enumListIntent(recallQuestion);
+  if (reTopic && !reList) return { topic: reTopic, list: false, extreme: null };
+  if (!reTopic && reList) return { topic: null, list: true, extreme: null };
+  // 跨家族歧义（两者都命中）或全部未命中：LLM 统一分类主判
+  const llm = await classifyAskIntent(env, question);
+  if (llm?.intent === "topic_enum" && llm.topic) return { topic: llm.topic, list: false, extreme: null };
+  if (llm?.intent === "enum_list") return { topic: null, list: true, extreme: null };
+  if (llm?.intent === "extreme" && llm.extreme) return { topic: null, list: false, extreme: llm.extreme };
+  // fail-closed 兜底：LLM 不可用/输出未过校验时保留既有正则偏好（主题优先）
+  if (reTopic) return { topic: reTopic, list: false, extreme: null };
+  if (reList) return { topic: null, list: true, extreme: null };
+  return { topic: null, list: false, extreme: null };
 }
 
 // ---- 财务口径澄清追问（R130 P2-1）----

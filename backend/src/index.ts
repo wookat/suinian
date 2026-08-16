@@ -65,7 +65,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMP
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, enumListIntent, topicEnumIntent, classifyAskIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -98,6 +98,8 @@ import {
   wecomKfConfigured,
   parseWecomKfCallback,
   syncKfMessages,
+  getKfState,
+  setKfState,
   sendKfText,
   downloadWecomMedia,
   consumeBindCodeKf,
@@ -630,14 +632,24 @@ async function processKfSync(
   openKfId: string | undefined,
   waitUntil: (p: Promise<unknown>) => void
 ): Promise<void> {
-  const messages = await syncKfMessages(env, syncToken, openKfId);
-  for (const msg of messages) {
-    try {
+  // 游标先处理后推进（R150 D-1）：整页处理完才持久化 next_cursor，崩溃窗口
+  // 变为重放而非丢失；重放页内已处理过的消息按最后完成的 msgid 幂等跳过
+  // （done 键与游标同存 wecom_kf_state，不增新表），避免重复建笔记/重复回执。
+  const doneKey = `done:${openKfId ?? "default"}`;
+  await syncKfMessages(env, syncToken, openKfId, async (msgs) => {
+    const lastDone = await getKfState(env.DB, doneKey);
+    let skipping = lastDone !== null && msgs.some((m) => m.msgid === lastDone);
+    for (const msg of msgs) {
+      if (skipping) {
+        if (msg.msgid === lastDone) skipping = false;
+        continue;
+      }
+      // 处理失败不得标记完成：抛出让整页中止、游标不前移，下次回调重放
+      // 本页并从最后成功的 msgid 之后继续（at-least-once）
       await handleKfMessage(env, msg, waitUntil);
-    } catch (e) {
-      console.error("wecom kf: message handling failed", msg.msgid, e);
+      await setKfState(env.DB, doneKey, msg.msgid);
     }
-  }
+  });
 }
 
 /** Route a single 微信客服 message through binding / ingest, replying via send_msg. */
@@ -2873,20 +2885,13 @@ app.post("/api/ask", async (c) => {
   // 主题枚举（R130 P1-1）：「我看过什么书/存过哪些菜谱」先走关键词/标签
   // LIKE 全量筛选（与计数/财务同一精确查询家族），语义 top-k 只在零命中时
   // 兜底（R129 R8：宽泛主题词的语义召回被高频主题压过，答非所问）。
-  let enumTopic = topicEnumIntent(question) ?? topicEnumIntent(recallQuestion);
-  let enumList = enumListIntent(question) || enumListIntent(recallQuestion);
-  // 主题限定优先于时间窗全量枚举：「记过哪些关于 X 的想法」不被全量枚举劫持，
-  // 主题关键词零命中时落回普通召回（语义兜底）而非列出全部笔记
-  if (enumTopic) enumList = false;
-  // 统一意图分类（R132 P1，落实 R131 D-1）：规则全部未命中时才问 LLM 一次，
-  // 只接受参数可严格校验的枚举/极值意图（主题词须出现在原问题中）；
-  // 校验不过或 AI 不可用则回落普通召回，既有规则路由行为不变。
-  if (!enumTopic && !enumList) {
-    const llmIntent = await classifyAskIntent(c.env, question);
-    if (llmIntent?.intent === "topic_enum" && llmIntent.topic) enumTopic = llmIntent.topic;
-    else if (llmIntent?.intent === "enum_list") enumList = true;
-    else if (llmIntent?.intent === "extreme" && llmIntent.extreme) return answerExtreme(llmIntent.extreme);
-  }
+  // 枚举家族入口统一收口 resolveAskEnumIntent（R150 P1-1）：主题枚举与时间窗
+  // 枚举正则同时命中时交 LLM 统一分类主判，正则只做 fail-closed 兜底；
+  // 单家族命中与全未命中（R132 LLM 补路由）行为不变。
+  const enumRoute = await resolveAskEnumIntent(c.env, question, recallQuestion);
+  if (enumRoute.extreme) return answerExtreme(enumRoute.extreme);
+  const enumTopic = enumRoute.topic;
+  const enumList = enumRoute.list;
   if (enumTopic) {
     const like = `%${enumTopic}%`;
     const tConds = ["user_id = ?", "deleted_at IS NULL", "(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)"];
@@ -3216,7 +3221,7 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）；汇总计算时也不要解释为什么排除某一项（如「68 元（买书，不属于吃的，忽略）」这类筛选过程），算式里只列入选项。涉及金额汇总时，不同币种（如 CNY 与 USD）绝不能直接相加，必须分币种分别合计并注明币种；分类为 transfer（资金往来：内转/提现/借入）的金额不是支出也不是收入，不要计入收支合计。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）；汇总计算时也不要解释为什么排除某一项（如「68 元（买书，不属于吃的，忽略）」这类筛选过程），算式里只列入选项。涉及金额汇总时，不同币种（如 CNY 与 USD）绝不能直接相加，必须分币种分别合计并注明币种；分类为 transfer（资金往来：内转/提现/借入）的金额不是支出也不是收入，不要计入收支合计。引用角标只标注直接支撑该句结论的片段，每处至多 3 个，不要把命中的片段序号成串堆在句尾。回答用中文，简洁。",
       },
       ...history,
       {
