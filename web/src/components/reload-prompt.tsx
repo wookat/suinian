@@ -2,11 +2,27 @@ import { RefreshCw, X } from "lucide-react"
 import { useRegisterSW } from "virtual:pwa-register/react"
 import { Button } from "@/components/ui/button"
 
+// 长驻 PWA 里 SW 只在页面加载时检查一次更新，常开着不关的用户可能几天
+// 都见不到更新提示：定期 + 回到前台时主动 update()，让 needRefresh 能
+// 在长会话里触发。仍保留手动"刷新"确认，避免自动 reload 丢用户未保存输入。
+const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
+
 export function ReloadPrompt() {
   const {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker,
-  } = useRegisterSW()
+  } = useRegisterSW({
+    onRegisteredSW(_url, r) {
+      if (!r) return
+      const check = () => {
+        if (navigator.onLine) void r.update().catch(() => {})
+      }
+      setInterval(check, UPDATE_CHECK_INTERVAL_MS)
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") check()
+      })
+    },
+  })
 
   if (!needRefresh) return null
 

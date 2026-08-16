@@ -1404,6 +1404,28 @@ app.get("/api/notes", async (c) => {
     binds.push(cur.createdAt, cur.createdAt, cur.id);
   }
 
+  // hybrid recall on the first page of a text search runs CONCURRENTLY with
+  // the keyword page query (R158 P2-3): semantic recall (embedding + vector
+  // query) and the partial-term recall don't depend on the page rows, and
+  // serializing them stacked their full latency onto search P95
+  const isSearch = Boolean(q && !cursor);
+  const terms = isSearch ? searchTerms(q) : [];
+  const hitsPromise = isSearch ? semanticRecall(c.env, userId, q, 10) : null;
+  let partialPromise: Promise<NoteRow[]> | null = null;
+  if (isSearch && terms.length > 1) {
+    // multi-word relevance: notes hitting only SOME terms still surface,
+    // ranked below full hits (all-term matches first, partial next)
+    const pf = noteFilterConds({ category, tag, source, from, to });
+    const orTerms = terms.map(() => termCond()).join(" OR ");
+    const termBinds = terms.flatMap((t) => Array(KEYWORD_FIELDS.length).fill(likeContains(t)) as string[]);
+    const where = [`user_id = ?`, ...pf.conds, `(${orTerms})`].join(" AND ");
+    partialPromise = c.env.DB.prepare(`SELECT * FROM notes WHERE ${where} ORDER BY created_at DESC LIMIT 30`)
+      .bind(userId, ...pf.binds, ...termBinds)
+      .all<NoteRow>()
+      .then((r) => r.results ?? [])
+      .catch(() => []);
+  }
+
   const sql = `SELECT * FROM notes WHERE ${conds.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT ?`;
   binds.push(limit + 1);
   const { results } = await c.env.DB.prepare(sql).bind(...binds).all<NoteRow>();
@@ -1412,29 +1434,13 @@ app.get("/api/notes", async (c) => {
   const page = rows.slice(0, limit);
   const next = hasMore && page.length > 0 ? encodeCursor(page[page.length - 1].created_at, page[page.length - 1].id) : null;
 
-  // hybrid recall on the first page of a text search: keyword hits + semantic
-  // hits (Vectorize/D1 vectors), deduped and ranked by relevance; any semantic
-  // failure leaves the pure keyword results untouched
-  if (q && !cursor) {
-    const terms = searchTerms(q);
-    const hits = await semanticRecall(c.env, userId, q, 10);
+  // keyword hits + semantic hits (Vectorize/D1 vectors), deduped and ranked
+  // by relevance; any semantic failure leaves the pure keyword results untouched
+  if (hitsPromise) {
+    const hits = await hitsPromise;
     const kwIds = new Set(page.map((n) => n.id));
     const semScore = new Map(hits.map((h) => [h.note_id, h.score]));
-    // multi-word relevance: notes hitting only SOME terms still surface,
-    // ranked below full hits (all-term matches first, partial next)
-    let partial: NoteRow[] = [];
-    if (terms.length > 1) {
-      const pf = noteFilterConds({ category, tag, source, from, to });
-      const orTerms = terms.map(() => termCond()).join(" OR ");
-      const termBinds = terms.flatMap((t) => Array(KEYWORD_FIELDS.length).fill(likeContains(t)) as string[]);
-      const where = [`user_id = ?`, ...pf.conds, `(${orTerms})`].join(" AND ");
-      const r = await c.env.DB.prepare(
-        `SELECT * FROM notes WHERE ${where} ORDER BY created_at DESC LIMIT 30`
-      )
-        .bind(userId, ...pf.binds, ...termBinds)
-        .all<NoteRow>();
-      partial = (r.results ?? []).filter((n) => !kwIds.has(n.id));
-    }
+    const partial: NoteRow[] = partialPromise ? (await partialPromise).filter((n) => !kwIds.has(n.id)) : [];
     const partialIds = new Set(partial.map((n) => n.id));
     const extraIds = hits.filter((h) => !kwIds.has(h.note_id) && !partialIds.has(h.note_id)).map((h) => h.note_id);
     let extra: NoteRow[] = [];

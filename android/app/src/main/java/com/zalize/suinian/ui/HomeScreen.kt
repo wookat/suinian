@@ -75,6 +75,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -677,6 +678,30 @@ fun HomeScreen(
                     )
                     Spacer(Modifier.height(8.dp))
                     AssistChip(onClick = { vm.refresh() }, label = { Text("重试") })
+                }
+            }
+            ui.notes.isEmpty() && (ui.query.isNotBlank() || ui.category != null || activeFilterCount > 0) -> {
+                // 搜索/筛选无结果与“账号里还没有碎念”是两回事，文案必须区分（与 Web 同口径）
+                Column(
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text("没有找到匹配的笔记", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "换个关键词、标签或分类试试，或清除筛选条件查看全部碎念。" +
+                            if (ui.query.isNotBlank()) "敏感笔记正文已加密存储、不参与搜索。" else "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Button(onClick = {
+                        vm.setQuery("")
+                        vm.setCategory(null)
+                        vm.clearFilters()
+                    }) { Text("清除筛选") }
                 }
             }
             ui.notes.isEmpty() -> {

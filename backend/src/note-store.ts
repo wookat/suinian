@@ -9,7 +9,7 @@ import type { NoteMeta, TriageResult } from "./types";
 import { sensitiveIngestGate, scrubDerivedMeta, DERIVED_PLAINTEXT_META_KEYS, type GatedNoteFields } from "./ingest";
 import { sanitizeSensitiveTags } from "./triage";
 import { syncAttachmentEncryption } from "./media";
-import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
+import { encryptContent, decryptContent, contentFingerprint, ENC_PLACEHOLDER, IMPORT_FP_VERSION } from "./crypto";
 
 export function parseNoteMeta(raw: string | null): NoteMeta | null {
   if (!raw) return null;
@@ -90,6 +90,16 @@ export async function prepareNoteInsert(
   let meta: NoteMeta | null = (typeof f.meta === "function" ? f.meta(gated) : f.meta) ?? null;
   // 敏感落库：派生明文 meta（转写/图片描述/文件摘录/链接摘录）统一洗净
   if (storedSensitive) meta = scrubDerivedMeta(meta);
+  // 敏感笔记落库后 content 只剩占位符：在唯一插入构造器里统一补内容指纹，
+  // 导出后重新导入的去重才能覆盖 App 内直接创建的敏感笔记（导入路径
+  // 已自带 import_fp，此处不覆盖）
+  if (storedSensitive && f.content && (meta?.import_fp ?? undefined) === undefined) {
+    meta = {
+      ...(meta ?? {}),
+      import_fp: await contentFingerprint(env.SUINIAN_ENC_KEY, f.content),
+      import_fp_v: IMPORT_FP_VERSION,
+    };
+  }
   if (gated.needs_retriage) meta = { ...(meta ?? {}), needs_retriage: true };
   const stmt = db
     .prepare(
