@@ -94,6 +94,73 @@ export function generateToken(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// ---- API token storage (R152 P1-1) ----
+// Tokens are 24 random bytes (~192 bits of entropy), so a single unsalted
+// SHA-256 is the right hash: brute-forcing the preimage space is infeasible,
+// and a slow KDF (PBKDF2/argon2) would only add per-request latency on the
+// hottest path (every authenticated call) without a security gain.
+
+export async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Written into users.api_token once its plaintext token moves to api_tokens:
+ * unique per user (column is NOT NULL UNIQUE) and can never equal a real
+ * token (tokens are pure hex, ":" never appears). */
+export function migratedTokenSentinel(userId: string): string {
+  return `hashed:${userId}`;
+}
+
+/** Legacy plaintext token still sitting in users.api_token (pre-R152 row). */
+export function isLegacyPlaintextToken(stored: string): boolean {
+  return !stored.startsWith("hashed:");
+}
+
+function tokenRowId(): string {
+  return `tk_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+}
+
+/** Statement inserting the hash of a raw token for a user (composable into batches). */
+export async function insertTokenStmt(db: D1Database, userId: string, rawToken: string): Promise<D1PreparedStatement> {
+  return db
+    .prepare("INSERT INTO api_tokens (id, user_id, token_hash) VALUES (?, ?, ?)")
+    .bind(tokenRowId(), userId, await sha256Hex(rawToken));
+}
+
+/** Mint a token for the user, storing only its hash. Returns the raw token (shown to the client once). */
+export async function issueToken(db: D1Database, userId: string): Promise<string> {
+  const token = generateToken();
+  await (await insertTokenStmt(db, userId, token)).run();
+  return token;
+}
+
+export type TokenAuth = { userId: string };
+
+/**
+ * Resolve a bearer token to its user via hash lookup. Legacy plaintext rows
+ * in users.api_token (pre-R152) still authenticate and are transparently
+ * migrated: the hash row is inserted and the plaintext replaced with the
+ * sentinel, so no existing token ever breaks. Migration failure is
+ * non-fatal (auth already succeeded; the next request retries it).
+ */
+export async function authenticateToken(db: D1Database, token: string): Promise<TokenAuth | null> {
+  const tokenHash = await sha256Hex(token);
+  const row = await db.prepare("SELECT user_id FROM api_tokens WHERE token_hash = ?").bind(tokenHash).first<{ user_id: string }>();
+  if (row) return { userId: row.user_id };
+  const legacy = await db.prepare("SELECT id FROM users WHERE api_token = ?").bind(token).first<{ id: string }>();
+  if (!legacy) return null;
+  try {
+    await db.batch([
+      db.prepare("INSERT OR IGNORE INTO api_tokens (id, user_id, token_hash) VALUES (?, ?, ?)").bind(tokenRowId(), legacy.id, tokenHash),
+      db.prepare("UPDATE users SET api_token = ? WHERE id = ?").bind(migratedTokenSentinel(legacy.id), legacy.id),
+    ]);
+  } catch (e) {
+    console.error("token hash migration failed", e);
+  }
+  return { userId: legacy.id };
+}
+
 export function validateName(name: unknown): string | null {
   if (typeof name !== "string") return null;
   const n = name.trim();

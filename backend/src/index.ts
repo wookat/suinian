@@ -40,6 +40,11 @@ import {
   generateRecoveryCode,
   normalizeRecoveryCode,
   registrationEnabled,
+  authenticateToken,
+  issueToken,
+  insertTokenStmt,
+  migratedTokenSentinel,
+  isLegacyPlaintextToken,
   checkRateLimit,
   sweepAuthRateLimits,
   clientIp,
@@ -65,7 +70,7 @@ import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMP
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -237,7 +242,11 @@ app.post("/api/auth/register", async (c) => {
     // existing account instead of a dead-end 409
     if (existing.password_hash && (await verifyPassword(password, existing.password_hash))) {
       console.log(`register: idempotent retry for ${existing.id}`);
-      return c.json({ user: { id: existing.id, name: existing.name }, api_token: existing.api_token });
+      // pre-R152 rows still hold the plaintext token; hashed rows mint a fresh one
+      const retryToken = isLegacyPlaintextToken(existing.api_token)
+        ? existing.api_token
+        : await issueToken(c.env.DB, existing.id);
+      return c.json({ user: { id: existing.id, name: existing.name }, api_token: retryToken });
     }
     return c.json({ error: "用户名已存在", code: "NAME_TAKEN" }, 409);
   }
@@ -251,10 +260,13 @@ app.post("/api/auth/register", async (c) => {
     return c.json({ error: "注册失败（密码处理出错），请重试", code: "HASH_FAILED" }, 500);
   }
   try {
-    // single INSERT = atomic in D1; the account only exists once this succeeds
-    await c.env.DB.prepare("INSERT INTO users (id, name, api_token, password_hash) VALUES (?, ?, ?, ?)")
-      .bind(id, name, token, passwordHash)
-      .run();
+    // atomic D1 batch: the account and its token hash exist together or not at
+    // all; users.api_token only ever holds the sentinel (never the plaintext)
+    await c.env.DB.batch([
+      c.env.DB.prepare("INSERT INTO users (id, name, api_token, password_hash) VALUES (?, ?, ?, ?)")
+        .bind(id, name, migratedTokenSentinel(id), passwordHash),
+      await insertTokenStmt(c.env.DB, id, token),
+    ]);
   } catch (e) {
     console.error("register: insert failed", e);
     const msg = e instanceof Error ? e.message : String(e);
@@ -265,7 +277,10 @@ app.post("/api/auth/register", async (c) => {
         .bind(name)
         .first<{ id: string; name: string; api_token: string; password_hash: string | null }>();
       if (winner?.password_hash && (await verifyPassword(password, winner.password_hash))) {
-        return c.json({ user: { id: winner.id, name: winner.name }, api_token: winner.api_token });
+        const winnerToken = isLegacyPlaintextToken(winner.api_token)
+          ? winner.api_token
+          : await issueToken(c.env.DB, winner.id);
+        return c.json({ user: { id: winner.id, name: winner.name }, api_token: winnerToken });
       }
       return c.json({ error: "用户名已存在", code: "NAME_TAKEN" }, 409);
     }
@@ -316,10 +331,14 @@ app.post("/api/auth/recover", async (c) => {
     hashPassword(normalizeRecoveryCode(nextCode)!),
   ]);
   // one-time consumption: the used code's hash is replaced atomically with the
-  // new one, so a captured code can never be replayed
-  await c.env.DB.prepare("UPDATE users SET password_hash = ?, api_token = ?, recovery_hash = ? WHERE id = ?")
-    .bind(passwordHash, newToken, nextHash, user.id)
-    .run();
+  // new one, so a captured code can never be replayed; every previous token
+  // (hashed rows and any legacy plaintext) dies with the old password
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM api_tokens WHERE user_id = ?").bind(user.id),
+    await insertTokenStmt(c.env.DB, user.id, newToken),
+    c.env.DB.prepare("UPDATE users SET password_hash = ?, api_token = ?, recovery_hash = ? WHERE id = ?")
+      .bind(passwordHash, migratedTokenSentinel(user.id), nextHash, user.id),
+  ]);
   console.log(`recover: password reset for ${user.id}`);
   return c.json({ user: { id: user.id, name: user.name }, api_token: newToken, recovery_code: nextCode });
 });
@@ -342,7 +361,18 @@ app.post("/api/auth/login", async (c) => {
   if (!(await verifyPassword(password, user.password_hash))) {
     return c.json({ error: "用户名或密码错误" }, 401);
   }
-  return c.json({ user: { id: user.id, name: user.name }, api_token: user.api_token });
+  // pre-R152 rows: keep returning the single shared token and move its hash
+  // into api_tokens (other devices holding it stay logged in). Hashed rows:
+  // mint an additional token for this device — existing tokens stay valid.
+  if (isLegacyPlaintextToken(user.api_token)) {
+    const legacyToken = user.api_token;
+    await c.env.DB.batch([
+      await insertTokenStmt(c.env.DB, user.id, legacyToken),
+      c.env.DB.prepare("UPDATE users SET api_token = ? WHERE id = ?").bind(migratedTokenSentinel(user.id), user.id),
+    ]);
+    return c.json({ user: { id: user.id, name: user.name }, api_token: legacyToken });
+  }
+  return c.json({ user: { id: user.id, name: user.name }, api_token: await issueToken(c.env.DB, user.id) });
 });
 
 // ---- admin maintenance (guarded by ADMIN_TOKEN worker secret, not user tokens) ----
@@ -875,13 +905,11 @@ app.use("/api/*", async (c, next) => {
   const auth = c.req.header("authorization") || "";
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (!m) return c.json({ error: "unauthorized" }, 401);
-  const row = await c.env.DB.prepare("SELECT id FROM users WHERE api_token = ?")
-    .bind(m[1])
-    .first<{ id: string }>();
-  if (!row) return c.json({ error: "unauthorized" }, 401);
-  c.set("userId", row.id);
+  const tokenAuth = await authenticateToken(c.env.DB, m[1]);
+  if (!tokenAuth) return c.json({ error: "unauthorized" }, 401);
+  c.set("userId", tokenAuth.userId);
   const touch = c.env.DB.prepare("UPDATE users SET last_used_at = datetime('now') WHERE id = ?")
-    .bind(row.id)
+    .bind(tokenAuth.userId)
     .run()
     .then(() => undefined)
     .catch(() => undefined);
@@ -911,8 +939,15 @@ app.get("/api/auth/me", async (c) => {
 });
 
 app.post("/api/auth/rotate-token", async (c) => {
+  const userId = c.get("userId");
   const token = generateToken();
-  await c.env.DB.prepare("UPDATE users SET api_token = ? WHERE id = ?").bind(token, c.get("userId")).run();
+  // rotation = a leaked credential must die everywhere: revoke every token
+  // (hashed rows and any legacy plaintext) and mint exactly one replacement
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM api_tokens WHERE user_id = ?").bind(userId),
+    await insertTokenStmt(c.env.DB, userId, token),
+    c.env.DB.prepare("UPDATE users SET api_token = ? WHERE id = ?").bind(migratedTokenSentinel(userId), userId),
+  ]);
   return c.json({ api_token: token });
 });
 
@@ -2703,7 +2738,11 @@ app.post("/api/ask", async (c) => {
     const srows = sr.results ?? [];
     if (srows.length > 0) {
       const answer = buildFinanceSubsetAnswer(subsetTerms, srows, sRange?.phrase ?? null);
-      const sRefRows = srows.filter((n) => !n.is_sensitive).slice(0, 10);
+      // references 必须与答案里的逐笔明细同一个集合同一顺序（直接命中优先，
+      // 仅标签命中单列不进引用；R151 P2-1）
+      const sFinance = srows.filter((n) => n.category === "expense" || n.category === "income");
+      const sDirect = sFinance.filter((n) => subsetDirectHit(n, subsetTerms));
+      const sRefRows = (sDirect.length > 0 ? sDirect : sFinance).filter((n) => !n.is_sensitive).slice(0, 10);
       return c.json({
         answer,
         references: sRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),

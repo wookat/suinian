@@ -7,6 +7,19 @@ const EMBED_MODEL = "@cf/baai/bge-m3";
 /** Cosine similarity above which a note counts as a semantic match for search/ask recall. */
 export const SEMANTIC_MIN_SCORE = 0.45;
 
+// Small corpora (R151 P2-3): with only a handful of notes, everything is "the
+// closest match" and 0.45 lets unrelated notes surface as 语义匹配 (e.g. a
+// coffee note for 「跑步」). Below this corpus size a stricter floor applies;
+// larger corpora keep the recall-friendly threshold since real matches
+// naturally outrank noise there.
+export const SEMANTIC_SMALL_CORPUS_MAX = 20;
+export const SEMANTIC_SMALL_CORPUS_MIN_SCORE = 0.6;
+
+/** Effective semantic threshold for a corpus of `corpusSize` vectors. */
+export function semanticMinScoreFor(corpusSize: number, minScore = SEMANTIC_MIN_SCORE): number {
+  return corpusSize < SEMANTIC_SMALL_CORPUS_MAX ? Math.max(minScore, SEMANTIC_SMALL_CORPUS_MIN_SCORE) : minScore;
+}
+
 // Workers AI cold starts can hang tens of seconds; interactive search/ask
 // must degrade to keyword recall instead of blocking on the embedding
 const EMBED_TIMEOUT_MS = 8_000;
@@ -105,6 +118,12 @@ export async function semanticRecall(
     const qv = await embedText(env, query);
     if (!qv) return [];
     if (env.VECTORIZE) {
+      const cnt = await env.DB.prepare(
+        "SELECT COUNT(*) AS cnt FROM note_embeddings e JOIN notes n ON n.id = e.note_id WHERE n.user_id = ? AND n.is_sensitive = 0"
+      )
+        .bind(userId)
+        .first<{ cnt: number }>();
+      const effMin = semanticMinScoreFor(cnt?.cnt ?? 0, minScore);
       const res = await env.VECTORIZE.query(qv, {
         topK,
         filter: { user_id: userId },
@@ -112,13 +131,14 @@ export async function semanticRecall(
         returnMetadata: "none",
       });
       return (res.matches ?? [])
-        .filter((m) => m.score >= minScore)
+        .filter((m) => m.score >= effMin)
         .map((m) => ({ note_id: m.id, score: m.score }));
     }
     // page through ALL of the user's vectors (batched to stay under D1's
     // per-query response size): a fixed newest-N window silently blinds
     // semantic recall to older notes once the account outgrows it
-    const hits: SemanticHit[] = [];
+    const scored: SemanticHit[] = [];
+    let corpusSize = 0;
     const BATCH = 400;
     const MAX_VECTORS = 4000;
     for (let offset = 0; offset < MAX_VECTORS; offset += BATCH) {
@@ -131,6 +151,7 @@ export async function semanticRecall(
         .bind(userId, BATCH, offset)
         .all<{ note_id: string; vector: string }>();
       const rows = results ?? [];
+      corpusSize += rows.length;
       for (const r of rows) {
         let v: number[];
         try {
@@ -139,10 +160,12 @@ export async function semanticRecall(
           continue;
         }
         const score = cosineSim(qv, v);
-        if (score >= minScore) hits.push({ note_id: r.note_id, score });
+        if (score >= minScore) scored.push({ note_id: r.note_id, score });
       }
       if (rows.length < BATCH) break;
     }
+    const effMin = semanticMinScoreFor(corpusSize, minScore);
+    const hits = scored.filter((h) => h.score >= effMin);
     hits.sort((a, b) => b.score - a.score);
     return hits.slice(0, topK);
   } catch (err) {
