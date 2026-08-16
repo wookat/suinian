@@ -131,6 +131,12 @@ describe("financeTopicTerms", () => {
     expect(financeTopicTerms("吃喝花了多少")).toEqual(["吃喝"]);
   });
 
+  it("recognizes behavior verbs like 交/付/买 as topic-count questions", () => {
+    expect(topicCountIntent("我交过几次房租")).toBe("房租");
+    expect(topicCountIntent("房租交过几次")).toBe("房租");
+    expect(topicCountIntent("买过几次咖啡")).toBe("咖啡");
+  });
+
   it("strips time qualifiers from the topic (time filter handles them)", () => {
     expect(financeTopicTerms("2026年7月咖啡花了多少")).toEqual(["咖啡"]);
     expect(financeTopicTerms("上个月咖啡一共花了多少")).toEqual(["咖啡"]);
