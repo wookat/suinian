@@ -24,6 +24,18 @@ description: How to run and test suinian (backend Worker + web SPA) fully locall
 - Note: typing CJK text via computer-use `type` into the textarea may drop characters (xdotool cannot type CJK); to enter Chinese, put it on the clipboard (`printf '中文' | xclip -selection clipboard -d :0`) and paste with Ctrl+V, verifying the text landed before pressing Enter.
 - Mobile-viewport testing: Chrome's minimum window width (~500px) prevents resizing the window to 375px; use DevTools device toolbar (F12 → Ctrl+Shift+M) and set dimensions to 375×667 instead.
 
+## Android emulator testing (learned R156)
+- Build: `cd android && echo "sdk.dir=/home/ubuntu/android-sdk" > local.properties && ./gradlew assembleDebug` (local.properties is gitignored).
+- Launch the emulator with capped resources or the VM OOM-kills qemu (also killing VNC): `emulator -avd qa156 -memory 1536 -cores 2 -gpu swiftshader_indirect -no-audio`.
+- Dismiss stylus-tutorial / "System UI isn't responding" overlays with `adb shell input keyevent 4` (BACK) rather than clicking in the emulator window.
+- Drive the app via adb, not host clicks: `adb shell uiautomator dump /sdcard/ui.xml` to find bounds/content-desc, `adb shell input tap X Y`, `adb shell input text 'word%sword'` (spaces must be `%s`; CJK is impossible via `input text` — use ASCII content or skip).
+- Login screen tabs: 注册/登录/Token/找回; capture EditText is the top box, send button content-desc is 记下.
+
+## Production DB verification (learned R156)
+- Remote D1 queries need `CLOUDFLARE_API_TOKEN="$CLOUDFLARE_GLOBAL_API_TOKEN"` (the default token gets 7403): `npx wrangler d1 execute suinian --remote --command "..." --json`. Note `attachments` has no created_at column.
+- Verify sensitive-attachment encryption by downloading the R2 object and checking the `SNE1` magic: `npx wrangler r2 object get "suinian-media/<r2_key>" --file out.bin --remote && xxd out.bin | head -1`.
+- Zip-import asset pitfall: the Obsidian/Cubox md pipeline only collects `![[wikilink]]` image embeds; standard markdown `![](path)` refs are left in the body and NOT stored as attachments (Notion/Apple paths do handle them via collectImageRefs). Use `![[img.png]]` in fixtures.
+
 ## Repo checks
 - backend: `npm test` (vitest), `npm run typecheck`
 - web: `npm run lint` (oxlint, warnings ok), `npm run build` (tsc + vite)
