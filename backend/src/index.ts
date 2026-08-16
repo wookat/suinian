@@ -4089,6 +4089,11 @@ export default {
       ctx.waitUntil(generateAllDailyReviews(env));
       // daily R2↔attachments reconciliation: GC orphan media objects
       ctx.waitUntil(reconcileMediaOrphans(env));
+      // 清理存量零信号（纯 emoji/符号）向量：这类向量对任意查询都给高相似度，
+      // 是语义误报的主源；幂等，清完后每天空转
+      ctx.waitUntil(purgeLowSignalEmbeddings(env).then((n) => {
+        if (n > 0) console.log(`semantic: purged ${n} low-signal embeddings`);
+      }));
       // 存量敏感附件迁移：把仍为明文的敏感笔记 R2 原件加密重写（幂等）
       ctx.waitUntil(sweepUnencryptedSensitiveAttachments(env));
     }
