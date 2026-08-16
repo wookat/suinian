@@ -5,6 +5,13 @@ description: How to run and test suinian (backend Worker + web SPA) fully locall
 
 # Local dev testing for suinian
 
+## Production testing tips (learned R158)
+- Web token login has a UI path (no localStorage hack needed): onboarding modal → 「我已有 API token」 → settings 数据源 → switch to 「真实 API」 tab → fill API Base URL + token → 测试连接 (shows 「连接成功，Token 有效」) → 保存设置.
+- Android emulator: host mouse clicks on the emulator window may not register — always drive via `adb shell input tap/swipe/text` + `uiautomator dump`. Enter (keyevent 66) does NOT submit the home search field; tap the send arrow at the right edge of the search box instead.
+- Small AVDs (320x640) leave ~0px for the notes list under the capture box — enlarge with `adb shell wm size 400x860`. CAVEAT: doing `wm size` while the app is open can leave the timeline skeleton stuck indefinitely (config-change recreation mid-refresh?); force-stop and relaunch the app after resizing.
+- CJK cannot be typed via `adb shell input text`; for matched-search tests on Android use an ASCII substring of the note (e.g. a number in the title).
+- The `browser_console` tool may fail to attach to Chrome even with `--remote-debugging-port=9222 --remote-allow-origins=*`; `curl localhost:9222/json` still lists targets (and shows the registered `sw.js` service_worker target), and typing into the DevTools console via computer-use works but complex JS with `?.`/`!!` gets mangled by xdotool — use plain `function(reg){...}` + `&&` style.
+
 ## Production testing tips (learned R148)
 - Token-only login (no password, e.g. qa.json with `token`): launch Chrome with `--remote-debugging-port=9222 --remote-allow-origins=*` (without the allow-origins flag CDP websocket handshakes are rejected 403, and the `browser_console` tool may fail to connect with a custom `--user-data-dir` — use a python `websocket-client` CDP script against `localhost:9222/json` instead). Then set `localStorage['suinian.settings'] = JSON.stringify({apiBaseUrl:'https://suinian-api.zalize.com', apiToken:TOKEN, useMock:false, onboarded:true, tourSeen:true})` and reload — lands directly on the logged-in timeline.
 - Objective first-load timing: read `performance.getEntriesByType('navigation'/'resource')` via CDP and report `/api/notes` duration instead of eyeballing.

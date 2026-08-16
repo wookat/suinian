@@ -2,7 +2,7 @@
 // into normalized note items (content + original created time + tags + url).
 import { prepareNoteInsert } from "./note-store";
 import { storeOriginal } from "./media";
-import { contentFingerprint, decryptContent } from "./crypto";
+import { contentFingerprint, decryptContent, IMPORT_FP_VERSION } from "./crypto";
 
 export interface ImportAsset {
   name: string;
@@ -451,6 +451,7 @@ export async function runImport(
           meta: (gated) => ({
             import_source: source,
             import_fp: fp,
+            import_fp_v: IMPORT_FP_VERSION,
             // notes keep their original created_at; lateness/triage hints must
             // measure from when the note actually entered the queue
             imported_at: new Date().toISOString(),
@@ -536,8 +537,8 @@ export async function sweepImportDedupe(
     }
     const fp = await contentFingerprint(env.SUINIAN_ENC_KEY, plain);
     await db
-      .prepare("UPDATE notes SET meta = json_set(coalesce(meta, '{}'), '$.import_fp', ?) WHERE id = ?")
-      .bind(fp, r.id)
+      .prepare("UPDATE notes SET meta = json_set(coalesce(meta, '{}'), '$.import_fp', ?, '$.import_fp_v', ?) WHERE id = ?")
+      .bind(fp, IMPORT_FP_VERSION, r.id)
       .run();
     stats.fp_backfilled++;
   }

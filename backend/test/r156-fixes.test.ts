@@ -251,8 +251,13 @@ function fakeEnv(withKey: boolean) {
                 return { meta: { changes: 1 } };
               }
               if (sql.includes("json_set(coalesce(meta, '{}'), '$.import_fp'")) {
-                const row = notes.find((r) => r.id === b[1]);
-                if (row) row.meta = JSON.stringify({ ...(row.meta ? JSON.parse(row.meta) : {}), import_fp: b[0] });
+                const row = notes.find((r) => r.id === b[2]);
+                if (row)
+                  row.meta = JSON.stringify({
+                    ...(row.meta ? JSON.parse(row.meta) : {}),
+                    import_fp: b[0],
+                    import_fp_v: b[1],
+                  });
                 return { meta: { changes: 1 } };
               }
               if (sql.includes("SET deleted_at = datetime('now')")) {

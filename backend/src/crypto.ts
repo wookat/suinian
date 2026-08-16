@@ -74,6 +74,13 @@ export async function decryptBytes(keyB64: string, bytes: Uint8Array): Promise<U
 }
 
 /**
+ * 当前指纹算法版本（meta.import_fp_v）：v1 = HMAC-SHA256(SUINIAN_ENC_KEY)，
+ * 无密钥时退化 SHA-256。升级算法/换钥时递增版本号，去重时按版本分别
+ * 计算候选指纹即可平滑迁移（sweepImportDedupe 已具备解密重算机制）。
+ */
+export const IMPORT_FP_VERSION = 1;
+
+/**
  * 内容指纹（导入去重）：有密钥时按 HMAC-SHA256（DB 泄露不可对短内容做字典
  * 反猜），无密钥的本地/自部署环境退化为 SHA-256。输出 base64。
  */

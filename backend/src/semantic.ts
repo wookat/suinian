@@ -115,14 +115,20 @@ export async function semanticRecall(
   minScore = SEMANTIC_MIN_SCORE
 ): Promise<SemanticHit[]> {
   try {
+    // corpus-size lookup only gates the threshold, so it runs concurrently
+    // with the query embedding instead of adding a serial D1 round-trip
+    const cntPromise = env.VECTORIZE
+      ? env.DB.prepare(
+          "SELECT COUNT(*) AS cnt FROM note_embeddings e JOIN notes n ON n.id = e.note_id WHERE n.user_id = ? AND n.is_sensitive = 0"
+        )
+          .bind(userId)
+          .first<{ cnt: number }>()
+          .catch(() => null)
+      : null;
     const qv = await embedText(env, query);
     if (!qv) return [];
     if (env.VECTORIZE) {
-      const cnt = await env.DB.prepare(
-        "SELECT COUNT(*) AS cnt FROM note_embeddings e JOIN notes n ON n.id = e.note_id WHERE n.user_id = ? AND n.is_sensitive = 0"
-      )
-        .bind(userId)
-        .first<{ cnt: number }>();
+      const cnt = await cntPromise;
       const effMin = semanticMinScoreFor(cnt?.cnt ?? 0, minScore);
       const res = await env.VECTORIZE.query(qv, {
         topK,

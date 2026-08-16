@@ -394,10 +394,10 @@ export async function clusterNote(
       await summarize(picked, note.title || undefined);
       return picked;
     }
-    // cold start: no thread matched (or none exist) — pair with a recent unthreaded idea
+    // cold start: no thread matched (or none exist) — pair with a recent unthreaded idea/collect note
     const { results: loose } = await env.DB.prepare(
       `SELECT id, title, content FROM notes
-       WHERE user_id = ? AND category = 'idea' AND deleted_at IS NULL AND thread_id IS NULL AND id != ?
+       WHERE user_id = ? AND category IN ${THREAD_CATEGORIES} AND deleted_at IS NULL AND thread_id IS NULL AND id != ?
        ORDER BY created_at DESC LIMIT 30`
     )
       .bind(note.user_id, note.id)
@@ -528,7 +528,7 @@ export async function rebuildStep(env: Env, userId: string, state: RebuildState,
     // came later) get one more match against the full thread set
     while (Date.now() < deadline && state.secondPassed < REBUILD_SECOND_PASS_MAX) {
       const { results } = await env.DB.prepare(
-        `SELECT * FROM notes WHERE user_id = ?1 AND category = 'idea' AND deleted_at IS NULL AND thread_id IS NULL
+        `SELECT * FROM notes WHERE user_id = ?1 AND category IN ${THREAD_CATEGORIES} AND deleted_at IS NULL AND thread_id IS NULL
            AND (created_at > ?2 OR (created_at = ?2 AND id > ?3))
          ORDER BY created_at ASC, id ASC LIMIT ${REBUILD_BATCH}`
       )

@@ -62,6 +62,9 @@ class ApiClient(private val baseUrl: String, private val token: String) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
+        // callTimeout 覆盖整次调用（含 DNS 解析）：connect/read 超时都不管 DNS，
+        // 首启冷启动碰上 DNS 挂死会让首页骨架屏无限停留而非报错重试
+        .callTimeout(30, TimeUnit.SECONDS)
         .build()
 
     private val json = Json {
@@ -223,7 +226,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             if (tags != null) putJsonArray("tags") { tags.forEach { add(JsonPrimitive(it)) } }
             if (setCategory != null) put("category", setCategory)
         }.toString().toRequestBody(jsonMedia)
-        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS).build()
         val resp = try {
             client60.newCall(request("/api/notes/batch").post(body).build()).execute()
         } catch (e: IOException) {
@@ -282,7 +285,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             put("which", which)
             put("period", period)
         }.toString().toRequestBody(jsonMedia)
-        val client90 = client.newBuilder().readTimeout(90, TimeUnit.SECONDS).build()
+        val client90 = client.newBuilder().readTimeout(90, TimeUnit.SECONDS).callTimeout(105, TimeUnit.SECONDS).build()
         val resp = try {
             client90.newCall(request("/api/reports/generate").post(body).build()).execute()
         } catch (e: IOException) {
@@ -301,7 +304,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
 
     /** DELETE /api/auth/me：永久注销账号并删除全部数据 */
     suspend fun deleteAccount(): Unit = withContext(Dispatchers.IO) {
-        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS).build()
         val resp = try {
             client60.newCall(request("/api/auth/me").delete().build()).execute()
         } catch (e: IOException) {
@@ -332,7 +335,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
     /** POST /api/notes/:id/refetch-link：链接笔记手动重试抓取标题/正文 */
     suspend fun refetchLink(id: String): Note? = withContext(Dispatchers.IO) {
         val body = "{}".toRequestBody(jsonMedia)
-        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS).build()
         val resp = try {
             client60.newCall(request("/api/notes/$id/refetch-link").post(body).build()).execute()
         } catch (e: IOException) {
@@ -346,7 +349,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
 
     /** GET /api/notes/:id/file：下载原件字节（附件不超 10MB，直接读入内存） */
     suspend fun downloadNoteFile(id: String): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
-        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS).build()
         val resp = try {
             client60.newCall(request("/api/notes/$id/file").get().build()).execute()
         } catch (e: IOException) {
@@ -366,7 +369,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             .addQueryParameter("inline", "1")
             .addQueryParameter("att", attachmentId)
             .build()
-        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS).build()
         val req = Request.Builder().url(url).header("Authorization", "Bearer $token").get().build()
         val resp = try {
             client60.newCall(req).execute()
@@ -520,7 +523,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             .addFormDataPart("file", fileName, bytes.toRequestBody(mime.toMediaType()))
             .build()
         val req = request("/api/ingest/media").post(body).build()
-        val client30 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val client30 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS).build()
         val resp = try {
             client30.newCall(req).execute()
         } catch (e: IOException) {
