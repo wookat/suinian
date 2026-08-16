@@ -25,6 +25,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
@@ -76,6 +77,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.material.icons.outlined.AddCircleOutline
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -426,6 +432,10 @@ fun HomeScreen(
             is InlineCommand.Tags -> "手动打标：" + command.tags.joinToString(" ") { "#$it" }
             null -> null
         }
+        // 以问号结尾的疑问句（R159 D-3）：?前缀指令很难被发现，直接发送会存成
+        // 笔记（往往分拣成 todo）。给可点的内联提示，不改变发送行为
+        val questionLike = command == null && draft.trim().length > 1 &&
+            (draft.trimEnd().endsWith("？") || draft.trimEnd().endsWith("?"))
         if (recording) {
             // 录音中：替换速记框，显示计时 + 取消/停止（对齐 Web 录音条）
             Card(
@@ -455,13 +465,19 @@ fun HomeScreen(
                 }
             }
         } else {
+        // 窄屏/大显示尺寸（系统显示大小最大档）下，四个尾部图标 + 麦克风会吃掉
+        // 几乎全部宽度；折叠相册/拍照/文件到一个「+」菜单，保证输入区可用
+        val compactCapture = LocalConfiguration.current.screenWidthDp < 400
+        var attachMenuOpen by remember { mutableStateOf(false) }
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
             modifier = Modifier
                 .fillMaxWidth()
                 .focusRequester(focusRequester),
-            placeholder = { Text("现在的想法是…… 支持 ?提问 !原样存 #打标") },
+            // 占位文案必须限行：窄屏/大显示尺寸（系统显示大小最大档）下不限行会
+            // 逐字竖排撞爆输入框，把笔记列表挤出屏幕
+            placeholder = { Text("现在的想法是…… 支持 ?提问 !原样存 #打标", maxLines = 2, overflow = TextOverflow.Ellipsis) },
             shape = RoundedCornerShape(16.dp),
             maxLines = 4,
             isError = overLimit,
@@ -471,6 +487,15 @@ fun HomeScreen(
                 }
                 commandHint != null -> {
                     { Text(commandHint, color = MaterialTheme.colorScheme.primary) }
+                }
+                questionLike -> {
+                    {
+                        Text(
+                            "像是在提问？点此改为向笔记提问（直接发送仍会存为笔记）",
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { draft = "?" + draft.trimStart() },
+                        )
+                    }
                 }
                 else -> null
             },
@@ -490,7 +515,48 @@ fun HomeScreen(
                 }
             },
             trailingIcon = {
+                val launchFilePicker = {
+                    filePicker.launch(
+                        arrayOf(
+                            "application/pdf",
+                            "text/plain",
+                            "text/markdown",
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        )
+                    )
+                }
                 Row {
+                    if (compactCapture) {
+                        IconButton(onClick = { attachMenuOpen = true }, enabled = !ui.sending) {
+                            Icon(Icons.Outlined.AddCircleOutline, contentDescription = "更多入库方式")
+                        }
+                        DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("相册选图入库") },
+                                leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null) },
+                                onClick = {
+                                    attachMenuOpen = false
+                                    imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("拍照入库") },
+                                leadingIcon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = null) },
+                                onClick = {
+                                    attachMenuOpen = false
+                                    launchCamera()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("选择文件入库") },
+                                leadingIcon = { Icon(Icons.Outlined.AttachFile, contentDescription = null) },
+                                onClick = {
+                                    attachMenuOpen = false
+                                    launchFilePicker()
+                                },
+                            )
+                        }
+                    } else {
                     IconButton(
                         onClick = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                         enabled = !ui.sending,
@@ -504,19 +570,11 @@ fun HomeScreen(
                         Icon(Icons.Outlined.PhotoCamera, contentDescription = "拍照入库")
                     }
                     IconButton(
-                        onClick = {
-                            filePicker.launch(
-                                arrayOf(
-                                    "application/pdf",
-                                    "text/plain",
-                                    "text/markdown",
-                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                )
-                            )
-                        },
+                        onClick = { launchFilePicker() },
                         enabled = !ui.sending,
                     ) {
                         Icon(Icons.Outlined.AttachFile, contentDescription = "选择文件入库")
+                    }
                     }
                     val commandEmpty = when (command) {
                         is InlineCommand.Ask -> command.question.isBlank()
@@ -549,7 +607,7 @@ fun HomeScreen(
             value = ui.query,
             onValueChange = { vm.setQuery(it) },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("搜索碎念…") },
+            placeholder = { Text("搜索碎念…", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             shape = RoundedCornerShape(16.dp),
             singleLine = true,
             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },

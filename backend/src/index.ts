@@ -52,7 +52,7 @@ import {
 } from "./auth";
 import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports, financeStats } from "./reports";
 import { getTodayReview, generateAllDailyReviews, readCronHeartbeats, writeCronHeartbeat } from "./review";
-import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings, EMBED_BACKFILL_BUDGET_MS } from "./semantic";
+import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings, purgeLowSignalEmbeddings, EMBED_BACKFILL_BUDGET_MS } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteNotesGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
 import { deleteUserData } from "./account";
 import {
@@ -73,7 +73,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -423,6 +423,18 @@ app.post("/api/admin/sweep-import-dedupe", async (c) => {
   const stats = await sweepImportDedupe(c.env);
   const attachmentsMigrated = await sweepUnencryptedSensitiveAttachments(c.env);
   return c.json({ ok: true, ...stats, attachments_migrated: attachmentsMigrated });
+});
+
+// 存量维护（R160 P1-1）：把已入库的零信号（纯 emoji/符号）笔记向量从召回池
+// 中逐出（D1 置 '[]' 哨兵 + Vectorize 删除）。幂等可重跑。
+app.post("/api/admin/purge-low-signal-embeddings", async (c) => {
+  const adminToken = c.env.ADMIN_TOKEN;
+  if (!adminToken) return c.json({ error: "not found" }, 404);
+  const auth = c.req.header("authorization") || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m || m[1] !== adminToken) return c.json({ error: "unauthorized" }, 401);
+  const purged = await purgeLowSignalEmbeddings(c.env);
+  return c.json({ ok: true, purged });
 });
 
 // ---- WeChat Official Account callback (公众号, public; guarded by WECHAT_MP_TOKEN) ----
@@ -2990,9 +3002,19 @@ app.post("/api/ask", async (c) => {
   const enumTopic = enumRoute.topic;
   const enumList = enumRoute.list;
   if (enumTopic) {
+    // 分类名主题（「所有待办」）按 category 精确筛全集：LIKE '%待办%' 会漏掉
+    // 正文里没写分类名的笔记（R159 P2-1 枚举召回不全）
+    const enumCategory = ENUM_TOPIC_CATEGORIES[enumTopic] ?? null;
     const like = likeContains(enumTopic);
-    const tConds = ["user_id = ?", "deleted_at IS NULL", "(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)"];
-    const tBinds: unknown[] = [userId, like, like, like, like];
+    const tConds = ["user_id = ?", "deleted_at IS NULL"];
+    const tBinds: unknown[] = [userId];
+    if (enumCategory) {
+      tConds.push("category = ?");
+      tBinds.push(enumCategory);
+    } else {
+      tConds.push("(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)");
+      tBinds.push(like, like, like, like);
+    }
     if (timeRange?.start) {
       tConds.push("created_at >= ?");
       tBinds.push(timeRange.start);
@@ -3016,11 +3038,15 @@ app.post("/api/ask", async (c) => {
       const tSens = tTotalRow?.sens ?? 0;
       const tRows = tListRows.results ?? [];
       const tLines = enumNoteLines(tRows, true);
-      let answer = `${timeRange?.phrase ?? ""}和「${enumTopic}」相关的记录共 ${tTotal} 条`;
+      let answer = enumCategory
+        ? `${timeRange?.phrase ?? ""}分类为「${enumTopic}」的记录共 ${tTotal} 条`
+        : `${timeRange?.phrase ?? ""}和「${enumTopic}」相关的记录共 ${tTotal} 条`;
       if (tSens > 0) answer += `（含 ${tSens} 条加密的敏感笔记）`;
       answer += `：\n\n${tLines.join("\n")}`;
       if (tTotal > tRows.length) answer += `\n\n……其余 ${tTotal - tRows.length} 条可在时间流搜索「${enumTopic}」查看。`;
-      answer += `\n\n以上为按关键词「${enumTopic}」在全部笔记中精确筛选的结果（不含已删除笔记）；相关但没写到这个词的笔记可换个说法再问。`;
+      answer += enumCategory
+        ? `\n\n以上为按分类「${enumTopic}」在全部笔记中的数据库精确筛选结果（不含已删除笔记）。`
+        : `\n\n以上为按关键词「${enumTopic}」在全部笔记中精确筛选的结果（不含已删除笔记）；相关但没写到这个词的笔记可换个说法再问。`;
       const tRefRows = tRows.filter((n) => !n.is_sensitive).slice(0, 10);
       return c.json({
         answer,

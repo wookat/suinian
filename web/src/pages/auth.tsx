@@ -145,6 +145,8 @@ export function AuthPage() {
   const [demoNotes, setDemoNotes] = useState<Note[] | null>(null)
   const [recoveryInput, setRecoveryInput] = useState("")
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null)
+  // 注册/找回成功但服务端恢复码生成失败（降级返回 null）：需明确告知去设置页补生成
+  const [recoveryMissing, setRecoveryMissing] = useState(false)
 
   function continueAfterAuth() {
     const leftover = userDemoNotes()
@@ -193,6 +195,10 @@ export function AuthPage() {
       if (res.recovery_code) {
         // 注册/找回成功：先展示一次性恢复码，用户确认保存后再进入应用
         setRecoveryCode(res.recovery_code)
+      } else if (mode !== "login") {
+        // 服务端恢复码生成失败会降级返回 null：必须明确告知，否则用户
+        // 直到忘密码那天才发现自己没有任何找回途径
+        setRecoveryMissing(true)
       } else {
         continueAfterAuth()
       }
@@ -205,6 +211,30 @@ export function AuthPage() {
       setBusy(false)
     }
   }
+
+  if (recoveryMissing)
+    return (
+      <div className="mx-auto max-w-sm space-y-4">
+        <Card className="space-y-4 p-4">
+          <h2 className="flex items-center gap-2 text-base font-semibold">
+            <CircleAlert className="size-4 text-destructive" /> 恢复码未能生成
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            操作已成功，但服务端未能生成恢复码。恢复码是忘记密码时找回账号的唯一方式，
+            请进入应用后尽快在设置页点「重新生成恢复码」并安全保存。
+          </p>
+          <Button
+            onClick={() => {
+              setRecoveryMissing(false)
+              continueAfterAuth()
+            }}
+            className="w-full"
+          >
+            我知道了，进入应用后去生成
+          </Button>
+        </Card>
+      </div>
+    )
 
   if (recoveryCode)
     return (
