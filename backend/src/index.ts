@@ -1020,12 +1020,22 @@ const CATEGORY_LABEL: Record<string, string> = {
  * (same category + same first line, e.g. re-saved duplicates or several
  * encrypted rows) into one line with a ×N count.
  */
-function enumNoteLines(rows: NoteRow[]): string[] {
+function enumNoteLines(rows: NoteRow[], withSnippet = false): string[] {
   const order: string[] = [];
   const counts = new Map<string, number>();
   for (const n of rows) {
     const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
-    const text = n.is_sensitive ? "（加密的敏感笔记）" : (n.title || n.content.split("\n")[0] || "").slice(0, 40);
+    let text: string;
+    if (n.is_sensitive) {
+      text = "（加密的敏感笔记）";
+    } else if (withSnippet && n.title) {
+      // 主题枚举里标题常是概括词（「老人呼叫App功能」），补正文首行片段
+      // 才回答得了「都有哪些想法」这类看内容的问法
+      const body = (n.content.split("\n")[0] || "").slice(0, 60);
+      text = body && body !== n.title ? `${n.title}：${body}` : (n.title || "").slice(0, 40);
+    } else {
+      text = (n.title || n.content.split("\n")[0] || "").slice(0, 40);
+    }
     const line = "- ［" + label + "］" + text;
     if (!counts.has(line)) order.push(line);
     counts.set(line, (counts.get(line) ?? 0) + 1);
@@ -2453,7 +2463,7 @@ export function needsBilingualKeywordExtraction(question: string): boolean {
 }
 
 const ASK_KEYWORDS_SYSTEM =
-  "你是检索关键词抽取器。从问题中抽取 2-6 个最能定位相关笔记的关键词（具体的名词、动词或专有名词，每个 2-6 个字），用空格分隔输出，不要任何标点、解释或前缀。问题里的具体数字/金额/价格/型号/电话等细节词（如「8.5元」「iPhone 15」）也是关键词，要保留其核心词（如「报价」「8.5」）。忽略疑问词（什么/哪个/怎么/是啥/what/which/how）、时间词（今天/最近几天/上个月/去年/recently/last week）、代词和语气助词。若问题含英文词，除英文关键词外还要同时输出其中文对应词（因为笔记多为中文）。例如「最近几天收藏的那个咖啡视频讲什么」输出「咖啡 视频 收藏」；「What did I note about the coffee shop idea」输出「coffee shop 咖啡馆 点子」。";
+  "你是检索关键词抽取器。从问题中抽取 2-6 个最能定位相关笔记的关键词（具体的名词、动词或专有名词，每个 2-6 个字），用空格分隔输出，不要任何标点、解释或前缀。问题里的具体数字/金额/价格/型号/电话等细节词（如「8.5元」「iPhone 15」）也是关键词，要保留其核心词（如「报价」「8.5」）。忽略疑问词（什么/哪个/怎么/是啥/what/which/how）、时间词（今天/最近几天/上个月/去年/recently/last week）、代词和语气助词。若问题含英文词，除英文关键词外还要同时输出其中文对应词（因为笔记多为中文）。关键词有常见同义词、别称或另一种语言写法时，要一并输出（笔记原文可能用的是别的说法）：如「苹果电脑」也输出「MacBook」、「日语」也输出「日本語」、「书摘」也输出「摘录 书名」。例如「最近几天收藏的那个咖啡视频讲什么」输出「咖啡 视频 收藏」；「What did I note about the coffee shop idea」输出「coffee shop 咖啡馆 点子」。";
 
 /**
  * LLM keyword extraction for unsegmented CJK questions (query-rewrite stage):
@@ -2902,7 +2912,7 @@ app.post("/api/ask", async (c) => {
     if (tTotal > 0) {
       const tSens = tTotalRow?.sens ?? 0;
       const tRows = tListRows.results ?? [];
-      const tLines = enumNoteLines(tRows);
+      const tLines = enumNoteLines(tRows, true);
       let answer = `${timeRange?.phrase ?? ""}和「${enumTopic}」相关的记录共 ${tTotal} 条`;
       if (tSens > 0) answer += `（含 ${tSens} 条加密的敏感笔记）`;
       answer += `：\n\n${tLines.join("\n")}`;
