@@ -12,13 +12,14 @@ import {
   extractHashTags,
   htmlToText,
   parseCsv,
+  parseCubox,
   splitTags,
   firstUrl,
   clipContent,
   MAX_IMPORT_ITEMS,
 } from "./import";
 
-export type ZipImportSource = "notion" | "obsidian" | "apple-notes" | "flomo";
+export type ZipImportSource = "notion" | "obsidian" | "apple-notes" | "flomo" | "cubox";
 
 export interface ZipParseResult {
   items: ImportItem[];
@@ -78,6 +79,26 @@ function safeDecodeURI(s: string): string {
   }
 }
 
+/**
+ * Zip entries without the UTF-8 flag get their names decoded as latin-1; if
+ * the underlying bytes are valid UTF-8, re-decode so CJK filenames (and the
+ * titles derived from them) don't turn into mojibake.
+ */
+function fixZipName(name: string): string {
+  if (!/[\u0080-\u00ff]/.test(name)) return name;
+  const bytes = new Uint8Array(name.length);
+  for (let i = 0; i < name.length; i++) {
+    const c = name.charCodeAt(i);
+    if (c > 0xff) return name; // contains non-latin1 chars: already decoded correctly
+    bytes[i] = c;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+  } catch {
+    return name;
+  }
+}
+
 /** Unzip into path -> bytes, skipping macOS cruft and directory entries. */
 export function unzipEntries(bytes: Uint8Array): Record<string, Uint8Array> {
   const raw = unzipSync(bytes);
@@ -86,7 +107,7 @@ export function unzipEntries(bytes: Uint8Array): Record<string, Uint8Array> {
     if (path.endsWith("/")) continue;
     const base = baseName(path);
     if (path.startsWith("__MACOSX/") || base === ".DS_Store" || base.startsWith("._")) continue;
-    out[path] = data;
+    out[fixZipName(path)] = data;
   }
   return out;
 }
@@ -360,6 +381,20 @@ export function parseObsidianZip(entries: Record<string, Uint8Array>): ZipParseR
         return `【图片：${assetName}】`;
       });
       body = body.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2").replace(/\[\[([^\]]+)\]\]/g, "$1");
+      // 标准 markdown 图片 ![](path) 与 ![[wikilink]] 同样入库（Obsidian 导出两种写法都常见）
+      const collected = collectImageRefs(body, dirName(path), entries, total);
+      body = collected.body;
+      for (const a of collected.assets) {
+        if (assets.some((x) => x.name === a.name)) {
+          total.count--; // collectImageRefs 已计数，同名重复回退
+          continue;
+        }
+        if (assets.length < MAX_ASSETS_PER_NOTE) assets.push(a);
+        else {
+          total.count--;
+          total.dropped++;
+        }
+      }
       const title = fm.title ?? name;
       const content = clipContent(
         body.startsWith(`# ${title}`) || body.split("\n")[0]?.trim() === title
@@ -516,6 +551,36 @@ export function parseFlomoZip(entries: Record<string, Uint8Array>): ZipParseResu
   return { items, failures, assets_dropped: total.dropped, truncated };
 }
 
+// ---- Cubox (zip of csv / bookmark html / txt / md) ----
+
+/**
+ * Cubox 桌面端可把导出打成 zip：包内是 CSV / 书签 HTML / txt（逐文件走
+ * parseCubox），或每条收藏一个 .md（走 Obsidian 同款 md 管线，标题/图片
+ * 口径一致）。
+ */
+export function parseCuboxZip(entries: Record<string, Uint8Array>): ZipParseResult {
+  const md = parseObsidianZip(entries);
+  const items = [...md.items];
+  const failures = [...md.failures];
+  let truncated = md.truncated;
+  for (const path of Object.keys(entries).filter((p) => /\.(csv|html?|txt)$/i.test(p))) {
+    if (items.length >= MAX_IMPORT_ITEMS) {
+      truncated = true;
+      break;
+    }
+    try {
+      const parsed = parseCubox(strFromU8(entries[path]));
+      items.push(...parsed.slice(0, MAX_IMPORT_ITEMS - items.length));
+    } catch (e) {
+      failures.push({ item: baseName(path), reason: e instanceof Error ? e.message : "解析失败" });
+    }
+  }
+  if (items.length === 0 && failures.length === 0) {
+    failures.push({ item: "zip", reason: "zip 中未找到 Cubox 导出的 CSV / HTML / txt / md 文件" });
+  }
+  return { items, failures, assets_dropped: md.assets_dropped, truncated };
+}
+
 // ---- entry ----
 
 export function parseImportZip(source: ZipImportSource, bytes: Uint8Array): ZipParseResult {
@@ -534,5 +599,7 @@ export function parseImportZip(source: ZipImportSource, bytes: Uint8Array): ZipP
       return parseAppleNotesZip(entries);
     case "flomo":
       return parseFlomoZip(entries);
+    case "cubox":
+      return parseCuboxZip(entries);
   }
 }

@@ -3,7 +3,7 @@
 // restore path (dedup, media re-upload, background pipeline backfill).
 import { Zip, ZipDeflate, ZipPassThrough, Unzip, UnzipInflate, strToU8, strFromU8 } from "fflate";
 import type { Env, NoteMeta, NoteRow, ThreadRow, WeeklyReportRow } from "./types";
-import { decryptContent, decryptBytes, encryptBytes, isEncryptedAttachment, ENC_PLACEHOLDER } from "./crypto";
+import { decryptContent, decryptBytes, isEncryptedAttachment, ENC_PLACEHOLDER } from "./crypto";
 import { prepareNoteInsert } from "./note-store";
 import { backfillEmbeddings } from "./semantic";
 import { backfillGraphExtracts } from "./graph";
@@ -11,7 +11,7 @@ import { clusterNote } from "./threads";
 import { SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 import { maybeSensitive } from "./triage";
 import { scrubDerivedMeta } from "./ingest";
-import { resolveAttachmentMime } from "./media";
+import { storeOriginal, type MediaType } from "./media";
 
 export const BACKUP_FORMAT = "suinian-backup";
 export const BACKUP_VERSION = 1;
@@ -370,7 +370,6 @@ export async function restoreBackup(
   // old note id -> new note id (only for imported, non-duplicate notes)
   const idMap = new Map<string, string>();
   // 落库为敏感的新笔记 id：其媒体原件重上传时同口径加密（R154 P2-2）
-  const sensitiveNewIds = new Set<string>();
   // restored idea notes get a first clustering pass in the background
   const ideaIds: string[] = [];
   // zip path -> attachment info from notes.json
@@ -486,7 +485,7 @@ export async function restoreBackup(
         // 恢复入库走持久层统一敏感管道（R122 P1-1 / R124 P1-1 收口）：不再信任
         // 备份文件里的 is_sensitive 定论——外来/篡改的 zip 可以带着明文密码 +
         // is_sensitive:false + 既定 category 绕过整个敏感体系。
-        const { stmt, storedSensitive } = await prepareNoteInsert(env, env.DB, {
+        const { stmt } = await prepareNoteInsert(env, env.DB, {
           id: newId,
           user_id: userId,
           source: typeof n.source === "string" ? n.source : "import",
@@ -509,7 +508,6 @@ export async function restoreBackup(
           created_at: n.created_at,
           updated_at: DATETIME_RE.test(n.updated_at ?? "") ? n.updated_at : n.created_at,
         });
-        if (storedSensitive) sensitiveNewIds.add(newId);
         stmts.push(stmt);
       }
       if (stmts.length > 0) await env.DB.batch(stmts);
@@ -536,27 +534,17 @@ export async function restoreBackup(
       stats.media_failed++;
       return;
     }
-    const safeName = info.att.name.replace(/[^\w.\-\u4e00-\u9fff]/g, "_");
-    const key = `media/${userId}/${newNoteId}/${Date.now()}-${safeName}`;
-    // restore shares the same mime fallback as the ingestion boundary
-    // (storeOriginal)：老备份里 octet-stream/缺失的 mime 按扩展名兜底，
-    // 不把 R146 已清零的存量问题重新引入
-    const mime = resolveAttachmentMime(info.att.mime, info.att.name);
-    try {
-      const sensitive = sensitiveNewIds.has(newNoteId);
-      const body = sensitive && env.SUINIAN_ENC_KEY ? await encryptBytes(env.SUINIAN_ENC_KEY, entry.data) : entry.data;
-      await env.MEDIA.put(key, body, {
-        httpMetadata: { contentType: mime },
-        ...(body !== entry.data ? { customMetadata: { enc: "1" } } : {}),
-      });
-      await env.DB.prepare("INSERT INTO attachments (id, note_id, r2_key, mime, size) VALUES (?, ?, ?, ?, ?)")
-        .bind(crypto.randomUUID(), newNoteId, key, mime, entry.data.length)
-        .run();
-      stats.media_imported++;
-    } catch (e) {
-      console.error("restore: media upload failed", e);
-      stats.media_failed++;
-    }
+    // 恢复路径统一走 storeOriginal 入库管道（mime 兜底、敏感加密信封均在边界内）
+    const mime = info.att.mime || "";
+    const type: MediaType = mime.startsWith("audio/") ? "audio" : mime.startsWith("image/") ? "image" : "file";
+    const key = await storeOriginal(env, userId, newNoteId, {
+      type,
+      bytes: entry.data,
+      mime,
+      fileName: info.att.name,
+    });
+    if (key) stats.media_imported++;
+    else stats.media_failed++;
   };
 
   const drain = async (): Promise<{ error: string; status: 400 | 413 } | null> => {

@@ -347,7 +347,7 @@ export async function reconcileMediaOrphans(env: Env): Promise<number> {
  * 分拣异步转敏感的窗口由 syncAttachmentEncryption 收口。
  */
 export async function storeOriginal(
-  env: Env,
+  env: { MEDIA?: R2Bucket; DB: D1Database; SUINIAN_ENC_KEY?: string },
   userId: string,
   noteId: string,
   req: MediaIngestRequest

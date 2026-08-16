@@ -118,6 +118,8 @@ export interface NoteMeta {
   imported_at?: string;
   /** Original tags from the export file, merged back after AI triage (imported notes). */
   import_tags?: string[];
+  /** 导入内容指纹（HMAC-SHA256）：敏感笔记落库后 content 只剩占位符，重复导入去重靠它。 */
+  import_fp?: string;
   /** Merchant / purpose of an expense/income note. */
   finance_merchant?: string;
   /** Fields the user set by hand; AI triage / cron sweeps must not overwrite them. */

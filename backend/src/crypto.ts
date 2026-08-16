@@ -73,6 +73,25 @@ export async function decryptBytes(keyB64: string, bytes: Uint8Array): Promise<U
   }
 }
 
+/**
+ * 内容指纹（导入去重）：有密钥时按 HMAC-SHA256（DB 泄露不可对短内容做字典
+ * 反猜），无密钥的本地/自部署环境退化为 SHA-256。输出 base64。
+ */
+export async function contentFingerprint(keyB64: string | undefined, content: string): Promise<string> {
+  const data = new TextEncoder().encode(content);
+  if (keyB64) {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      b64decode(keyB64.trim()).slice().buffer as ArrayBuffer,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    return b64encode(await crypto.subtle.sign("HMAC", key, data));
+  }
+  return b64encode(await crypto.subtle.digest("SHA-256", data));
+}
+
 /** Decrypt a "v1:<b64 iv>:<b64 ciphertext>" string; returns null when malformed or key mismatch. */
 export async function decryptContent(keyB64: string, enc: string): Promise<string | null> {
   try {

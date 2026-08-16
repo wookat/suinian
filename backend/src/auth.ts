@@ -183,6 +183,15 @@ export function registrationEnabled(v: string | undefined): boolean {
 export const RATE_LIMIT_MAX = 5;
 
 /**
+ * 账号维度的宽限：单 IP 的暴力尝试由 IP 维度（5/分）拦住，账号维度只在
+ * 多 IP 分布式打同一账号时升级锁定——避免任何人拿已知用户名连错 5 次
+ * 就能骚扰式锁死真实用户登录（R155 D-3）。
+ */
+export const ACCT_RATE_LIMIT_MAX = 20;
+
+export type RateLimitDim = string | { key: string; max: number };
+
+/**
  * Fixed-window rate limit backed by D1 (`max`/min per action+dimension), checked
  * across every given dimension (e.g. IP and account) — all must be under the
  * limit. Trade-off: a D1 table is the simplest durable option on Workers
@@ -191,11 +200,13 @@ export const RATE_LIMIT_MAX = 5;
  * throttling. Fails closed on D1 errors: if the limiter store is down we
  * conservatively reject instead of letting unlimited attempts through.
  */
-export async function checkRateLimit(db: D1Database, action: string, dims: string[], max = RATE_LIMIT_MAX): Promise<boolean> {
+export async function checkRateLimit(db: D1Database, action: string, dims: RateLimitDim[], max = RATE_LIMIT_MAX): Promise<boolean> {
   const windowStart = new Date().toISOString().slice(0, 16); // minute granularity
   try {
     let allowed = true;
-    for (const dim of dims) {
+    for (const d of dims) {
+      const dim = typeof d === "string" ? d : d.key;
+      const dimMax = typeof d === "string" ? max : d.max;
       const key = `${action}:${dim}`;
       // single atomic UPSERT: window rollover + increment + read back in one
       // statement, so concurrent requests can never over-admit via a stale
@@ -210,7 +221,7 @@ export async function checkRateLimit(db: D1Database, action: string, dims: strin
         )
         .bind(key, windowStart)
         .first<{ count: number }>();
-      if ((row?.count ?? max + 1) > max) allowed = false;
+      if ((row?.count ?? dimMax + 1) > dimMax) allowed = false;
     }
     return allowed;
   } catch (e) {

@@ -215,10 +215,11 @@ describe("register + recover flow", () => {
     expect(res.status).toBe(400);
   });
 
-  it("rate limits recovery attempts per account across IPs", async () => {
+  // R155 D-3：账号维度阈值放宽到 ACCT_RATE_LIMIT_MAX，单 IP 仍由 IP 维度 5/分拦住
+  it("rate limits distributed recovery attempts per account across IPs", async () => {
     const { env } = makeEnv(users);
     await app.request(post("/api/auth/register", { name: "alice", password: "password123" }), undefined, env);
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 20; i++) {
       const res = await app.request(
         post("/api/auth/recover", { name: "alice", recovery_code: "AAAA-AAAA-AAAA-AAAA", new_password: "newpassword456" }, `9.9.9.${i}`),
         undefined,
