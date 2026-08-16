@@ -363,6 +363,9 @@ export function financeTopicTerms(question: string): string[] | null {
   if (!FINANCE_WORD_RE.test(question) || !SUBSET_AGG_RE.test(question)) return null;
   let residual = question;
   for (const re of STRIP_RES) residual = residual.replace(re, "");
+  // 时间限定词不属于主题（「2026年7月咖啡」→「咖啡」）：时间过滤由
+  // parseTimeRange 负责，残留的年月日 token 一律剥掉
+  residual = residual.replace(/\d{2,4}\s*年|\d{1,2}\s*月(?:份)?|\d{1,2}\s*[日号]|上+个?[月周]|这个?[月周]|本[月周]|最近|今年|去年|前年/g, "");
   // 剥掉开头的购买/消费动词（「买咖啡」→「咖啡」），但不能把「吃喝」这类
   // 本身就是主题的词剥空
   const stripped = residual.replace(/^[买在喝吃点逛去为给用出]{1,2}/, "");

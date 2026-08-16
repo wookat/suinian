@@ -131,6 +131,12 @@ describe("financeTopicTerms", () => {
     expect(financeTopicTerms("吃喝花了多少")).toEqual(["吃喝"]);
   });
 
+  it("strips time qualifiers from the topic (time filter handles them)", () => {
+    expect(financeTopicTerms("2026年7月咖啡花了多少")).toEqual(["咖啡"]);
+    expect(financeTopicTerms("上个月咖啡一共花了多少")).toEqual(["咖啡"]);
+    expect(financeTopicTerms("今年房租一共花了多少钱")).toEqual(["房租"]);
+  });
+
   it("stays null for overall aggregates (exact route keeps them)", () => {
     expect(financeAggIntent("这个月一共花了多少钱")).toBe("exact");
     expect(financeTopicTerms("这个月一共花了多少钱")).toBeNull();

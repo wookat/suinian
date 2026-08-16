@@ -115,24 +115,33 @@ export async function semanticRecall(
         .filter((m) => m.score >= minScore)
         .map((m) => ({ note_id: m.id, score: m.score }));
     }
-    const { results } = await env.DB.prepare(
-      `SELECT e.note_id, e.vector FROM note_embeddings e
-       JOIN notes n ON n.id = e.note_id
-       WHERE n.user_id = ? AND n.is_sensitive = 0
-       ORDER BY n.created_at DESC LIMIT 500`
-    )
-      .bind(userId)
-      .all<{ note_id: string; vector: string }>();
+    // page through ALL of the user's vectors (batched to stay under D1's
+    // per-query response size): a fixed newest-N window silently blinds
+    // semantic recall to older notes once the account outgrows it
     const hits: SemanticHit[] = [];
-    for (const r of results ?? []) {
-      let v: number[];
-      try {
-        v = JSON.parse(r.vector) as number[];
-      } catch {
-        continue;
+    const BATCH = 400;
+    const MAX_VECTORS = 4000;
+    for (let offset = 0; offset < MAX_VECTORS; offset += BATCH) {
+      const { results } = await env.DB.prepare(
+        `SELECT e.note_id, e.vector FROM note_embeddings e
+         JOIN notes n ON n.id = e.note_id
+         WHERE n.user_id = ? AND n.is_sensitive = 0
+         ORDER BY n.created_at DESC LIMIT ? OFFSET ?`
+      )
+        .bind(userId, BATCH, offset)
+        .all<{ note_id: string; vector: string }>();
+      const rows = results ?? [];
+      for (const r of rows) {
+        let v: number[];
+        try {
+          v = JSON.parse(r.vector) as number[];
+        } catch {
+          continue;
+        }
+        const score = cosineSim(qv, v);
+        if (score >= minScore) hits.push({ note_id: r.note_id, score });
       }
-      const score = cosineSim(qv, v);
-      if (score >= minScore) hits.push({ note_id: r.note_id, score });
+      if (rows.length < BATCH) break;
     }
     hits.sort((a, b) => b.score - a.score);
     return hits.slice(0, topK);
