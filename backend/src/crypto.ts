@@ -32,6 +32,47 @@ export async function encryptContent(keyB64: string, plaintext: string): Promise
   return `${ENC_PREFIX}${b64encode(iv)}:${b64encode(ct)}`;
 }
 
+// 附件原件的二进制加密封装（R154 P2-2）：R2 对象体 = MAGIC(4) + IV(12) + AES-GCM 密文。
+// 读取侧按 magic 自动识别，明文存量对象无缝兼容。
+const ATT_MAGIC = new Uint8Array([0x53, 0x4e, 0x45, 0x31]); // "SNE1"
+
+/** Does this R2 object body carry the encrypted-attachment envelope? */
+export function isEncryptedAttachment(bytes: Uint8Array): boolean {
+  if (bytes.length < ATT_MAGIC.length + 12) return false;
+  for (let i = 0; i < ATT_MAGIC.length; i++) if (bytes[i] !== ATT_MAGIC[i]) return false;
+  return true;
+}
+
+/** Encrypt attachment bytes → MAGIC + IV + ciphertext. */
+export async function encryptBytes(keyB64: string, bytes: Uint8Array): Promise<Uint8Array> {
+  const key = await importKey(keyB64);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bytes.slice().buffer as ArrayBuffer));
+  const out = new Uint8Array(ATT_MAGIC.length + iv.length + ct.length);
+  out.set(ATT_MAGIC, 0);
+  out.set(iv, ATT_MAGIC.length);
+  out.set(ct, ATT_MAGIC.length + iv.length);
+  return out;
+}
+
+/** Decrypt an encrypted-attachment envelope; returns null when not encrypted, malformed or key mismatch. */
+export async function decryptBytes(keyB64: string, bytes: Uint8Array): Promise<Uint8Array | null> {
+  try {
+    if (!isEncryptedAttachment(bytes)) return null;
+    const iv = bytes.subarray(ATT_MAGIC.length, ATT_MAGIC.length + 12);
+    const ct = bytes.subarray(ATT_MAGIC.length + 12);
+    const key = await importKey(keyB64);
+    const pt = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: iv.slice().buffer as ArrayBuffer },
+      key,
+      ct.slice().buffer as ArrayBuffer
+    );
+    return new Uint8Array(pt);
+  } catch {
+    return null;
+  }
+}
+
 /** Decrypt a "v1:<b64 iv>:<b64 ciphertext>" string; returns null when malformed or key mismatch. */
 export async function decryptContent(keyB64: string, enc: string): Promise<string | null> {
   try {

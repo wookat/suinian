@@ -503,20 +503,25 @@ export function NoteCard({
               语义匹配
             </Badge>
           )}
-          {note.tags.slice(0, MAX_TAGS).map((tag) => (
-            <Badge
-              key={tag}
-              variant="secondary"
-              className={cn(onTagClick && "cursor-pointer hover:bg-accent")}
-              onClick={() => onTagClick?.(tag)}
-            >
-              #{tag}
-            </Badge>
-          ))}
-          {extraTags > 0 && (
-            <Badge variant="secondary" className="text-muted-foreground">
-              +{extraTags}
-            </Badge>
+          {/* 遮罩态不外显派生标签（R154 P2-3）：与标题/摘要同口径，揭示后才展示 */}
+          {!(sensitive && !revealed) && (
+            <>
+              {note.tags.slice(0, MAX_TAGS).map((tag) => (
+                <Badge
+                  key={tag}
+                  variant="secondary"
+                  className={cn(onTagClick && "cursor-pointer hover:bg-accent")}
+                  onClick={() => onTagClick?.(tag)}
+                >
+                  #{tag}
+                </Badge>
+              ))}
+              {extraTags > 0 && (
+                <Badge variant="secondary" className="text-muted-foreground">
+                  +{extraTags}
+                </Badge>
+              )}
+            </>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">

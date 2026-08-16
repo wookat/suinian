@@ -3,7 +3,7 @@
 // restore path (dedup, media re-upload, background pipeline backfill).
 import { Zip, ZipDeflate, ZipPassThrough, Unzip, UnzipInflate, strToU8, strFromU8 } from "fflate";
 import type { Env, NoteMeta, NoteRow, ThreadRow, WeeklyReportRow } from "./types";
-import { decryptContent, ENC_PLACEHOLDER } from "./crypto";
+import { decryptContent, decryptBytes, encryptBytes, isEncryptedAttachment, ENC_PLACEHOLDER } from "./crypto";
 import { prepareNoteInsert } from "./note-store";
 import { backfillEmbeddings } from "./semantic";
 import { backfillGraphExtracts } from "./graph";
@@ -247,20 +247,31 @@ export async function buildBackupZip(
         if (failed || !env.MEDIA) break;
         const obj = await env.MEDIA.get(m.r2_key);
         if (!obj) continue;
-        const f = new ZipPassThrough(m.path);
-        zip.add(f);
+        // 敏感附件原件在 R2 为 AES-GCM 信封（R154 P2-2）：完整备份承诺的是
+        // 可直接使用的明文原件，打包前解密；无法解密时跳过而非吐密文
+        const chunks: Uint8Array[] = [];
         const reader = (obj.body as ReadableStream<Uint8Array>).getReader();
-        let prev: Uint8Array | null = null;
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
-          if (prev) {
-            await writer.ready;
-            f.push(prev);
-          }
-          prev = value;
+          if (value) chunks.push(value);
         }
-        f.push(prev ?? new Uint8Array(0), true);
+        const total = chunks.reduce((n, c) => n + c.length, 0);
+        let bytes = new Uint8Array(total);
+        let off = 0;
+        for (const c of chunks) {
+          bytes.set(c, off);
+          off += c.length;
+        }
+        if (isEncryptedAttachment(bytes)) {
+          const plain = env.SUINIAN_ENC_KEY ? await decryptBytes(env.SUINIAN_ENC_KEY, bytes) : null;
+          if (!plain) continue;
+          bytes = new Uint8Array(plain);
+        }
+        const f = new ZipPassThrough(m.path);
+        zip.add(f);
+        await writer.ready;
+        f.push(bytes, true);
       }
       zip.end();
     } catch (e) {
@@ -358,6 +369,8 @@ export async function restoreBackup(
 
   // old note id -> new note id (only for imported, non-duplicate notes)
   const idMap = new Map<string, string>();
+  // 落库为敏感的新笔记 id：其媒体原件重上传时同口径加密（R154 P2-2）
+  const sensitiveNewIds = new Set<string>();
   // restored idea notes get a first clustering pass in the background
   const ideaIds: string[] = [];
   // zip path -> attachment info from notes.json
@@ -473,7 +486,7 @@ export async function restoreBackup(
         // 恢复入库走持久层统一敏感管道（R122 P1-1 / R124 P1-1 收口）：不再信任
         // 备份文件里的 is_sensitive 定论——外来/篡改的 zip 可以带着明文密码 +
         // is_sensitive:false + 既定 category 绕过整个敏感体系。
-        const { stmt } = await prepareNoteInsert(env, env.DB, {
+        const { stmt, storedSensitive } = await prepareNoteInsert(env, env.DB, {
           id: newId,
           user_id: userId,
           source: typeof n.source === "string" ? n.source : "import",
@@ -496,6 +509,7 @@ export async function restoreBackup(
           created_at: n.created_at,
           updated_at: DATETIME_RE.test(n.updated_at ?? "") ? n.updated_at : n.created_at,
         });
+        if (storedSensitive) sensitiveNewIds.add(newId);
         stmts.push(stmt);
       }
       if (stmts.length > 0) await env.DB.batch(stmts);
@@ -529,8 +543,11 @@ export async function restoreBackup(
     // 不把 R146 已清零的存量问题重新引入
     const mime = resolveAttachmentMime(info.att.mime, info.att.name);
     try {
-      await env.MEDIA.put(key, entry.data, {
+      const sensitive = sensitiveNewIds.has(newNoteId);
+      const body = sensitive && env.SUINIAN_ENC_KEY ? await encryptBytes(env.SUINIAN_ENC_KEY, entry.data) : entry.data;
+      await env.MEDIA.put(key, body, {
         httpMetadata: { contentType: mime },
+        ...(body !== entry.data ? { customMetadata: { enc: "1" } } : {}),
       });
       await env.DB.prepare("INSERT INTO attachments (id, note_id, r2_key, mime, size) VALUES (?, ?, ?, ?, ?)")
         .bind(crypto.randomUUID(), newNoteId, key, mime, entry.data.length)

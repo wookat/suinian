@@ -8,6 +8,7 @@
 import type { NoteMeta, TriageResult } from "./types";
 import { sensitiveIngestGate, scrubDerivedMeta, DERIVED_PLAINTEXT_META_KEYS, type GatedNoteFields } from "./ingest";
 import { sanitizeSensitiveTags } from "./triage";
+import { syncAttachmentEncryption } from "./media";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 
 export function parseNoteMeta(raw: string | null): NoteMeta | null {
@@ -162,7 +163,7 @@ export interface NotePatchResult {
  * 非守护字段 SET 一并执行。
  */
 export async function applyNotePatch(
-  env: { SUINIAN_ENC_KEY?: string },
+  env: { SUINIAN_ENC_KEY?: string; MEDIA?: R2Bucket },
   db: D1Database,
   existing: ExistingNoteState,
   p: NotePatchInput,
@@ -271,7 +272,12 @@ export async function applyNotePatch(
     .prepare(`UPDATE notes SET ${allSets.join(", ")} WHERE id = ? AND user_id = ? AND updated_at = ?`)
     .bind(...binds, ...extra.binds, existing.id, existing.user_id, existing.updated_at)
     .run();
-  return { changes: res.meta.changes ?? 0, sensitive, needsRetriage };
+  const changes = res.meta.changes ?? 0;
+  // 转敏感：该笔记名下的 R2 附件原件同口径加密（R154 P2-2）
+  if (changes > 0 && sensitive && !existing.is_sensitive) {
+    await syncAttachmentEncryption({ MEDIA: env.MEDIA, DB: db, SUINIAN_ENC_KEY: env.SUINIAN_ENC_KEY }, existing.id);
+  }
+  return { changes, sensitive, needsRetriage };
 }
 
 /**
@@ -279,7 +285,7 @@ export async function applyNotePatch(
  * category 归零交回异步分拣。
  */
 export async function replaceNoteContent(
-  env: { SUINIAN_ENC_KEY?: string },
+  env: { SUINIAN_ENC_KEY?: string; MEDIA?: R2Bucket },
   db: D1Database,
   noteId: string,
   content: string,
@@ -295,6 +301,7 @@ export async function replaceNoteContent(
     )
     .bind(gated.content, gated.content_enc, sensitive ? 1 : 0, JSON.stringify(newMeta), noteId)
     .run();
+  if (sensitive) await syncAttachmentEncryption({ MEDIA: env.MEDIA, DB: db, SUINIAN_ENC_KEY: env.SUINIAN_ENC_KEY }, noteId);
   return { storedContent: gated.content, contentEnc: gated.content_enc, sensitive };
 }
 
@@ -309,7 +316,7 @@ export async function replaceNoteContent(
  * needs_retriage 交 cron 用新内容重新分拣。用户编辑永远赢。
  */
 export async function applyTriage(
-  env: { DB: D1Database; SUINIAN_ENC_KEY?: string },
+  env: { DB: D1Database; SUINIAN_ENC_KEY?: string; MEDIA?: R2Bucket },
   noteId: string,
   triage: TriageResult,
   content: string
@@ -409,7 +416,12 @@ export async function applyTriage(
   )
     .bind(...binds, noteId, row.updated_at)
     .run();
-  if ((res.meta.changes ?? 0) === 0) await markNeedsRetriage(env.DB, noteId);
+  if ((res.meta.changes ?? 0) === 0) {
+    await markNeedsRetriage(env.DB, noteId);
+    return;
+  }
+  // 分拣判敏感：已落 R2 的附件原件（异步存档早于分拣结论的窗口）补加密
+  if (triage.is_sensitive) await syncAttachmentEncryption(env, noteId);
 }
 
 /** 分拣回写被并发编辑抢先时的处置：只标复判位，cron 用新内容重分拣。 */

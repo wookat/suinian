@@ -62,6 +62,8 @@ import {
   storeOriginal,
   buildMediaReply,
   reconcileMediaOrphans,
+  loadOriginal,
+  sweepUnencryptedSensitiveAttachments,
   AUDIO_FAILED_PLACEHOLDER,
   IMAGE_FAILED_PLACEHOLDER,
 } from "./media";
@@ -216,7 +218,9 @@ app.get("/health", async (c) => {
       ok ? 200 : 503
     );
   }
-  return c.json({ ok: true });
+  // enc_key：敏感内容静态加密密钥是否已配置（R153 D-1：缺失时敏感内容
+  // fail-open 明文落库，外部监控可据此告警）
+  return c.json({ ok: true, enc_key: !!c.env.SUINIAN_ENC_KEY });
 });
 
 // ---- public auth: register / login (mounted before the bearer middleware) ----
@@ -2150,9 +2154,8 @@ app.post("/api/notes/:id/retry-media", async (c) => {
   const att = await c.env.DB.prepare("SELECT r2_key, mime FROM attachments WHERE note_id = ? ORDER BY rowid DESC LIMIT 1")
     .bind(id)
     .first<{ r2_key: string; mime: string | null }>();
-  const obj = att ? await c.env.MEDIA.get(att.r2_key) : null;
-  if (!obj) return c.json({ error: "原件未存档，无法原地重试，请重新上传" }, 404);
-  const bytes = new Uint8Array(await obj.arrayBuffer());
+  const bytes = att ? await loadOriginal(c.env, att.r2_key) : null;
+  if (!bytes) return c.json({ error: "原件未存档或无法解密，无法原地重试，请重新上传" }, 404);
 
   let content: string | null = null;
   const newMeta: NoteMeta = { ...meta };
@@ -2224,17 +2227,19 @@ app.get("/api/notes/:id/file", async (c) => {
         .bind(id)
         .first<{ r2_key: string; mime: string | null }>();
   if (!att) return c.json({ error: "no attachment" }, 404);
-  const obj = await c.env.MEDIA.get(att.r2_key);
-  if (!obj) return c.json({ error: "attachment missing" }, 404);
+  // 敏感附件原件以 AES-GCM 信封落 R2（R154 P2-2）：取件经 loadOriginal 透明解密；
+  // 加密对象无密钥/密钥不符时 fail-closed 拒绝吐密文
+  const bytes = await loadOriginal(c.env, att.r2_key);
+  if (!bytes) return c.json({ error: "attachment missing" }, 404);
   const fileName = parseNoteMeta(note.meta)?.file_name || att.r2_key.split("/").pop() || "file";
-  const mime = att.mime || obj.httpMetadata?.contentType || "application/octet-stream";
+  const mime = att.mime || "application/octet-stream";
   // inline rendering (R144 P1-1) only for safe media types the clients embed
   // (<img>/<audio>); everything else keeps forced download semantics
   const inline = c.req.query("inline") === "1" && /^(image|audio|video)\//.test(mime);
-  return new Response(obj.body, {
+  return new Response(bytes, {
     headers: {
       "Content-Type": mime,
-      "Content-Length": String(obj.size),
+      "Content-Length": String(bytes.length),
       "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(fileName)}`,
       "Cache-Control": "private, no-store",
     },
@@ -4005,6 +4010,8 @@ export default {
       ctx.waitUntil(generateAllDailyReviews(env));
       // daily R2↔attachments reconciliation: GC orphan media objects
       ctx.waitUntil(reconcileMediaOrphans(env));
+      // 存量敏感附件迁移：把仍为明文的敏感笔记 R2 原件加密重写（幂等）
+      ctx.waitUntil(sweepUnencryptedSensitiveAttachments(env));
     }
   },
 };
