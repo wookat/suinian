@@ -1408,9 +1408,20 @@ app.get("/api/notes", async (c) => {
   // the keyword page query (R158 P2-3): semantic recall (embedding + vector
   // query) and the partial-term recall don't depend on the page rows, and
   // serializing them stacked their full latency onto search P95
+  // interactive search must not stall on a cold Workers AI embed either: past
+  // this budget the response ships keyword-only results — the same graceful
+  // degradation as an embed failure (semantic extras are best-effort)
+  const SEARCH_SEMANTIC_BUDGET_MS = 2_000;
   const isSearch = Boolean(q && !cursor);
   const terms = isSearch ? searchTerms(q) : [];
-  const hitsPromise = isSearch ? semanticRecall(c.env, userId, q, 10) : null;
+  const hitsPromise = isSearch
+    ? Promise.race([
+        semanticRecall(c.env, userId, q, 10),
+        new Promise<Awaited<ReturnType<typeof semanticRecall>>>((resolve) =>
+          setTimeout(() => resolve([]), SEARCH_SEMANTIC_BUDGET_MS)
+        ),
+      ])
+    : null;
   let partialPromise: Promise<NoteRow[]> | null = null;
   if (isSearch && terms.length > 1) {
     // multi-word relevance: notes hitting only SOME terms still surface,
