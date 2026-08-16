@@ -46,6 +46,7 @@ import {
   migratedTokenSentinel,
   isLegacyPlaintextToken,
   checkRateLimit,
+  ACCT_RATE_LIMIT_MAX,
   sweepAuthRateLimits,
   clientIp,
 } from "./auth";
@@ -68,7 +69,7 @@ import {
   IMAGE_FAILED_PLACEHOLDER,
 } from "./media";
 import { detectFileKind, buildFileNote, buildFileReply, FILE_FAILED_PLACEHOLDER } from "./files";
-import { parseImportFile, runImport, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMPORT_ITEMS, type ImportSource, type ImportItem, type ImportFailure } from "./import";
+import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMPORT_ITEMS, type ImportSource, type ImportItem, type ImportFailure } from "./import";
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
@@ -314,7 +315,7 @@ app.post("/api/auth/recover", async (c) => {
     .json<{ name?: unknown; recovery_code?: unknown; new_password?: unknown }>()
     .catch(() => null);
   const name = validateName(body?.name);
-  if (!(await checkRateLimit(c.env.DB, "recover", name ? [clientIp(c.req.raw), `acct:${name}`] : [clientIp(c.req.raw)]))) {
+  if (!(await checkRateLimit(c.env.DB, "recover", name ? [clientIp(c.req.raw), { key: `acct:${name}`, max: ACCT_RATE_LIMIT_MAX }] : [clientIp(c.req.raw)]))) {
     return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
   }
   const code = normalizeRecoveryCode(body?.recovery_code);
@@ -350,7 +351,7 @@ app.post("/api/auth/recover", async (c) => {
 app.post("/api/auth/login", async (c) => {
   const body = await c.req.json<{ name?: unknown; password?: unknown }>().catch(() => null);
   const name = validateName(body?.name);
-  if (!(await checkRateLimit(c.env.DB, "login", name ? [clientIp(c.req.raw), `acct:${name}`] : [clientIp(c.req.raw)]))) {
+  if (!(await checkRateLimit(c.env.DB, "login", name ? [clientIp(c.req.raw), { key: `acct:${name}`, max: ACCT_RATE_LIMIT_MAX }] : [clientIp(c.req.raw)]))) {
     return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
   }
   const password = typeof body?.password === "string" ? body.password : "";
@@ -409,6 +410,19 @@ app.post("/api/admin/run-daily-reviews", async (c) => {
     ...stats,
     heartbeats: heartbeats.map((h) => ({ ...h, stats: h.stats ? JSON.parse(h.stats) : null })),
   });
+});
+
+// 存量维护（R155 P1-2/P2-1）：导入指纹回填 + 重复导入软删，顺带把仍为明文的
+// 敏感附件加密重写（与每日 cron 同一实现，这里只是手动触发口）。幂等可重跑。
+app.post("/api/admin/sweep-import-dedupe", async (c) => {
+  const adminToken = c.env.ADMIN_TOKEN;
+  if (!adminToken) return c.json({ error: "not found" }, 404);
+  const auth = c.req.header("authorization") || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m || m[1] !== adminToken) return c.json({ error: "unauthorized" }, 401);
+  const stats = await sweepImportDedupe(c.env);
+  const attachmentsMigrated = await sweepUnencryptedSensitiveAttachments(c.env);
+  return c.json({ ok: true, ...stats, attachments_migrated: attachmentsMigrated });
 });
 
 // ---- WeChat Official Account callback (公众号, public; guarded by WECHAT_MP_TOKEN) ----
@@ -1281,9 +1295,34 @@ app.post("/api/notes", async (c) => {
 // tag / keyword / source / created_at range, all combinable.
 const DATETIME_RE = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$/;
 
-/** Split a keyword query into up to 5 whitespace-separated terms. */
+// D1 rejects LIKE patterns over ~50 bytes ("pattern too complex"), so cap each term's UTF-8 length.
+export function capBytes(s: string, max: number): string {
+  const enc = new TextEncoder();
+  while (s.length > 0 && enc.encode(s).length > max) s = s.slice(0, -1);
+  return s;
+}
+
+const LIKE_TERM_MAX_BYTES = 45;
+
+/** Single implementation point for keyword → LIKE pattern (D1 byte cap applied). */
+export function likeContains(term: string): string {
+  return `%${capBytes(term, LIKE_TERM_MAX_BYTES)}%`;
+}
+
+/** Tag → LIKE pattern over the JSON tags column; overlong tags fall back to prefix match. */
+export function tagLikePattern(tag: string): string {
+  const capped = capBytes(tag, LIKE_TERM_MAX_BYTES);
+  return capped === tag ? `%"${tag}"%` : `%"${capped}%`;
+}
+
+/** Split a keyword query into up to 5 whitespace-separated terms (each capped for LIKE). */
 export function searchTerms(q: string): string[] {
-  return q.split(/\s+/).filter(Boolean).slice(0, 5);
+  return q
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 5)
+    .map((t) => capBytes(t, LIKE_TERM_MAX_BYTES))
+    .filter(Boolean);
 }
 
 // tags 参与关键词命中：ask 敏感提示推荐的搜索词可能只出现在标签里，
@@ -1322,14 +1361,14 @@ function noteFilterConds(filter: {
   }
   if (typeof filter.tag === "string" && filter.tag) {
     conds.push("tags LIKE ?");
-    binds.push(`%"${filter.tag}"%`);
+    binds.push(tagLikePattern(filter.tag));
   }
   if (typeof filter.q === "string" && filter.q.trim()) {
     // multi-word queries match notes containing every term (in any field, any
     // order) instead of requiring the words as one contiguous substring
     for (const term of searchTerms(filter.q)) {
       conds.push(termCond());
-      const like = `%${term}%`;
+      const like = likeContains(term);
       for (let i = 0; i < KEYWORD_FIELDS.length; i++) binds.push(like);
     }
   }
@@ -1387,7 +1426,7 @@ app.get("/api/notes", async (c) => {
     if (terms.length > 1) {
       const pf = noteFilterConds({ category, tag, source, from, to });
       const orTerms = terms.map(() => termCond()).join(" OR ");
-      const termBinds = terms.flatMap((t) => Array(KEYWORD_FIELDS.length).fill(`%${t}%`) as string[]);
+      const termBinds = terms.flatMap((t) => Array(KEYWORD_FIELDS.length).fill(likeContains(t)) as string[]);
       const where = [`user_id = ?`, ...pf.conds, `(${orTerms})`].join(" AND ");
       const r = await c.env.DB.prepare(
         `SELECT * FROM notes WHERE ${where} ORDER BY created_at DESC LIMIT 30`
@@ -2049,7 +2088,11 @@ app.get("/api/notes/random", async (c) => {
 
 app.get("/api/tags", async (c) => {
   const userId = c.get("userId");
-  const { results } = await c.env.DB.prepare("SELECT tags FROM notes WHERE user_id = ? AND deleted_at IS NULL")
+  // 敏感行的话题标签不进公开标签面（筛选行/标签管理），与 stats top_tags 及
+  // R154 遮罩卡片同口径：正文加密而标签公开会泄露敏感话题（如 #WiFi 3 条）
+  const { results } = await c.env.DB.prepare(
+    "SELECT tags FROM notes WHERE user_id = ? AND deleted_at IS NULL AND is_sensitive = 0"
+  )
     .bind(userId)
     .all<{ tags: string }>();
   const counts = new Map<string, number>();
@@ -2073,7 +2116,7 @@ async function retagUser(env: Env, userId: string, from: string, to: string | nu
   const { results } = await env.DB.prepare(
     "SELECT id, tags, is_sensitive FROM notes WHERE user_id = ? AND deleted_at IS NULL AND tags LIKE ?"
   )
-    .bind(userId, `%"${from}"%`)
+    .bind(userId, tagLikePattern(from))
     .all<{ id: string; tags: string; is_sensitive: number }>();
   let affected = 0;
   for (const row of results ?? []) {
@@ -2465,13 +2508,6 @@ export function sanitizeAskHistory(raw: unknown): AskHistoryMessage[] {
   return msgs.slice(-ASK_HISTORY_MAX_MESSAGES);
 }
 
-// D1 rejects LIKE patterns over ~50 bytes ("pattern too complex"), so cap each term's UTF-8 length.
-function capBytes(s: string, max: number): string {
-  const enc = new TextEncoder();
-  while (s.length > 0 && enc.encode(s).length > max) s = s.slice(0, -1);
-  return s;
-}
-
 /**
  * Recall keywords for /api/ask: terms from the current question come first,
  * then terms from the last two user turns of history (so follow-up questions
@@ -2581,7 +2617,7 @@ async function countSensitiveHits(env: Env, userId: string, terms: string[]): Pr
     const ors = terms.map(() => "(title LIKE ? OR tags LIKE ? OR url_title LIKE ?)");
     const binds: unknown[] = [userId];
     for (const t of terms) {
-      const like = `%${t}%`;
+      const like = likeContains(t);
       binds.push(like, like, like);
     }
     const row = await env.DB.prepare(
@@ -2626,7 +2662,7 @@ app.post("/api/ask", async (c) => {
     const clConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')", `(${ors})`];
     const clBinds: unknown[] = [userId];
     for (const t of clarifyTerms) {
-      const like = `%${t}%`;
+      const like = likeContains(t);
       clBinds.push(like, like, like);
     }
     if (clRange?.start) {
@@ -2726,7 +2762,7 @@ app.post("/api/ask", async (c) => {
     const sRange = (financeTopicTerms(question) ? parseTimeRange(question) : null) ?? timeRange;
     const likeOrs = subsetTerms.map(() => "(content LIKE ? OR title LIKE ? OR tags LIKE ?)").join(" OR ");
     const sConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')", `(${likeOrs})`];
-    const sBinds: unknown[] = [userId, ...subsetTerms.flatMap((t) => [`%${t}%`, `%${t}%`, `%${t}%`])];
+    const sBinds: unknown[] = [userId, ...subsetTerms.flatMap((t) => Array(3).fill(likeContains(t)) as string[])];
     if (sRange?.start) {
       sConds.push("created_at >= ?");
       sBinds.push(sRange.start);
@@ -2843,7 +2879,7 @@ app.post("/api/ask", async (c) => {
   if (topicCnt) {
     const tcRange = (topicCountIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
     const tcConds = ["user_id = ?", "deleted_at IS NULL", "(content LIKE ? OR title LIKE ? OR tags LIKE ?)"];
-    const tcBinds: unknown[] = [userId, `%${topicCnt}%`, `%${topicCnt}%`, `%${topicCnt}%`];
+    const tcBinds: unknown[] = [userId, ...(Array(3).fill(likeContains(topicCnt)) as string[])];
     if (tcRange?.start) {
       tcConds.push("created_at >= ?");
       tcBinds.push(tcRange.start);
@@ -2937,7 +2973,7 @@ app.post("/api/ask", async (c) => {
   const enumTopic = enumRoute.topic;
   const enumList = enumRoute.list;
   if (enumTopic) {
-    const like = `%${enumTopic}%`;
+    const like = likeContains(enumTopic);
     const tConds = ["user_id = ?", "deleted_at IS NULL", "(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)"];
     const tBinds: unknown[] = [userId, like, like, like, like];
     if (timeRange?.start) {
@@ -3052,7 +3088,7 @@ app.post("/api/ask", async (c) => {
     const ors = terms.map(() => "(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)");
     conds.push(`(${ors.join(" OR ")})`);
     for (const t of terms) {
-      const like = `%${t}%`;
+      const like = likeContains(t);
       binds.push(like, like, like, like);
     }
   }
@@ -3071,7 +3107,7 @@ app.post("/api/ask", async (c) => {
       .join(" + ");
     orderBy = `(${score}) DESC, created_at DESC`;
     for (const t of terms) {
-      const like = `%${t}%`;
+      const like = likeContains(t);
       binds.push(like, like, like, like);
     }
   }
@@ -3685,11 +3721,11 @@ app.post("/api/import", async (c) => {
     } else {
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)) {
-        if (source === "flomo") {
-          // flomo 导出 zip（HTML + file/ 图片）：走 zip 解析管线，图片入 R2 不再丢弃
+        if (source === "flomo" || source === "cubox") {
+          // flomo / Cubox 均双格式：纯文本导出或 zip（图片/多文件）都走各自 zip 管线
           zipBytes = bytes;
         } else {
-          return c.json({ error: "该来源不支持 zip 文件，请选择 flomo / Notion / Obsidian / Apple 备忘录来源上传 zip" }, 400);
+          return c.json({ error: "该来源不支持 zip 文件，请选择 Cubox / flomo / Notion / Obsidian / Apple 备忘录来源上传 zip" }, 400);
         }
       } else {
         text = new TextDecoder().decode(bytes);

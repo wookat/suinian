@@ -61,7 +61,7 @@ import { loadTheme, setTheme, type ThemeMode } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
 const IMPORT_SOURCES: { value: ImportSource; label: string; hint: string; accept: string }[] = [
-  { value: "cubox", label: "Cubox", hint: "支持 Cubox 导出的 CSV / 书签 HTML / txt 文件", accept: ".csv,.html,.htm,.txt" },
+  { value: "cubox", label: "Cubox", hint: "支持 Cubox 导出的 CSV / 书签 HTML / txt 文件，或打包为 zip 直接上传（含 md 导出）", accept: ".csv,.html,.htm,.txt,.zip" },
   { value: "flomo", label: "flomo", hint: "支持 flomo 导出的 zip 直接上传（图片自动入库），也支持解压后的 HTML 文件", accept: ".zip,.html,.htm" },
   { value: "notion", label: "Notion", hint: "支持 Notion「Markdown & CSV」导出的 zip（含嵌套页面 / 数据库 / 图片，图片自动入库）", accept: ".zip" },
   { value: "obsidian", label: "Obsidian", hint: "把整个 vault 文件夹压缩为 zip 上传；frontmatter 的 tags/created 会保留，[[内链]] 转为文本", accept: ".zip" },
@@ -1263,7 +1263,11 @@ export function SettingsPage() {
           {IMPORT_SOURCES.map((opt) => (
             <button
               key={opt.value}
-              onClick={() => setImportSource(opt.value)}
+              onClick={() => {
+                setImportSource(opt.value)
+                setImportMsg(null)
+                setImportFailed([])
+              }}
               className={cn(
                 "flex-1 whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium transition-colors",
                 importSource === opt.value

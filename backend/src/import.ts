@@ -1,6 +1,8 @@
 // Import pipeline: parse Cubox / flomo / Markdown / plain-text export files
 // into normalized note items (content + original created time + tags + url).
 import { prepareNoteInsert } from "./note-store";
+import { storeOriginal } from "./media";
+import { contentFingerprint, decryptContent } from "./crypto";
 
 export interface ImportAsset {
   name: string;
@@ -396,25 +398,43 @@ export async function runImport(
   for (let i = 0; i < items.length; i += CHUNK) {
     const chunk = items.slice(i, i + CHUNK);
     try {
-      // dedup: fetch existing notes matching any of the chunk's contents in one query
+      // dedup: match existing notes by content OR import fingerprint in one
+      // query—敏感笔记落库后 content 只剩占位符，只能靠 meta.import_fp 命中
+      const fps = await Promise.all(chunk.map((it) => contentFingerprint(env.SUINIAN_ENC_KEY, it.content)));
       const ph = chunk.map(() => "?").join(",");
       const existing = await db
-        .prepare(`SELECT content, created_at FROM notes WHERE user_id = ? AND deleted_at IS NULL AND content IN (${ph})`)
-        .bind(userId, ...chunk.map((it) => it.content))
-        .all<{ content: string; created_at: string }>();
-      const seen = new Set((existing.results ?? []).map((r) => `${r.created_at}\u0000${r.content}`));
-      const noTime = new Set((existing.results ?? []).map((r) => r.content));
+        .prepare(
+          `SELECT content, created_at, json_extract(meta, '$.import_fp') AS fp FROM notes
+           WHERE user_id = ? AND deleted_at IS NULL AND (content IN (${ph}) OR json_extract(meta, '$.import_fp') IN (${ph}))`
+        )
+        .bind(userId, ...chunk.map((it) => it.content), ...fps)
+        .all<{ content: string; created_at: string; fp: string | null }>();
+      const seen = new Set<string>();
+      const noTime = new Set<string>();
+      for (const r of existing.results ?? []) {
+        for (const k of [r.content, ...(r.fp ? [r.fp] : [])]) {
+          seen.add(`${r.created_at}\u0000${k}`);
+          noTime.add(k);
+        }
+      }
       const stmts: D1PreparedStatement[] = [];
       const inserted: { id: string; item: ImportItem }[] = [];
-      for (const item of chunk) {
+      for (let j = 0; j < chunk.length; j++) {
+        const item = chunk[j];
+        const fp = fps[j];
         const createdAt = item.created_at ?? toUtcSql(new Date())!;
-        const dup = item.created_at ? seen.has(`${createdAt}\u0000${item.content}`) : noTime.has(item.content);
+        const keys = [item.content, fp];
+        const dup = item.created_at
+          ? keys.some((k) => seen.has(`${createdAt}\u0000${k}`))
+          : keys.some((k) => noTime.has(k));
         if (dup) {
           stats.skipped++;
           continue;
         }
-        seen.add(`${createdAt}\u0000${item.content}`);
-        noTime.add(item.content);
+        for (const k of keys) {
+          seen.add(`${createdAt}\u0000${k}`);
+          noTime.add(k);
+        }
         const id = crypto.randomUUID();
         inserted.push({ id, item });
         // 导入入库走持久层统一敏感管道（R122 P1-1 / R124 P1-1 收口）：疑似含密的
@@ -430,6 +450,7 @@ export async function runImport(
           tags: item.tags,
           meta: (gated) => ({
             import_source: source,
+            import_fp: fp,
             // notes keep their original created_at; lateness/triage hints must
             // measure from when the note actually entered the queue
             imported_at: new Date().toISOString(),
@@ -450,16 +471,15 @@ export async function runImport(
             failures.push({ item: itemHead(item), reason: `图片 ${asset.name} 未入库（未配置 R2）` });
             continue;
           }
-          try {
-            const safeName = asset.name.replace(/[^\w.\-\u4e00-\u9fff]/g, "_");
-            const key = `media/${userId}/${id}/${Date.now()}-${safeName}`;
-            await env.MEDIA.put(key, asset.bytes, { httpMetadata: { contentType: asset.mime } });
-            await db
-              .prepare("INSERT INTO attachments (id, note_id, r2_key, mime, size) VALUES (?, ?, ?, ?, ?)")
-              .bind(crypto.randomUUID(), id, key, asset.mime, asset.bytes.length)
-              .run();
-          } catch (e) {
-            console.error("import asset failed", e);
+          // 附件入库唯一走 storeOriginal 管道：敏感笔记的原件在写入时即加密，
+          // 不依赖每日 sweep 兜底（R155 P1-1 收口）
+          const key = await storeOriginal(env, userId, id, {
+            type: asset.mime.startsWith("image/") ? "image" : "file",
+            bytes: asset.bytes,
+            mime: asset.mime,
+            fileName: asset.name,
+          });
+          if (!key) {
             failures.push({ item: itemHead(item), reason: `图片 ${asset.name} 入库失败` });
           }
         }
@@ -474,6 +494,73 @@ export async function runImport(
     await opts.onProgress?.(Math.min(i + CHUNK, items.length), items.length);
   }
   return { stats, failures };
+}
+
+// ---- stock maintenance ----
+
+export interface ImportDedupeStats {
+  fp_backfilled: number;
+  fp_unrecoverable: number;
+  duplicates_removed: number;
+}
+
+/**
+ * 存量维护（R155 P2-1）：为缺 import_fp 的导入笔记回填指纹（敏感行解密
+ * content_enc 计算），再按 (user, created_at, 指纹) 找重复导入，保留最早
+ * 一条，其余软删。幂等、限额，可反复运行直至清零。
+ */
+export async function sweepImportDedupe(
+  env: { DB: D1Database; SUINIAN_ENC_KEY?: string },
+  limit = 500
+): Promise<ImportDedupeStats> {
+  const stats: ImportDedupeStats = { fp_backfilled: 0, fp_unrecoverable: 0, duplicates_removed: 0 };
+  const db = env.DB;
+  const rows = await db
+    .prepare(
+      `SELECT id, content, content_enc FROM notes
+       WHERE deleted_at IS NULL AND json_extract(meta, '$.import_source') IS NOT NULL
+         AND json_extract(meta, '$.import_fp') IS NULL
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<{ id: string; content: string; content_enc: string | null }>();
+  for (const r of rows.results ?? []) {
+    const plain = r.content_enc
+      ? env.SUINIAN_ENC_KEY
+        ? await decryptContent(env.SUINIAN_ENC_KEY, r.content_enc)
+        : null
+      : r.content;
+    if (plain === null) {
+      stats.fp_unrecoverable++;
+      continue;
+    }
+    const fp = await contentFingerprint(env.SUINIAN_ENC_KEY, plain);
+    await db
+      .prepare("UPDATE notes SET meta = json_set(coalesce(meta, '{}'), '$.import_fp', ?) WHERE id = ?")
+      .bind(fp, r.id)
+      .run();
+    stats.fp_backfilled++;
+  }
+  const dup = await db
+    .prepare(
+      `SELECT id FROM notes n WHERE deleted_at IS NULL
+         AND json_extract(meta, '$.import_fp') IS NOT NULL
+         AND rowid > (SELECT MIN(m.rowid) FROM notes m WHERE m.user_id = n.user_id AND m.deleted_at IS NULL
+               AND m.created_at = n.created_at
+               AND json_extract(m.meta, '$.import_fp') = json_extract(n.meta, '$.import_fp'))
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<{ id: string }>();
+  for (const r of dup.results ?? []) {
+    // soft delete: the cron sweep hard-deletes (and cleans attachments/vectors) after the undo window
+    await db
+      .prepare("UPDATE notes SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?")
+      .bind(r.id)
+      .run();
+    stats.duplicates_removed++;
+  }
+  return stats;
 }
 
 // ---- entry ----
