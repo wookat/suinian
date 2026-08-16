@@ -360,6 +360,9 @@ const SUBSET_AGG_RE = /一共|总共|合计|总计|共计|加起来|总额|花�
 export function financeTopicTerms(question: string): string[] | null {
   if (isFinanceAggQuestion(question)) return null; // 无限定 → 全局精确合计
   if (FACT_QUERY_RE.test(question)) return null;
+  // 「包括/算上…吗」是口径澄清问句而非子集合计：交澄清路由或普通召回，
+  // 绝不把残留的追问措辞抽成垃圾关键词（R151 P2-2）
+  if (/包括|包含|算上|算进|在内/.test(question)) return null;
   if (!FINANCE_WORD_RE.test(question) || !SUBSET_AGG_RE.test(question)) return null;
   let residual = question;
   for (const re of STRIP_RES) residual = residual.replace(re, "");
@@ -368,7 +371,7 @@ export function financeTopicTerms(question: string): string[] | null {
   residual = residual.replace(/\d{2,4}\s*年|\d{1,2}\s*月(?:份)?|\d{1,2}\s*[日号]|上+个?[月周]|这个?[月周]|本[月周]|最近|今年|去年|前年/g, "");
   // 剥掉开头的购买/消费动词（「买咖啡」→「咖啡」），但不能把「吃喝」这类
   // 本身就是主题的词剥空
-  const stripped = residual.replace(/^[买在喝吃点逛去为给用出]{1,2}/, "");
+  const stripped = residual.replace(/^[买在喝吃点逛去为给用出]{1,2}/, "").replace(/^(?:你|您|咱)+/, "");
   if (stripped.length >= 2) residual = stripped;
   const terms = residual
     .split(/和|跟|以及|、/)
@@ -377,15 +380,32 @@ export function financeTopicTerms(question: string): string[] | null {
   return terms.length > 0 && terms.length <= 3 ? terms : null;
 }
 
-/** 财务主题子集的精确合计答案：逐笔明细 + 按币种合计，敏感笔记计入合计但不展示内容。 */
+/** 命中层级：标题/正文直接命中，还是仅靠分拣标签命中（R151 P2-1）。
+ * 敏感笔记正文加密、无法核验，按原口径视作直接命中计入合计。 */
+export function subsetDirectHit(
+  note: Pick<NoteRow, "title" | "content" | "is_sensitive">,
+  terms: string[]
+): boolean {
+  if (note.is_sensitive) return true;
+  return terms.some((t) => (note.title ?? "").includes(t) || note.content.includes(t));
+}
+
+/** 财务主题子集的精确合计答案：逐笔明细 + 按币种合计，敏感笔记计入合计但不展示内容。
+ * 仅标签命中的笔记单列不计入合计（R151 P2-1：分拣标签粒度偏宽——如燃气费被
+ * 打上「水电费」标签——会把无关记账算进子集合计）；标题/正文零命中时才退回
+ * 标签口径（标签可能是唯一信号，否则正常命中会退化成零结果）。 */
 export function buildFinanceSubsetAnswer(
   terms: string[],
-  rows: Pick<NoteRow, "id" | "title" | "content" | "created_at" | "category" | "is_sensitive" | "amount" | "currency">[],
+  rows: Pick<NoteRow, "id" | "title" | "content" | "tags" | "created_at" | "category" | "is_sensitive" | "amount" | "currency">[],
   phrase: string | null
 ): string {
   const scope = phrase ?? "到目前为止";
   const kw = terms.join("、");
-  const finance = rows.filter((n) => n.category === "expense" || n.category === "income");
+  const financeAll = rows.filter((n) => n.category === "expense" || n.category === "income");
+  const direct = financeAll.filter((n) => subsetDirectHit(n, terms));
+  const tagOnly = financeAll.filter((n) => !subsetDirectHit(n, terms));
+  const tagFallback = direct.length === 0;
+  const finance = tagFallback ? financeAll : direct;
   const totals: Record<string, { expense: number; income: number }> = {};
   let expenseCount = 0;
   let incomeCount = 0;
@@ -418,10 +438,22 @@ export function buildFinanceSubsetAnswer(
     return `- ${text}（${amount}，${formatShanghai(n.created_at).slice(0, 10)}）[${i + 1}]`;
   });
   const sensitiveCnt = finance.filter((n) => n.is_sensitive).length;
-  let md = `按关键词「${kw}」精确匹配（标题/正文/标签），${scope}共 ${expenseCount} 笔支出${incomeCount > 0 ? `、${incomeCount} 笔收入` : ""}：\n${totalLines.join("\n")}`;
+  const matchScope = tagFallback ? "仅标签命中，标题/正文无直接命中" : "标题/正文";
+  let md = `按关键词「${kw}」精确匹配（${matchScope}），${scope}共 ${expenseCount} 笔支出${incomeCount > 0 ? `、${incomeCount} 笔收入` : ""}：\n${totalLines.join("\n")}`;
   if (itemLines.length > 0) md += `\n\n逐笔明细${finance.length > visible.length ? `（共 ${finance.length} 笔，仅展示前 ${visible.length} 笔）` : ""}：\n${itemLines.join("\n")}`;
   if (sensitiveCnt > 0) md += `\n（含 ${sensitiveCnt} 笔加密的敏感记录，金额已计入合计，内容不在问答中展示。）`;
   if (unknown > 0) md += `\n（另有 ${unknown} 笔未识别出金额，未计入合计。）`;
+  if (!tagFallback && tagOnly.length > 0) {
+    const tagItems = tagOnly
+      .filter((n) => !n.is_sensitive)
+      .slice(0, 5)
+      .map((n) => {
+        const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
+        const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+        return `${text}（${amount}）`;
+      });
+    md += `\n（另有 ${tagOnly.length} 笔仅标签命中「${kw}」、标题/正文不含该词的记账未计入合计${tagItems.length > 0 ? `：${tagItems.join("、")}` : ""}；如需把它们算进去，可按标签在时间流筛选后自行确认。）`;
+  }
   md += `\n\n以上为数据库精确统计（关键词匹配口径，金额口径与周报/月报一致，不含已删除笔记）。如果你的记录用了别的说法，换个关键词再问试试。`;
   return md;
 }
@@ -676,16 +708,17 @@ export async function resolveAskEnumIntent(
 /** 精确财务合计答案的标识（buildFinanceAggAnswer 尾注）。 */
 const FINANCE_AGG_MARK_RE = /口径与周报\/月报一致/;
 
-const FINANCE_CLARIFY_RE = /(?:包括|包含|算上了?|算进去?了?|算了)([\u4e00-\u9fa5A-Za-z0-9的]{2,16}?)(?:的钱|的?开销)?(?:吗|么|嘛|没有?|了吗|了没|不)?$/;
+const FINANCE_CLARIFY_RE = /(?:包括|包含|算上了?|算进去?了?|算了)([\u4e00-\u9fa5A-Za-z0-9的]{2,16}?)(?:在内|以内|之内)?(?:的钱|的?开销)?(?:进去)?了?(?:吗|么|嘛|没有?|了吗|了没|不)?$/;
 
 /** 财务口径澄清追问的限定词（「包括报销的差旅费吗」→ [报销, 差旅费]）；非此类返回 null。 */
 export function financeClarifyTerms(question: string, lastAssistant: string | null): string[] | null {
   if (!lastAssistant || !FINANCE_AGG_MARK_RE.test(lastAssistant)) return null;
   const m = question.replace(/[？?。！!\s]+$/g, "").match(FINANCE_CLARIFY_RE);
   if (!m?.[1]) return null;
+  // 代词/语气前缀与方位尾巴不是关键词（「你算上打车费在内了吗」→ 打车费）
   const terms = m[1]
     .split("的")
-    .map((s) => s.trim())
+    .map((s) => s.trim().replace(/^(?:你|您|咱|都|也|把|将)+/, "").replace(/(?:在内|以内|之内|在)$/, ""))
     .filter((s) => s.length >= 2 && !/^(?:费用|开销|支出|收入|这个|那个|这些|那些)$/.test(s));
   return terms.length > 0 ? terms : null;
 }

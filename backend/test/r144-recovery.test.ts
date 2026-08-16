@@ -15,8 +15,15 @@ interface UserRow {
 /** Stateful fake D1 covering users (incl. recovery_hash) + auth_rate_limits. */
 function fakeDb(users: UserRow[]) {
   const rateLimits = new Map<string, { window_start: string; count: number }>();
+  const tokens: { user_id: string; token_hash: string }[] = [];
   const db = {
     users,
+    tokens,
+    async batch(stmts: { run(): Promise<unknown> }[]) {
+      const out: unknown[] = [];
+      for (const s of stmts) out.push(await s.run());
+      return out;
+    },
     prepare(sql: string) {
       let binds: unknown[] = [];
       const stmt = {
@@ -35,6 +42,10 @@ function fakeDb(users: UserRow[]) {
           }
           if (sql.includes("FROM users WHERE name = ?")) {
             return users.find((u) => u.name === binds[0]) ?? null;
+          }
+          if (sql.includes("FROM api_tokens WHERE token_hash = ?")) {
+            const t = tokens.find((t) => t.token_hash === binds[0]);
+            return t ? { user_id: t.user_id } : null;
           }
           if (sql.includes("FROM users WHERE api_token = ?")) {
             const u = users.find((u) => u.api_token === binds[0]);
@@ -58,6 +69,15 @@ function fakeDb(users: UserRow[]) {
               recovery_hash: null,
               created_at: "2026-01-01 00:00:00",
             });
+          } else if (sql.includes("INSERT") && sql.includes("INTO api_tokens")) {
+            if (!tokens.some((t) => t.token_hash === binds[2])) {
+              tokens.push({ user_id: binds[1] as string, token_hash: binds[2] as string });
+            }
+          } else if (sql.startsWith("DELETE FROM api_tokens WHERE user_id")) {
+            for (let i = tokens.length - 1; i >= 0; i--) if (tokens[i].user_id === binds[0]) tokens.splice(i, 1);
+          } else if (sql.startsWith("UPDATE users SET api_token")) {
+            const u = users.find((u) => u.id === binds[1]);
+            if (u) u.api_token = binds[0] as string;
           } else if (sql.startsWith("UPDATE users SET recovery_hash")) {
             const u = users.find((u) => u.id === binds[1]);
             if (u) u.recovery_hash = binds[0] as string;
@@ -217,8 +237,7 @@ describe("register + recover flow", () => {
   it("POST /api/auth/recovery-code regenerates and invalidates the old code", async () => {
     const { env } = makeEnv(users);
     const reg = await app.request(post("/api/auth/register", { name: "alice", password: "password123" }), undefined, env);
-    const { recovery_code: oldCode } = (await reg.json()) as { recovery_code: string };
-    const token = users[0].api_token;
+    const { recovery_code: oldCode, api_token: token } = (await reg.json()) as { recovery_code: string; api_token: string };
     const res = await app.request(post("/api/auth/recovery-code", {}, "1.2.3.4", token), undefined, env);
     expect(res.status).toBe(200);
     const { recovery_code: newCode } = (await res.json()) as { recovery_code: string };

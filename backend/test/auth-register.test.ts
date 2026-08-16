@@ -9,6 +9,7 @@ import {
   registrationEnabled,
   checkRateLimit,
   RATE_LIMIT_MAX,
+  sha256Hex,
 } from "../src/auth";
 
 interface UserRow {
@@ -19,13 +20,15 @@ interface UserRow {
   created_at: string;
 }
 
-/** Stateful fake D1 covering users + auth_rate_limits + note tables for cascade delete. */
+/** Stateful fake D1 covering users + api_tokens + auth_rate_limits + note tables for cascade delete. */
 function fakeDb(users: UserRow[]) {
   const rateLimits = new Map<string, { window_start: string; count: number }>();
   const deleted: string[] = [];
+  const tokens: { user_id: string; token_hash: string }[] = [];
   const db = {
     users,
     deleted,
+    tokens,
     async batch(stmts: { run(): Promise<unknown> }[]) {
       const out: unknown[] = [];
       for (const s of stmts) out.push(await s.run());
@@ -54,6 +57,10 @@ function fakeDb(users: UserRow[]) {
           if (sql.includes("FROM users WHERE name = ?")) {
             return users.find((u) => u.name === binds[0]) ?? null;
           }
+          if (sql.includes("FROM api_tokens WHERE token_hash = ?")) {
+            const t = tokens.find((t) => t.token_hash === binds[0]);
+            return t ? { user_id: t.user_id } : null;
+          }
           if (sql.includes("FROM users WHERE api_token = ?")) {
             const u = users.find((u) => u.api_token === binds[0]);
             return u ? { id: u.id } : null;
@@ -80,6 +87,13 @@ function fakeDb(users: UserRow[]) {
               password_hash: binds[3] as string | null,
               created_at: "2026-01-01 00:00:00",
             });
+          } else if (sql.includes("INSERT") && sql.includes("INTO api_tokens")) {
+            if (!tokens.some((t) => t.token_hash === binds[2])) {
+              tokens.push({ user_id: binds[1] as string, token_hash: binds[2] as string });
+            }
+          } else if (sql.startsWith("DELETE FROM api_tokens WHERE user_id")) {
+            for (let i = tokens.length - 1; i >= 0; i--) if (tokens[i].user_id === binds[0]) tokens.splice(i, 1);
+            deleted.push("api_tokens");
           } else if (sql.startsWith("UPDATE users SET api_token")) {
             const u = users.find((u) => u.id === binds[1]);
             if (u) u.api_token = binds[0] as string;
@@ -220,7 +234,12 @@ describe("POST /api/auth/register", () => {
     expect(retry.status).toBe(200);
     const body2 = (await retry.json()) as { user: { id: string }; api_token: string };
     expect(body2.user.id).toBe(body1.user.id);
-    expect(body2.api_token).toBe(body1.api_token);
+    // R152: tokens are hashed at rest, so the retry issues a fresh token; the
+    // original one keeps working (both hashes stored for the same account)
+    expect(body2.api_token).toMatch(/^[0-9a-f]{48}$/);
+    const { DB } = { DB: env.DB as unknown as ReturnType<typeof fakeDb> };
+    expect(DB.tokens.map((t) => t.token_hash)).toContain(await sha256Hex(body1.api_token));
+    expect(DB.tokens.map((t) => t.token_hash)).toContain(await sha256Hex(body2.api_token));
     expect(users.length).toBe(1);
   });
 
@@ -265,7 +284,11 @@ describe("POST /api/auth/login", () => {
     const res = await app.request(post("/api/auth/login", { name: "bob", password: "password123" }, "5.5.5.5"), undefined, env);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { api_token: string };
-    expect(body.api_token).toBe(users[0].api_token);
+    // R152: only the SHA-256 hash is stored; users.api_token holds a sentinel
+    expect(body.api_token).toMatch(/^[0-9a-f]{48}$/);
+    expect(users[0].api_token).toBe(`hashed:${users[0].id}`);
+    const DB = env.DB as unknown as ReturnType<typeof fakeDb>;
+    expect(DB.tokens.map((t) => t.token_hash)).toContain(await sha256Hex(body.api_token));
   });
 
   it("rejects wrong password and unknown users", async () => {
@@ -298,7 +321,10 @@ describe("token rotate + me + delete", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { api_token: string };
     expect(body.api_token).toMatch(/^[0-9a-f]{48}$/);
-    expect(users[0].api_token).toBe(body.api_token);
+    // R152: the plaintext column now holds the unmatchable sentinel
+    expect(users[0].api_token).toBe("hashed:u1");
+    const DB = env.DB as unknown as ReturnType<typeof fakeDb>;
+    expect(DB.tokens).toEqual([{ user_id: "u1", token_hash: await sha256Hex(body.api_token) }]);
     // old token now rejected
     const res2 = await app.request(post("/api/auth/rotate-token", {}, "6.6.6.6", "old-token"), undefined, env);
     expect(res2.status).toBe(401);
@@ -351,6 +377,7 @@ describe("token rotate + me + delete", () => {
       "edges",
       "daily_reviews",
       "user_preferences",
+      "api_tokens",
     ]) {
       expect(DB.deleted).toContain(t);
     }

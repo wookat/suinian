@@ -69,6 +69,8 @@ function latencyDb(notes: Row[], latencyMs: number) {
           stats.roundtrips++;
           await sleep(latencyMs);
           if (sql.includes("auth_rate_limits")) return { count: 1 };
+          // hashed-token auth (R152): the bearer token resolves via api_tokens
+          if (sql.includes("FROM api_tokens")) return { user_id: "u1" };
           if (sql.includes("FROM users")) return binds[0] === "good-token" ? { id: "u1" } : null;
           return null;
         },

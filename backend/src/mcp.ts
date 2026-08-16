@@ -3,6 +3,7 @@ import { StreamableHTTPTransport } from "@hono/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Env } from "./types";
+import { authenticateToken } from "./auth";
 
 type Vars = { userId: string };
 type App = Hono<{ Bindings: Env; Variables: Vars }>;
@@ -335,9 +336,9 @@ export function registerMcpRoute(app: App): void {
       );
     }
     const token = m[1];
-    const user = await c.env.DB.prepare("SELECT id FROM users WHERE api_token = ?")
-      .bind(token)
-      .first<{ id: string }>();
+    // unified auth layer (R152): same hashed-token lookup as the REST bearer
+    // middleware, including transparent migration of legacy plaintext rows
+    const user = await authenticateToken(c.env.DB, token);
     if (!user) {
       return c.json({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized: invalid token" }, id: null }, 401);
     }
