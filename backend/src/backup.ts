@@ -11,6 +11,7 @@ import { clusterNote } from "./threads";
 import { SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 import { maybeSensitive } from "./triage";
 import { scrubDerivedMeta } from "./ingest";
+import { resolveAttachmentMime } from "./media";
 
 export const BACKUP_FORMAT = "suinian-backup";
 export const BACKUP_VERSION = 1;
@@ -523,12 +524,16 @@ export async function restoreBackup(
     }
     const safeName = info.att.name.replace(/[^\w.\-\u4e00-\u9fff]/g, "_");
     const key = `media/${userId}/${newNoteId}/${Date.now()}-${safeName}`;
+    // restore shares the same mime fallback as the ingestion boundary
+    // (storeOriginal)：老备份里 octet-stream/缺失的 mime 按扩展名兜底，
+    // 不把 R146 已清零的存量问题重新引入
+    const mime = resolveAttachmentMime(info.att.mime, info.att.name);
     try {
       await env.MEDIA.put(key, entry.data, {
-        httpMetadata: { contentType: info.att.mime ?? "application/octet-stream" },
+        httpMetadata: { contentType: mime },
       });
       await env.DB.prepare("INSERT INTO attachments (id, note_id, r2_key, mime, size) VALUES (?, ?, ?, ?, ?)")
-        .bind(crypto.randomUUID(), newNoteId, key, info.att.mime, entry.data.length)
+        .bind(crypto.randomUUID(), newNoteId, key, mime, entry.data.length)
         .run();
       stats.media_imported++;
     } catch (e) {

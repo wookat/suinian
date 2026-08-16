@@ -260,6 +260,169 @@ export function countAggIntent(question: string): "exact" | "fail_closed" | null
   return countQueryIntent(question)?.intent ?? null;
 }
 
+// ---- 财务极值（R148 P1-2）----
+// 「最贵的一笔支出」是一条 ORDER BY amount SQL 就能精确回答的问题，绝不能
+// 交 LLM 对 top-k 召回猜极值（R147 实测：答 1980 吉他，实为 8999 MacBook）。
+// 金额比较按币种分组：不同币种的金额不可直接比大小。
+
+export interface FinanceExtremeQuery {
+  kind: "max" | "min";
+  /** 比较对象：支出或收入（默认支出）。 */
+  direction: "expense" | "income";
+}
+
+/** 识别财务极值问题（最贵/最大/最小一笔支出、金额最高的收入等）。 */
+export function financeExtremeIntent(question: string): FinanceExtremeQuery | null {
+  if (!FINANCE_WORD_RE.test(question) && !/买/.test(question)) return null;
+  const direction: "expense" | "income" = /收入|进账|入账|赚|挣/.test(question) ? "income" : "expense";
+  if (/最贵|最高|最大的?一?[笔项]|金额最[大高]|花得?最多|数额最大/.test(question)) return { kind: "max", direction };
+  if (/最便宜|最低|最小的?一?[笔项]|金额最[小低]|花得?最少|数额最小/.test(question)) return { kind: "min", direction };
+  return null;
+}
+
+const FINANCE_DIRECTION_LABELS: Record<"expense" | "income", string> = { expense: "支出", income: "收入" };
+
+/** 财务极值的确定性答案：按币种分组比较，敏感笔记只报金额/时间不露内容。 */
+export function buildFinanceExtremeAnswer(
+  query: FinanceExtremeQuery,
+  rows: Pick<NoteRow, "id" | "title" | "content" | "created_at" | "is_sensitive" | "amount" | "currency">[],
+  unknownAmount: number,
+  phrase: string | null
+): string {
+  const scope = phrase ?? "全部笔记";
+  const label = FINANCE_DIRECTION_LABELS[query.direction];
+  const kindLabel = query.kind === "max" ? "金额最大" : "金额最小";
+  if (rows.length === 0) {
+    return `${scope}没有已识别出金额的${label}记录，无法比较金额大小。${unknownAmount > 0 ? `（另有 ${unknownAmount} 笔${label}未识别出金额。）` : ""}`;
+  }
+  const lines = rows.map((n, i) => {
+    const amount = formatAmount(n.amount ?? 0, n.currency || "CNY");
+    const when = formatShanghai(n.created_at);
+    const desc = n.is_sensitive
+      ? "（加密的敏感笔记，内容不在问答中展示）"
+      : `：${(n.title || n.content).replace(/\s+/g, " ").slice(0, 60)}`;
+    const cite = n.is_sensitive ? "" : ` [${i + 1}]`;
+    return rows.length === 1
+      ? `你${kindLabel}的一笔${label}是 ${amount}（${when}，北京时间）${cite}${desc}`
+      : `- ${n.currency || "CNY"}：${amount}（${when}，北京时间）${cite}${desc}`;
+  });
+  let md = rows.length === 1 ? lines[0] : `${scope}按币种分别比较（不同币种金额不可直接比较），${kindLabel}的${label}：\n${lines.join("\n")}`;
+  md += `\n\n以上为数据库精确查询结果（按已识别金额比较，不含已删除笔记${unknownAmount > 0 ? `；另有 ${unknownAmount} 笔未识别出金额，未参与比较` : ""}）。`;
+  return md;
+}
+
+// ---- 主题关键词计数（R148 P1-2）----
+// 「记录过几次房租」这类按主题计次的问题：主题词可从问法中干净提取时，
+// 走 SQL LIKE 精确计数（与主题枚举同一关键词匹配家族），答案如实标注
+// 「按关键词匹配」口径；提取不出时仍由计数 fail-closed 兜底。
+
+const TOPIC_COUNT_RES: RegExp[] = [
+  // 「记录过几次房租」「提到过多少次咖啡」
+  /(?:记录?|写|提到?|说)[过了]{1,2}(?:多少|几)次([\u4e00-\u9fa5A-Za-z0-9]{1,12})/,
+  // 「房租记录过几次」「咖啡一共提过多少次」
+  /([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)(?:我?一共|我?总共)?(?:被)?(?:记录?|写|提到?|说)[过了]{1,2}(?:多少|几)次/,
+  // 「房租出现过几次」
+  /([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)出现[过了]{1,2}(?:多少|几)次/,
+];
+
+/** 识别「主题 + 计次」问题，返回用于 LIKE 精确计数的主题词；非此类返回 null。 */
+export function topicCountIntent(question: string): string | null {
+  if (FACT_QUERY_RE.test(question)) return null;
+  const q = question.replace(/[？?。！!\s]+$/g, "").replace(STRIP_RES[0], "");
+  for (const re of TOPIC_COUNT_RES) {
+    const topic = q.match(re)?.[1]?.replace(/^(?:关于|有关|我的?|把)/, "").replace(/^的+|的+$/g, "").trim();
+    if (topic && topic.length >= 2 && !TOPIC_ENUM_GENERIC_RE.test(topic)) return topic;
+  }
+  return null;
+}
+
+/** 主题关键词计数的精确答案（如实标注按关键词匹配口径）。 */
+export function buildTopicCountAnswer(topic: string, cnt: number, sensitiveCnt: number, phrase: string | null): string {
+  const scope = phrase ?? "到目前为止";
+  if (cnt === 0) {
+    return `按关键词「${topic}」精确匹配（标题/正文/标签），${scope}没有匹配到相关笔记。\n\n以上为数据库精确统计（关键词匹配口径，不含已删除笔记）。如果你的记录用了别的说法，换个关键词再问试试。`;
+  }
+  let md = `按关键词「${topic}」精确匹配（标题/正文/标签），${scope}共记录了 ${cnt} 条相关笔记`;
+  if (sensitiveCnt > 0) md += `（含 ${sensitiveCnt} 条加密的敏感笔记，内容不在问答中展示）`;
+  md += "。\n\n以上为数据库精确统计（关键词匹配口径，不含已删除笔记）。";
+  return md;
+}
+
+// ---- 财务主题子集合计（R148 P1-2）----
+// 「咖啡一共花了多少」这类带主题限定的合计：主题词可干净提取时，走 SQL
+// LIKE 圈定子集后按 financeStats 同一口径精确合计（R147：此前一律 fail-closed，
+// 诚实但找回失败）；提取不出干净主题词时仍 fail-closed，绝不交 LLM 心算。
+
+// 财务子集问法的合计措辞：强合计词，或「花了多少（钱）」这类弱合计问法
+const SUBSET_AGG_RE = /一共|总共|合计|总计|共计|加起来|总额|花了?多少|多少钱/;
+
+/** 从财务合计问法中提取主题限定词；非「主题 + 合计」问法返回 null。 */
+export function financeTopicTerms(question: string): string[] | null {
+  if (isFinanceAggQuestion(question)) return null; // 无限定 → 全局精确合计
+  if (FACT_QUERY_RE.test(question)) return null;
+  if (!FINANCE_WORD_RE.test(question) || !SUBSET_AGG_RE.test(question)) return null;
+  let residual = question;
+  for (const re of STRIP_RES) residual = residual.replace(re, "");
+  // 剥掉开头的购买/消费动词（「买咖啡」→「咖啡」），但不能把「吃喝」这类
+  // 本身就是主题的词剥空
+  const stripped = residual.replace(/^[买在喝吃点逛去为给用出]{1,2}/, "");
+  if (stripped.length >= 2) residual = stripped;
+  const terms = residual
+    .split(/和|跟|以及|、/)
+    .map((s) => s.trim())
+    .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s));
+  return terms.length > 0 && terms.length <= 3 ? terms : null;
+}
+
+/** 财务主题子集的精确合计答案：逐笔明细 + 按币种合计，敏感笔记计入合计但不展示内容。 */
+export function buildFinanceSubsetAnswer(
+  terms: string[],
+  rows: Pick<NoteRow, "id" | "title" | "content" | "created_at" | "category" | "is_sensitive" | "amount" | "currency">[],
+  phrase: string | null
+): string {
+  const scope = phrase ?? "到目前为止";
+  const kw = terms.join("、");
+  const finance = rows.filter((n) => n.category === "expense" || n.category === "income");
+  const totals: Record<string, { expense: number; income: number }> = {};
+  let expenseCount = 0;
+  let incomeCount = 0;
+  let unknown = 0;
+  for (const n of finance) {
+    if (typeof n.amount !== "number" || !Number.isFinite(n.amount)) {
+      unknown++;
+      continue;
+    }
+    const cur = n.currency || "CNY";
+    totals[cur] ??= { expense: 0, income: 0 };
+    if (n.category === "expense") {
+      totals[cur].expense += n.amount;
+      expenseCount++;
+    } else {
+      totals[cur].income += n.amount;
+      incomeCount++;
+    }
+  }
+  const totalLines = Object.entries(totals).map(([cur, t]) => {
+    const parts: string[] = [];
+    if (t.expense > 0 || expenseCount > 0) parts.push(`支出 ${formatAmount(t.expense, cur)}`);
+    if (t.income > 0 || incomeCount > 0) parts.push(`收入 ${formatAmount(t.income, cur)}`);
+    return `- ${cur}：${parts.join("，")}`;
+  });
+  const visible = finance.filter((n) => !n.is_sensitive).slice(0, 10);
+  const itemLines = visible.map((n, i) => {
+    const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
+    const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+    return `- ${text}（${amount}，${formatShanghai(n.created_at).slice(0, 10)}）[${i + 1}]`;
+  });
+  const sensitiveCnt = finance.filter((n) => n.is_sensitive).length;
+  let md = `按关键词「${kw}」精确匹配（标题/正文/标签），${scope}共 ${expenseCount} 笔支出${incomeCount > 0 ? `、${incomeCount} 笔收入` : ""}：\n${totalLines.join("\n")}`;
+  if (itemLines.length > 0) md += `\n\n逐笔明细${finance.length > visible.length ? `（共 ${finance.length} 笔，仅展示前 ${visible.length} 笔）` : ""}：\n${itemLines.join("\n")}`;
+  if (sensitiveCnt > 0) md += `\n（含 ${sensitiveCnt} 笔加密的敏感记录，金额已计入合计，内容不在问答中展示。）`;
+  if (unknown > 0) md += `\n（另有 ${unknown} 笔未识别出金额，未计入合计。）`;
+  md += `\n\n以上为数据库精确统计（关键词匹配口径，金额口径与周报/月报一致，不含已删除笔记）。如果你的记录用了别的说法，换个关键词再问试试。`;
+  return md;
+}
+
 // ---- 极值/排序类统计（R126 P1-3）----
 // 「最早一条笔记是什么时候记的」类问题是一条 min/max/order-by SQL 就能精确
 // 回答的，绝不能交给 LLM 对 top-k 召回猜答（R125 Q3 非确定性错答）。
@@ -725,6 +888,18 @@ export function sensitiveHintLine(count: number, terms: string[]): string {
   const kw = terms.filter((t) => t.length <= 20).slice(0, 2).join(" ");
   const where = kw ? `搜索「${kw}」` : "搜索相关关键词";
   return `\n\n另有 ${count} 条加密的敏感笔记可能相关（内容不会进入问答），可到时间流${where}后点击解锁查看。`;
+}
+
+/**
+ * 凭据类问法（密码/私钥/助记词等）。R147 P2-1：这类问题按关键词匹配不到
+ * 敏感笔记元数据时（敏感笔记正文加密、常无标题），拒答分支既无敏感提示
+ * 又引无关笔记——同一意图两种体验。识别出凭据意图后统一给敏感指引。
+ */
+export const CREDENTIAL_Q_RE = /密码|口令|私钥|助记词|恢复码|密钥|passwords?|passphrase|secret key|pin\s?码/i;
+
+/** 凭据类问法的兜底指引（不含计数：关键词没匹配上，计数会误导）。 */
+export function credentialHintLine(): string {
+  return "\n\n提示：账号密码这类信息如果记成了加密的敏感笔记，内容不会进入问答；可到时间流搜索相关关键词后点击解锁查看。";
 }
 
 /**
