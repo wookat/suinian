@@ -57,7 +57,7 @@ import { detectPushSupport, currentSubscription, enablePush, disablePush } from 
 import { RecoveryCodeCard } from "@/pages/auth"
 import type { TagCount } from "@/lib/types"
 import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
-import { loadTheme, setTheme, type ThemeMode } from "@/lib/theme"
+import { loadFontSize, loadTheme, setFontSize, setTheme, type FontSize, type ThemeMode } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
 const IMPORT_SOURCES: { value: ImportSource; label: string; hint: string; accept: string }[] = [
@@ -88,10 +88,19 @@ const THEME_OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "跟随系统", icon: Monitor },
 ]
 
+const FONT_SIZE_OPTIONS: { value: FontSize; label: string }[] = [
+  { value: "small", label: "小" },
+  { value: "normal", label: "标准" },
+  { value: "large", label: "大" },
+  { value: "xlarge", label: "特大" },
+]
+
 type SwStatus = {
   supported: boolean
   registered: boolean
   active: boolean
+  installing: boolean
+  waiting: boolean
   controlling: boolean
   offlineReady: boolean
 }
@@ -103,7 +112,7 @@ function useSwStatus(): SwStatus | null {
     async function check() {
       if (!("serviceWorker" in navigator)) {
         if (!cancelled)
-          setStatus({ supported: false, registered: false, active: false, controlling: false, offlineReady: false })
+          setStatus({ supported: false, registered: false, active: false, installing: false, waiting: false, controlling: false, offlineReady: false })
         return
       }
       try {
@@ -118,12 +127,14 @@ function useSwStatus(): SwStatus | null {
             supported: true,
             registered: !!reg,
             active: !!reg?.active,
+            installing: !!reg?.installing,
+            waiting: !!reg?.waiting,
             controlling: !!navigator.serviceWorker.controller,
             offlineReady,
           })
       } catch {
         if (!cancelled)
-          setStatus({ supported: true, registered: false, active: false, controlling: false, offlineReady: false })
+          setStatus({ supported: true, registered: false, active: false, installing: false, waiting: false, controlling: false, offlineReady: false })
       }
     }
     void check()
@@ -138,15 +149,31 @@ function useSwStatus(): SwStatus | null {
 
 function SwStatusCard() {
   const status = useSwStatus()
+  const [retrying, setRetrying] = useState(false)
   if (!status) return null
   const ok = status.active && status.offlineReady
+  // 安装失败终态（R178 P1-1）：已注册但既无 active 也无 installing —— 新 SW
+  // 安装失败后变 redundant，以前会永远显示「安装中」，无失败可见性也无出路
+  const failed = status.registered && !status.active && !status.installing
   const text = !status.supported
     ? "当前浏览器不支持离线缓存（Service Worker）"
     : ok
-      ? `离线可用：页面已缓存，断网也能打开${status.controlling ? "" : "（刷新后接管本页）"}`
-      : status.registered
-        ? "离线缓存正在安装中，稍后刷新可生效"
-        : "离线缓存未注册，刷新页面重试"
+      ? `离线可用：页面已缓存，断网也能打开${status.controlling ? "" : "（刷新后接管本页）"}${status.waiting ? "；新版本已就绪，刷新页面完成更新" : ""}`
+      : failed
+        ? "离线缓存安装失败（可能是网络问题），可点击重试"
+        : status.registered
+          ? "离线缓存正在安装中，稍后刷新可生效"
+          : "离线缓存未注册，刷新页面重试"
+  const retry = async () => {
+    setRetrying(true)
+    try {
+      const reg = await navigator.serviceWorker.getRegistration()
+      if (reg && !reg.active) await reg.unregister()
+      window.location.reload()
+    } catch {
+      setRetrying(false)
+    }
+  }
   return (
     <Card className="p-4">
       <h2 className="text-sm font-medium">离线与更新（PWA）</h2>
@@ -159,6 +186,11 @@ function SwStatusCard() {
         {ok ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
         {text}
       </p>
+      {failed && (
+        <Button size="sm" variant="outline" className="mt-2" disabled={retrying} onClick={() => void retry()}>
+          {retrying ? "重试中…" : "重试安装离线缓存"}
+        </Button>
+      )}
       <p className="mt-1 text-xs text-muted-foreground">
         有新版本时页面会弹出「点击刷新」提示；离线时可浏览已缓存的笔记/线索/周报
       </p>
@@ -696,6 +728,7 @@ export function SettingsPage() {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null)
   const [theme, setThemeState] = useState<ThemeMode>(loadTheme)
+  const [fontSize, setFontSizeState] = useState<FontSize>(loadFontSize)
   const [copied, setCopied] = useState(false)
   const [curlCopied, setCurlCopied] = useState(false)
   const [rotating, setRotating] = useState(false)
@@ -1540,6 +1573,24 @@ export function SettingsPage() {
               </button>
             )
           })}
+        </div>
+        <p className="mt-3 text-xs text-muted-foreground">字号</p>
+        <div className="mt-1 flex gap-1 rounded-lg bg-secondary p-1">
+          {FONT_SIZE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => {
+                setFontSize(opt.value)
+                setFontSizeState(opt.value)
+              }}
+              className={cn(
+                "flex flex-1 items-center justify-center whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium transition-colors sm:px-3",
+                fontSize === opt.value ? "bg-card shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
       </Card>
 

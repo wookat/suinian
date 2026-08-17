@@ -29,7 +29,29 @@ export function setTheme(mode: ThemeMode) {
 
 export function initTheme() {
   applyTheme()
+  applyFontSize()
   media.addEventListener("change", () => {
     if (loadTheme() === "system") applyTheme()
   })
+}
+
+// ---- 四档字号（R177 P2-3）----
+
+export type FontSize = "small" | "normal" | "large" | "xlarge"
+
+const FONT_KEY = "suinian.fontsize"
+const FONT_PX: Record<FontSize, string> = { small: "14px", normal: "16px", large: "18px", xlarge: "20px" }
+
+export function loadFontSize(): FontSize {
+  const v = localStorage.getItem(FONT_KEY)
+  return v === "small" || v === "large" || v === "xlarge" ? v : "normal"
+}
+
+export function applyFontSize(size: FontSize = loadFontSize()) {
+  document.documentElement.style.fontSize = size === "normal" ? "" : FONT_PX[size]
+}
+
+export function setFontSize(size: FontSize) {
+  localStorage.setItem(FONT_KEY, size)
+  applyFontSize(size)
 }

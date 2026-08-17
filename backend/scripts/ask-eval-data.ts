@@ -623,4 +623,27 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAll: ["nz20"],
     expectAnswerContains: ["549", "数据库精确查询"],
   },
+
+  // —— R178（R177 P1-3）：无财务词的自然措辞主题极值也必须进确定性路径 ——
+  // 「键盘里最便宜的是哪一把」曾 3/3 走 LLM 兜底答错数字（599 vs 458）；
+  // 「最贵/最便宜」本身即价格语义，最贵/最便宜对称收口。
+  {
+    id: "q111",
+    category: "财务极值",
+    question: "键盘里最便宜的是哪一把",
+    expectAll: ["exp1"],
+    forbid: ["nz20"],
+    expectAnswerContains: ["399", "数据库精确查询", "键盘"],
+    forbidAnswerContains: ["549"],
+  },
+  {
+    id: "q112",
+    category: "财务极值",
+    question: "键盘里最贵的是哪一把",
+    expectAll: ["exp1"],
+    forbid: ["nz20"],
+    expectAnswerContains: ["399", "数据库精确查询", "键盘"],
+    forbidAnswerContains: ["549"],
+    holdout: true,
+  },
 ];

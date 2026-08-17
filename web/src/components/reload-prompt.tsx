@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 // 都见不到更新提示：定期 + 回到前台时主动 update()，让 needRefresh 能
 // 在长会话里触发。仍保留手动"刷新"确认，避免自动 reload 丢用户未保存输入。
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
+const INSTALL_RETRY_DELAY_MS = 45 * 1000
 
 export function ReloadPrompt() {
   const {
@@ -21,6 +22,12 @@ export function ReloadPrompt() {
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") check()
       })
+      // 安装失败自愈（R178 P1-1）：install 阶段预缓存拉取失败会让新 SW 变
+      // redundant，注册长期停在无 active 状态、离线彻底不可用。注册后延时
+      // 复查一次：既无 active 也无 installing 即视为安装失败，update() 重试
+      setTimeout(() => {
+        if (navigator.onLine && !r.active && !r.installing) void r.update().catch(() => {})
+      }, INSTALL_RETRY_DELAY_MS)
     },
   })
 

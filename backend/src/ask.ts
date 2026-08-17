@@ -392,7 +392,11 @@ export const ASK_META_QUESTION_RE = /在想什么|在想些什么|想了?些?什
 export function financeExtremeIntent(question: string): FinanceExtremeQuery | null {
   // 「多少钱/花费/费用」不在 FINANCE_WORD_RE 里，但配上极值措辞（最贵/最便宜）
   // 已是明确的财务极值问法（R175 P2-2：「打车里最贵的一次是多少钱」漏判走 LLM）
-  if (!FINANCE_WORD_RE.test(question) && !/买|多少钱|花费|费用/.test(question)) return null;
+  // 「最贵/最便宜」本身就是价格比较语义（R178 P1-3：「键盘里最便宜的是哪一把」
+  // 无任何财务词，漏判走 LLM 答错 599 vs 458）——价格固有的极值措辞单独成立；
+  // 「最高/最低/最大/最小」仍歧义（最高的山），必须配财务词才收口。
+  const priceInherent = /最贵|最便宜|花得?最[多少]|花钱最[狠多猛]|金额最[大高小低]|数额最[大小]/.test(question);
+  if (!priceInherent && !FINANCE_WORD_RE.test(question) && !/买|多少钱|花费|费用/.test(question)) return null;
   const direction: "expense" | "income" = /收入|进账|入账|赚|挣/.test(question) ? "income" : "expense";
   if (/最贵|最高|最大的?一?[笔项]|金额最[大高]|花得?最多|花钱最[狠多猛]|最狠的?一[笔次]|数额最大/.test(question)) return { kind: "max", direction };
   if (/最便宜|最低|最小的?一?[笔项]|金额最[小低]|花得?最少|数额最小/.test(question)) return { kind: "min", direction };
@@ -621,7 +625,7 @@ export type FinanceListDirection = "expense" | "income" | "both";
 
 const FINANCE_LIST_CUES: [RegExp, FinanceListDirection][] = [
   // 收入/收支线索先判（「赚了哪些钱」不能被支出侧的裸「哪些钱」抢先）
-  [/(?:收入|进账|入账)(?:记录|明细|情况)?(?:都)?有哪些|有(?:过)?(?:哪些|些什么|什么)(?:收入|进账|入账)|(?:收入|进账)明细|[赚挣](?:了|到|过)?(?:哪些|些什么|什么)钱/, "income"],
+  [/(?:收入|进账|入账)(?:记录|明细|情况)?(?:都)?有哪些|有(?:过)?(?:哪些|些什么|什么)(?:收入|进账|入账)|(?:收入|进账)明细|[赚挣](?:了|到|过)?(?:哪些|些什么|什么)钱|记[了过]?(?:哪些|些什么|什么)(?:收入|进账|入账)/, "income"],
   [/记[了过]?(?:哪些|些什么|什么)账|账单(?:明细)?(?:都)?有哪些|收支明细/, "both"],
   // 「花了哪些钱/花了些什么钱」「哪些钱」「钱都花在哪了」
   [/花了?(?:哪些|些什么|什么)钱|哪些钱|钱(?:都)?(?:花|用)(?:在|到)了?(?:哪|什么)/, "expense"],
