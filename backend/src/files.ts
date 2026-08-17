@@ -4,7 +4,7 @@ import { sanitizeTags } from "./triage";
 import type { Env } from "./types";
 import { withTimeout } from "./media";
 
-export type FileKind = "pdf" | "txt" | "md" | "docx";
+export type FileKind = "pdf" | "txt" | "md" | "docx" | "csv" | "xlsx";
 
 /** 提取文本入 content 的直存上限；超过则先 AI 摘要，全文摘录进 meta */
 export const FILE_DIRECT_CHARS = 600;
@@ -22,6 +22,9 @@ const EXT_KIND: Record<string, FileKind> = {
   md: "md",
   markdown: "md",
   docx: "docx",
+  csv: "csv",
+  tsv: "csv",
+  xlsx: "xlsx",
 };
 
 const MIME_KIND: Record<string, FileKind> = {
@@ -29,6 +32,9 @@ const MIME_KIND: Record<string, FileKind> = {
   "text/plain": "txt",
   "text/markdown": "md",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "text/csv": "csv",
+  "text/tab-separated-values": "csv",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
 };
 
 /** 根据文件名扩展名 + mime 判定支持的文件类型；不支持返回 null */
@@ -74,6 +80,62 @@ export function extractDocxText(bytes: Uint8Array): string | null {
   }
 }
 
+/** xlsx（OOXML zip）→ 纯文本：解包 sharedStrings + 各 sheet，按行取单元格值 */
+export function extractXlsxText(bytes: Uint8Array): string | null {
+  try {
+    const files = unzipSync(bytes);
+    const dec = new TextDecoder("utf-8");
+    const shared: string[] = [];
+    const ss = files["xl/sharedStrings.xml"];
+    if (ss) {
+      const xml = dec.decode(ss);
+      for (const m of xml.matchAll(/<si(?:\s[^>]*)?>([\s\S]*?)<\/si>/g)) {
+        const texts = Array.from(m[1].matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)).map((t) =>
+          decodeXmlEntities(t[1])
+        );
+        shared.push(texts.join(""));
+      }
+    }
+    const lines: string[] = [];
+    const sheetNames = Object.keys(files)
+      .filter((k) => /^xl\/worksheets\/sheet\d+\.xml$/.test(k))
+      .sort();
+    for (const name of sheetNames) {
+      const xml = dec.decode(files[name]);
+      for (const row of xml.split(/<\/row>/)) {
+        const cells: string[] = [];
+        for (const c of row.matchAll(/<c(\s[^>]*)?>([\s\S]*?)<\/c>/g)) {
+          const attrs = c[1] ?? "";
+          const inner = c[2];
+          const t = attrs.match(/\st="([^"]+)"/)?.[1];
+          if (t === "inlineStr") {
+            const texts = Array.from(inner.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)).map((m) =>
+              decodeXmlEntities(m[1])
+            );
+            cells.push(texts.join(""));
+            continue;
+          }
+          const v = inner.match(/<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/)?.[1];
+          if (v === undefined) continue;
+          if (t === "s") {
+            const idx = parseInt(v, 10);
+            cells.push(Number.isFinite(idx) && shared[idx] !== undefined ? shared[idx] : "");
+          } else {
+            cells.push(decodeXmlEntities(v));
+          }
+        }
+        const line = cells.join("\t").trim();
+        if (line) lines.push(line);
+      }
+    }
+    const text = lines.join("\n").trim();
+    return text || null;
+  } catch (err) {
+    console.error("extractXlsxText: failed", err);
+    return null;
+  }
+}
+
 /** PDF → 纯文本（unpdf / PDF.js serverless build）；失败返回 null */
 export async function extractPdfText(bytes: Uint8Array): Promise<string | null> {
   try {
@@ -90,11 +152,12 @@ export async function extractPdfText(bytes: Uint8Array): Promise<string | null> 
 
 /** 按类型提取文件文本；失败/无文本返回 null（原件仍存档） */
 export async function extractFileText(kind: FileKind, bytes: Uint8Array): Promise<string | null> {
-  if (kind === "txt" || kind === "md") {
+  if (kind === "txt" || kind === "md" || kind === "csv") {
     const text = new TextDecoder("utf-8").decode(bytes).trim();
     return text || null;
   }
   if (kind === "docx") return extractDocxText(bytes);
+  if (kind === "xlsx") return extractXlsxText(bytes);
   return extractPdfText(bytes);
 }
 

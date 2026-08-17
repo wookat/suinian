@@ -135,6 +135,8 @@ export function AuthPage() {
     window.location.hash.includes("mode=login") ? "login" : "register",
   )
   const [apiBaseUrl, setApiBaseUrl] = useState(defaultApiBase)
+  // 默认折叠 API 地址（自部署才需要改）；推不出默认值时必须展开让用户填
+  const [showApiBase, setShowApiBase] = useState(() => !defaultApiBase())
   const [name, setName] = useState("")
   const [password, setPassword] = useState("")
   const [password2, setPassword2] = useState("")
@@ -272,39 +274,48 @@ export function AuthPage() {
                   setMismatch(false)
                 }}
                 className={cn(
-                  "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  "flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-1.5 py-1.5 text-sm font-medium transition-colors sm:px-3",
                   mode === opt.value
                     ? "bg-card shadow-sm"
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                <Icon className="size-3.5" />
-                {opt.label}
+                <Icon className="size-3.5 shrink-0" />
+                <span className="truncate">{opt.label}</span>
               </button>
             )
           })}
         </div>
 
-        <div className="space-y-1.5">
-          <label htmlFor="auth-base" className="text-sm font-medium">
-            API 地址
-          </label>
-          <Input
-            id="auth-base"
-            type="text"
-            inputMode="url"
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            placeholder="https://suinian-api.example.workers.dev"
-            value={apiBaseUrl}
-            onChange={(e) => setApiBaseUrl(e.target.value)}
-          />
-          <p className="text-xs text-muted-foreground">
-            官方托管版或你自部署的 worker 地址
-          </p>
-        </div>
+        {showApiBase ? (
+          <div className="space-y-1.5">
+            <label htmlFor="auth-base" className="text-sm font-medium">
+              API 地址
+            </label>
+            <Input
+              id="auth-base"
+              type="text"
+              inputMode="url"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="https://suinian-api.example.workers.dev"
+              value={apiBaseUrl}
+              onChange={(e) => setApiBaseUrl(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              官方托管版或你自部署的 worker 地址
+            </p>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowApiBase(true)}
+            className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+          >
+            高级：修改 API 地址（自部署用，当前：{apiBaseUrl}）
+          </button>
+        )}
 
         <div className="space-y-1.5">
           <label htmlFor="auth-name" className="text-sm font-medium">
