@@ -1228,7 +1228,7 @@ export function TimelinePage() {
                     threadTitle={n.thread_id ? threadTitles.get(n.thread_id) : undefined}
                     onAskQuestion={(q) => {
                       setAskMode(true)
-                      setAskPrefill(q)
+                      setAskInputPrefill(q)
                       window.scrollTo({ top: 0, behavior: "smooth" })
                     }}
                   />
