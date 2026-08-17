@@ -189,7 +189,7 @@ data class Report(
 )
 
 @Serializable
-data class ReportDetail(val report: Report)
+data class ReportDetail(val report: Report? = null, val message: String? = null)
 
 /** POST /api/ask 响应：references 元素为 {index, note_id} */
 @Serializable

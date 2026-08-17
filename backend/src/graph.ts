@@ -1,7 +1,6 @@
 import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
-import { embedText, semanticRecall } from "./semantic";
-import { cosineSim } from "./threads";
+import { embedText, semanticRecall, cosineSim } from "./semantic";
 
 /** Cosine similarity between entity-name embeddings above which two names are the same entity. */
 const ENTITY_MERGE_SIM = 0.92;
@@ -287,14 +286,31 @@ export async function deleteNoteGraph(env: Env, noteId: string): Promise<void> {
     for (const e of results ?? []) {
       await refreshEntityNoteCount(env, e.id);
     }
-    // drop orphan entities (no mentions left) and their remaining edges
-    await env.DB.prepare(
-      "DELETE FROM edges WHERE (src_type = 'entity' AND src_id IN (SELECT id FROM entities WHERE note_count = 0)) OR (dst_type = 'entity' AND dst_id IN (SELECT id FROM entities WHERE note_count = 0))"
-    ).run();
-    await env.DB.prepare("DELETE FROM entities WHERE note_count = 0").run();
+    await dropOrphanEntities(env, (results ?? []).map((e) => e.id));
   } catch (err) {
     console.error(`graph: delete failed for note=${noteId}`, err);
   }
+}
+
+/**
+ * Drop entities left with no mentions, and their remaining edges — but only
+ * among the entities this deletion actually touched. A global
+ * `DELETE … WHERE note_count = 0` (pre-R162) raced concurrent extraction:
+ * a freshly-inserted entity of ANY user still sits at note_count = 0 until
+ * its mention edge lands, so an unrelated delete could reap it and leave the
+ * incoming edges dangling (audit-r161 P2-2). Scoping to the touched ids also
+ * removes the cross-user blast radius; the delete stays conditional on
+ * note_count = 0 so an entity re-mentioned in between survives.
+ */
+async function dropOrphanEntities(env: Env, entityIds: string[]): Promise<void> {
+  if (entityIds.length === 0) return;
+  const ph = entityIds.map(() => "?").join(",");
+  await env.DB.batch([
+    env.DB.prepare(
+      `DELETE FROM edges WHERE (src_type = 'entity' AND src_id IN (SELECT id FROM entities WHERE id IN (${ph}) AND note_count = 0)) OR (dst_type = 'entity' AND dst_id IN (SELECT id FROM entities WHERE id IN (${ph}) AND note_count = 0))`
+    ).bind(...entityIds, ...entityIds),
+    env.DB.prepare(`DELETE FROM entities WHERE id IN (${ph}) AND note_count = 0`).bind(...entityIds),
+  ]);
 }
 
 /**
@@ -315,11 +331,7 @@ export async function deleteNotesGraph(env: Env, noteIds: string[]): Promise<voi
     for (const e of results ?? []) {
       await refreshEntityNoteCount(env, e.id);
     }
-    // drop orphan entities (no mentions left) and their remaining edges
-    await env.DB.prepare(
-      "DELETE FROM edges WHERE (src_type = 'entity' AND src_id IN (SELECT id FROM entities WHERE note_count = 0)) OR (dst_type = 'entity' AND dst_id IN (SELECT id FROM entities WHERE note_count = 0))"
-    ).run();
-    await env.DB.prepare("DELETE FROM entities WHERE note_count = 0").run();
+    await dropOrphanEntities(env, (results ?? []).map((e) => e.id));
   } catch (err) {
     console.error(`graph: batch delete failed (${noteIds.length} notes)`, err);
   }

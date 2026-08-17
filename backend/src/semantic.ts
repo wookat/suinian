@@ -1,6 +1,5 @@
 import type { Env, NoteRow } from "./types";
 import { withTimeout } from "./ai";
-import { cosineSim } from "./threads";
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
 
@@ -34,6 +33,20 @@ const EMBED_TIMEOUT_MS = 8_000;
 // batch embedding runs in background pipelines (retriage, migration), where a
 // longer window beats losing the whole batch to a cold start
 const EMBED_BATCH_TIMEOUT_MS = 30_000;
+
+export function cosineSim(a: number[], b: number[]): number {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
 
 export async function embedText(env: Env, text: string, timeoutMs = EMBED_TIMEOUT_MS): Promise<number[] | null> {
   if (!env.AI) return null;
@@ -75,14 +88,74 @@ export function noteEmbedText(n: Pick<NoteRow, "title" | "content" | "url_title"
  */
 export async function upsertNoteEmbedding(env: Env, note: NoteRow): Promise<void> {
   try {
-    const embedTextValue = noteEmbedText(note);
-    if (note.is_sensitive || !hasSemanticSignal(embedTextValue)) {
+    if (note.is_sensitive) {
       await deleteNoteEmbedding(env, note.id);
       return;
     }
+    // refresh: the note's text may have changed, a stored vector is stale
+    await ensureNoteEmbedding(env, note, { refresh: true });
+  } catch (err) {
+    console.error(`semantic: upsert embedding failed for note=${note.id}`, err);
+  }
+}
+
+/** Fields a note-embedding write needs; satisfied by NoteRow. */
+export type EmbeddableNote = Pick<
+  NoteRow,
+  "id" | "user_id" | "is_sensitive" | "title" | "content" | "url_title" | "url_summary"
+>;
+
+/**
+ * THE single write entry to the vector store (note_embeddings + Vectorize
+ * mirror). Every pipeline that needs a note's vector — search/ask upsert,
+ * thread clustering, duplicate-thread merging, cron backfill — must go
+ * through here (or the batch backfill in this module) so the zero-signal
+ * gate can never be bypassed again (R162 P1-1: threads.ts had its own
+ * saveEmbedding and resurrected purged emoji vectors). Guarded by a unit
+ * test that rejects note_embeddings INSERTs outside this module.
+ *
+ * Sensitive notes get no vector. Zero-signal notes get the '[]' sentinel row
+ * (so backfill/clustering never re-embed them) and no Vectorize entry.
+ * Otherwise returns the stored vector, embedding and persisting it first
+ * when missing (or always, with `refresh`). Never throws.
+ */
+export async function ensureNoteEmbedding(
+  env: Env,
+  note: EmbeddableNote,
+  opts?: { refresh?: boolean }
+): Promise<number[] | null> {
+  try {
+    if (note.is_sensitive) return null;
+    const text = noteEmbedText(note);
+    if (!hasSemanticSignal(text)) {
+      await env.DB.prepare("INSERT OR REPLACE INTO note_embeddings (note_id, vector) VALUES (?, '[]')")
+        .bind(note.id)
+        .run();
+      if (env.VECTORIZE) {
+        await env.VECTORIZE.deleteByIds([note.id]).catch((err) =>
+          console.error(`semantic: vectorize delete failed for note=${note.id}`, err)
+        );
+      }
+      return null;
+    }
+    if (!opts?.refresh) {
+      const row = await env.DB.prepare("SELECT vector FROM note_embeddings WHERE note_id = ?")
+        .bind(note.id)
+        .first<{ vector: string }>();
+      if (row?.vector) {
+        try {
+          const v = JSON.parse(row.vector) as number[];
+          // '[]' sentinel with signal present means the note was edited from
+          // zero-signal to real text: fall through and re-embed
+          if (Array.isArray(v) && v.length > 0) return v;
+        } catch {
+          /* corrupt row: re-embed below */
+        }
+      }
+    }
     // background pipeline: allow a longer window than interactive queries
-    const vector = await embedText(env, embedTextValue, 30_000);
-    if (!vector) return;
+    const vector = await embedText(env, text, 30_000);
+    if (!vector) return null;
     await env.DB.prepare("INSERT OR REPLACE INTO note_embeddings (note_id, vector) VALUES (?, ?)")
       .bind(note.id, JSON.stringify(vector))
       .run();
@@ -91,8 +164,10 @@ export async function upsertNoteEmbedding(env: Env, note: NoteRow): Promise<void
         { id: note.id, values: vector, metadata: { user_id: note.user_id } },
       ]);
     }
+    return vector;
   } catch (err) {
-    console.error(`semantic: upsert embedding failed for note=${note.id}`, err);
+    console.error(`semantic: ensure embedding failed for note=${note.id}`, err);
+    return null;
   }
 }
 

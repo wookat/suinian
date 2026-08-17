@@ -1,6 +1,11 @@
 import type { Env, NoteRow } from "./types";
-import { chatComplete, withTimeout } from "./ai";
+import { chatComplete } from "./ai";
 import { findGraphThreadMate } from "./graph";
+import { ensureNoteEmbedding, cosineSim, hasSemanticSignal, noteEmbedText } from "./semantic";
+
+// re-export for existing consumers (graph.ts, tests); the implementation
+// lives in semantic.ts next to the vector-store write path
+export { cosineSim };
 
 /** bge-m3 cosine similarity above which two ideas join the same thread directly. */
 const SIM_JOIN = 0.76;
@@ -15,10 +20,6 @@ const SIM_JOIN = 0.76;
 const SIM_CONFIRM_FLOOR = 0.62;
 /** Categories that participate in thread clustering: thoughts and the articles they react to. */
 export const THREAD_CATEGORIES = "('idea','collect')";
-const EMBED_MODEL = "@cf/baai/bge-m3";
-// clustering runs in background slices; a hung cold start must fail the one
-// note, not the whole slice (see thread-jobs.ts checkpointing)
-const EMBED_TIMEOUT_MS = 15_000;
 
 const CJK = "\\u4e00-\\u9fff\\u3400-\\u4dbf";
 const CJK_BEFORE_LATIN = new RegExp(`([${CJK}])([A-Za-z0-9])`, "g");
@@ -31,66 +32,6 @@ const LATIN_BEFORE_CJK = new RegExp(`([A-Za-z0-9%])([${CJK}])`, "g");
  */
 export function spacifyCjk(s: string): string {
   return s.replace(CJK_BEFORE_LATIN, "$1 $2").replace(LATIN_BEFORE_CJK, "$1 $2");
-}
-
-/** Same field mix as semantic.noteEmbedText, local to avoid an import cycle. */
-function embedInput(n: Pick<NoteRow, "title" | "content" | "url_title" | "url_summary">): string {
-  return [n.title, n.content, n.url_title, n.url_summary].filter(Boolean).join("\n");
-}
-
-export function cosineSim(a: number[], b: number[]): number {
-  let dot = 0;
-  let na = 0;
-  let nb = 0;
-  const len = Math.min(a.length, b.length);
-  for (let i = 0; i < len; i++) {
-    dot += a[i] * b[i];
-    na += a[i] * a[i];
-    nb += b[i] * b[i];
-  }
-  if (na === 0 || nb === 0) return 0;
-  return dot / (Math.sqrt(na) * Math.sqrt(nb));
-}
-
-async function embed(env: Env, text: string): Promise<number[] | null> {
-  if (!env.AI) return null;
-  try {
-    const res = (await withTimeout(
-      env.AI.run(EMBED_MODEL, { text: [text.slice(0, 1000)] }) as Promise<{ data?: number[][] }>,
-      EMBED_TIMEOUT_MS,
-      "threads embed"
-    )) as { data?: number[][] };
-    const v = res?.data?.[0];
-    if (!Array.isArray(v) || v.length === 0) {
-      console.error("threads: embed returned no vector", JSON.stringify(res).slice(0, 200));
-      return null;
-    }
-    return v;
-  } catch (err) {
-    console.error("threads: embed failed", err);
-    return null;
-  }
-}
-
-async function loadStoredEmbedding(env: Env, noteId: string): Promise<number[] | null> {
-  const row = await env.DB.prepare("SELECT vector FROM note_embeddings WHERE note_id = ?")
-    .bind(noteId)
-    .first<{ vector: string }>();
-  if (!row?.vector) return null;
-  try {
-    const v = JSON.parse(row.vector) as number[];
-    return Array.isArray(v) && v.length > 0 ? v : null;
-  } catch {
-    return null;
-  }
-}
-
-async function saveEmbedding(env: Env, noteId: string, vector: number[]): Promise<void> {
-  await env.DB.prepare(
-    "INSERT OR REPLACE INTO note_embeddings (note_id, vector) VALUES (?, ?)"
-  )
-    .bind(noteId, JSON.stringify(vector))
-    .run();
 }
 
 async function newThread(env: Env, userId: string, title: string): Promise<string> {
@@ -268,10 +209,7 @@ export async function clusterNote(
       if (mate) {
         console.log(`threads: graph mate note=${note.id} mate=${mate.note_id} shared=${mate.shared}`);
         // still store the embedding so search/ask recall keeps working
-        if (!(await loadStoredEmbedding(env, note.id))) {
-          const v = await embed(env, embedInput(note));
-          if (v) await saveEmbedding(env, note.id, v);
-        }
+        await ensureNoteEmbedding(env, note);
         let threadId = mate.thread_id;
         if (!threadId) {
           const m = await env.DB.prepare("SELECT title, content FROM notes WHERE id = ?")
@@ -285,18 +223,16 @@ export async function clusterNote(
         return threadId;
       }
     }
-    // sensitive notes never enter the vector store (content is encrypted at rest)
-    let vector = note.is_sensitive ? null : await loadStoredEmbedding(env, note.id);
-    if (!note.is_sensitive && !vector) {
-      vector = await embed(env, embedInput(note));
-      if (vector) await saveEmbedding(env, note.id, vector);
-    }
+    // sensitive/zero-signal notes never enter the vector store; the shared
+    // gate in ensureNoteEmbedding decides (R162 P1-1: this used to be an
+    // independent embed+save path that resurrected purged emoji vectors)
+    const vector = await ensureNoteEmbedding(env, note);
     if (vector) {
-      type Candidate = { id: string; thread_id: string | null; category: string; title: string | null; content: string; url_title: string | null; url_summary: string | null; vector: string | null };
+      type Candidate = { id: string; thread_id: string | null; category: string; title: string | null; content: string; url_title: string | null; url_summary: string | null; is_sensitive: number; vector: string | null };
       // recent ideas/collects (any age cap removed) + one representative note
       // per existing thread, so historical threads stay joinable beyond the window
       const { results } = await env.DB.prepare(
-        `SELECT n.id, n.thread_id, n.category, n.title, n.content, n.url_title, n.url_summary, e.vector FROM notes n
+        `SELECT n.id, n.thread_id, n.category, n.title, n.content, n.url_title, n.url_summary, n.is_sensitive, e.vector FROM notes n
          LEFT JOIN note_embeddings e ON e.note_id = n.id
          WHERE n.user_id = ? AND n.category IN ${THREAD_CATEGORIES} AND n.deleted_at IS NULL AND n.id != ?
          ORDER BY n.created_at DESC LIMIT 200`
@@ -306,7 +242,7 @@ export async function clusterNote(
       const candidates: Candidate[] = [...(results ?? [])];
       try {
         const { results: reps } = await env.DB.prepare(
-          `SELECT n.id, n.thread_id, n.category, n.title, n.content, n.url_title, n.url_summary, e.vector FROM notes n
+          `SELECT n.id, n.thread_id, n.category, n.title, n.content, n.url_title, n.url_summary, n.is_sensitive, e.vector FROM notes n
            LEFT JOIN note_embeddings e ON e.note_id = n.id
            WHERE n.id IN (
              SELECT (SELECT nn.id FROM notes nn WHERE nn.thread_id = t.id AND nn.deleted_at IS NULL
@@ -329,15 +265,17 @@ export async function clusterNote(
         let v: number[] | null = null;
         if (r.vector) {
           try {
-            v = JSON.parse(r.vector) as number[];
+            const p = JSON.parse(r.vector) as number[];
+            // '[]' sentinel = zero-signal note: not comparable, and must not
+            // fall into the backfill branch below
+            v = Array.isArray(p) && p.length > 0 ? p : null;
           } catch {
             v = null;
           }
         } else if (backfilled < 20) {
           // lazily embed older notes that predate the embeddings table
           backfilled++;
-          v = await embed(env, embedInput(r));
-          if (v) await saveEmbedding(env, r.id, v);
+          v = await ensureNoteEmbedding(env, { ...r, user_id: note.user_id });
         }
         if (!v) continue;
         const sim = cosineSim(vector, v);
@@ -386,6 +324,13 @@ export async function clusterNote(
       return null;
     }
     if (opts?.frugal || note.category === "collect") return null;
+    // zero-signal notes (pure emoji/symbol) must not cluster at all: the
+    // LLM-only fallbacks have no similarity floor and happily grouped emoji
+    // notes into an「情绪变化」thread (audit-r161 P1-1)
+    if (!note.is_sensitive && !hasSemanticSignal(noteEmbedText(note))) {
+      console.log(`threads: skip zero-signal note=${note.id}`);
+      return null;
+    }
     // no embedding available: DeepSeek-only fallback (existing threads, then cold-start pairing)
     console.log(`threads: no embedding for note=${note.id}, using deepseek fallback`);
     const picked = await pickThreadByDeepseek(env, note);
@@ -753,11 +698,10 @@ export async function mergeDuplicateThreads(
             v = null;
           }
         }
-        if (!v && row) {
+        if (!v && row?.vector !== "[]" && row) {
           // representative embedding not stored yet (concurrent-save window):
           // embed it now rather than silently skipping the thread
-          v = await embed(env, embedInput(row));
-          if (v) await saveEmbedding(env, row.id, v);
+          v = await ensureNoteEmbedding(env, { ...row, user_id: userId, is_sensitive: 0 });
         }
         reps.set(threadId, row ? { vector: v, text: row.title || row.content } : null);
       }
