@@ -75,6 +75,29 @@ export function hasSemanticSignal(text: string): boolean {
   return /[\p{L}\p{N}]/u.test(text);
 }
 
+/**
+ * The user-original text a note's semantic signal is judged from: the content
+ * the user wrote plus text derived from a user-supplied URL. The AI triage
+ * title is deliberately excluded — triage happily titles a pure-emoji note
+ * (「庆祝」), and judging the gate on title-included text lets the vector of a
+ * zero-signal note resurrect through its generated title (audit-r163 P1-1).
+ * Titles remain display-only and still enter the embedding text itself.
+ */
+export function noteSemanticSource(n: Pick<NoteRow, "content" | "url_title" | "url_summary">): string {
+  return [n.content, n.url_title, n.url_summary].filter(Boolean).join("\n");
+}
+
+/**
+ * THE single gate deciding whether a note may enter semantic pipelines
+ * (vector store, thread clustering, knowledge graph). Judged on the
+ * user-original text (noteSemanticSource), never on AI-generated titles.
+ */
+export function noteHasSemanticSignal(
+  n: Pick<NoteRow, "content" | "url_title" | "url_summary">
+): boolean {
+  return hasSemanticSignal(noteSemanticSource(n));
+}
+
 /** The text a note is embedded from: title + content + link metadata. */
 export function noteEmbedText(n: Pick<NoteRow, "title" | "content" | "url_title" | "url_summary">): string {
   return [n.title, n.content, n.url_title, n.url_summary].filter(Boolean).join("\n");
@@ -126,8 +149,7 @@ export async function ensureNoteEmbedding(
 ): Promise<number[] | null> {
   try {
     if (note.is_sensitive) return null;
-    const text = noteEmbedText(note);
-    if (!hasSemanticSignal(text)) {
+    if (!noteHasSemanticSignal(note)) {
       await env.DB.prepare("INSERT OR REPLACE INTO note_embeddings (note_id, vector) VALUES (?, '[]')")
         .bind(note.id)
         .run();
@@ -154,7 +176,7 @@ export async function ensureNoteEmbedding(
       }
     }
     // background pipeline: allow a longer window than interactive queries
-    const vector = await embedText(env, text, 30_000);
+    const vector = await embedText(env, noteEmbedText(note), 30_000);
     if (!vector) return null;
     await env.DB.prepare("INSERT OR REPLACE INTO note_embeddings (note_id, vector) VALUES (?, ?)")
       .bind(note.id, JSON.stringify(vector))
@@ -294,7 +316,7 @@ export async function purgeLowSignalEmbeddings(env: Env): Promise<number> {
       .bind(BATCH, offset)
       .all<Pick<NoteRow, "id" | "title" | "content" | "url_title" | "url_summary">>();
     const rows = results ?? [];
-    const bad = rows.filter((n) => !hasSemanticSignal(noteEmbedText(n)));
+    const bad = rows.filter((n) => !noteHasSemanticSignal(n));
     if (bad.length > 0) {
       const mark = env.DB.prepare("UPDATE note_embeddings SET vector = '[]' WHERE note_id = ?");
       for (const n of bad) await mark.bind(n.id).run();
@@ -358,12 +380,12 @@ export async function backfillEmbeddings(env: Env, limit = 20, timeBudgetMs = 0)
     // zero-signal notes must not enter the vector store, but they must not
     // stall the backfill loop either: give them a sentinel empty vector row
     // so the NOT EXISTS query stops re-selecting them
-    const noSignal = fetched.filter((n) => !hasSemanticSignal(noteEmbedText(n)));
+    const noSignal = fetched.filter((n) => !noteHasSemanticSignal(n));
     if (noSignal.length > 0) {
       const mark = env.DB.prepare("INSERT OR REPLACE INTO note_embeddings (note_id, vector) VALUES (?, '[]')");
       for (const n of noSignal) await mark.bind(n.id).run();
     }
-    const rows = fetched.filter((n) => hasSemanticSignal(noteEmbedText(n)));
+    const rows = fetched.filter((n) => noteHasSemanticSignal(n));
     if (rows.length === 0) {
       if (fetched.length < limit) break;
       continue;

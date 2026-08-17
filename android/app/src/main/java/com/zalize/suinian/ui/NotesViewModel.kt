@@ -557,8 +557,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 下载全量备份 zip 到系统下载目录，返回文件名。includeSensitive=true 时敏感笔记含明文 */
-    suspend fun downloadBackupToDownloads(includeSensitive: Boolean = false): String {
-        val (bytes, fileName) = repo.downloadBackup(includeSensitive)
+    suspend fun downloadBackupToDownloads(includeSensitive: Boolean = false, password: String? = null): String {
+        val (bytes, fileName) = repo.downloadBackup(includeSensitive, password)
         saveToDownloads(fileName, "application/zip", bytes)
         return fileName
     }

@@ -93,6 +93,25 @@ async function apiFetch(path: string, init: RequestInit): Promise<Response> {
   return res;
 }
 
+/**
+ * 同页重复剪藏检测（R164 P2）：同 URL + 内容完全一致的未删除扩展笔记视为
+ * 重复（与 import_fp「内容指纹」思路一致，这里两边都有明文故直接精确比对，
+ * 不必新增指纹字段）。查询失败时返回 null——去重是尽力而为，绝不阻断保存。
+ */
+export async function findDuplicateNote(url: string, content: string): Promise<{ id: string } | null> {
+  try {
+    const res = await apiFetch(
+      `/api/notes?url=${encodeURIComponent(url)}&source=extension&limit=20`,
+      { method: "GET" }
+    );
+    const data = (await res.json()) as { notes?: { id: string; content: string }[] };
+    const hit = (data.notes ?? []).find((n) => n.content === content);
+    return hit ? { id: hit.id } : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function saveNote(payload: SaveNotePayload): Promise<{ id: string }> {
   const res = await apiFetch("/api/notes", {
     method: "POST",

@@ -545,11 +545,17 @@ class ApiClient(private val baseUrl: String, private val token: String) {
     }
 
     /** GET /api/backup：全量备份 zip（笔记全字段 + 线索/周报 + 媒体原件），返回字节与文件名。敏感笔记默认脱敏，includeSensitive=true 时含明文 */
-    suspend fun downloadBackup(includeSensitive: Boolean = false): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
+    suspend fun downloadBackup(includeSensitive: Boolean = false, password: String? = null): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
         val client120 = client.newBuilder().readTimeout(120, TimeUnit.SECONDS).build()
         val path = if (includeSensitive) "/api/backup?include_sensitive=true" else "/api/backup"
+        val builder = request(path).get()
+        // 敏感明文导出需密码复核；URLEncoder 编码以通过 HTTP 头 ASCII 限制（服务端解码）
+        if (includeSensitive && !password.isNullOrEmpty()) {
+            // URLEncoder 把空格编成 +，而服务端 decodeURIComponent 不还原 +，改用 %20
+            builder.header("X-Suinian-Password", java.net.URLEncoder.encode(password, "UTF-8").replace("+", "%20"))
+        }
         val resp = try {
-            client120.newCall(request(path).get().build()).execute()
+            client120.newCall(builder.build()).execute()
         } catch (e: IOException) {
             throw ApiException("网络连接失败，请检查网络后重试", e)
         }

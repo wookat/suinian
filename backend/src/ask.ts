@@ -914,6 +914,21 @@ function cleanDanglingCitations(s: string): string {
 }
 
 /**
+ * 同内容重复笔记（写入端历史重复/重复剪藏）在 Ask 引用列表并列多引只增冗余
+ * 不增信息：按内容精确聚合（与 import_fp 同口径），只保留排序最靠前的一条
+ * 进入上下文与引用（R163 设计建议 3）。
+ */
+export function dedupeNotesByContent<T extends { content: string }>(notes: T[]): T[] {
+  const seen = new Set<string>();
+  return notes.filter((n) => {
+    const key = n.content.trim();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
  * Single source of truth for /api/ask citations: the answer text and the
  * references array are rewritten together so every [n] marker left in the
  * answer maps to exactly one returned reference card.

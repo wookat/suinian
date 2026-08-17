@@ -84,6 +84,8 @@ fun SettingsScreen(
     var backingUp by remember { mutableStateOf(false) }
     var backupIncludeSensitive by remember { mutableStateOf(false) }
     var backupMessage by remember { mutableStateOf<String?>(null) }
+    var showBackupPasswordDialog by remember { mutableStateOf(false) }
+    var backupPassword by remember { mutableStateOf("") }
     var restoring by remember { mutableStateOf(false) }
     var restoreMessage by remember { mutableStateOf<String?>(null) }
     var pushPrefs by remember { mutableStateOf<PushPreferences?>(null) }
@@ -564,6 +566,12 @@ fun SettingsScreen(
             }
             OutlinedButton(
                 onClick = {
+                    if (backupIncludeSensitive) {
+                        // 敏感明文整包导出需密码复核（与后端 X-Suinian-Password 校验配对）
+                        backupPassword = ""
+                        showBackupPasswordDialog = true
+                        return@OutlinedButton
+                    }
                     backingUp = true
                     backupMessage = null
                     scope.launch {
@@ -580,6 +588,45 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !settings.mockMode && !backingUp && !restoring,
             ) { Text(if (backingUp) "备份打包中，请稍候…" else "下载完整备份（zip 含媒体）") }
+            if (showBackupPasswordDialog) {
+                AlertDialog(
+                    onDismissRequest = { showBackupPasswordDialog = false },
+                    title = { Text("验证账号密码") },
+                    text = {
+                        Column {
+                            Text("导出将包含敏感内容明文，请输入账号密码验证：")
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = backupPassword,
+                                onValueChange = { backupPassword = it },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showBackupPasswordDialog = false
+                            val pw = backupPassword
+                            backupPassword = ""
+                            backingUp = true
+                            backupMessage = null
+                            scope.launch {
+                                try {
+                                    val fileName = vm.downloadBackupToDownloads(true, pw)
+                                    backupMessage = "已保存到系统下载：$fileName"
+                                } catch (e: Exception) {
+                                    backupMessage = e.message ?: "备份下载失败，请稍后重试"
+                                } finally {
+                                    backingUp = false
+                                }
+                            }
+                        }) { Text("验证并备份") }
+                    },
+                    dismissButton = { TextButton(onClick = { showBackupPasswordDialog = false }) { Text("取消") } },
+                )
+            }
             Spacer(Modifier.height(4.dp))
             Text(
                 "完整备份包含全部笔记字段与语音/图片/文件原件，可在下方「从备份恢复」无损搬家到新账号/新实例",

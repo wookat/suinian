@@ -1,4 +1,4 @@
-import { saveNote, selectionContent, pageContent, loadSettings } from "@/utils/api";
+import { saveNote, findDuplicateNote, selectionContent, pageContent, loadSettings } from "@/utils/api";
 import type { ExtractResult } from "@/entrypoints/extract";
 
 const MENU_SAVE_SELECTION = "suinian-save-selection";
@@ -45,7 +45,12 @@ async function saveSelection(tab: { id?: number; url?: string; title?: string },
       notify("碎念剪藏", "无法获取页面地址");
       return;
     }
-    await saveNote({ content: selectionContent(selection, tab.title, tab.url), url: tab.url });
+    const content = selectionContent(selection, tab.title, tab.url);
+    if (await findDuplicateNote(tab.url, content)) {
+      notify("碎念剪藏", `这段内容已剪藏过，本次未重复保存`, { openWebOnClick: true });
+      return;
+    }
+    await saveNote({ content, url: tab.url });
     notify("已保存到碎念", `划词内容已保存：${selection.trim().slice(0, 50)}`, { openWebOnClick: true });
   } catch (e) {
     notify("保存失败", e instanceof Error ? e.message : String(e));
@@ -59,10 +64,12 @@ async function savePage(tab: { id?: number; url?: string; title?: string }) {
       return;
     }
     const r = tab.id != null ? await runExtract(tab.id) : null;
-    await saveNote({
-      content: pageContent({ title: r?.title || tab.title || tab.url, url: tab.url, excerpt: r?.excerpt }),
-      url: tab.url,
-    });
+    const content = pageContent({ title: r?.title || tab.title || tab.url, url: tab.url, excerpt: r?.excerpt });
+    if (await findDuplicateNote(tab.url, content)) {
+      notify("碎念剪藏", `该页面已剪藏过：${r?.title || tab.title || tab.url}`, { openWebOnClick: true });
+      return;
+    }
+    await saveNote({ content, url: tab.url });
     notify("已保存到碎念", `已剪藏：${r?.title || tab.title || tab.url}`, { openWebOnClick: true });
   } catch (e) {
     notify("保存失败", e instanceof Error ? e.message : String(e));

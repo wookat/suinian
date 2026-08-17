@@ -792,11 +792,20 @@ export function SettingsPage() {
 
   async function handleExport(format: "json" | "markdown" | "backup") {
     if (exporting) return
+    // 敏感明文整包导出需密码复核（与后端 x-suinian-password 校验配对）
+    let password: string | undefined
+    if (includeSensitive) {
+      const input = window.prompt("导出将包含敏感内容明文，请输入账号密码验证：")
+      if (input === null) return
+      password = input
+    }
     setExporting(format)
     setExportMsg(null)
     try {
       const { blob, filename } =
-        format === "backup" ? await downloadBackup(includeSensitive) : await exportData(format, includeSensitive)
+        format === "backup"
+          ? await downloadBackup(includeSensitive, password)
+          : await exportData(format, includeSensitive, password)
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
