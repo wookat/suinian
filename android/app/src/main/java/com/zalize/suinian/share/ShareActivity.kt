@@ -64,6 +64,7 @@ private fun isSupportedDocument(mime: String?, name: String?): Boolean {
         "text/plain",
         "text/markdown",
         "text/csv",
+        "text/comma-separated-values",
         "text/tab-separated-values",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
