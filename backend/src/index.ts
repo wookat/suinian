@@ -2819,6 +2819,8 @@ app.post("/api/ask", async (c) => {
   // 性能归因（R172）：各阶段耗时进 Server-Timing 头，含答案生成的完整分解
   const askT0 = Date.now();
   const askMarks: Array<[string, number]> = [];
+  // 关键词提取 LLM 调用的预算上限：超时按提取失败降级为朴素分词（best-effort）
+  const ASK_KWEXT_BUDGET_MS = 2_000;
   // query rewrite: resolve pronouns/ordinals against history, then keyword recall
   const tRewrite = Date.now();
   const recallQuestion = await rewriteAskQuestion(c.env, question, history);
@@ -3344,11 +3346,25 @@ app.post("/api/ask", async (c) => {
     });
   }
   let terms = extractAskTerms(recallQuestion, history);
+  // semantic recall only depends on recallQuestion — start it here so the
+  // embedding call overlaps the keyword-extraction LLM call and keyword SQL
+  // instead of running after them (R172 归因：sem 全程串行贡献 150-400ms)
+  const semTiming: SemanticRecallTiming = { embed: 0, scan: 0 };
+  const tSem = Date.now();
+  const semHitsPromise = semanticRecall(c.env, userId, recallQuestion, 10, undefined, semTiming).then((h) => {
+    askMarks.push(["sem", Date.now() - tSem], ["embed", semTiming.embed], ["scan", semTiming.scan]);
+    return h;
+  });
   // unsegmented CJK clauses never LIKE-match: extract real keywords via LLM,
-  // keeping any short naive terms; failures keep the naive terms untouched
+  // keeping any short naive terms; failures keep the naive terms untouched.
+  // Budget-capped (R172 归因：kwext 偶发 4s+ 长尾直接顶高 ask P95)；超时按
+  // 提取失败对待，沿用朴素分词
   if (needsCjkKeywordExtraction(terms) || needsBilingualKeywordExtraction(recallQuestion)) {
     const tKwExt = Date.now();
-    const kw = await extractAskKeywords(c.env, recallQuestion);
+    const kw = await Promise.race([
+      extractAskKeywords(c.env, recallQuestion),
+      new Promise<string[]>((resolve) => setTimeout(() => resolve([]), ASK_KWEXT_BUDGET_MS)),
+    ]);
     askMarks.push(["kwext", Date.now() - tKwExt]);
     if (kw.length > 0) {
       terms = [...kw, ...terms.filter((t) => !(CJK_RE.test(t) && t.length >= 8))]
@@ -3432,10 +3448,7 @@ app.post("/api/ask", async (c) => {
 
   // hybrid recall: add semantic hits (same query-rewritten question) that the
   // keyword LIKE recall missed; failures silently degrade to keyword-only
-  const semTiming: SemanticRecallTiming = { embed: 0, scan: 0 };
-  const tSem = Date.now();
-  const semHits = await semanticRecall(c.env, userId, recallQuestion, 10, undefined, semTiming);
-  askMarks.push(["sem", Date.now() - tSem], ["embed", semTiming.embed], ["scan", semTiming.scan]);
+  const semHits = await semHitsPromise;
   const semScore = new Map(semHits.map((h) => [h.note_id, h.score]));
   const have = new Set(notes.map((n) => n.id));
   const extraIds = semHits.filter((h) => !have.has(h.note_id)).map((h) => h.note_id);
