@@ -52,7 +52,7 @@ import {
 } from "./auth";
 import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports, financeStats } from "./reports";
 import { getTodayReview, generateAllDailyReviews, readCronHeartbeats, writeCronHeartbeat } from "./review";
-import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings, purgeLowSignalEmbeddings, EMBED_BACKFILL_BUDGET_MS } from "./semantic";
+import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings, purgeLowSignalEmbeddings, EMBED_BACKFILL_BUDGET_MS, type SemanticRecallTiming } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteNotesGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
 import { deleteUserData } from "./account";
 import {
@@ -1414,6 +1414,11 @@ export function noteFilterConds(filter: {
   return { conds, binds };
 }
 
+/** Server-Timing 头（R172 性能归因）：毫秒级阶段耗时，curl -w/DevTools 可直接读。 */
+function serverTimingHeader(marks: Array<[string, number]>): string {
+  return marks.map(([k, v]) => `${k};dur=${Math.round(v)}`).join(", ");
+}
+
 // ---- GET /api/notes ----
 app.get("/api/notes", async (c) => {
   const userId = c.get("userId");
@@ -1441,9 +1446,18 @@ app.get("/api/notes", async (c) => {
   const SEARCH_SEMANTIC_BUDGET_MS = 2_000;
   const isSearch = Boolean(q && !cursor);
   const terms = isSearch ? searchTerms(q) : [];
+  const t0 = Date.now();
+  const semTiming: SemanticRecallTiming = { embed: 0, scan: 0 };
+  let semMs = 0;
   const hitsPromise = isSearch
     ? Promise.race([
-        semanticRecall(c.env, userId, q, 10),
+        (() => {
+          const tSem = Date.now();
+          return semanticRecall(c.env, userId, q, 10, undefined, semTiming).then((h) => {
+            semMs = Date.now() - tSem;
+            return h;
+          });
+        })(),
         new Promise<Awaited<ReturnType<typeof semanticRecall>>>((resolve) =>
           setTimeout(() => resolve([]), SEARCH_SEMANTIC_BUDGET_MS)
         ),
@@ -1466,7 +1480,9 @@ app.get("/api/notes", async (c) => {
 
   const sql = `SELECT * FROM notes WHERE ${conds.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT ?`;
   binds.push(limit + 1);
+  const tKw = Date.now();
   const { results } = await c.env.DB.prepare(sql).bind(...binds).all<NoteRow>();
+  const kwMs = Date.now() - tKw;
   const rows = results ?? [];
   const hasMore = rows.length > limit;
   const page = rows.slice(0, limit);
@@ -1482,14 +1498,17 @@ app.get("/api/notes", async (c) => {
     const partialIds = new Set(partial.map((n) => n.id));
     const extraIds = hits.filter((h) => !kwIds.has(h.note_id) && !partialIds.has(h.note_id)).map((h) => h.note_id);
     let extra: NoteRow[] = [];
+    let extraMs = 0;
     if (extraIds.length > 0) {
       // semantic extras must satisfy the same structured filters (minus keyword)
       const ef = noteFilterConds({ category, tag, source, from, to });
       const ph = extraIds.map(() => "?").join(",");
       const where = [`user_id = ?`, `id IN (${ph})`, ...ef.conds].join(" AND ");
+      const tExtra = Date.now();
       const r = await c.env.DB.prepare(`SELECT * FROM notes WHERE ${where}`)
         .bind(userId, ...extraIds, ...ef.binds)
         .all<NoteRow>();
+      extraMs = Date.now() - tExtra;
       extra = r.results ?? [];
     }
     const merged = [...page, ...partial, ...extra];
@@ -1506,6 +1525,17 @@ app.get("/api/notes", async (c) => {
             kwIds.has(n.id) || partialIds.has(n.id) ? (semScore.has(n.id) ? "both" : "keyword") : "semantic",
         }))
       )
+    );
+    c.header(
+      "Server-Timing",
+      serverTimingHeader([
+        ["kw", kwMs],
+        ["sem", semMs],
+        ["embed", semTiming.embed],
+        ["scan", semTiming.scan],
+        ["extra", extraMs],
+        ["total", Date.now() - t0],
+      ])
     );
     return c.json({ notes, next_cursor: next });
   }
@@ -1946,19 +1976,25 @@ const BATCH_STMTS_PER_CALL = 100;
  * D1 roundtrips dominate wall time (each can intermittently take seconds), so
  * reads run in parallel and mutations go through few large batch() calls
  * instead of 2 sequential roundtrips per 80-id chunk.
+ *
+ * set_category 额外回传 prev（R172 D-1）：每条的原分类与原 manual_override 位，
+ * 客户端据此用 restore_categories 逆向恢复——与标签撤销同一批量语义。
  */
+export type PrevCategory = { id: string; category: string | null; manual: boolean };
+
 async function runBatchAction(
   env: Env,
   userId: string,
   action: string,
   ids: string[],
-  opts: { tags: string[]; category: string },
+  opts: { tags: string[]; category: string; entries?: PrevCategory[] },
   onProgress?: (done: number, total: number) => void
-): Promise<{ affected: number; changedIds: string[] }> {
+): Promise<{ affected: number; changedIds: string[]; prev: PrevCategory[] }> {
   const started = Date.now();
   const chunks = chunkIds(ids);
   let affected = 0;
   const changedIds: string[] = [];
+  const prev: PrevCategory[] = [];
   if (action === "delete") {
     // soft delete: all chunk UPDATEs in one batch() roundtrip; the cron sweep
     // hard-deletes (and cleans attachments/vectors/graph) after the undo window
@@ -1969,20 +2005,59 @@ async function runBatchAction(
     );
     for (const res of await env.DB.batch(stmts)) affected += (res.meta as { changes?: number })?.changes ?? 0;
     onProgress?.(ids.length, ids.length);
+  } else if (action === "restore_categories") {
+    // 批量改分类的逆向操作（R172 D-1）：按回传的 prev 列表逐条恢复原分类与
+    // 原 manual_override.category 位，与标签撤销同一批量语义
+    const entries = opts.entries ?? [];
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    const entryChunks = chunkIds(entries.map((e) => e.id));
+    const selected = await Promise.all(
+      entryChunks.map((chunk) =>
+        env.DB.prepare(
+          `SELECT id, meta FROM notes WHERE user_id = ? AND deleted_at IS NULL AND id IN (${chunk.map(() => "?").join(",")})`
+        )
+          .bind(userId, ...chunk)
+          .all<{ id: string; meta: string | null }>()
+      )
+    );
+    const stmts: D1PreparedStatement[] = [];
+    for (const row of selected.flatMap((r) => r.results ?? [])) {
+      const e = byId.get(row.id);
+      if (!e) continue;
+      const meta = parseNoteMeta(row.meta) ?? {};
+      meta.manual_override = { ...meta.manual_override, category: e.manual };
+      if (!e.manual) delete meta.manual_override.category;
+      stmts.push(
+        env.DB.prepare(
+          "UPDATE notes SET category = ?, meta = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?"
+        ).bind(e.category, JSON.stringify(meta), row.id, userId)
+      );
+      changedIds.push(row.id);
+    }
+    let done = entries.length - stmts.length;
+    onProgress?.(done, entries.length);
+    for (let i = 0; i < stmts.length; i += BATCH_STMTS_PER_CALL) {
+      const slice = stmts.slice(i, i + BATCH_STMTS_PER_CALL);
+      await env.DB.batch(slice);
+      affected += slice.length;
+      done += slice.length;
+      onProgress?.(done, entries.length);
+    }
   } else if (action === "add_tags" || action === "remove_tags" || action === "set_category") {
     const selected = await Promise.all(
       chunks.map((chunk) =>
         env.DB.prepare(
-          `SELECT id, tags, meta, is_sensitive FROM notes WHERE user_id = ? AND deleted_at IS NULL AND id IN (${chunk.map(() => "?").join(",")})`
+          `SELECT id, tags, meta, is_sensitive, category FROM notes WHERE user_id = ? AND deleted_at IS NULL AND id IN (${chunk.map(() => "?").join(",")})`
         )
           .bind(userId, ...chunk)
-          .all<{ id: string; tags: string; meta: string | null; is_sensitive: number }>()
+          .all<{ id: string; tags: string; meta: string | null; is_sensitive: number; category: string | null }>()
       )
     );
     const stmts: D1PreparedStatement[] = [];
     for (const row of selected.flatMap((r) => r.results ?? [])) {
       const meta = parseNoteMeta(row.meta) ?? {};
       if (action === "set_category") {
+        prev.push({ id: row.id, category: row.category, manual: meta.manual_override?.category === true });
         meta.manual_override = { ...meta.manual_override, category: true };
         stmts.push(
           env.DB.prepare(
@@ -2019,7 +2094,7 @@ async function runBatchAction(
     }
   }
   console.log(`notes/batch ${action}: ids=${ids.length} affected=${affected} ${Date.now() - started}ms`);
-  return { affected, changedIds };
+  return { affected, changedIds, prev };
 }
 
 app.post("/api/notes/batch", async (c) => {
@@ -2029,7 +2104,13 @@ app.post("/api/notes/batch", async (c) => {
     .catch(() => null);
   if (!body) return c.json({ error: "invalid body" }, 400);
   const action = body.action;
-  if (action !== "delete" && action !== "add_tags" && action !== "remove_tags" && action !== "set_category")
+  if (
+    action !== "delete" &&
+    action !== "add_tags" &&
+    action !== "remove_tags" &&
+    action !== "set_category" &&
+    action !== "restore_categories"
+  )
     return c.json({ error: "invalid action" }, 400);
   // 批量写操作同样限频（R123 P2：batch 曾完全不限流）
   if (!(await checkRateLimit(c.env.DB, "batch_write", [userId], BATCH_WRITE_RATE_LIMIT_MAX))) {
@@ -2037,9 +2118,30 @@ app.post("/api/notes/batch", async (c) => {
   }
   let ids = Array.isArray(body.ids) ? body.ids.filter((v): v is string => typeof v === "string") : [];
   const filter = body.filter && typeof body.filter === "object" ? (body.filter as Record<string, unknown>) : null;
+  // 批量改分类的逆向恢复（R172 D-1）：目标由 entries（原分类快照）给定
+  const rawEntries = Array.isArray((body as { entries?: unknown }).entries)
+    ? ((body as { entries: unknown[] }).entries as unknown[])
+    : [];
+  const entries: PrevCategory[] = rawEntries
+    .filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null)
+    .filter(
+      (e) =>
+        typeof e.id === "string" &&
+        (e.category === null ||
+          (typeof e.category === "string" &&
+            ["idea", "todo", "collect", "data", "expense", "income", "transfer"].includes(e.category)))
+    )
+    .map((e) => ({ id: e.id as string, category: (e.category as string | null) ?? null, manual: e.manual === true }));
+  if (action === "restore_categories") {
+    if (entries.length === 0) return c.json({ error: "entries required" }, 400);
+    if (entries.length > BATCH_MAX_IDS) return c.json({ error: `一次最多操作 ${BATCH_MAX_IDS} 条` }, 400);
+    ids = entries.map((e) => e.id);
+  }
   // matches beyond the BATCH_FILTER_MAX cap; lets the UI say "N more remain"
   let remaining = 0;
-  if (ids.length === 0 && filter) {
+  if (action === "restore_categories") {
+    // targets already fixed by entries
+  } else if (ids.length === 0 && filter) {
     const resolved = await resolveBatchFilter(c.env, userId, filter);
     ids = resolved.ids;
     remaining = Math.max(0, resolved.total - ids.length);
@@ -2057,7 +2159,7 @@ app.post("/api/notes/batch", async (c) => {
   const category = typeof body.category === "string" ? body.category : "";
   if (action === "set_category" && !["idea", "todo", "collect", "data", "expense", "income", "transfer"].includes(category))
     return c.json({ error: "invalid category" }, 400);
-  const opts = { tags, category };
+  const opts = { tags, category, entries };
 
   // ?stream=1: NDJSON progress lines ({"done","total"}) followed by a final
   // {ok, affected} line (or {error}); keeps big batches responsive in the UI.
@@ -2069,17 +2171,18 @@ app.post("/api/notes/batch", async (c) => {
     const run = (async () => {
       try {
         await writeLine({ done: 0, total: ids.length });
-        const { affected, changedIds } = await runBatchAction(c.env, userId, action, ids, opts, (done, total) =>
+        const { affected, changedIds, prev } = await runBatchAction(c.env, userId, action, ids, opts, (done, total) =>
           void writeLine({ done, total })
         );
         // delete echoes the targeted ids, tag actions the actually-changed ids,
-        // so the client can offer undo (restore / inverse tag op)
+        // so the client can offer undo (restore / inverse tag op); set_category
+        // echoes prev snapshots for the restore_categories inverse (R172 D-1)
         await writeLine(
           action === "delete"
             ? { ok: true, affected, remaining, ids }
-            : action === "add_tags" || action === "remove_tags"
-              ? { ok: true, affected, remaining, ids: changedIds }
-              : { ok: true, affected, remaining }
+            : action === "set_category"
+              ? { ok: true, affected, remaining, ids: changedIds, prev }
+              : { ok: true, affected, remaining, ids: changedIds }
         );
       } catch (e) {
         console.error("batch stream failed", e);
@@ -2096,14 +2199,15 @@ app.post("/api/notes/batch", async (c) => {
     });
   }
 
-  const { affected, changedIds } = await runBatchAction(c.env, userId, action, ids, opts);
-  // delete echoes the targeted ids, tag actions the actually-changed ids, for undo
+  const { affected, changedIds, prev } = await runBatchAction(c.env, userId, action, ids, opts);
+  // delete echoes the targeted ids, tag actions the actually-changed ids, for
+  // undo; set_category echoes prev snapshots for restore_categories (R172 D-1)
   return c.json(
     action === "delete"
       ? { ok: true, affected, remaining, ids }
-      : action === "add_tags" || action === "remove_tags"
-        ? { ok: true, affected, remaining, ids: changedIds }
-        : { ok: true, affected, remaining }
+      : action === "set_category"
+        ? { ok: true, affected, remaining, ids: changedIds, prev }
+        : { ok: true, affected, remaining, ids: changedIds }
   );
 });
 
@@ -2712,8 +2816,13 @@ app.post("/api/ask", async (c) => {
   const history = sanitizeAskHistory(body?.history);
   const useGraph = body?.graph !== false; // graph:false disables GraphRAG expansion (A/B comparison)
 
+  // 性能归因（R172）：各阶段耗时进 Server-Timing 头，含答案生成的完整分解
+  const askT0 = Date.now();
+  const askMarks: Array<[string, number]> = [];
   // query rewrite: resolve pronouns/ordinals against history, then keyword recall
+  const tRewrite = Date.now();
   const recallQuestion = await rewriteAskQuestion(c.env, question, history);
+  askMarks.push(["rewrite", Date.now() - tRewrite]);
   // explicit time scope ("上个月/最近一周/去年…") narrows recall to that window
   const timeRange = parseTimeRange(recallQuestion);
   // 财务/统计合计类问题走精确聚合（与周报/月报同一 financeStats 口径），
@@ -3126,7 +3235,9 @@ app.post("/api/ask", async (c) => {
   // 枚举家族入口统一收口 resolveAskEnumIntent（R150 P1-1）：主题枚举与时间窗
   // 枚举正则同时命中时交 LLM 统一分类主判，正则只做 fail-closed 兜底；
   // 单家族命中与全未命中（R132 LLM 补路由）行为不变。
+  const tRoute = Date.now();
   const enumRoute = await resolveAskEnumIntent(c.env, question, recallQuestion);
+  askMarks.push(["route", Date.now() - tRoute]);
   if (enumRoute.extreme) return answerExtreme(enumRoute.extreme);
   const enumTopic = enumRoute.topic;
   const enumList = enumRoute.list;
@@ -3236,7 +3347,9 @@ app.post("/api/ask", async (c) => {
   // unsegmented CJK clauses never LIKE-match: extract real keywords via LLM,
   // keeping any short naive terms; failures keep the naive terms untouched
   if (needsCjkKeywordExtraction(terms) || needsBilingualKeywordExtraction(recallQuestion)) {
+    const tKwExt = Date.now();
     const kw = await extractAskKeywords(c.env, recallQuestion);
+    askMarks.push(["kwext", Date.now() - tKwExt]);
     if (kw.length > 0) {
       terms = [...kw, ...terms.filter((t) => !(CJK_RE.test(t) && t.length >= 8))]
         .filter((t, i, a) => a.indexOf(t) === i)
@@ -3283,11 +3396,13 @@ app.post("/api/ask", async (c) => {
       binds.push(like, like, like, like);
     }
   }
+  const tKwSql = Date.now();
   const { results } = await c.env.DB.prepare(
     `SELECT * FROM notes WHERE ${conds.join(" AND ")} AND deleted_at IS NULL ORDER BY ${orderBy} LIMIT 20`
   )
     .bind(...binds)
     .all<NoteRow>();
+  askMarks.push(["kwsql", Date.now() - tKwSql]);
   let notes = results ?? [];
 
   // 元属性召回（R134 D-3，P2-1）：问题按输入形态提问（语音/图片/文件）时，
@@ -3317,7 +3432,10 @@ app.post("/api/ask", async (c) => {
 
   // hybrid recall: add semantic hits (same query-rewritten question) that the
   // keyword LIKE recall missed; failures silently degrade to keyword-only
-  const semHits = await semanticRecall(c.env, userId, recallQuestion, 10);
+  const semTiming: SemanticRecallTiming = { embed: 0, scan: 0 };
+  const tSem = Date.now();
+  const semHits = await semanticRecall(c.env, userId, recallQuestion, 10, undefined, semTiming);
+  askMarks.push(["sem", Date.now() - tSem], ["embed", semTiming.embed], ["scan", semTiming.scan]);
   const semScore = new Map(semHits.map((h) => [h.note_id, h.score]));
   const have = new Set(notes.map((n) => n.id));
   const extraIds = semHits.filter((h) => !have.has(h.note_id)).map((h) => h.note_id);
@@ -3353,7 +3471,9 @@ app.post("/api/ask", async (c) => {
     // relation-flavored questions (evolution / why / follow-up / provenance)
     // lean hardest on the graph: widen the expansion budget for them
     const relationQ = /关系|关联|变化|演化|脉络|为什么|依据|后来|进展|着落|转折|一步步|怎么变/.test(recallQuestion);
+    const tGraph = Date.now();
     const expansion = await graphExpand(c.env, userId, notes.map((n) => n.id), relationQ ? 8 : 5, recallQuestion);
+    askMarks.push(["graph", Date.now() - tGraph]);
     graphTriples = expansion.triples;
     const missing = expansion.note_ids.filter((nid) => !notes.some((n) => n.id === nid));
     if (missing.length > 0) {
@@ -3378,6 +3498,7 @@ app.post("/api/ask", async (c) => {
   // 触发（单跳问题零额外延迟），且只增补≤6 条、总上下文封顶 30 条。
   const multiHopIds = new Set<string>();
   if (notes.length > 0 && !timeRange && MULTI_HOP_RE.test(recallQuestion)) {
+    const tHop = Date.now();
     try {
       const seeds = notes
         .slice(0, 3)
@@ -3418,6 +3539,7 @@ app.post("/api/ask", async (c) => {
     } catch (err) {
       console.error("ask: multi-hop second recall failed", err);
     }
+    askMarks.push(["hop", Date.now() - tHop]);
   }
   if (notes.length === 0) {
     // nothing recalled at all: answer "没找到" honestly (never bluff over the
@@ -3467,6 +3589,7 @@ app.post("/api/ask", async (c) => {
       return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}) ${n.title ?? ""}\n${n.content.slice(0, 500)}`;
     })
     .join("\n\n");
+  const tGen = Date.now();
   const answer = await chatComplete(c.env, {
     temperature: 0.3,
     max_tokens: 800,
@@ -3475,7 +3598,7 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用，「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）；汇总计算时也不要解释为什么排除某一项（如「68 元（买书，不属于吃的，忽略）」这类筛选过程），算式里只列入选项。涉及金额汇总时，不同币种（如 CNY 与 USD）绝不能直接相加，必须分币种分别合计并注明币种；分类为 transfer（资金往来：内转/提现/借入）的金额不是支出也不是收入，不要计入收支合计。引用角标只标注直接支撑该句结论的片段，每处至多 3 个，不要把命中的片段序号成串堆在句尾。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用；回答「A 和 B 是否同一/对应/一体」这类跨片段对应问题时，对应双方各自的片段都必须标注 [序号] 引用，不能只引其中一方。「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）；汇总计算时也不要解释为什么排除某一项（如「68 元（买书，不属于吃的，忽略）」这类筛选过程），算式里只列入选项。涉及金额汇总时，不同币种（如 CNY 与 USD）绝不能直接相加，必须分币种分别合计并注明币种；分类为 transfer（资金往来：内转/提现/借入）的金额不是支出也不是收入，不要计入收支合计。引用角标只标注直接支撑该句结论的片段，每处至多 3 个，不要把命中的片段序号成串堆在句尾。回答用中文，简洁。",
       },
       ...history,
       {
@@ -3516,6 +3639,8 @@ app.post("/api/ask", async (c) => {
       answer2 = retry;
     }
   }
+  askMarks.push(["gen", Date.now() - tGen]);
+  c.header("Server-Timing", serverTimingHeader([...askMarks, ["total", Date.now() - askT0]]));
   // the model itself concluded "没找到" over recalled topic notes: honest
   // wording is 「笔记里没提到」, not 「没找到相关笔记」 (R115 P2 拒答口径)；
   // suggestions prefer strong semantic hits, falling back to the top recall
@@ -3566,6 +3691,22 @@ app.post("/api/ask", async (c) => {
   // citations; the answer text and the references array are rewritten
   // together so no [n] marker dangles
   const { answer: finalAnswer, references } = reconcileAskCitations(answer2 ?? "", noteIds, weakIds);
+  // 多跳引证补全（R172 P2，q56 引证不全）：多跳问法下，二跳/图谱召回且语义分
+  // 达引用线的源笔记即使没被模型在正文里点到 [序号]，也要进 references——
+  // 答案说「A 和 B 是一体的」时，B 的源笔记不能从引用里消失。只增补、不改写
+  // 答案文本（无对应 [n] 标记的引用与零引用兜底路径的行为口径一致）。
+  if (MULTI_HOP_RE.test(recallQuestion)) {
+    const citedIds = new Set(references.map((r) => r.note_id));
+    const missingSources = notes
+      .filter(
+        (n) =>
+          !citedIds.has(n.id) &&
+          (multiHopIds.has(n.id) || graphNoteIds.has(n.id)) &&
+          (semScore.get(n.id) ?? 0) >= ASK_CITATION_MIN_SCORE
+      )
+      .slice(0, 2);
+    for (const n of missingSources) references.push({ index: references.length + 1, note_id: n.id });
+  }
   const byId = new Map(notes.map((n) => [n.id, n]));
   const refNotes = await Promise.all(
     references.map((r) => noteToJsonDecrypted(c.env, byId.get(r.note_id)!))

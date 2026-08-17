@@ -80,6 +80,8 @@ export interface TriageResult {
   currency?: string | null;
   /** Optional merchant / purpose for expense/income notes. */
   merchant?: string | null;
+  /** 内容像在向笔记库提问（即使没打问号）；前端据此展示「去问 AI」入口。 */
+  is_question?: boolean;
 }
 
 /** Optional per-note metadata stored as JSON in notes.meta. */
@@ -134,6 +136,8 @@ export interface NoteMeta {
   retriage_attempts?: number;
   /** Terminal state: retriage hit its attempt ceiling; cleared by a later successful triage or a manual category edit. */
   triage_failed?: boolean;
+  /** 分拣判定内容像在提问（无问号疑问句）；前端据此渲染「去问 AI」轻量入口。 */
+  is_question?: boolean;
 }
 
 export interface NoteRow {

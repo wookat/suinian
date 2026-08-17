@@ -179,6 +179,7 @@ export function buildTriagePrompt(
 - amount: 仅 expense/income/transfer 时输出的金额数字（不带单位，如 23 或 12.5）；内容里没有明确金额时必须为 null，绝不要猜测。其它类别一律 null
 - currency: 仅 expense/income/transfer 且 amount 非 null 时输出 ISO 4217 代码（人民币/块/元默认 "CNY"，美元 "USD"），否则 null
 - merchant: 仅 expense/income/transfer 时输出的商家或用途短语（<=12字），推断不出则 null
+- is_question: 内容是否在向自己的笔记库提问 (boolean)。疑问句语气（哪些/什么/多少/怎么/为什么/吗/呢等）且意图是想得到回答时为 true，即使句尾没打问号——如「最近一周我花了哪些钱」。以下必须为 false：记录信息/想法/待办（即使含疑问词，如「查一下明天几点开会」是待办）、自问自答式的思考记录（「要不要做 X？我觉得可以」）、修辞性反问
 - todo_due: 若是待办且能推断截止时间，基于上面给出的今天日期与星期换算（如"周五之前"= 从今天起最近的周五）。内容中有具体时刻（如"下午三点半""晚上8点"）时输出带时刻和时区偏移的 ISO 8601 "YYYY-MM-DDTHH:mm:00${off}"（24 小时制，时刻按用户时区 ${tz} 理解，偏移固定写 ${off}，如 "${tomorrow.iso}T15:30:00${off}"）；只有日期没有时刻时仅输出 "YYYY-MM-DD"；无法推断则 null。绝不要输出早于今天的日期
 ${
     corrections.length
@@ -457,7 +458,8 @@ function candidateToTriage(o: Record<string, unknown>, defaultOffset: string): T
         : null;
   const merchant =
     isFinance && typeof o.merchant === "string" && o.merchant.trim() ? o.merchant.trim().slice(0, 24) : null;
-  return { category: category as Category, tags, title, is_sensitive, todo_due, amount, currency, merchant };
+  const is_question = o.is_question === true;
+  return { category: category as Category, tags, title, is_sensitive, todo_due, amount, currency, merchant, is_question };
 }
 
 /** Parse the LLM output into a TriageResult; returns null when invalid.

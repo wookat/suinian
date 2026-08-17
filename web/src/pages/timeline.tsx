@@ -27,14 +27,14 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
-import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, getThreads, ApiError, NetworkError } from "@/lib/api"
+import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, restoreCategories, getThreads, ApiError, NetworkError } from "@/lib/api"
 import type { BatchFilter } from "@/lib/api"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
 import { PENDING_UNDO_KEY } from "@/lib/pending-undo"
 import { FirstRunTour } from "@/components/first-run-tour"
 import { cn, parseServerTime } from "@/lib/utils"
-import type { Note, NoteCategory, NotePatch } from "@/lib/types"
+import type { Note, NoteCategory, NotePatch, PrevCategory } from "@/lib/types"
 
 // ask mode is opt-in: keep its chat UI out of the first-paint bundle
 const AskChat = lazy(() => import("@/components/ask-chat").then((m) => ({ default: m.AskChat })))
@@ -112,13 +112,15 @@ const SEARCH_DEBOUNCE_MS = 300
 const POLL_INTERVAL = 2000
 const POLL_MAX = 15
 // 批量撤销：待撤销操作存 localStorage + 时间流顶部驻留撤销条，慢返回/刷新后窗口内仍可撤销
-// （删除走服务端软删进「最近删除」，30 天后真删；标签操作记录实际变更的 ids 做逆操作）
+// （删除走服务端软删进「最近删除」，30 天后真删；标签操作记录实际变更的 ids 做逆操作；
+// 改分类用服务端回传的原分类快照 prev 做逆向批量恢复）
 const PENDING_UNDO_TTL_MS = 5 * 60 * 1000
 
 type PendingUndo = {
-  kind: "restore" | "add_tags" | "remove_tags"
+  kind: "restore" | "add_tags" | "remove_tags" | "set_category"
   ids: string[]
   tag?: string
+  prev?: PrevCategory[]
   message: string
   expires: number
 }
@@ -243,6 +245,9 @@ export function TimelinePage() {
         } else if (p.kind === "add_tags") {
           await batchNotes("remove_tags", p.ids, { tags: [p.tag ?? ""] })
           showToast(`已撤销：从 ${p.ids.length} 条移除 #${p.tag}`)
+        } else if (p.kind === "set_category") {
+          const res = await restoreCategories(p.prev ?? [])
+          showToast(`已撤销：恢复 ${res.affected} 条的原分类`)
         } else {
           await batchNotes("add_tags", p.ids, { tags: [p.tag ?? ""] })
           showToast(`已撤销：为 ${p.ids.length} 条补回 #${p.tag}`)
@@ -262,7 +267,7 @@ export function TimelinePage() {
 
   // 刷新后恢复未过期的撤销条（批量操作→刷新→撤销仍可用）
   useEffect(() => {
-    type Saved = { kind?: unknown; ids?: unknown; tag?: unknown; message?: unknown; expires?: unknown }
+    type Saved = { kind?: unknown; ids?: unknown; tag?: unknown; prev?: unknown; message?: unknown; expires?: unknown }
     let saved: Saved | null = null
     try {
       const raw = localStorage.getItem(PENDING_UNDO_KEY)
@@ -274,9 +279,22 @@ export function TimelinePage() {
     const ids = Array.isArray(saved.ids) ? saved.ids.filter((v): v is string => typeof v === "string") : []
     const expires = typeof saved.expires === "number" ? saved.expires : 0
     const kind =
-      saved.kind === "add_tags" || saved.kind === "remove_tags" ? saved.kind : "restore"
+      saved.kind === "add_tags" || saved.kind === "remove_tags" || saved.kind === "set_category"
+        ? saved.kind
+        : "restore"
     const tag = typeof saved.tag === "string" ? saved.tag : undefined
-    if (ids.length === 0 || expires <= Date.now() || (kind !== "restore" && !tag)) {
+    const prev = Array.isArray(saved.prev)
+      ? (saved.prev as unknown[]).filter(
+          (e): e is PrevCategory =>
+            typeof e === "object" && e !== null && typeof (e as PrevCategory).id === "string",
+        )
+      : undefined
+    if (
+      ids.length === 0 ||
+      expires <= Date.now() ||
+      (kind === "add_tags" || kind === "remove_tags" ? !tag : false) ||
+      (kind === "set_category" && (!prev || prev.length === 0))
+    ) {
       try {
         localStorage.removeItem(PENDING_UNDO_KEY)
       } catch {
@@ -288,6 +306,7 @@ export function TimelinePage() {
       kind,
       ids,
       tag,
+      prev,
       message: typeof saved.message === "string" ? saved.message : `已删除 ${ids.length} 条`,
       expires,
     })
@@ -525,11 +544,14 @@ export function TimelinePage() {
         setCatPanelOpen(false)
         exitSelectMode()
         const label = CATEGORY_OPTIONS.find((c) => c.value === cat)?.label ?? cat
-        showToast(
+        const message =
           res.remaining > 0
             ? `已将前 ${res.affected} 条改为「${label}」，剩余 ${res.remaining} 条请再次执行`
-            : `已将全部匹配的 ${res.affected} 条改为「${label}」`,
-        )
+            : `已将全部匹配的 ${res.affected} 条改为「${label}」`
+        // 与其余批量操作同一驻留撤销条：用服务端回传的原分类快照逆向恢复
+        if (res.prev && res.prev.length > 0)
+          showPendingUndo({ kind: "set_category", ids: res.ids, prev: res.prev, message })
+        else showToast(message)
         void load()
       } catch (e) {
         showToast(e instanceof Error ? e.message : String(e))
@@ -543,17 +565,20 @@ export function TimelinePage() {
       .filter((n) => selectedIds.has(n.id))
       .map((n) => ({ id: n.id, category: n.category }))
     try {
-      await batchNotes("set_category", ids, { category: cat }, (done, total) => setBatchProgress({ done, total }))
+      const res = await batchNotes("set_category", ids, { category: cat }, (done, total) => setBatchProgress({ done, total }))
       setNotes((ns) => ns.map((n) => (selectedIds.has(n.id) ? { ...n, category: cat } : n)))
       setCatPanelOpen(false)
       exitSelectMode()
       const label = CATEGORY_OPTIONS.find((c) => c.value === cat)?.label ?? cat
-      showToast(`已将 ${ids.length} 条改为「${label}」`, () => {
-        void Promise.allSettled(
-          previous.filter((p) => p.category).map((p) => patchNote(p.id, { category: p.category! })),
-        ).then(() => void load())
-        setToast(null)
-      })
+      if (res.prev && res.prev.length > 0) {
+        showPendingUndo({ kind: "set_category", ids: res.ids, prev: res.prev, message: `已将 ${res.affected} 条改为「${label}」` })
+      } else
+        showToast(`已将 ${ids.length} 条改为「${label}」`, () => {
+          void Promise.allSettled(
+            previous.filter((p) => p.category).map((p) => patchNote(p.id, { category: p.category! })),
+          ).then(() => void load())
+          setToast(null)
+        })
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e))
     } finally {
@@ -1201,6 +1226,11 @@ export function TimelinePage() {
                     selected={selectedIds.has(n.id)}
                     onSelectToggle={toggleSelected}
                     threadTitle={n.thread_id ? threadTitles.get(n.thread_id) : undefined}
+                    onAskQuestion={(q) => {
+                      setAskMode(true)
+                      setAskPrefill(q)
+                      window.scrollTo({ top: 0, behavior: "smooth" })
+                    }}
                   />
                 ))}
               </div>

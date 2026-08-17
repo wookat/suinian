@@ -304,6 +304,8 @@ interface NoteCardProps {
   onSelectToggle?: (note: Note) => void
   /** 所属线索标题：提供时在卡片底部显示可点击的线索入口 */
   threadTitle?: string | null
+  /** 无问号疑问句（meta.is_question）：提供时卡片展示「去问 AI」轻量入口 */
+  onAskQuestion?: (content: string) => void
   className?: string
 }
 
@@ -319,6 +321,7 @@ export function NoteCard({
   selected = false,
   onSelectToggle,
   threadTitle,
+  onAskQuestion,
   className,
 }: NoteCardProps) {
   const [localNote, setLocalNote] = useState<Note | null>(null)
@@ -1001,6 +1004,19 @@ export function NoteCard({
           </div>
         )}
       </div>
+      {onAskQuestion && note.meta?.is_question && !sensitive && !editing && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onAskQuestion(note.content)
+          }}
+          className="mt-2 inline-flex max-w-full items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
+          title="把这条内容作为问题发给 AI 问答"
+        >
+          <Sparkles className="size-3 shrink-0" />
+          这像是个问题，去问 AI
+        </button>
+      )}
       {note.thread_id && threadTitle && !editing && (
         <a
           href={`#/threads?id=${encodeURIComponent(note.thread_id)}`}

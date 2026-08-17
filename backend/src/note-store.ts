@@ -366,6 +366,14 @@ export async function applyTriage(
     delete newMeta.retriage_attempts;
     metaChanged = true;
   }
+  // 无问号疑问句（R172 D-2）：分拣判「像在提问」记 meta，前端渲染「去问 AI」
+  // 轻量入口；重分拣改判时同步清掉，敏感笔记不提示（避免引导把秘密值发问答）
+  const wantQuestion = triage.is_question === true && !triage.is_sensitive;
+  if (wantQuestion !== (newMeta.is_question === true)) {
+    if (wantQuestion) newMeta.is_question = true;
+    else delete newMeta.is_question;
+    metaChanged = true;
+  }
   const mergedTags = Array.isArray(importTags)
     ? [...new Set([...importTags, ...triage.tags])].slice(0, 6)
     : triage.tags;
