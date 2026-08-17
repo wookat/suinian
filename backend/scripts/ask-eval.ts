@@ -138,6 +138,24 @@ async function waitForEmbeddings(): Promise<void> {
   console.warn("warning: semantic probe never matched — embeddings may be incomplete");
 }
 
+/** Wait until async triage has extracted amounts for the finance seed notes
+ * (财务极值/聚合类问题依赖 amount 列，triage 队列慢时会整类误判「无金额」). */
+async function waitForAmounts(idByKey: Map<string, string>): Promise<void> {
+  const financeKeys = NOTES.filter((n) => n.category === "expense" || n.category === "income").map((n) => n.key);
+  for (let i = 0; i < 60; i++) {
+    await sleep(5000);
+    const res: { notes: (NoteJson & { amount?: number | null })[] } = await api("/api/notes?limit=100");
+    const byId = new Map(res.notes.map((n) => [n.id, n]));
+    const missing = financeKeys.filter((k) => byId.get(idByKey.get(k)!)?.amount == null);
+    if (missing.length === 0) {
+      console.log(`amounts ready after ~${(i + 1) * 5}s`);
+      return;
+    }
+    if (i % 6 === 5) console.log(`  waiting for amounts: ${missing.join(",")}`);
+  }
+  console.warn("warning: some finance notes never got an amount — extreme/agg questions may misjudge");
+}
+
 interface AskResponse {
   answer: string;
   references: { index: number; note_id: string }[];
@@ -222,6 +240,7 @@ async function main() {
   try {
     const idByKey = await seed();
     await waitForEmbeddings();
+    await waitForAmounts(idByKey);
     // give graph extraction a little more time (AI calls per note)
     await sleep(15_000);
 
