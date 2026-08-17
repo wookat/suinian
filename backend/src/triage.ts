@@ -394,22 +394,48 @@ export function normalizeTodoDue(v: unknown, defaultOffset = "+08:00"): string |
   return `${m[1]}T${m[2]}:00${normalizeOffset(m[3], defaultOffset)}`;
 }
 
-/** Parse the LLM output into a TriageResult; returns null when invalid. */
-export function parseTriageJson(text: string, defaultOffset = "+08:00"): TriageResult | null {
-  let raw = text.trim();
-  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) raw = fence[1].trim();
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
-  let obj: unknown;
-  try {
-    obj = JSON.parse(raw.slice(start, end + 1));
-  } catch {
-    return null;
+/** 平衡花括号扫描：从任意 LLM 输出中提取全部顶层 JSON 对象（容忍多对象
+ * 并排/裸数组包裹/前后散文），解析失败的片段静默跳过。 */
+function extractJsonObjects(raw: string): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') {
+      if (depth > 0) inStr = true;
+      continue;
+    }
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      if (depth > 0) depth--;
+      if (depth === 0 && start >= 0) {
+        try {
+          const parsed = JSON.parse(raw.slice(start, i + 1)) as unknown;
+          if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+            out.push(parsed as Record<string, unknown>);
+          }
+        } catch {
+          /* 花括号配平但非合法 JSON 的片段：跳过 */
+        }
+        start = -1;
+      }
+    }
   }
-  if (typeof obj !== "object" || obj === null) return null;
-  const o = obj as Record<string, unknown>;
+  return out;
+}
+
+function candidateToTriage(o: Record<string, unknown>, defaultOffset: string): TriageResult | null {
   const category = o.category;
   if (typeof category !== "string" || !CATEGORIES.includes(category as Category)) return null;
   const tags = Array.isArray(o.tags)
@@ -432,6 +458,40 @@ export function parseTriageJson(text: string, defaultOffset = "+08:00"): TriageR
   const merchant =
     isFinance && typeof o.merchant === "string" && o.merchant.trim() ? o.merchant.trim().slice(0, 24) : null;
   return { category: category as Category, tags, title, is_sensitive, todo_due, amount, currency, merchant };
+}
+
+/** Parse the LLM output into a TriageResult; returns null when invalid.
+ *
+ * R170 P1-2：多行 CSV 记账笔记会诱使模型输出多个并排 JSON 对象或裸数组
+ * （R169 实测 22 分钟不分拣、1 小时降级只打「想法」）。解析容忍多对象/
+ * 数组/markdown 包裹：取第一个合法对象定分类；当全部候选是同分类同币种
+ * 的记账行时金额确定性求和（一条多行账单笔记的正确合计），分类不一致则
+ * 金额置空（无法归一，绝不猜）。 */
+export function parseTriageJson(text: string, defaultOffset = "+08:00"): TriageResult | null {
+  let raw = text.trim();
+  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) raw = fence[1].trim();
+  const candidates = extractJsonObjects(raw)
+    .map((o) => candidateToTriage(o, defaultOffset))
+    .filter((r): r is TriageResult => r !== null);
+  if (candidates.length === 0) return null;
+  const first = candidates[0];
+  if (candidates.length === 1) return first;
+  const isFinance = first.category === "expense" || first.category === "income" || first.category === "transfer";
+  const uniform = candidates.every(
+    (c) => c.category === first.category && (c.currency ?? "CNY") === (first.currency ?? "CNY")
+  );
+  if (isFinance && uniform) {
+    const amounts = candidates.map((c) => c.amount).filter((a): a is number => a !== null);
+    const amount = amounts.length > 0 ? Math.round(amounts.reduce((s, a) => s + a, 0) * 100) / 100 : null;
+    const tags = sanitizeTags(candidates.flatMap((c) => c.tags));
+    return { ...first, amount, currency: amount !== null ? (first.currency ?? "CNY") : null, tags };
+  }
+  if (!uniform && isFinance) {
+    // 分类/币种不一致的多行输出：分类取首个，金额无法归一置空（绝不错记）
+    return { ...first, amount: null, currency: null };
+  }
+  return first;
 }
 
 /** Load the user's 50 most-used tags for prompt reuse. */

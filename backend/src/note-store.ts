@@ -360,6 +360,12 @@ export async function applyTriage(
     delete newMeta.needs_retriage;
     metaChanged = true;
   }
+  // 分拣成功即离开失败态（R170 P1-2）
+  if (newMeta.triage_failed !== undefined || newMeta.retriage_attempts !== undefined) {
+    delete newMeta.triage_failed;
+    delete newMeta.retriage_attempts;
+    metaChanged = true;
+  }
   const mergedTags = Array.isArray(importTags)
     ? [...new Set([...importTags, ...triage.tags])].slice(0, 6)
     : triage.tags;

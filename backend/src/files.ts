@@ -15,6 +15,7 @@ const SUMMARIZE_INPUT_CHARS = 8000;
 const PDF_TIMEOUT_MS = 20_000;
 
 export const FILE_FAILED_PLACEHOLDER = "【文件】文本提取失败，已存档原件";
+export const FILE_BINARY_PLACEHOLDER = "【文件】扩展名是文本格式但内容是二进制数据（疑似图片等改名文件），未提取文本，已存档原件";
 
 const EXT_KIND: Record<string, FileKind> = {
   pdf: "pdf",
@@ -69,9 +70,46 @@ export function detectFileKind(fileName: string | undefined, mime: string, bytes
   return MIME_KIND[base] ?? null;
 }
 
+/** 解码质量评分：常用字符（ASCII/CJK 基本区/中日标点/全角/假名）占比；
+ * 替换符与私用区/生僻扩展区字符重罚（错编码解出的乱码典型落点）。 */
+function decodeQuality(s: string): number {
+  let good = 0;
+  let bad = 0;
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!;
+    if (c === 0xfffd) {
+      bad += 3;
+    } else if (c < 0x80) {
+      good++;
+    } else if (
+      (c >= 0x4e00 && c <= 0x9fff) ||
+      (c >= 0x3000 && c <= 0x30ff) ||
+      (c >= 0xff00 && c <= 0xffef) ||
+      c === 0x2018 || c === 0x2019 || c === 0x201c || c === 0x201d || c === 0x2014 || c === 0x2026
+    ) {
+      good++;
+    } else if ((c >= 0xe000 && c <= 0xf8ff) || (c >= 0x3400 && c <= 0x4dbf)) {
+      bad += 2;
+    } else {
+      bad++;
+    }
+  }
+  const total = good + bad;
+  return total === 0 ? 1 : good / total;
+}
+
+function tryDecode(bytes: Uint8Array, encoding: string): string | null {
+  try {
+    return new TextDecoder(encoding).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * 文本字节 → 字符串（R168 P2-1）：BOM 嗅探 UTF-16，UTF-8 严格解码失败回退 GBK
- * （老版 Excel/WPS 导出 CSV 默认 GBK），再失败用 UTF-8 替换符兜底（原件已存档）。
+ * 文本字节 → 字符串（R168 P2-1 / R170 P2-1）：BOM 嗅探 UTF-16，UTF-8 严格解码；
+ * 失败后 GBK/Big5 双解码按质量评分择优（老版 Excel/WPS 导出 CSV 默认 GBK，
+ * 台港导出常见 Big5），再失败用 UTF-8 替换符兜底（原件已存档）。
  */
 export function decodeTextBytes(bytes: Uint8Array): string {
   try {
@@ -83,12 +121,46 @@ export function decodeTextBytes(bytes: Uint8Array): string {
   try {
     return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
   } catch {
-    try {
-      return new TextDecoder("gbk").decode(bytes);
-    } catch {
-      return new TextDecoder("utf-8").decode(bytes);
+    // Big5 字节流会被 GBK 无异常地解成乱码，异常兜底链判不出来：必须比解码质量
+    const gbk = tryDecode(bytes, "gbk");
+    const big5 = tryDecode(bytes, "big5");
+    if (gbk !== null && big5 !== null) {
+      return decodeQuality(big5) > decodeQuality(gbk) ? big5 : gbk;
     }
+    return gbk ?? big5 ?? new TextDecoder("utf-8").decode(bytes);
   }
+}
+
+/** 常见二进制格式 magic bytes（PNG/JPEG/GIF/RIFF/zip/gzip/7z/BMP/ELF/MZ）。 */
+const BINARY_MAGICS: number[][] = [
+  [0x89, 0x50, 0x4e, 0x47], // PNG
+  [0xff, 0xd8, 0xff], // JPEG
+  [0x47, 0x49, 0x46, 0x38], // GIF8
+  [0x52, 0x49, 0x46, 0x46], // RIFF（webp/wav/avi）
+  [0x50, 0x4b, 0x03, 0x04], // zip（能嗅成 docx/xlsx 的在 sniffFileKind 已认领）
+  [0x1f, 0x8b], // gzip
+  [0x37, 0x7a, 0xbc, 0xaf], // 7z
+  [0x42, 0x4d], // BMP
+  [0x7f, 0x45, 0x4c, 0x46], // ELF
+  [0x4d, 0x5a], // MZ（exe）
+];
+
+/** 二进制内容嗅探（R170 P2-2）：PNG 等二进制文件伪装 .csv 绝不能当文本
+ * 解码存入乱码。magic bytes 命中，或开头含 NUL/高密度控制字符即判二进制
+ *（UTF-16 BOM 文本除外）。 */
+export function looksBinaryText(bytes: Uint8Array): boolean {
+  if (bytes.length === 0) return false;
+  if (bytes.length >= 2 && ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff))) return false;
+  for (const magic of BINARY_MAGICS) {
+    if (bytes.length >= magic.length && magic.every((b, i) => bytes[i] === b)) return true;
+  }
+  const head = bytes.subarray(0, 2048);
+  let control = 0;
+  for (const b of head) {
+    if (b === 0x00) return true;
+    if (b < 0x09 || (b > 0x0d && b < 0x20 && b !== 0x1b)) control++;
+  }
+  return control / head.length > 0.1;
 }
 
 function decodeXmlEntities(s: string): string {
@@ -273,6 +345,11 @@ export async function buildFileNote(
   fileName: string,
   bytes: Uint8Array
 ): Promise<FileIngestResult> {
+  // 二进制伪装文本扩展名（R170 P2-2）：先嗅探拒收，绝不把二进制字节当文本
+  // 解码存入乱码（原件仍存档，回复友好提示）
+  if ((kind === "txt" || kind === "md" || kind === "csv") && looksBinaryText(bytes)) {
+    return { content: `${FILE_BINARY_PLACEHOLDER}：${fileName}`, excerpt: null, summarized: false, extracted: false };
+  }
   const text = await extractFileText(kind, bytes);
   if (!text) {
     return { content: `${FILE_FAILED_PLACEHOLDER}：${fileName}`, excerpt: null, summarized: false, extracted: false };
@@ -295,7 +372,12 @@ export async function buildFileNote(
 
 /** 微信/Web 的文件入库确认文案：已存档：<文件名> · <一句话摘要> */
 export function buildFileReply(fileName: string, content: string, extracted: boolean): string {
-  if (!extracted) return `已存档：${fileName}（文本提取失败，原件已保存，可稍后重发）`;
+  if (!extracted) {
+    if (content.startsWith(FILE_BINARY_PLACEHOLDER)) {
+      return `已存档：${fileName}（这个文件扩展名是文本格式，但内容是图片等二进制数据，未提取文本；原件已保存，如需识别请改回正确扩展名后重发）`;
+    }
+    return `已存档：${fileName}（文本提取失败，原件已保存，可稍后重发）`;
+  }
   const clean = content.replace(new RegExp(`^【${fileName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}】`), "");
   const head = clean.replace(/\s+/g, " ").trim().slice(0, 40);
   return `已存档：${fileName} · ${head}${clean.trim().length > 40 ? "…" : ""}`;

@@ -575,6 +575,102 @@ export function buildFinanceSubsetAnswer(
   return md;
 }
 
+// ---- 时间窗财务列举（R170 P1-1）----
+// 「最近一周我花了哪些钱」这类时间窗+财务列举问题必须与合计/比较同一架构：
+// 按 category 走 SQL 精确列举（待办/未发生金额绝不计入），绝不落 top-k 召回
+// （R169 实测 12/12 全败：候选层漏掉窗内支出，关图谱还把「待办交房租」
+// 幻觉成已发生支出）。窗内无记录时 fail-closed，绝不引用窗外/待办笔记。
+
+export type FinanceListDirection = "expense" | "income" | "both";
+
+const FINANCE_LIST_CUES: [RegExp, FinanceListDirection][] = [
+  // 收入/收支线索先判（「赚了哪些钱」不能被支出侧的裸「哪些钱」抢先）
+  [/(?:收入|进账|入账)(?:记录|明细|情况)?(?:都)?有哪些|有(?:过)?(?:哪些|些什么|什么)(?:收入|进账|入账)|(?:收入|进账)明细|[赚挣](?:了|到|过)?(?:哪些|些什么|什么)钱/, "income"],
+  [/记[了过]?(?:哪些|些什么|什么)账|账单(?:明细)?(?:都)?有哪些|收支明细/, "both"],
+  // 「花了哪些钱/花了些什么钱」「哪些钱」「钱都花在哪了」
+  [/花了?(?:哪些|些什么|什么)钱|哪些钱|钱(?:都)?(?:花|用)(?:在|到)了?(?:哪|什么)/, "expense"],
+  // 「有哪些支出/开销」「支出有哪些」「消费明细」「列一下开销」
+  [/(?:支出|开支|开销|花销|消费)(?:记录|明细|情况)?(?:都)?有哪些|有(?:过)?(?:哪些|些什么|什么)(?:支出|开支|开销|花销|消费)|(?:支出|开支|开销|花销|消费)明细|列(?:一下|出|举)?[^？?。]{0,6}(?:支出|开支|开销|花销|消费)/, "expense"],
+];
+
+/** 识别财务列举问题（「花了哪些钱」）；带主题限定（「买了哪些书」）返回 null。 */
+export function financeListIntent(question: string): FinanceListDirection | null {
+  let direction: FinanceListDirection | null = null;
+  for (const [re, dir] of FINANCE_LIST_CUES) {
+    if (re.test(question)) {
+      direction = dir;
+      break;
+    }
+  }
+  if (!direction) return null;
+  // 残留主题词（「买了哪些书花了哪些钱」）说明不是纯财务列举：留给主题
+  // 子集/普通召回，与 isFinanceAggQuestion 同一剥离口径
+  let residual = question;
+  for (const re of STRIP_RES) residual = residual.replace(re, "");
+  residual = residual.replace(/最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|明细|记录|清单|情况|列出|列举|列一下|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的/g, "");
+  return residual.length < 2 ? direction : null;
+}
+
+const FINANCE_LIST_LABELS: Record<FinanceListDirection, string> = {
+  expense: "支出",
+  income: "收入",
+  both: "收支",
+};
+
+/** 财务列举的确定性答案：逐笔明细 + 按币种合计；窗内无记录 fail-closed。 */
+export function buildFinanceListAnswer(
+  direction: FinanceListDirection,
+  rows: Pick<NoteRow, "id" | "title" | "content" | "created_at" | "category" | "is_sensitive" | "amount" | "currency">[],
+  phrase: string | null
+): string {
+  const scope = phrase ?? "到目前为止";
+  const label = FINANCE_LIST_LABELS[direction];
+  const caliber = `以上为按记账笔记的数据库精确列举（口径与周报/月报一致，不含已删除笔记；待办等尚未发生的计划不计入）。`;
+  if (rows.length === 0) {
+    return `${scope}没有找到${label}记录。\n\n按记账笔记（分类为${direction === "both" ? "支出/收入" : label}）的数据库精确查询，${scope}确实没有这类记录；待办等尚未发生的计划不计入，为避免误答我不引用时间范围之外的笔记。如果这段时间的花费还没记账，补记后再问试试。`;
+  }
+  const totals: Record<string, { expense: number; income: number }> = {};
+  let expenseCount = 0;
+  let incomeCount = 0;
+  let unknown = 0;
+  for (const n of rows) {
+    if (n.category === "expense") expenseCount++;
+    else if (n.category === "income") incomeCount++;
+    if (typeof n.amount !== "number" || !Number.isFinite(n.amount)) {
+      unknown++;
+      continue;
+    }
+    const cur = n.currency || "CNY";
+    totals[cur] ??= { expense: 0, income: 0 };
+    if (n.category === "expense") totals[cur].expense += n.amount;
+    else if (n.category === "income") totals[cur].income += n.amount;
+  }
+  const countParts: string[] = [];
+  if (expenseCount > 0) countParts.push(`${expenseCount} 笔支出`);
+  if (incomeCount > 0) countParts.push(`${incomeCount} 笔收入`);
+  const totalLines = Object.entries(totals).map(([cur, t]) => {
+    const parts: string[] = [];
+    if (t.expense > 0) parts.push(`支出 ${formatAmount(t.expense, cur)}`);
+    if (t.income > 0) parts.push(`收入 ${formatAmount(t.income, cur)}`);
+    return `- ${cur}：${parts.join("，")}`;
+  });
+  const visible = rows.filter((n) => !n.is_sensitive).slice(0, 20);
+  const itemLines = visible.map((n, i) => {
+    const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
+    const dir = direction === "both" ? (n.category === "income" ? "收入·" : "支出·") : "";
+    const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+    return `- ${text}（${dir}${amount}，${formatShanghai(n.created_at).slice(0, 10)}）[${i + 1}]`;
+  });
+  const sensitiveCnt = rows.filter((n) => n.is_sensitive).length;
+  let md = `${scope}你共记了 ${countParts.join("、")}`;
+  if (totalLines.length > 0) md += `：\n${totalLines.join("\n")}`;
+  if (itemLines.length > 0) md += `\n\n逐笔明细${rows.length > visible.length ? `（共 ${rows.length} 笔，仅展示前 ${visible.length} 笔）` : ""}：\n${itemLines.join("\n")}`;
+  if (sensitiveCnt > 0) md += `\n（含 ${sensitiveCnt} 笔加密的敏感记录，金额已计入合计，内容不在问答中展示。）`;
+  if (unknown > 0) md += `\n（另有 ${unknown} 笔未识别出金额，未计入合计。）`;
+  md += `\n\n${caliber}`;
+  return md;
+}
+
 // ---- 极值/排序类统计（R126 P1-3）----
 // 「最早一条笔记是什么时候记的」类问题是一条 min/max/order-by SQL 就能精确
 // 回答的，绝不能交给 LLM 对 top-k 召回猜答（R125 Q3 非确定性错答）。
