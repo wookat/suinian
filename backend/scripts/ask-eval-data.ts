@@ -576,12 +576,12 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAnswerContains: ["260", "数据库精确查询"],
     holdout: true,
   },
-  // 主题零命中：绝不能退回全局极值冒充主题答案（落回普通召回后如实说没找到）
+  // 主题零命中：绝不能退回全局极值冒充主题答案（落回普通召回，如实说没找到；
+  // 召回可能引用相邻笔记作"查无"依据，只禁止把全局极值金额当答案）
   {
     id: "q107",
     category: "财务极值",
     question: "我买过的钢琴里最贵的是哪一台",
-    forbid: ["nz20", "exp1", "exp2"],
-    forbidAnswerContains: ["549", "399"],
+    forbidAnswerContains: ["549", "399", "¥5", "¥3"],
   },
 ];
