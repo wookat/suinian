@@ -3604,8 +3604,13 @@ app.post("/api/ask", async (c) => {
   // 问题「宁缺毋滥」的拒答口径不同——泛化措辞导致关键词/语义都够不着阈值
   // 不代表没有可答内容（R176：q108 元问题切题后零召回误拒答）
   if (notes.length === 0 && metaQuestion) {
+    // 「在想什么」问的是想法本身，优先想法类笔记；其余元问法（总结/回顾）
+    // 不限类目取最近记录
+    const ideaOnly = /在想|想了?些?什么/.test(question);
     const recent = await c.env.DB.prepare(
-      "SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND is_sensitive = 0 ORDER BY created_at DESC LIMIT 12"
+      `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND is_sensitive = 0${
+        ideaOnly ? " AND category = 'idea'" : ""
+      } ORDER BY created_at DESC LIMIT 12`
     )
       .bind(userId)
       .all<NoteRow>();
