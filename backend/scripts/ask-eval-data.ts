@@ -599,7 +599,9 @@ export const QUESTIONS: EvalQuestion[] = [
       { role: "user", content: "这个月金额最大的一笔支出是什么" },
       { role: "assistant", content: "金额最大的一笔支出是跑鞋 ¥549.00 [1]。（以上为数据库精确查询）" },
     ],
-    expectAny: ["cafe3", "proj3", "idea1", "cafe1", "cafe2", "proj1", "proj2"],
+    // 元问题回落最近想法类笔记（R176）：接受任一近期 idea 笔记被引用，
+    // 断言核心在 forbid——不得被上一轮财务上下文污染
+    expectAny: ["cafe3", "nz18", "nz16", "nz14", "proj3", "pod3", "job3", "nz11", "nz9", "fit2", "jp2", "pod2", "proj2"],
     forbidAnswerContains: ["数据库精确查询", "金额最大"],
   },
   {
