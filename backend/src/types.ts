@@ -130,6 +130,10 @@ export interface NoteMeta {
   from_ask?: boolean;
   /** Triage kept failing and the note got a fallback category; the cron sweep re-triages it once AI recovers. */
   needs_retriage?: boolean;
+  /** Retriage retry counter maintained by the degrade sweep. */
+  retriage_attempts?: number;
+  /** Terminal state: retriage hit its attempt ceiling; cleared by a later successful triage or a manual category edit. */
+  triage_failed?: boolean;
 }
 
 export interface NoteRow {

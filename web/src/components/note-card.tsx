@@ -488,6 +488,15 @@ export function NoteCard({
           ) : (
             <CategoryBadge category={note.category} active={categoryFilterActive} />
           )}
+          {!pending && note.meta?.triage_failed && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"
+              title="AI 多次尝试仍无法自动分拣，已按兜底分类保存；手动改分类即可修正"
+            >
+              <CircleAlert className="size-3" />
+              自动分拣失败
+            </span>
+          )}
           {sensitive && (
             <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-600 dark:text-orange-400">
               <ShieldAlert className="size-3" />

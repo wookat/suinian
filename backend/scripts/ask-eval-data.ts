@@ -487,4 +487,53 @@ export const QUESTIONS: EvalQuestion[] = [
     forbidAnswerContains: ["口径与周报/月报一致"],
     holdout: true,
   },
+
+  // —— R170（R169 P1-1）：时间窗财务「列举类」必须走 SQL 精确列举——
+  // q08「最近一周我花了哪些钱」曾 12/12 全败：候选层漏掉窗内支出，
+  // 关图谱还把「待办交房租」幻觉成已发生支出。窗内只有 exp2（5 天前），
+  // exp1（8 天前）在窗外；todo1（房租待办）绝不能被当成支出引用。
+  {
+    id: "q98",
+    category: "财务列举",
+    question: "最近一周我有哪些支出",
+    expectAll: ["exp2"],
+    forbid: ["todo1", "exp1"],
+    expectAnswerContains: ["数据库精确列举"],
+    forbidAnswerContains: ["房租"],
+  },
+  {
+    id: "q99",
+    category: "财务列举",
+    question: "过去7天我的消费明细",
+    expectAll: ["exp2"],
+    forbid: ["todo1", "exp1"],
+    expectAnswerContains: ["数据库精确列举"],
+    holdout: true,
+  },
+  {
+    id: "q100",
+    category: "财务列举",
+    question: "最近一周我的钱都花在哪了",
+    expectAll: ["exp2"],
+    forbid: ["todo1", "exp1"],
+    forbidAnswerContains: ["房租"],
+  },
+  // 长窗口：一个月内 exp1/exp2 都在窗内（nz20 恰在 30 天边界，不强求）
+  {
+    id: "q101",
+    category: "财务列举",
+    question: "最近一个月我花了哪些钱",
+    expectAll: ["exp1", "exp2"],
+    forbid: ["todo1"],
+    expectAnswerContains: ["数据库精确列举"],
+  },
+  // 无收入记录：列举收入必须 fail-closed 明确说没有，绝不拿支出/待办凑数
+  {
+    id: "q102",
+    category: "财务列举",
+    question: "最近一个月我有哪些收入",
+    expectRefusal: true,
+    forbid: ["todo1", "exp1", "exp2", "nz20"],
+    holdout: true,
+  },
 ];

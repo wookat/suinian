@@ -73,7 +73,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -1622,6 +1622,12 @@ app.patch("/api/notes/:id", async (c) => {
     // remember the user's hand-set values so AI triage / cron never overwrites them
     const meta = parseNoteMeta(existing.meta) ?? {};
     meta.manual_override = { ...meta.manual_override, ...override };
+    if (override.category) {
+      // 手动定分类即离开分拣失败/待复判态（R170 P1-2）
+      delete meta.triage_failed;
+      delete meta.needs_retriage;
+      delete meta.retriage_attempts;
+    }
     patch.meta = meta;
   }
   if (
@@ -2860,6 +2866,45 @@ app.post("/api/ask", async (c) => {
       references: cRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
       notes: cRefRows.map((n) => noteToJson(n)),
       finance_compare: true,
+    });
+  }
+  // 时间窗财务列举（R170 P1-1）：「最近一周花了哪些钱」按 category 走 SQL
+  // 精确列举（待办/未发生金额绝不计入）；窗内无记录 fail-closed，绝不让
+  // top-k 召回漏项或把待办幻觉成已发生支出（R169 实测 12/12 全败）。
+  const finList = financeListIntent(question) ?? (FINANCE_WORD_RE.test(question) ? null : financeListIntent(recallQuestion));
+  if (finList) {
+    const lRange = (financeListIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
+    const lConds = ["user_id = ?", "deleted_at IS NULL"];
+    const lBinds: unknown[] = [userId];
+    if (finList === "both") {
+      lConds.push("category IN ('expense','income')");
+    } else {
+      lConds.push("category = ?");
+      lBinds.push(finList);
+    }
+    if (lRange?.start) {
+      lConds.push("created_at >= ?");
+      lBinds.push(lRange.start);
+    }
+    if (lRange?.end) {
+      lConds.push("created_at < ?");
+      lBinds.push(lRange.end);
+    }
+    const lr = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE ${lConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
+    )
+      .bind(...lBinds)
+      .all<NoteRow>();
+    const lrows = lr.results ?? [];
+    const answer = buildFinanceListAnswer(finList, lrows, lRange?.phrase ?? null);
+    // references 与逐笔明细同集合同顺序（敏感记账计入合计但不露出）
+    const lRefRows = lrows.filter((n) => !n.is_sensitive).slice(0, 20);
+    return c.json({
+      answer,
+      references: lRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
+      notes: lRefRows.map((n) => noteToJson(n)),
+      finance_list: true,
+      ...(lrows.length === 0 ? { finance_fail_closed: true } : {}),
     });
   }
   const origFinanceIntent = financeAggIntent(question);
@@ -4119,13 +4164,16 @@ async function retriageOne(
     // sweep re-triages it once AI recovers, but only up to RETRIAGE_MAX_ATTEMPTS
     // times so a note the model can never triage reaches a terminal state
     if (Date.now() - Date.parse(`${row.created_at.replace(" ", "T")}Z`) > TRIAGE_DEGRADE_AFTER_MS) {
+      // R170 P1-2：达到重试上限时落显式失败态 $.triage_failed，UI/运维可见
+      // （区别于「已正常分拣的想法」），用户手动改分类即清除重试标记
       await env.DB.prepare(
         `UPDATE notes SET category = coalesce(category, ?), meta = json_set(coalesce(meta, '{}'),
            '$.retriage_attempts', coalesce(json_extract(meta, '$.retriage_attempts'), 0) + 1,
-           '$.needs_retriage', json(CASE WHEN coalesce(json_extract(meta, '$.retriage_attempts'), 0) + 1 >= ? THEN 'false' ELSE 'true' END)),
+           '$.needs_retriage', json(CASE WHEN coalesce(json_extract(meta, '$.retriage_attempts'), 0) + 1 >= ? THEN 'false' ELSE 'true' END),
+           '$.triage_failed', json(CASE WHEN coalesce(json_extract(meta, '$.retriage_attempts'), 0) + 1 >= ? THEN 'true' ELSE 'false' END)),
            updated_at = datetime('now') WHERE id = ?`
       )
-        .bind(FALLBACK_TRIAGE.category, RETRIAGE_MAX_ATTEMPTS, row.id)
+        .bind(FALLBACK_TRIAGE.category, RETRIAGE_MAX_ATTEMPTS, RETRIAGE_MAX_ATTEMPTS, row.id)
         .run();
     }
     return false;

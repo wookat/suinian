@@ -23,6 +23,8 @@ export interface NoteMeta {
   import_source?: string
   /** 批量导入的入库时间（区别于保留的原 created_at），用于分拣延迟判断 */
   imported_at?: string
+  /** 分拣重试达上限的终态失败：已按兜底分类保存，手动改分类即清除 */
+  triage_failed?: boolean
 }
 
 /** 附件元数据（R144 P1-1）：仅元信息，取件走鉴权 API，不含任何直链 */

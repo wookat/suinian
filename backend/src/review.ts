@@ -189,30 +189,35 @@ export async function generateDailyReviewDetailed(
 
   const picks: { note: NoteRow; kind: ReviewKind }[] = [];
   const seen = new Set<string>();
-  const push = (rows: NoteRow[], kind: ReviewKind, max: number) => {
+  const push = (rows: NoteRow[], kind: ReviewKind, max: number, limitTotal = MAX_REVIEW_ITEMS) => {
     for (const n of rows) {
-      if (picks.length >= MAX_REVIEW_ITEMS || seen.has(n.id)) continue;
+      if (picks.length >= limitTotal || seen.has(n.id)) continue;
       if (picks.filter((p) => p.kind === kind).length >= max) continue;
       picks.push({ note: n, kind });
       seen.add(n.id);
     }
   };
-  push(await notesOnLocalDay(env, userId, shiftDate(today, { years: 1 }), 2, tzModifier), "year_ago", 2);
-  push(await notesOnLocalDay(env, userId, shiftDate(today, { months: 1 }), 2, tzModifier), "month_ago", 2);
-  // 洞察轮换：按日期奇偶轮换「反复出现的主题」/「悬置的待办」优先级，每天至多 1 条
-  if (picks.length < MAX_REVIEW_ITEMS) {
-    const dayNum = parseInt(today.replace(/-/g, ""), 10);
-    const order: ReviewKind[] = dayNum % 2 === 0 ? ["recurring_theme", "pending_todo"] : ["pending_todo", "recurring_theme"];
-    for (const kind of order) {
-      const cand =
-        kind === "recurring_theme"
-          ? await recurringThemeCandidate(env, userId, [...seen])
-          : await pendingTodoCandidate(env, userId, [...seen]);
-      if (cand) {
-        push([cand], kind, 1);
-        break;
-      }
+  // 洞察配额（R170 P2-4）：先探洞察候选（轮换「反复出现的主题」/「悬置的
+  // 待办」），有则给它保留 1 个名额，纪念日至多占 MAX-1 条——否则连续纪念日
+  // 会把临期待办永远挤出回顾（audit-r169 §3.6 实测饿死路径）
+  const dayNum = parseInt(today.replace(/-/g, ""), 10);
+  const order: ReviewKind[] = dayNum % 2 === 0 ? ["recurring_theme", "pending_todo"] : ["pending_todo", "recurring_theme"];
+  let insight: { note: NoteRow; kind: ReviewKind } | null = null;
+  for (const kind of order) {
+    const cand =
+      kind === "recurring_theme"
+        ? await recurringThemeCandidate(env, userId, [])
+        : await pendingTodoCandidate(env, userId, []);
+    if (cand) {
+      insight = { note: cand, kind };
+      break;
     }
+  }
+  const annivCap = insight ? MAX_REVIEW_ITEMS - 1 : MAX_REVIEW_ITEMS;
+  push(await notesOnLocalDay(env, userId, shiftDate(today, { years: 1 }), 2, tzModifier), "year_ago", 2, annivCap);
+  push(await notesOnLocalDay(env, userId, shiftDate(today, { months: 1 }), 2, tzModifier), "month_ago", 2, annivCap);
+  if (insight && !seen.has(insight.note.id)) {
+    push([insight.note], insight.kind, 1);
   }
   if (picks.length < MAX_REVIEW_ITEMS) {
     push(await revisitCandidates(env, userId, [...seen], MAX_REVIEW_ITEMS - picks.length), "revisit", MAX_REVIEW_ITEMS);
