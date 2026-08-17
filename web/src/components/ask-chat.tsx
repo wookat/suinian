@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { NoteCard } from "@/components/note-card"
-import { ask, createNote } from "@/lib/api"
+import { askStream, createNote } from "@/lib/api"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import type { AskHistoryMessage, Note } from "@/lib/types"
@@ -132,6 +132,11 @@ export function AskChat({
   const [messages, setMessages] = useState<AskChatMessage[]>(loadMessages)
   const [input, setInput] = useState("")
   const [asking, setAsking] = useState(false)
+  // 流式中间态（R174 SSE）：meta = 已检索 N 条；text = 生成中的正文增量。
+  // 正文里的 [n] 角标在流式期间按纯文本展示，done 后用引证补全的最终全文
+  // 一次性替换，角标才变为可点击引用（保证引证确定性）。
+  const [streamState, setStreamState] = useState<{ retrieved: number | null; text: string }>({ retrieved: null, text: "" })
+  const abortRef = useRef<AbortController | null>(null)
   const [saveStates, setSaveStates] = useState<Record<string, "saving" | "saved" | "error">>({})
   const [confirmClear, setConfirmClear] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -153,9 +158,10 @@ export function AskChat({
     saveMessages(messages)
   }, [messages])
 
+  const hasStreamText = streamState.text.length > 0
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
-  }, [messages.length, asking])
+  }, [messages.length, asking, hasStreamText])
 
   const history = useMemo<AskHistoryMessage[]>(
     () =>
@@ -178,10 +184,21 @@ export function AskChat({
     if (!q || asking) return
     if (question === undefined) setInput("")
     setAsking(true)
+    setStreamState({ retrieved: null, text: "" })
+    const controller = new AbortController()
+    abortRef.current = controller
     const userMsg: AskChatMessage = { id: crypto.randomUUID(), role: "user", content: q }
     setMessages((ms) => [...ms, userMsg])
     try {
-      const res = await ask(q, history)
+      const res = await askStream(
+        q,
+        history,
+        {
+          onMeta: (m) => setStreamState((s) => ({ ...s, retrieved: m.retrieved })),
+          onDelta: (t) => setStreamState((s) => ({ ...s, text: s.text + t })),
+        },
+        controller.signal,
+      )
       const refs = (res.references ?? []).flatMap((r) => {
         const note = res.notes.find((n) => n.id === r.note_id)
         return note ? [{ index: r.index, note }] : []
@@ -191,6 +208,14 @@ export function AskChat({
         { id: crypto.randomUUID(), role: "assistant", content: res.answer, refs, question: q },
       ])
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError" && controller.signal.aborted) {
+        // 用户主动取消：不算错误，保留问题方便重发
+        setMessages((ms) => [
+          ...ms,
+          { id: crypto.randomUUID(), role: "assistant", content: "已取消本次回答。", question: q, error: true },
+        ])
+        return
+      }
       const raw = e instanceof Error ? e.message : String(e)
       const friendly = /internal error|^5\d\d$|failed to fetch/i.test(raw) ? "问答服务暂时不可用，请稍后重试" : raw
       setMessages((ms) => [
@@ -204,7 +229,9 @@ export function AskChat({
         },
       ])
     } finally {
+      abortRef.current = null
       setAsking(false)
+      setStreamState({ retrieved: null, text: "" })
     }
   }
 
@@ -378,8 +405,25 @@ export function AskChat({
         )}
         {asking && (
           <div className="flex justify-start">
-            <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm bg-accent/60 px-3.5 py-2 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" /> 正在思考…
+            <div className="max-w-[92%] space-y-2 rounded-2xl rounded-bl-sm bg-accent/60 px-3.5 py-2">
+              {streamState.text ? (
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">{streamState.text}</p>
+              ) : (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  {streamState.retrieved !== null
+                    ? `已找到 ${streamState.retrieved} 条相关笔记，正在生成回答…`
+                    : "正在思考…"}
+                </div>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs text-muted-foreground"
+                onClick={() => abortRef.current?.abort()}
+              >
+                取消
+              </Button>
             </div>
           </div>
         )}

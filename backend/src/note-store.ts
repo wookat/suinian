@@ -409,6 +409,14 @@ export async function applyTriage(
       newMeta.finance_merchant = triage.merchant;
       metaChanged = true;
     }
+  } else if (triage.amount != null) {
+    // 分类被手改只锁分类本身；金额/币种/商家提取仍生效（仅补空，不覆盖已有值）
+    sets.push("amount = coalesce(amount, ?)", "currency = coalesce(currency, ?)");
+    binds.push(triage.amount, triage.currency ?? null);
+    if (triage.merchant && !newMeta.finance_merchant) {
+      newMeta.finance_merchant = triage.merchant;
+      metaChanged = true;
+    }
   }
   if (metaChanged) {
     sets.push("meta = ?");

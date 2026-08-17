@@ -111,7 +111,9 @@ export type QuestionCategory =
   | "为什么依据"
   | "数字细节"
   | "财务聚合"
-  | "统计聚合";
+  | "统计聚合"
+  | "财务列举"
+  | "财务极值";
 
 export interface EvalQuestion {
   id: string;
@@ -535,5 +537,51 @@ export const QUESTIONS: EvalQuestion[] = [
     expectRefusal: true,
     forbid: ["todo1", "exp1", "exp2", "nz20"],
     holdout: true,
+  },
+
+  // —— R174（R173 P1）：财务极值的主题限定必须注入 SQL WHERE ——
+  // 「买过的键盘里最贵的」曾 3/3 答成全局最大支出（跑鞋 549）并以
+  // 「精确查询」背书；主题限定后必须命中键盘 399，绝不能出现 549。
+  {
+    id: "q103",
+    category: "财务极值",
+    question: "我买过的键盘里最贵的是哪一把",
+    expectAll: ["exp1"],
+    forbid: ["nz20"],
+    expectAnswerContains: ["399", "数据库精确查询", "键盘"],
+    forbidAnswerContains: ["549"],
+  },
+  {
+    id: "q104",
+    category: "财务极值",
+    question: "买过的跑鞋中花得最多的一笔是多少钱",
+    expectAll: ["nz20"],
+    forbid: ["exp1"],
+    expectAnswerContains: ["549", "数据库精确查询"],
+    holdout: true,
+  },
+  // 不带主题的全局极值不回归：全局最大支出仍是跑鞋 549
+  {
+    id: "q105",
+    category: "财务极值",
+    question: "我最贵的一笔支出是什么",
+    expectAll: ["nz20"],
+    expectAnswerContains: ["549", "数据库精确查询"],
+  },
+  {
+    id: "q106",
+    category: "财务极值",
+    question: "金额最小的一笔消费是哪笔",
+    expectAll: ["exp2"],
+    expectAnswerContains: ["260", "数据库精确查询"],
+    holdout: true,
+  },
+  // 主题零命中：绝不能退回全局极值冒充主题答案（落回普通召回，如实说没找到；
+  // 召回可能引用相邻笔记作"查无"依据，只禁止把全局极值金额当答案）
+  {
+    id: "q107",
+    category: "财务极值",
+    question: "我买过的钢琴里最贵的是哪一台",
+    forbidAnswerContains: ["549", "399", "¥5", "¥3"],
   },
 ];

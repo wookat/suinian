@@ -153,6 +153,7 @@ export function buildTriagePrompt(
   - 「报销到账 1200」→ income，amount=1200，currency="CNY"
   - 「今天买了杯咖啡，没看多少钱」→ expense，amount=null（金额不确定绝不要猜）
   - 「周末记得去买猫粮」→ todo（还没花钱，不是 expense）
+  - 「我这周记了哪些待办」→ idea，is_question=true（向笔记库提问的查询句，不是一条新待办）
   注意：已经发生/完成的动作叙述是日志不是待办——「跑了 7 公里」「读完第四章」「搞定了/交了/发布了」这类完成式记录归 idea（生活/工作日志、读书感想）或 expense/income（若是记账），绝不要因为句子里有动词就归 todo。判例：
   - 「跑步 7 公里，早上出门凉快多了」→ idea（完成式运动日志，不是待办）
   - 「读《纳瓦尔宝典》第四章，杠杆的三种形式很有启发」→ idea（读书笔记，不是待办）

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   financeExtremeIntent,
+  financeExtremeTopicTerms,
   buildFinanceExtremeAnswer,
   topicCountIntent,
   buildTopicCountAnswer,
@@ -49,6 +50,33 @@ describe("financeExtremeIntent", () => {
     expect(financeExtremeIntent("最长的一条笔记是哪条")).toBeNull();
     expect(financeExtremeIntent("咖啡一共花了多少")).toBeNull();
     expect(financeExtremeIntent("最早的笔记是什么时候记的")).toBeNull();
+  });
+});
+
+describe("financeExtremeTopicTerms", () => {
+  it("extracts the topic qualifier from 主题+极值 wording (R174 P1)", () => {
+    expect(financeExtremeTopicTerms("我买过的键盘里最贵的是哪一把")).toEqual(["键盘"]);
+    expect(financeExtremeTopicTerms("买过的键盘中最贵的一笔是多少钱")).toEqual(["键盘"]);
+    expect(financeExtremeTopicTerms("买的耳机里最便宜的是哪个")).toEqual(["耳机"]);
+    expect(financeExtremeTopicTerms("咖啡里花得最多的一笔是多少")).toEqual(["咖啡"]);
+  });
+
+  it("stays null for unscoped extreme questions (global route keeps them)", () => {
+    expect(financeExtremeTopicTerms("我最贵的一笔支出是什么")).toBeNull();
+    expect(financeExtremeTopicTerms("最贵的一笔支出")).toBeNull();
+    expect(financeExtremeTopicTerms("金额最大的一笔消费")).toBeNull();
+    expect(financeExtremeTopicTerms("最大的一笔收入是哪笔")).toBeNull();
+    expect(financeExtremeTopicTerms("最便宜的一笔支出")).toBeNull();
+  });
+
+  it("strips time qualifiers from the topic (time filter handles them)", () => {
+    expect(financeExtremeTopicTerms("上个月买的键盘里最贵的是哪一把")).toEqual(["键盘"]);
+    expect(financeExtremeTopicTerms("今年最贵的一笔支出")).toBeNull();
+  });
+
+  it("stays null for non-extreme questions", () => {
+    expect(financeExtremeTopicTerms("咖啡一共花了多少")).toBeNull();
+    expect(financeExtremeTopicTerms("最长的一条笔记是哪条")).toBeNull();
   });
 });
 
