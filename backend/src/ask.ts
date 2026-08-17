@@ -392,6 +392,33 @@ export function financeExtremeIntent(question: string): FinanceExtremeQuery | nu
   return null;
 }
 
+// 极值问法的主题限定（R174 P1）：「我买过的键盘里最贵的是哪一把」的「键盘」
+// 必须注入 SQL WHERE（与财务子集/主题枚举同一 LIKE 匹配家族），绝不能识别出
+// 极值意图后丢掉主题限定答成全局极值（R173 实测 3/3 复现）。剥掉极值措辞/
+// 财务词/时间短语/购买动词/量词填充后，残留的干净词即主题限定词。
+const EXTREME_STRIP_RES: RegExp[] = [
+  STRIP_RES[0], // 时间短语，与财务聚合同一口径
+  /最贵|最便宜|金额最[大高小低]|最[高低]|最大的?一?[笔项个]|最小的?一?[笔项个]|花得?最[多少]|花钱最[狠多猛]|最狠的?一[笔次]|数额最[大小]|排(?:名)?第一/g,
+  /(?:是)?哪一?[笔项个把只台件本条张部次辆双瓶副架块支款]?|什么|多少钱|多少/g,
+  /[一两]笔|[一两]项|[一两]次/g,
+  /买[过了的]{0,2}|购入|入手|里面?|之中|当中|其中|这些|那些|所有|全部|历史上|有史以来|记录里|笔记里/g,
+  STRIP_RES[2], // 财务动词/名词
+  STRIP_RES[3], // 语气/填充
+];
+
+/** 从财务极值问法中提取主题限定词（「键盘里最贵的」→「键盘」）；无限定返回 null。 */
+export function financeExtremeTopicTerms(question: string): string[] | null {
+  if (!financeExtremeIntent(question)) return null;
+  let residual = question;
+  for (const re of EXTREME_STRIP_RES) residual = residual.replace(re, "");
+  residual = residual.replace(/^的+|的+$/g, "");
+  const terms = residual
+    .split(/和|跟|以及|、|的/)
+    .map((s) => s.trim().replace(/[里中]$/, ""))
+    .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s));
+  return terms.length > 0 && terms.length <= 3 ? terms : null;
+}
+
 const FINANCE_DIRECTION_LABELS: Record<"expense" | "income", string> = { expense: "支出", income: "收入" };
 
 /** 财务极值的确定性答案：按币种分组比较，敏感笔记只报金额/时间不露内容。 */
@@ -399,9 +426,11 @@ export function buildFinanceExtremeAnswer(
   query: FinanceExtremeQuery,
   rows: Pick<NoteRow, "id" | "title" | "content" | "created_at" | "is_sensitive" | "amount" | "currency">[],
   unknownAmount: number,
-  phrase: string | null
+  phrase: string | null,
+  terms: string[] | null = null
 ): string {
-  const scope = phrase ?? "全部笔记";
+  const topic = terms && terms.length > 0 ? `「${terms.join("、")}」` : null;
+  const scope = `${phrase ?? ""}${topic ? `与${topic}相关的记录里` : phrase ? "" : "全部笔记"}`;
   const label = FINANCE_DIRECTION_LABELS[query.direction];
   const kindLabel = query.kind === "max" ? "金额最大" : "金额最小";
   if (rows.length === 0) {
@@ -415,11 +444,11 @@ export function buildFinanceExtremeAnswer(
       : `：${(n.title || n.content).replace(/\s+/g, " ").slice(0, 60)}`;
     const cite = n.is_sensitive ? "" : ` [${i + 1}]`;
     return rows.length === 1
-      ? `你${kindLabel}的一笔${label}是 ${amount}（${when}，北京时间）${cite}${desc}`
+      ? `${topic ? `${scope}，` : ""}你${kindLabel}的一笔${label}是 ${amount}（${when}，北京时间）${cite}${desc}`
       : `- ${n.currency || "CNY"}：${amount}（${when}，北京时间）${cite}${desc}`;
   });
   let md = rows.length === 1 ? lines[0] : `${scope}按币种分别比较（不同币种金额不可直接比较），${kindLabel}的${label}：\n${lines.join("\n")}`;
-  md += `\n\n以上为数据库精确查询结果（按已识别金额比较，不含已删除笔记${unknownAmount > 0 ? `；另有 ${unknownAmount} 笔未识别出金额，未参与比较` : ""}）。`;
+  md += `\n\n以上为数据库精确查询结果（${topic ? `按关键词${topic}匹配标题/正文/标签，` : ""}按已识别金额比较，不含已删除笔记${unknownAmount > 0 ? `；另有 ${unknownAmount} 笔未识别出金额，未参与比较` : ""}）。`;
   return md;
 }
 

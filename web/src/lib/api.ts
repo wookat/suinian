@@ -572,6 +572,104 @@ export async function ask(
   }
 }
 
+/** askStream 的增量事件回调 */
+export interface AskStreamHandlers {
+  /** 检索完成（生成开始前）：已找到 retrieved 条相关笔记 */
+  onMeta?: (meta: { retrieved: number }) => void
+  /** 生成文本增量（正文尚未定稿，引证角标以最终 done 全文为准） */
+  onDelta?: (text: string) => void
+}
+
+/**
+ * 流式问答（R174，SSE）：带 Accept: text/event-stream 协商。确定性路由（财务/
+ * 计数/枚举等）服务端仍整段 JSON 返回——按 content-type 识别直接解析；LLM 生成
+ * 分支收 meta/delta 渐进渲染，done 事件携带引证补全后的最终全文 + references，
+ * 调用方用返回值一次性替换流式中间态（保证引证角标确定性）。SSE 通道建立失败
+ * （弱网/代理剥流）自动降级为普通 JSON 问答，行为与 ask() 一致。
+ */
+export async function askStream(
+  question: string,
+  history: AskHistoryMessage[] = [],
+  handlers: AskStreamHandlers = {},
+  signal?: AbortSignal,
+): Promise<AskResponse> {
+  if (loadSettings().useMock) return mockAsk(question)
+  const { apiBaseUrl, apiToken } = loadSettings()
+  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  // 流式总预算与服务端一致取 60s 兜底（首字节到达后正文持续流动，不会误伤）
+  const timeoutSignal = AbortSignal.timeout(60_000)
+  let res: Response
+  try {
+    res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/ask`, {
+      method: "POST",
+      signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+        Authorization: `Bearer ${apiToken}`,
+      },
+      body: JSON.stringify(history.length > 0 ? { question, history } : { question }),
+    })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError" && signal?.aborted) throw e
+    // SSE 通道建立失败：降级为普通 JSON 问答（弱网/中间层不支持流式时不坏）
+    return ask(question, history)
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    let message = text || res.statusText
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown }
+      if (typeof parsed.error === "string" && parsed.error) message = parsed.error
+    } catch {
+      // not JSON, keep raw text
+    }
+    throw new ApiError(res.status, message)
+  }
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!contentType.includes("text/event-stream") || !res.body) {
+    // 确定性路由整段 JSON（或中间层剥掉了流式）：直接按普通问答解析
+    const data = (await res.json()) as AskResponse
+    return { ...data, notes: (data.notes ?? []).map((n) => normalizeNote(n as unknown as Record<string, unknown>)) }
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ""
+  let event = ""
+  let done_: AskResponse | null = null
+  let errMessage: string | null = null
+  const handleLine = (line: string) => {
+    if (line.startsWith("event:")) {
+      event = line.slice(6).trim()
+      return
+    }
+    if (!line.startsWith("data:")) return
+    const data = line.slice(5).trim()
+    if (!data) return
+    try {
+      if (event === "meta") handlers.onMeta?.(JSON.parse(data) as { retrieved: number })
+      else if (event === "delta") handlers.onDelta?.((JSON.parse(data) as { text: string }).text)
+      else if (event === "done") done_ = JSON.parse(data) as AskResponse
+      else if (event === "error") errMessage = (JSON.parse(data) as { message?: string }).message ?? "生成失败，请重试"
+    } catch {
+      // 忽略坏帧，done 缺失时统一在结尾兜底
+    }
+  }
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const lines = buf.split("\n")
+    buf = lines.pop() ?? ""
+    for (const line of lines) handleLine(line)
+  }
+  handleLine(buf)
+  if (errMessage) throw new ApiError(500, errMessage)
+  if (!done_) throw new NetworkError("流式回答中断，请重试", true)
+  const final = done_ as AskResponse
+  return { ...final, notes: (final.notes ?? []).map((n) => normalizeNote(n as unknown as Record<string, unknown>)) }
+}
+
 export async function exportData(
   format: "json" | "markdown",
   includeSensitive: boolean,

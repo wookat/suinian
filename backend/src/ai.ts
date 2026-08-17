@@ -161,6 +161,138 @@ export async function chatComplete(env: AiEnv, opts: ChatOptions): Promise<strin
   return runModel(env, fallback, opts);
 }
 
+/** Parse one provider SSE body, feeding text chunks to onDelta; returns full text or null. */
+async function consumeSseBody(
+  body: ReadableStream<Uint8Array>,
+  extract: (data: string) => string | null,
+  onDelta: (text: string) => void
+): Promise<string | null> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let full = "";
+  let sawAny = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === "[DONE]") continue;
+        const text = extract(data);
+        if (text) {
+          sawAny = true;
+          full += text;
+          onDelta(text);
+        }
+      }
+    }
+  } catch (err) {
+    // a stream that dies after emitting text is not retried (the client
+    // already rendered it); only a stream that died before any text falls
+    // through the provider chain
+    console.error("chatCompleteStream: stream interrupted", err);
+  }
+  return sawAny ? full : null;
+}
+
+const extractOpenAiDelta = (data: string): string | null => {
+  try {
+    const j = JSON.parse(data) as { choices?: { delta?: { content?: string } }[] };
+    return j.choices?.[0]?.delta?.content ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const extractWorkersAiDelta = (data: string): string | null => {
+  try {
+    const j = JSON.parse(data) as { response?: string };
+    return j.response ?? null;
+  } catch {
+    return null;
+  }
+};
+
+async function runWorkersAiStream(env: AiEnv, model: string, opts: ChatOptions, onDelta: (t: string) => void): Promise<string | null> {
+  if (!env.AI) return null;
+  try {
+    const stream = (await withTimeout(
+      env.AI.run(model as Parameters<Ai["run"]>[0], {
+        messages: opts.messages,
+        temperature: opts.temperature,
+        max_tokens: opts.max_tokens,
+        stream: true,
+      }) as unknown as Promise<ReadableStream<Uint8Array>>,
+      opts.timeout_ms ?? 20_000,
+      `workers-ai stream ${model}`
+    )) as ReadableStream<Uint8Array>;
+    return await consumeSseBody(stream, extractWorkersAiDelta, onDelta);
+  } catch (err) {
+    console.error("chatCompleteStream: workers-ai failed", model, err);
+    return null;
+  }
+}
+
+async function runOpenAiCompatStream(env: AiEnv, model: string, opts: ChatOptions, onDelta: (t: string) => void): Promise<string | null> {
+  if (!env.DEEPSEEK_API_KEY) return null;
+  try {
+    const res = await fetch(`${env.AI_BASE_URL || env.DEEPSEEK_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${env.DEEPSEEK_API_KEY}` },
+      body: JSON.stringify({
+        model,
+        temperature: opts.temperature,
+        max_tokens: opts.max_tokens,
+        messages: opts.messages,
+        stream: true,
+      }),
+      signal: AbortSignal.timeout(opts.timeout_ms ?? 20_000),
+    });
+    if (!res.ok || !res.body) {
+      console.error("chatCompleteStream: provider error", res.status, (await res.text()).slice(0, 200));
+      return null;
+    }
+    return await consumeSseBody(res.body, extractOpenAiDelta, onDelta);
+  } catch (err) {
+    console.error("chatCompleteStream: failed", err);
+    return null;
+  }
+}
+
+function runModelStream(env: AiEnv, model: string, opts: ChatOptions, onDelta: (t: string) => void): Promise<string | null> {
+  if (model.startsWith(WORKERS_AI_PREFIX)) return runWorkersAiStream(env, model.slice(WORKERS_AI_PREFIX.length), opts, onDelta);
+  return runOpenAiCompatStream(env, model, opts, onDelta);
+}
+
+/**
+ * Streaming variant of `chatComplete`: feeds incremental text to `onDelta` as
+ * the model produces it and resolves with the full text (same provider chain
+ * and fallback semantics). If the stream dies after some text already went
+ * out, the accumulated text is returned rather than retried — the caller's
+ * final reconcile pass owns the definitive answer. Providers that failed
+ * before emitting anything fall through the chain; a chain layer that only
+ * supports non-streaming still works (single onDelta with the whole text).
+ */
+export async function chatCompleteStream(env: AiEnv, opts: ChatOptions, onDelta: (text: string) => void): Promise<string | null> {
+  const model = env.AI_MODEL || "deepseek-chat";
+  if (model === MOCK_MODEL) {
+    const text = mockChatResponse(opts);
+    onDelta(text);
+    return text;
+  }
+  const primary = await runModelStream(env, model, opts, onDelta);
+  if (primary !== null) return primary;
+  const fallback = fallbackModelFor(env, model);
+  if (!fallback) return null;
+  console.error(`chatCompleteStream: primary ${model} failed, falling back to ${fallback}`);
+  return runModelStream(env, fallback, opts, onDelta);
+}
+
 /**
  * Lightweight liveness probe for /health?probe=ai: one tiny completion against
  * the first chain layer, then the second. `provider` reports which layer

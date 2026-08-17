@@ -30,7 +30,7 @@ import {
   REBUILD_SLICE_BUDGET_MS,
   type ThreadJobRow,
 } from "./thread-jobs";
-import { chatComplete, aiProbe } from "./ai";
+import { chatComplete, chatCompleteStream, aiProbe, type ChatOptions } from "./ai";
 import {
   hashPassword,
   verifyPassword,
@@ -73,7 +73,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -1596,10 +1596,10 @@ app.patch("/api/notes/:id", async (c) => {
   }
 
   const existing = await c.env.DB.prepare(
-    "SELECT is_sensitive, id, user_id, content, content_enc, meta, tags, updated_at FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+    "SELECT is_sensitive, id, user_id, content, content_enc, meta, tags, category, updated_at FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
   )
     .bind(id, userId)
-    .first<{ is_sensitive: number; id: string; user_id: string; content: string; content_enc: string | null; meta: string | null; tags: string; updated_at: string }>();
+    .first<{ is_sensitive: number; id: string; user_id: string; content: string; content_enc: string | null; meta: string | null; tags: string; category: string | null; updated_at: string }>();
   if (!existing) return c.json({ error: "not found" }, 404);
 
   // optimistic lock: clients editing a loaded note send its updated_at back so
@@ -1657,6 +1657,9 @@ app.patch("/api/notes/:id", async (c) => {
       delete meta.triage_failed;
       delete meta.needs_retriage;
       delete meta.retriage_attempts;
+      // 但 AI 从未处理过的笔记（导入后 category 仍 NULL）留在复判队列：
+      // cron 照常提取金额/标题/标签，分类本身因 manual_override 不再被覆盖
+      if (existing.category === null) meta.needs_retriage = true;
     }
     patch.meta = meta;
   }
@@ -2236,6 +2239,19 @@ app.get("/api/notes/random", async (c) => {
     .bind(c.get("userId"))
     .first<NoteRow>();
   if (!note) return c.json({ error: "暂无可回看的笔记" }, 404);
+  const [withAtt] = await withAttachments(c.env, [noteToJson(note)]);
+  return c.json({ note: withAtt });
+});
+
+// 单条笔记读取（R174 P2-4，审计/运维对照用；注册在 trash/random 等静态段之后，
+// 避免 :id 吞掉同前缀路由）。与列表同口径：敏感行正文以占位符返回，不解密。
+app.get("/api/notes/:id", async (c) => {
+  const note = await c.env.DB.prepare(
+    "SELECT * FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  )
+    .bind(c.req.param("id"), c.get("userId"))
+    .first<NoteRow>();
+  if (!note) return c.json({ error: "not found" }, 404);
   const [withAtt] = await withAttachments(c.env, [noteToJson(note)]);
   return c.json({ note: withAtt });
 });
@@ -2894,8 +2910,16 @@ app.post("/api/ask", async (c) => {
   const finExtreme = financeExtremeIntent(question) ?? (FINANCE_WORD_RE.test(question) ? null : financeExtremeIntent(recallQuestion));
   if (finExtreme) {
     const xRange = (financeExtremeIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
+    // 主题限定（R174 P1）：「键盘里最贵的」的「键盘」注入 WHERE（与财务
+    // 子集同一 LIKE 匹配口径），绝不把主题极值答成全局极值
+    const xTerms = financeExtremeIntent(question) ? financeExtremeTopicTerms(question) : financeExtremeTopicTerms(recallQuestion);
     const xConds = ["user_id = ?", "deleted_at IS NULL", "category = ?"];
     const xBinds: unknown[] = [userId, finExtreme.direction];
+    if (xTerms) {
+      const likeOrs = xTerms.map(() => "(content LIKE ? OR title LIKE ? OR tags LIKE ?)").join(" OR ");
+      xConds.push(`(${likeOrs})`);
+      xBinds.push(...xTerms.flatMap((t) => Array(3).fill(likeContains(t)) as string[]));
+    }
     if (xRange?.start) {
       xConds.push("created_at >= ?");
       xBinds.push(xRange.start);
@@ -2918,14 +2942,18 @@ app.post("/api/ask", async (c) => {
         .first<{ cnt: number }>(),
     ]);
     const xRows = xr.results ?? [];
-    const answer = buildFinanceExtremeAnswer(finExtreme, xRows, unknownRow?.cnt ?? 0, xRange?.phrase ?? null);
-    const xRefRows = xRows.filter((n) => !n.is_sensitive);
-    return c.json({
-      answer,
-      references: xRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: xRefRows.map((n) => noteToJson(n)),
-      finance_extreme: true,
-    });
+    // 主题关键词零命中：落回普通召回（语义仍可能兜底），不 dead-end，
+    // 也绝不退回全局极值冒充主题答案
+    if (!(xTerms && xRows.length === 0 && (unknownRow?.cnt ?? 0) === 0)) {
+      const answer = buildFinanceExtremeAnswer(finExtreme, xRows, unknownRow?.cnt ?? 0, xRange?.phrase ?? null, xTerms);
+      const xRefRows = xRows.filter((n) => !n.is_sensitive);
+      return c.json({
+        answer,
+        references: xRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
+        notes: xRefRows.map((n) => noteToJson(n)),
+        finance_extreme: true,
+      });
+    }
   }
   // 财务比较（R168 P1）：「赚得多还是花得多/入不敷出/收支差多少」与环比对比
   // 都必须基于 financeStats 的 SQL 精确聚合做比较后确定性措辞，绝不让 LLM
@@ -3602,8 +3630,16 @@ app.post("/api/ask", async (c) => {
       return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}) ${n.title ?? ""}\n${n.content.slice(0, 500)}`;
     })
     .join("\n\n");
+  // ask SSE（R174，R173 第四节方案）：只有走到这里的 LLM 生成分支才流式
+  // （确定性路由 <2.2s 保持整段 JSON）；客户端以 Accept: text/event-stream
+  // 协商，不带该头的客户端（Android/MCP/微信桥）行为完全不变。事件序列
+  // meta（已检索 N 条）→ delta×n（生成文本增量）→ done（引证补全后的最终
+  // 全文 + references，客户端一次性替换，保证引证角标确定性）。
+  const wantsStream = (c.req.header("accept") ?? "").includes("text/event-stream");
+
+  const runGeneration = async (onDelta?: (text: string) => void): Promise<Record<string, unknown>> => {
   const tGen = Date.now();
-  const answer = await chatComplete(c.env, {
+  const genOpts: ChatOptions = {
     temperature: 0.3,
     max_tokens: 800,
     timeout_ms: 40_000,
@@ -3623,7 +3659,10 @@ app.post("/api/ask", async (c) => {
         }`,
       },
     ],
-  });
+  };
+  const answer = onDelta
+    ? await chatCompleteStream(c.env, genOpts, onDelta)
+    : await chatComplete(c.env, genOpts);
   // semantic-only hits (never keyword-matched) below the citation threshold
   const weakIds = new Set(extraIds.filter((id) => (semScore.get(id) ?? 0) < ASK_CITATION_MIN_SCORE));
   // 检索命中却误拒答（R113 P1）：强命中（关键词命中或语义分达标）存在时，
@@ -3653,7 +3692,8 @@ app.post("/api/ask", async (c) => {
     }
   }
   askMarks.push(["gen", Date.now() - tGen]);
-  c.header("Server-Timing", serverTimingHeader([...askMarks, ["total", Date.now() - askT0]]));
+  // 流式分支的响应头已发出，Server-Timing 只在整段 JSON 分支可设
+  if (!onDelta) c.header("Server-Timing", serverTimingHeader([...askMarks, ["total", Date.now() - askT0]]));
   // the model itself concluded "没找到" over recalled topic notes: honest
   // wording is 「笔记里没提到」, not 「没找到相关笔记」 (R115 P2 拒答口径)；
   // suggestions prefer strong semantic hits, falling back to the top recall
@@ -3698,7 +3738,7 @@ app.post("/api/ask", async (c) => {
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
     );
-    return c.json({ answer: noAnswer + hint, references, notes: refNotes, no_answer: true });
+    return { answer: noAnswer + hint, references, notes: refNotes, no_answer: true };
   }
   // weak semantic-only hits stay in the context but never surface as
   // citations; the answer text and the references array are rewritten
@@ -3725,9 +3765,47 @@ app.post("/api/ask", async (c) => {
     references.map((r) => noteToJsonDecrypted(c.env, byId.get(r.note_id)!))
   );
   if (!answer2) {
-    return c.json({ answer: "（AI 暂不可用）已找到相关记录，见 references。", references, notes: refNotes });
+    return { answer: "（AI 暂不可用）已找到相关记录，见 references。", references, notes: refNotes };
   }
-  return c.json({ answer: finalAnswer, references, notes: refNotes });
+  return { answer: finalAnswer, references, notes: refNotes };
+  };
+
+  if (wantsStream) {
+    const { readable, writable } = new TransformStream<Uint8Array>();
+    const writer = writable.getWriter();
+    const enc = new TextEncoder();
+    const send = (event: string, data: unknown) =>
+      writer.write(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)).catch(() => {});
+    c.executionCtx.waitUntil(
+      (async () => {
+        try {
+          await send("meta", { retrieved: notes.length });
+          const body = await runGeneration((text) => {
+            void send("delta", { text });
+          });
+          await send("done", body);
+        } catch (err) {
+          console.error("ask: stream generation failed", err);
+          await send("error", { message: "生成失败，请重试" });
+        } finally {
+          try {
+            await writer.close();
+          } catch {
+            /* client disconnected */
+          }
+        }
+      })()
+    );
+    return new Response(readable, {
+      headers: {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      },
+    });
+  }
+
+  return c.json(await runGeneration());
 });
 
 // ---- GET /api/threads ----
