@@ -27,6 +27,7 @@ describe("parseTriageJson", () => {
       amount: null,
       currency: null,
       merchant: null,
+      is_question: false,
     });
   });
 

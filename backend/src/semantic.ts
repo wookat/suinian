@@ -217,6 +217,9 @@ export async function deleteNoteEmbeddings(env: Env, noteIds: string[]): Promise
 
 export type SemanticHit = { note_id: string; score: number };
 
+/** 可选耗时分解出参（R172 性能归因）：查询向量化 vs 向量检索。 */
+export type SemanticRecallTiming = { embed: number; scan: number };
+
 /**
  * Semantic recall for a user's notes: embed the query, then rank against
  * stored vectors. Uses Vectorize (topK, user_id metadata filter) when the
@@ -229,7 +232,8 @@ export async function semanticRecall(
   userId: string,
   query: string,
   topK = 10,
-  minScore = SEMANTIC_MIN_SCORE
+  minScore = SEMANTIC_MIN_SCORE,
+  timing?: SemanticRecallTiming
 ): Promise<SemanticHit[]> {
   try {
     // corpus-size lookup only gates the threshold, so it runs concurrently
@@ -242,8 +246,11 @@ export async function semanticRecall(
           .first<{ cnt: number }>()
           .catch(() => null)
       : null;
+    const tEmbed = Date.now();
     const qv = await embedText(env, query);
+    if (timing) timing.embed = Date.now() - tEmbed;
     if (!qv) return [];
+    const tScan = Date.now();
     if (env.VECTORIZE) {
       const cnt = await cntPromise;
       const effMin = semanticMinScoreFor(cnt?.cnt ?? 0, minScore);
@@ -253,9 +260,11 @@ export async function semanticRecall(
         returnValues: false,
         returnMetadata: "none",
       });
-      return (res.matches ?? [])
+      const out = (res.matches ?? [])
         .filter((m) => m.score >= effMin)
         .map((m) => ({ note_id: m.id, score: m.score }));
+      if (timing) timing.scan = Date.now() - tScan;
+      return out;
     }
     // page through ALL of the user's vectors (batched to stay under D1's
     // per-query response size): a fixed newest-N window silently blinds
@@ -287,6 +296,7 @@ export async function semanticRecall(
       }
       if (rows.length < BATCH) break;
     }
+    if (timing) timing.scan = Date.now() - tScan;
     const effMin = semanticMinScoreFor(corpusSize, minScore);
     const hits = scored.filter((h) => h.score >= effMin);
     hits.sort((a, b) => b.score - a.score);

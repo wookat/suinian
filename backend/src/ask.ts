@@ -906,11 +906,21 @@ export interface AskEnumRoute {
   extreme: "earliest" | "latest" | "longest" | null;
 }
 
+// 演化/脉络类问题（R172 P1，R149 起遗留）：「X 的想法是怎么变化的」「都有哪些
+// 进展和变化」问的是内容随时间的演变，需要语义+时间线检索与按时间顺序生成，
+// 不属于枚举家族——即使问句带「哪些/所有」这类列举线索词。此前该类问法会被
+// topic_enum 关键词精确筛选短路（LIKE '%主题%' 漏掉没写到该词的相关笔记且
+// 提前 return），在枚举入口最前面确定性放行到普通召回。
+export const EVOLUTION_Q_RE = /怎么变|变化|演[变进化]|脉络|历程|轨迹|心路|来龙去脉|发展过程|进展/;
+
 export async function resolveAskEnumIntent(
   env: Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL">,
   question: string,
   recallQuestion: string
 ): Promise<AskEnumRoute> {
+  if (EVOLUTION_Q_RE.test(question) || EVOLUTION_Q_RE.test(recallQuestion)) {
+    return { topic: null, list: false, extreme: null };
+  }
   const reTopic = topicEnumIntent(question) ?? topicEnumIntent(recallQuestion);
   const reList = enumListIntent(question) || enumListIntent(recallQuestion);
   if (reTopic && !reList) return { topic: reTopic, list: false, extreme: null };

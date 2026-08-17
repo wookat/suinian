@@ -25,6 +25,8 @@ export interface NoteMeta {
   imported_at?: string
   /** 分拣重试达上限的终态失败：已按兜底分类保存，手动改分类即清除 */
   triage_failed?: boolean
+  /** 分拣判定内容像在提问（无问号疑问句）：卡片渲染「去问 AI」轻量入口 */
+  is_question?: boolean
 }
 
 /** 附件元数据（R144 P1-1）：仅元信息，取件走鉴权 API，不含任何直链 */
@@ -122,7 +124,14 @@ export interface TagCount {
   count: number
 }
 
-export type BatchAction = "delete" | "add_tags" | "remove_tags" | "set_category"
+export type BatchAction = "delete" | "add_tags" | "remove_tags" | "set_category" | "restore_categories"
+
+/** 批量改分类撤销（R172 D-1）：服务端回传的每条原分类快照，供逆向恢复 */
+export interface PrevCategory {
+  id: string
+  category: string | null
+  manual: boolean
+}
 
 export interface NotesQuery {
   category?: string

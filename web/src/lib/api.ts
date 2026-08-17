@@ -25,6 +25,7 @@ import type {
   NotePatch,
   NotesQuery,
   NotesResponse,
+  PrevCategory,
   TagCount,
   StatsResponse,
   ReportsResponse,
@@ -384,11 +385,12 @@ export async function emptyTrash(): Promise<number> {
   return res.purged
 }
 
-/** 批量操作结果：affected=本次影响条数；remaining=筛选匹配超上限未处理条数；ids=删除时被软删的 id（供撤销） */
+/** 批量操作结果：affected=本次影响条数；remaining=筛选匹配超上限未处理条数；ids=删除时被软删的 id（供撤销）；prev=改分类时每条的原分类快照（供撤销） */
 export interface BatchResult {
   affected: number
   remaining: number
   ids: string[]
+  prev?: PrevCategory[]
 }
 
 /** NDJSON 批量流：{done,total} 进度行 + 最终 {ok,affected,remaining,ids?}（或 {error}） */
@@ -429,7 +431,7 @@ async function batchStream(
   let result: BatchResult | null = null
   const handleLine = (line: string) => {
     if (!line.trim()) return
-    let obj: { done?: number; total?: number; ok?: boolean; affected?: number; remaining?: number; ids?: string[]; error?: string }
+    let obj: { done?: number; total?: number; ok?: boolean; affected?: number; remaining?: number; ids?: string[]; prev?: PrevCategory[]; error?: string }
     try {
       obj = JSON.parse(line)
     } catch {
@@ -437,7 +439,12 @@ async function batchStream(
     }
     if (typeof obj.error === "string") throw new ApiError(500, obj.error)
     if (typeof obj.affected === "number")
-      result = { affected: obj.affected, remaining: obj.remaining ?? 0, ids: Array.isArray(obj.ids) ? obj.ids : [] }
+      result = {
+        affected: obj.affected,
+        remaining: obj.remaining ?? 0,
+        ids: Array.isArray(obj.ids) ? obj.ids : [],
+        prev: Array.isArray(obj.prev) ? obj.prev : undefined,
+      }
     else if (typeof obj.done === "number" && typeof obj.total === "number") onProgress?.(obj.done, obj.total)
   }
   for (;;) {
@@ -480,6 +487,14 @@ export async function batchNotesByFilter(
   onProgress?: (done: number, total: number) => void,
 ): Promise<BatchResult> {
   return batchStream({ action, filter, ...opts }, onProgress)
+}
+
+/** 批量改分类的逆向恢复：按 prev 快照逐条恢复原分类与原手动标记位 */
+export async function restoreCategories(
+  entries: PrevCategory[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<BatchResult> {
+  return batchStream({ action: "restore_categories", entries }, onProgress)
 }
 
 /** 全部标签 + 使用次数（按次数降序） */
