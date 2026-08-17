@@ -443,4 +443,48 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAnswerContains: ["包括"],
     forbidAnswerContains: ["不做心算合计"],
   },
+
+  // —— R168（R167 P1-1）：财务「比较类」问题必须走 SQL 精确聚合后确定性
+  // 措辞，绝不让 LLM 对截断召回自由算术（漏项算错总支出是忠实性红线）——
+  {
+    id: "q92",
+    category: "财务聚合",
+    question: "这个月我是赚得多还是花得多",
+    expectAnswerContains: ["口径与周报/月报一致"],
+  },
+  {
+    id: "q93",
+    category: "财务聚合",
+    question: "最近一个月收入和支出差多少",
+    expectAnswerContains: ["口径与周报/月报一致"],
+    holdout: true,
+  },
+  {
+    id: "q94",
+    category: "财务聚合",
+    question: "我是不是入不敷出了",
+    expectAnswerContains: ["口径与周报/月报一致"],
+  },
+  {
+    id: "q95",
+    category: "财务聚合",
+    question: "这个月开销比上个月多还是少",
+    expectAnswerContains: ["本月", "上个月", "口径与周报/月报一致"],
+    holdout: true,
+  },
+  {
+    id: "q96",
+    category: "财务聚合",
+    question: "这个月支出环比怎么样",
+    expectAnswerContains: ["本月", "上个月", "口径与周报/月报一致"],
+  },
+  // 比较路由绝不劫持具体单笔问题（与 q62 同口径的反例护栏）
+  {
+    id: "q97",
+    category: "财务聚合",
+    question: "买跑鞋花得比机械键盘多吗",
+    expectAny: ["exp1", "nz20"],
+    forbidAnswerContains: ["口径与周报/月报一致"],
+    holdout: true,
+  },
 ];

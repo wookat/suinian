@@ -190,6 +190,118 @@ export function financeAggIntent(question: string): "exact" | "fail_closed" | nu
   return null;
 }
 
+// ---- 财务比较（R168 P1）----
+// 「赚得多还是花得多/入不敷出/收支差多少」这类收支比较问题与合计同理：
+// 必须基于 financeStats 的 SQL 精确聚合做比较后确定性措辞，绝不让 LLM 对
+// 被 LIMIT 截断的召回结果自由加总再比较（R167 实测漏项算错总支出）。
+
+const FINANCE_BALANCE_RES: RegExp[] = [
+  // 「赚得多还是花得多」「花得多还是挣得少」等还是式二选一
+  /[赚挣收][得的了]?[多少]还是[花支][得的出了]?[多少]|[花支][得的出了]?[多少]还是[赚挣收][得的入了]?[多少]/,
+  /收入[多少]还是支出[多少]|支出[多少]还是收入[多少]|收入还是支出多|支出还是收入多/,
+  // 「花得比赚得多」「是不是花的比挣的多」比较句式
+  /[花支][得的出]?比[赚挣收][得的入]?[多少]|[赚挣收][得的入]?比[花支][得的出]?[多少]/,
+  // 固定说法：入不敷出/超支/收支倒挂/是赚是亏
+  /入不敷出|收不抵支|支大于收|收大于支|收支倒挂|超支|花超/,
+  /赚了还是亏了|亏了还是赚了|是赚是亏|亏钱了[吗么]|亏损了[吗么]/,
+  // 收支差值：「收支差多少」「收入和支出差多少/差额」
+  /收支差(?:了|额|值)?(?:是)?多少|收入和支出(?:的)?差(?:多少|额|值)|收入支出差多少/,
+  /(?:收入|支出)[^？?。]{0,6}(?:哪个多|谁多|差多少|差额|差值)/,
+];
+
+/** 识别收支比较问题（同期收入 vs 支出）；非此类返回 false。 */
+export function financeCompareIntent(question: string): boolean {
+  // 「哪个多/谁多」是比较措辞而非事实查询，先摘除再过事实问题闸门
+  const probe = question.replace(/哪个多|谁多/g, "");
+  if (FACT_QUERY_RE.test(probe)) return false;
+  return FINANCE_BALANCE_RES.some((re) => re.test(question));
+}
+
+// 环比/上期对比：本期与上期两个窗口各自 SQL 聚合后比较。识别条件从严：
+// 必须出现「环比」，或同句同时出现本期+上期时间词，或「比上个月/比上周」
+// 这类明确的跨期比较措辞——「上个月结余多少」这类单期合计绝不落入。
+const MOM_EXPLICIT_RE = /环比/;
+const MOM_VS_PREV_MONTH_RE = /(?:比|较|跟|和|同)上个?月(?:比|相比)?|上个?月(?:比|较|跟|和|同)(?:这个?月|本月)/;
+const MOM_VS_PREV_WEEK_RE = /(?:比|较|跟|和|同)上个?(?:周|星期)(?:比|相比)?|上个?(?:周|星期)(?:比|较|跟|和|同)(?:这个?周|本周)/;
+
+/** 识别财务环比/跨期比较问题，返回比较窗口单位；非此类返回 null。 */
+export function financeMomIntent(question: string): "month" | "week" | null {
+  if (FACT_QUERY_RE.test(question)) return null;
+  if (!FINANCE_WORD_RE.test(question)) return null;
+  if (MOM_EXPLICIT_RE.test(question)) return /周|星期/.test(question) ? "week" : "month";
+  if (MOM_VS_PREV_WEEK_RE.test(question)) return "week";
+  if (MOM_VS_PREV_MONTH_RE.test(question)) return "month";
+  const hasCurMonth = /本月|这个?月/.test(question);
+  const hasPrevMonth = /上个?月/.test(question);
+  const hasCurWeek = /本周|这个?周|这一?周/.test(question);
+  const hasPrevWeek = /上个?周|上一?周|上个?星期/.test(question);
+  if (hasCurWeek && hasPrevWeek) return "week";
+  if (hasCurMonth && hasPrevMonth) return "month";
+  return null;
+}
+
+/** 收支比较的确定性答案：按币种分别比较（不同币种金额不可直接比较）。 */
+export function buildFinanceCompareAnswer(stats: FinanceStats, phrase: string | null): string {
+  const scope = phrase ?? "全部笔记";
+  if (stats.expenseCount === 0 && stats.incomeCount === 0) {
+    const transferNote = stats.transferCount > 0 ? `另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支。` : "";
+    return `${scope}没有记账记录（支出/收入均为 0 笔），无法比较收支。${transferNote}\n\n以上为精确统计，口径与周报/月报一致。`;
+  }
+  const entries = Object.entries(stats.totals);
+  const lines = entries.map(([cur, t]) => {
+    const diff = t.income - t.expense;
+    const verdict =
+      diff > 0
+        ? `收入比支出多 ${formatAmount(diff, cur)}（赚得多）`
+        : diff < 0
+          ? `支出比收入多 ${formatAmount(-diff, cur)}（花得多）`
+          : "收支持平";
+    return `- ${cur}：收入 ${formatAmount(t.income, cur)}，支出 ${formatAmount(t.expense, cur)}，${verdict}`;
+  });
+  let head: string;
+  if (entries.length === 1) {
+    const [, t] = entries[0];
+    const diff = t.income - t.expense;
+    head = diff > 0 ? `${scope}你赚得多：` : diff < 0 ? `${scope}你花得多：` : `${scope}你的收支持平：`;
+  } else {
+    head = `${scope}的收支按币种分别比较（不同币种金额不可直接比较）：`;
+  }
+  let md = `${head}\n${lines.join("\n")}\n共 ${stats.expenseCount} 笔支出、${stats.incomeCount} 笔收入。`;
+  if (stats.unknownAmount > 0) md += `\n（另有 ${stats.unknownAmount} 笔未识别出金额，未计入比较。）`;
+  if (stats.transferCount > 0) md += `\n（另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支。）`;
+  md += `\n\n以上为精确统计，口径与周报/月报一致。`;
+  return md;
+}
+
+/** 环比比较的确定性答案：本期与上期各自精确聚合后按币种对比。 */
+export function buildFinanceMomAnswer(
+  cur: FinanceStats,
+  prev: FinanceStats,
+  curPhrase: string,
+  prevPhrase: string
+): string {
+  const noCur = cur.expenseCount === 0 && cur.incomeCount === 0;
+  const noPrev = prev.expenseCount === 0 && prev.incomeCount === 0;
+  if (noCur && noPrev) {
+    return `${curPhrase}和${prevPhrase}都没有记账记录，无法对比。\n\n以上为精确统计，口径与周报/月报一致。`;
+  }
+  const currencies = [...new Set([...Object.keys(cur.totals), ...Object.keys(prev.totals)])];
+  const lines = currencies.map((c) => {
+    const a = cur.totals[c] ?? { expense: 0, income: 0 };
+    const b = prev.totals[c] ?? { expense: 0, income: 0 };
+    const dExp = a.expense - b.expense;
+    const expVerdict = dExp > 0 ? `多花 ${formatAmount(dExp, c)}` : dExp < 0 ? `少花 ${formatAmount(-dExp, c)}` : "持平";
+    const dInc = a.income - b.income;
+    const incVerdict = dInc > 0 ? `多 ${formatAmount(dInc, c)}` : dInc < 0 ? `少 ${formatAmount(-dInc, c)}` : "持平";
+    return `- ${c}：支出 ${curPhrase} ${formatAmount(a.expense, c)}，${prevPhrase} ${formatAmount(b.expense, c)}，较${prevPhrase}${expVerdict}；收入 ${curPhrase} ${formatAmount(a.income, c)}，${prevPhrase} ${formatAmount(b.income, c)}，较${prevPhrase}${incVerdict}`;
+  });
+  let md = `${curPhrase}与${prevPhrase}对比（按币种分别比较，不同币种金额不可直接比较）：\n${lines.join("\n")}\n${curPhrase}共 ${cur.expenseCount} 笔支出、${cur.incomeCount} 笔收入；${prevPhrase}共 ${prev.expenseCount} 笔支出、${prev.incomeCount} 笔收入。`;
+  const unknown = cur.unknownAmount + prev.unknownAmount;
+  if (unknown > 0) md += `\n（另有 ${unknown} 笔未识别出金额，未计入对比。）`;
+  md += `\n\n以上为精确统计，口径与周报/月报一致。`;
+  return md;
+}
+
 // ---- 计数/枚举类问答（R124 P1-2）----
 // 「记了多少条」类计数问题与财务聚合同理：必须走 SQL COUNT 精确计数，绝不能
 // 让 LLM 对被 LIMIT 截断的召回窗口猜总数（R123 实测：实为 210 条答成 16）。
@@ -323,6 +435,11 @@ const TOPIC_COUNT_RES: RegExp[] = [
   /([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)(?:我?一共|我?总共)?(?:被)?(?:记录?|写|提到?|说|交|付|买|花|去|吃|喝)[过了]{1,2}(?:多少|几)次/,
   // 「房租出现过几次」
   /([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)出现[过了]{1,2}(?:多少|几)次/,
+  // 「我一共记了几条跟健身有关的」「跟健身相关的笔记有多少条」——「跟X有关」
+  // 式计条与计次同族，走同一 LIKE 精确计数口径（R168 设计建议 2：q12 类
+  // 问法此前先答"没找到"再补统计，路由不稳定）
+  /(?:多少|几)\s*条(?:是)?(?:跟|和|与|关于)([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)(?:有关|相关)/,
+  /(?:跟|和|与|关于)([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)(?:有关|相关)的?(?:笔记|记录|内容)?[^？?。]{0,8}?(?:多少|几)\s*条/,
 ];
 
 /** 识别「主题 + 计次」问题，返回用于 LIKE 精确计数的主题词；非此类返回 null。 */

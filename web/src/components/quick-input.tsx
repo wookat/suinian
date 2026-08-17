@@ -251,6 +251,8 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
             type="file"
             accept="image/*,.pdf,.txt,.md,.markdown,.docx,.csv,.tsv,.xlsx"
             className="hidden"
+            aria-hidden="true"
+            tabIndex={-1}
             onChange={(e) => {
               const file = e.target.files?.[0]
               if (file) void uploadMedia(file)

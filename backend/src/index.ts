@@ -73,7 +73,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -173,6 +173,10 @@ const MAX_CONTENT_CHARS = 20_000;
 
 /** Per-user /api/ask requests per minute (each runs several LLM calls). */
 const ASK_RATE_LIMIT_MAX = 15;
+
+/** Per-user per-minute cap on manual media/link retries（refetch-link / retry-media）：
+ * 每次触发出站抓取或 AI 提取，正常人工重试远低于此频率（R168 P2-5）。 */
+const MEDIA_RETRY_RATE_LIMIT_MAX = 10;
 
 /** Backoff schedule for in-request triage retries (async path); each delay gets up to +100% jitter. */
 const TRIAGE_RETRY_DELAYS_MS = [3_000, 8_000];
@@ -906,7 +910,7 @@ async function ingestKfFile(
       return;
     }
     const fileName = filenameHint || media.filename || "file";
-    const kind = detectFileKind(fileName, media.mime);
+    const kind = detectFileKind(fileName, media.mime, media.bytes);
     const meta: NoteMeta = {
       file_name: fileName,
       file_mime: media.mime,
@@ -2151,14 +2155,16 @@ app.get("/api/tags", async (c) => {
   return c.json({ tags });
 });
 
-/** Replace/remove a tag across all of a user's notes; `to = null` removes it. Returns affected note count. */
+/** Replace/remove a tag across all of a user's notes; `to = null` removes it. Returns affected note count.
+ * 回收站行一并覆盖（R168 P2-4）：软删恢复是产品承诺，恢复后标签必须与全局
+ * 重命名/删除后的口径一致，否则按新标签筛选找不回这条。 */
 async function retagUser(env: Env, userId: string, from: string, to: string | null): Promise<number> {
   const { results } = await env.DB.prepare(
-    "SELECT id, tags, is_sensitive FROM notes WHERE user_id = ? AND deleted_at IS NULL AND tags LIKE ?"
+    "SELECT id, tags, is_sensitive FROM notes WHERE user_id = ? AND tags LIKE ?"
   )
     .bind(userId, tagLikePattern(from))
     .all<{ id: string; tags: string; is_sensitive: number }>();
-  let affected = 0;
+  const stmts: D1PreparedStatement[] = [];
   for (const row of results ?? []) {
     let current: string[] = [];
     try {
@@ -2168,10 +2174,10 @@ async function retagUser(env: Env, userId: string, from: string, to: string | nu
     }
     if (!current.includes(from)) continue; // LIKE can over-match substrings
     const next = [...new Set(current.map((t) => (t === from ? to : t)).filter((t): t is string => t !== null))];
-    await prepareTagsUpdate(env.DB, { id: row.id, user_id: userId, is_sensitive: row.is_sensitive }, next).run();
-    affected++;
+    stmts.push(prepareTagsUpdate(env.DB, { id: row.id, user_id: userId, is_sensitive: row.is_sensitive }, next));
   }
-  return affected;
+  if (stmts.length > 0) await env.DB.batch(stmts);
+  return stmts.length;
 }
 
 const MAX_TAG_CHARS = 32;
@@ -2185,6 +2191,10 @@ app.post("/api/tags/rename", async (c) => {
   if (!from || !to) return c.json({ error: "from/to required" }, 400);
   if (to.length > MAX_TAG_CHARS) return c.json({ error: `标签最长 ${MAX_TAG_CHARS} 个字符` }, 400);
   if (from === to) return c.json({ ok: true, affected: 0 });
+  // 全库批量改写与批量打标同费：共用 batch_write 限流桶（R168 P2-5）
+  if (!(await checkRateLimit(c.env.DB, "batch_write", [c.get("userId")], BATCH_WRITE_RATE_LIMIT_MAX))) {
+    return c.json({ error: "批量操作太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
   const affected = await retagUser(c.env, c.get("userId"), from, to);
   return c.json({ ok: true, affected });
 });
@@ -2195,6 +2205,9 @@ app.post("/api/tags/delete", async (c) => {
   const body = await c.req.json<{ tag?: unknown }>().catch(() => null);
   const tag = typeof body?.tag === "string" ? body.tag.trim() : "";
   if (!tag) return c.json({ error: "tag required" }, 400);
+  if (!(await checkRateLimit(c.env.DB, "batch_write", [c.get("userId")], BATCH_WRITE_RATE_LIMIT_MAX))) {
+    return c.json({ error: "批量操作太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
   const affected = await retagUser(c.env, c.get("userId"), tag, null);
   return c.json({ ok: true, affected });
 });
@@ -2203,6 +2216,10 @@ app.post("/api/tags/delete", async (c) => {
 // Manual retry of link title + article extraction for a link note.
 app.post("/api/notes/:id/refetch-link", async (c) => {
   const id = c.req.param("id");
+  // 每次触发服务端出站抓取 + AI enrich：与 retry-media 共用低频重试桶（R168 P2-5）
+  if (!(await checkRateLimit(c.env.DB, "media_retry", [c.get("userId")], MEDIA_RETRY_RATE_LIMIT_MAX))) {
+    return c.json({ error: "重试太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
   const note = await c.env.DB.prepare("SELECT id, url FROM notes WHERE id = ? AND user_id = ?")
     .bind(id, c.get("userId"))
     .first<{ id: string; url: string | null }>();
@@ -2221,6 +2238,10 @@ app.post("/api/notes/:id/refetch-link", async (c) => {
 // triage pipeline with the real content.
 app.post("/api/notes/:id/retry-media", async (c) => {
   const id = c.req.param("id");
+  // 重跑转写/提取消耗 AI 配额：与 refetch-link 共用低频重试桶（R168 P2-5）
+  if (!(await checkRateLimit(c.env.DB, "media_retry", [c.get("userId")], MEDIA_RETRY_RATE_LIMIT_MAX))) {
+    return c.json({ error: "重试太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
   const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL")
     .bind(id, c.get("userId"))
     .first<NoteRow>();
@@ -2260,7 +2281,7 @@ app.post("/api/notes/:id/retry-media", async (c) => {
       newMeta.media_status = "ok";
     }
   } else {
-    const kind = detectFileKind(meta.file_name, meta.file_mime ?? att!.mime ?? "");
+    const kind = detectFileKind(meta.file_name, meta.file_mime ?? att!.mime ?? "", bytes);
     if (!kind) return c.json({ error: "不支持的文件类型" }, 400);
     const result = await buildFileNote(c.env, kind, meta.file_name || "file", bytes);
     if (result.extracted) {
@@ -2455,7 +2476,7 @@ app.post("/api/ingest/media", async (c) => {
 
   if (parsed.type === "file") {
     const fileName = parsed.fileName || "file";
-    const kind = detectFileKind(parsed.fileName, parsed.mime);
+    const kind = detectFileKind(parsed.fileName, parsed.mime, parsed.bytes);
     // 不认识的类型不再拒收：原件照样存档，笔记正文用文件名占位保证可检索
     const result = kind
       ? await buildFileNote(c.env, kind, fileName, parsed.bytes)
@@ -2787,6 +2808,58 @@ app.post("/api/ask", async (c) => {
       references: xRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
       notes: xRefRows.map((n) => noteToJson(n)),
       finance_extreme: true,
+    });
+  }
+  // 财务比较（R168 P1）：「赚得多还是花得多/入不敷出/收支差多少」与环比对比
+  // 都必须基于 financeStats 的 SQL 精确聚合做比较后确定性措辞，绝不让 LLM
+  // 对被 LIMIT 截断的召回自由加总再比较（R167 P1-1：漏项算错总支出）。
+  const finMom = financeMomIntent(question) ?? (FINANCE_WORD_RE.test(question) ? null : financeMomIntent(recallQuestion));
+  if (finMom) {
+    const curRange = parseTimeRange(finMom === "month" ? "本月" : "本周")!;
+    const prevRange = parseTimeRange(finMom === "month" ? "上个月" : "上周")!;
+    const mr = await c.env.DB.prepare(
+      "SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND category IN ('expense','income','transfer') AND created_at >= ? ORDER BY created_at DESC LIMIT 4000"
+    )
+      .bind(userId, prevRange.start)
+      .all<NoteRow>();
+    const mrows = mr.results ?? [];
+    const curStats = financeStats(mrows.filter((n) => inTimeRange(n.created_at, curRange)));
+    const prevStats = financeStats(mrows.filter((n) => inTimeRange(n.created_at, prevRange)));
+    const answer = buildFinanceMomAnswer(curStats, prevStats, curRange.phrase, prevRange.phrase);
+    const mRefRows = mrows.filter((n) => !n.is_sensitive).slice(0, 10);
+    return c.json({
+      answer,
+      references: mRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
+      notes: mRefRows.map((n) => noteToJson(n)),
+      finance_compare: true,
+    });
+  }
+  const finCompare = financeCompareIntent(question) || (FINANCE_WORD_RE.test(question) ? false : financeCompareIntent(recallQuestion));
+  if (finCompare) {
+    const cmpRange = (financeCompareIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
+    const cmpConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
+    const cmpBinds: unknown[] = [userId];
+    if (cmpRange?.start) {
+      cmpConds.push("created_at >= ?");
+      cmpBinds.push(cmpRange.start);
+    }
+    if (cmpRange?.end) {
+      cmpConds.push("created_at < ?");
+      cmpBinds.push(cmpRange.end);
+    }
+    const cr = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE ${cmpConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
+    )
+      .bind(...cmpBinds)
+      .all<NoteRow>();
+    const crows = cr.results ?? [];
+    const answer = buildFinanceCompareAnswer(financeStats(crows), cmpRange?.phrase ?? null);
+    const cRefRows = crows.filter((n) => !n.is_sensitive).slice(0, 10);
+    return c.json({
+      answer,
+      references: cRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
+      notes: cRefRows.map((n) => noteToJson(n)),
+      finance_compare: true,
     });
   }
   const origFinanceIntent = financeAggIntent(question);
