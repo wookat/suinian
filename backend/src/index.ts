@@ -3599,6 +3599,18 @@ app.post("/api/ask", async (c) => {
     }
     askMarks.push(["hop", Date.now() - tHop]);
   }
+  // 元问题（「我最近在想什么」这类无具体主题词的自我回顾）零召回时回落到
+  // 最近笔记：这类问题的诚实答案本来就是「最近记了什么」的归纳，与普通
+  // 问题「宁缺毋滥」的拒答口径不同——泛化措辞导致关键词/语义都够不着阈值
+  // 不代表没有可答内容（R176：q108 元问题切题后零召回误拒答）
+  if (notes.length === 0 && metaQuestion) {
+    const recent = await c.env.DB.prepare(
+      "SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND is_sensitive = 0 ORDER BY created_at DESC LIMIT 12"
+    )
+      .bind(userId)
+      .all<NoteRow>();
+    notes = dedupeNotesByContent(recent.results ?? []);
+  }
   if (notes.length === 0) {
     // nothing recalled at all: answer "没找到" honestly (never bluff over the
     // recent-20) and suggest the nearest notes below the semantic threshold
