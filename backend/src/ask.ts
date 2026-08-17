@@ -383,9 +383,16 @@ export interface FinanceExtremeQuery {
   direction: "expense" | "income";
 }
 
+// 元问题（R176 P1-2）：「最近在想什么/帮我总结」这类对全部笔记的生成型提问，
+// 意图判定必须以原始问题为准（R113 原则）——改写器可能把上一轮的财务措辞注入
+// recallQuestion，绝不允许改写产物把元问题劫持进确定性财务/统计路由。
+export const ASK_META_QUESTION_RE = /在想什么|在想些什么|想了?些?什么|总结一下|帮我总结|概括一下|梳理一下|回顾一下|最近在忙什么|近况/;
+
 /** 识别财务极值问题（最贵/最大/最小一笔支出、金额最高的收入等）。 */
 export function financeExtremeIntent(question: string): FinanceExtremeQuery | null {
-  if (!FINANCE_WORD_RE.test(question) && !/买/.test(question)) return null;
+  // 「多少钱/花费/费用」不在 FINANCE_WORD_RE 里，但配上极值措辞（最贵/最便宜）
+  // 已是明确的财务极值问法（R175 P2-2：「打车里最贵的一次是多少钱」漏判走 LLM）
+  if (!FINANCE_WORD_RE.test(question) && !/买|多少钱|花费|费用/.test(question)) return null;
   const direction: "expense" | "income" = /收入|进账|入账|赚|挣/.test(question) ? "income" : "expense";
   if (/最贵|最高|最大的?一?[笔项]|金额最[大高]|花得?最多|花钱最[狠多猛]|最狠的?一[笔次]|数额最大/.test(question)) return { kind: "max", direction };
   if (/最便宜|最低|最小的?一?[笔项]|金额最[小低]|花得?最少|数额最小/.test(question)) return { kind: "min", direction };

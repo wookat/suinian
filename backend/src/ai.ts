@@ -75,11 +75,15 @@ async function runWorkersAi(env: AiEnv, model: string, opts: ChatOptions): Promi
           messages: opts.messages,
           temperature: opts.temperature,
           max_tokens: opts.max_tokens,
-        }) as Promise<{ response?: string; choices?: { message?: { content?: string } }[] }>,
+        }) as Promise<{ response?: unknown; choices?: { message?: { content?: unknown } }[] }>,
         opts.timeout_ms ?? 20_000,
         `workers-ai ${model}`
-      )) as { response?: string; choices?: { message?: { content?: string } }[] };
-      return out.choices?.[0]?.message?.content ?? out.response ?? null;
+      )) as { response?: unknown; choices?: { message?: { content?: unknown } }[] };
+      const content = out.choices?.[0]?.message?.content;
+      if (typeof content === "string") return content;
+      // `response` is not always a string (see extractWorkersAiDelta): only
+      // trust it after a type check, never stringify structured values
+      return typeof out.response === "string" ? out.response : null;
     } catch (err) {
       console.error("chatComplete: workers-ai failed", model, err);
       const timedOut = err instanceof Error && err.message.includes("timed out");
@@ -184,7 +188,10 @@ async function consumeSseBody(
         const data = line.slice(5).trim();
         if (!data || data === "[DONE]") continue;
         const text = extract(data);
-        if (text) {
+        // extractors are typed to return string|null, but provider payloads are
+        // untrusted: drop any non-string that slips through instead of
+        // stringifying it into the answer
+        if (typeof text === "string" && text) {
           sawAny = true;
           full += text;
           onDelta(text);
@@ -202,17 +209,28 @@ async function consumeSseBody(
 
 const extractOpenAiDelta = (data: string): string | null => {
   try {
-    const j = JSON.parse(data) as { choices?: { delta?: { content?: string } }[] };
-    return j.choices?.[0]?.delta?.content ?? null;
+    const j = JSON.parse(data) as { choices?: { delta?: { content?: unknown } }[] };
+    const content = j.choices?.[0]?.delta?.content;
+    return typeof content === "string" ? content : null;
   } catch {
     return null;
   }
 };
 
+// Workers AI 流帧同时带 OpenAI 兼容的 choices[0].delta.content（始终是字符串）
+// 和自有的 response 字段；后者对形如 `[3]` 的角标 token 会序列化成未加引号的
+// JSON 数组（R175 P1-1：被字符串化成 `3`，括号丢失导致引用对账漏配）。
+// 优先读 canonical 的 delta.content，response 仅在确为字符串时兜底。
 const extractWorkersAiDelta = (data: string): string | null => {
   try {
-    const j = JSON.parse(data) as { response?: string };
-    return j.response ?? null;
+    const j = JSON.parse(data) as { response?: unknown; choices?: { delta?: { content?: unknown } }[] };
+    const content = j.choices?.[0]?.delta?.content;
+    if (typeof content === "string") return content;
+    if (typeof j.response === "string") return j.response;
+    if (j.response !== undefined && j.response !== null) {
+      console.error("extractWorkersAiDelta: dropping non-string response frame", JSON.stringify(j.response).slice(0, 80));
+    }
+    return null;
   } catch {
     return null;
   }
