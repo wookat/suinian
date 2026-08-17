@@ -113,7 +113,10 @@ export type QuestionCategory =
   | "财务聚合"
   | "统计聚合"
   | "财务列举"
-  | "财务极值";
+  | "财务极值"
+  | "主题枚举"
+  | "财务澄清"
+  | "多轮切题";
 
 export interface EvalQuestion {
   id: string;
@@ -583,5 +586,39 @@ export const QUESTIONS: EvalQuestion[] = [
     category: "财务极值",
     question: "我买过的钢琴里最贵的是哪一台",
     forbidAnswerContains: ["549", "399", "¥5", "¥3"],
+  },
+
+  // —— R176（R175 P1-2）：元问题切题绝不能被上一轮财务上下文改写劫持 ——
+  // 生产实录：财务追问后接「我最近在想什么」被改写成财务问题，
+  // 误走金额最大支出确定性路径。元问题必须走普通召回。
+  {
+    id: "q108",
+    category: "多轮切题",
+    question: "我最近在想什么",
+    history: [
+      { role: "user", content: "这个月金额最大的一笔支出是什么" },
+      { role: "assistant", content: "金额最大的一笔支出是跑鞋 ¥549.00 [1]。（以上为数据库精确查询）" },
+    ],
+    expectAny: ["cafe3", "proj3", "idea1", "cafe1", "cafe2", "proj1", "proj2"],
+    forbidAnswerContains: ["数据库精确查询", "金额最大"],
+  },
+  {
+    id: "q109",
+    category: "多轮切题",
+    question: "帮我总结一下最近记了些什么",
+    history: [
+      { role: "user", content: "最近一个月花了多少钱" },
+      { role: "assistant", content: "最近一个月你记了 3 笔支出，合计 ¥1023.00。（口径与周报/月报一致）" },
+    ],
+    forbidAnswerContains: ["口径与周报/月报一致", "数据库精确查询"],
+    holdout: true,
+  },
+  // 本轮拓宽的极值同义词（R175 P2-2）：首轮直接问也必须进确定性路径
+  {
+    id: "q110",
+    category: "财务极值",
+    question: "金额最大的一笔支出是什么",
+    expectAll: ["nz20"],
+    expectAnswerContains: ["549", "数据库精确查询"],
   },
 ];

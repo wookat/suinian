@@ -73,7 +73,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, ASK_META_QUESTION_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -1302,6 +1302,18 @@ app.post("/api/notes", async (c) => {
   if (!(await checkRateLimit(c.env.DB, "note_write", [userId], NOTE_WRITE_RATE_LIMIT_MAX))) {
     return c.json({ error: "写入太频繁了，请稍等一分钟再试", retryable: true }, 429);
   }
+  // 剪藏幂等（R176 D-2）：同页去重从扩展侧 best-effort 两步查写收敛为服务端
+  // 保证：同 URL + 同正文直接返回已有笔记（200+deduped）而不新建，三个剪藏
+  // 入口及未来任何客户端免费获得幂等；敏感行正文已加密比不中，按新建
+  // 处理（fail-open，不阻断写入）
+  if (body.source === "extension" && typeof body.url === "string" && body.url) {
+    const dup = await c.env.DB.prepare(
+      "SELECT * FROM notes WHERE user_id = ? AND url = ? AND deleted_at IS NULL AND content = ? ORDER BY created_at DESC LIMIT 1"
+    )
+      .bind(userId, body.url, body.content.trim())
+      .first<NoteRow>();
+    if (dup) return c.json({ note: await noteToJsonDecrypted(c.env, dup), deduped: true }, 200);
+  }
   // skip_triage (`!` inline command): store as-is, never re-sorted
   const skipTriage = body.skip_triage === true;
   // 客户端 meta 白名单（R126 P1-1）：只收标记位，不收任何可携带明文的
@@ -2244,7 +2256,8 @@ app.get("/api/notes/random", async (c) => {
 });
 
 // 单条笔记读取（R174 P2-4，审计/运维对照用；注册在 trash/random 等静态段之后，
-// 避免 :id 吞掉同前缀路由）。与列表同口径：敏感行正文以占位符返回，不解密。
+// 避免 :id 吞掉同前缀路由）。与列表/PATCH 同口径（R176 P2-1）：授权读返回解密
+// 后的明文，遮罩是客户端职责；三个读路径不得各自一套口径。
 app.get("/api/notes/:id", async (c) => {
   const note = await c.env.DB.prepare(
     "SELECT * FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
@@ -2252,7 +2265,7 @@ app.get("/api/notes/:id", async (c) => {
     .bind(c.req.param("id"), c.get("userId"))
     .first<NoteRow>();
   if (!note) return c.json({ error: "not found" }, 404);
-  const [withAtt] = await withAttachments(c.env, [noteToJson(note)]);
+  const [withAtt] = await withAttachments(c.env, [await noteToJsonDecrypted(c.env, note)]);
   return c.json({ note: withAtt });
 });
 
@@ -2769,7 +2782,7 @@ export async function extractAskKeywords(
 }
 
 const ASK_REWRITE_SYSTEM =
-  "你是检索查询改写器。把用户在多轮对话中的最后一个问题改写为不依赖上下文、可独立理解的完整问题：把代词（它/这个/那个/他们）和序数词（第一个/第二个/最后一个）替换为前文对应的具体事物，补全省略的主语和话题。只输出改写后的问题本身，不要任何解释或前缀。若问题本身已完整，原样输出。";
+  "你是检索查询改写器。把用户在多轮对话中的最后一个问题改写为不依赖上下文、可独立理解的完整问题：把代词（它/这个/那个/他们）和序数词（第一个/第二个/最后一个）替换为前文对应的具体事物，补全省略的主语和话题。只输出改写后的问题本身，不要任何解释或前缀。若最后一个问题不含代词、序数词且无省略、本身已可独立理解，必须逐字原样输出，绝不把前文的话题、金额或措辞混入问题。";
 
 /**
  * Rewrite a follow-up question into a standalone one (query rewrite) so keyword
@@ -2841,6 +2854,10 @@ app.post("/api/ask", async (c) => {
   const tRewrite = Date.now();
   const recallQuestion = await rewriteAskQuestion(c.env, question, history);
   askMarks.push(["rewrite", Date.now() - tRewrite]);
+  // 元问题闸（R176 P1-2）：原问题是「最近在想什么/帮我总结」这类生成型元问题时，
+  // 一切基于改写产物 recallQuestion 的确定性意图回退全部关闭——改写器可能把
+  // 上一轮的财务措辞注入改写结果，误路由到极值/合计等确定性答案（答非所问）
+  const metaQuestion = ASK_META_QUESTION_RE.test(question);
   // explicit time scope ("上个月/最近一周/去年…") narrows recall to that window
   const timeRange = parseTimeRange(recallQuestion);
   // 财务/统计合计类问题走精确聚合（与周报/月报同一 financeStats 口径），
@@ -2907,7 +2924,7 @@ app.post("/api/ask", async (c) => {
   // 时，改写补出的聚合措辞不得覆盖——单项问题必须走普通召回直答该项。
   // 财务极值（R148 P1-2）：「最贵的一笔支出」走 ORDER BY amount 精确查询，
   // 按币种分组比较（不同币种金额不可直接比大小），绝不交 LLM 猜极值。
-  const finExtreme = financeExtremeIntent(question) ?? (FINANCE_WORD_RE.test(question) ? null : financeExtremeIntent(recallQuestion));
+  const finExtreme = financeExtremeIntent(question) ?? (metaQuestion || FINANCE_WORD_RE.test(question) ? null : financeExtremeIntent(recallQuestion));
   if (finExtreme) {
     const xRange = (financeExtremeIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
     // 主题限定（R174 P1）：「键盘里最贵的」的「键盘」注入 WHERE（与财务
@@ -2958,7 +2975,7 @@ app.post("/api/ask", async (c) => {
   // 财务比较（R168 P1）：「赚得多还是花得多/入不敷出/收支差多少」与环比对比
   // 都必须基于 financeStats 的 SQL 精确聚合做比较后确定性措辞，绝不让 LLM
   // 对被 LIMIT 截断的召回自由加总再比较（R167 P1-1：漏项算错总支出）。
-  const finMom = financeMomIntent(question) ?? (FINANCE_WORD_RE.test(question) ? null : financeMomIntent(recallQuestion));
+  const finMom = financeMomIntent(question) ?? (metaQuestion || FINANCE_WORD_RE.test(question) ? null : financeMomIntent(recallQuestion));
   if (finMom) {
     const curRange = parseTimeRange(finMom === "month" ? "本月" : "本周")!;
     const prevRange = parseTimeRange(finMom === "month" ? "上个月" : "上周")!;
@@ -2979,7 +2996,7 @@ app.post("/api/ask", async (c) => {
       finance_compare: true,
     });
   }
-  const finCompare = financeCompareIntent(question) || (FINANCE_WORD_RE.test(question) ? false : financeCompareIntent(recallQuestion));
+  const finCompare = financeCompareIntent(question) || (metaQuestion || FINANCE_WORD_RE.test(question) ? false : financeCompareIntent(recallQuestion));
   if (finCompare) {
     const cmpRange = (financeCompareIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
     const cmpConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
@@ -3010,7 +3027,7 @@ app.post("/api/ask", async (c) => {
   // 时间窗财务列举（R170 P1-1）：「最近一周花了哪些钱」按 category 走 SQL
   // 精确列举（待办/未发生金额绝不计入）；窗内无记录 fail-closed，绝不让
   // top-k 召回漏项或把待办幻觉成已发生支出（R169 实测 12/12 全败）。
-  const finList = financeListIntent(question) ?? (FINANCE_WORD_RE.test(question) ? null : financeListIntent(recallQuestion));
+  const finList = financeListIntent(question) ?? (metaQuestion || FINANCE_WORD_RE.test(question) ? null : financeListIntent(recallQuestion));
   if (finList) {
     const lRange = (financeListIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
     const lConds = ["user_id = ?", "deleted_at IS NULL"];
@@ -3048,13 +3065,13 @@ app.post("/api/ask", async (c) => {
   }
   const origFinanceIntent = financeAggIntent(question);
   const financeIntent =
-    origFinanceIntent ?? (FINANCE_WORD_RE.test(question) ? null : financeAggIntent(recallQuestion));
+    origFinanceIntent ?? (metaQuestion || FINANCE_WORD_RE.test(question) ? null : financeAggIntent(recallQuestion));
   // 财务主题子集合计（R148 P1-2）：「咖啡一共花了多少」——主题词可干净提取时
   // 走 LIKE 圈定子集 + SQL 精确合计（此前一律 fail-closed：诚实但找回失败）
   const subsetTerms =
     financeIntent === "exact"
       ? null
-      : (financeTopicTerms(question) ?? (FINANCE_WORD_RE.test(question) ? null : financeTopicTerms(recallQuestion)));
+      : (financeTopicTerms(question) ?? (metaQuestion || FINANCE_WORD_RE.test(question) ? null : financeTopicTerms(recallQuestion)));
   if (subsetTerms) {
     const sRange = (financeTopicTerms(question) ? parseTimeRange(question) : null) ?? timeRange;
     const likeOrs = subsetTerms.map(() => "(content LIKE ? OR title LIKE ? OR tags LIKE ?)").join(" OR ");
@@ -3148,7 +3165,7 @@ app.post("/api/ask", async (c) => {
   }
   // 极值/排序类统计（R126 P1-3）：「最早/最新/最长一条笔记」是一条
   // min/max/order-by SQL 就能精确回答的，绝不交 LLM 对 top-k 召回猜答
-  const extremeKind = extremeQueryIntent(question) ?? extremeQueryIntent(recallQuestion);
+  const extremeKind = extremeQueryIntent(question) ?? (metaQuestion ? null : extremeQueryIntent(recallQuestion));
   const answerExtreme = async (kind: NonNullable<ReturnType<typeof extremeQueryIntent>>) => {
     const order =
       kind === "earliest"
@@ -3172,7 +3189,7 @@ app.post("/api/ask", async (c) => {
   // R126：分类/敏感/日均限定也是可 SQL 化的精确计数，不再落 fail-closed
   // 主题关键词计数（R148 P1-2）：「记录过几次房租」走 LIKE 精确计数，
   // 答案如实标注按关键词匹配口径（R147 实测：LLM 从 top-k 猜 4 次，实为 6）
-  const topicCnt = topicCountIntent(question) ?? topicCountIntent(recallQuestion);
+  const topicCnt = topicCountIntent(question) ?? (metaQuestion ? null : topicCountIntent(recallQuestion));
   if (topicCnt) {
     const tcRange = (topicCountIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
     const tcConds = ["user_id = ?", "deleted_at IS NULL", "(content LIKE ? OR title LIKE ? OR tags LIKE ?)"];
@@ -3205,7 +3222,7 @@ app.post("/api/ask", async (c) => {
     });
   }
   const origCountQuery = countQueryIntent(question);
-  const countQuery = origCountQuery ?? countQueryIntent(recallQuestion);
+  const countQuery = origCountQuery ?? (metaQuestion ? null : countQueryIntent(recallQuestion));
   if (countQuery) {
     const cRange = (origCountQuery ? parseTimeRange(question) : null) ?? timeRange;
     const cConds = ["user_id = ?", "deleted_at IS NULL"];
@@ -3266,7 +3283,7 @@ app.post("/api/ask", async (c) => {
   // 枚举正则同时命中时交 LLM 统一分类主判，正则只做 fail-closed 兜底；
   // 单家族命中与全未命中（R132 LLM 补路由）行为不变。
   const tRoute = Date.now();
-  const enumRoute = await resolveAskEnumIntent(c.env, question, recallQuestion);
+  const enumRoute = await resolveAskEnumIntent(c.env, question, metaQuestion ? question : recallQuestion);
   askMarks.push(["route", Date.now() - tRoute]);
   if (enumRoute.extreme) return answerExtreme(enumRoute.extreme);
   const enumTopic = enumRoute.topic;
