@@ -63,6 +63,8 @@ data class ReportsUiState(
     val detail: Report? = null,
     val generating: Boolean = false,
     val generateError: String? = null,
+    /** 空数据窗口的引导文案（非错误） */
+    val generateNotice: String? = null,
     /** 周/月切换：week|month */
     val periodTab: String = "week",
 )
@@ -90,16 +92,24 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setPeriodTab(period: String) {
-        _ui.value = _ui.value.copy(periodTab = period, generateError = null)
+        _ui.value = _ui.value.copy(periodTab = period, generateError = null, generateNotice = null)
     }
 
     /** 手动生成本周/本月报告（POST /api/reports/generate period=week|month），成功后直接打开详情 */
     fun generate(onGenerated: (String) -> Unit) {
         if (_ui.value.generating) return
-        _ui.value = _ui.value.copy(generating = true, generateError = null)
+        _ui.value = _ui.value.copy(generating = true, generateError = null, generateNotice = null)
         viewModelScope.launch {
             try {
-                val report = repo.generateReport("this", _ui.value.periodTab)
+                val result = repo.generateReport("this", _ui.value.periodTab)
+                val report = result.report
+                if (report == null) {
+                    _ui.value = _ui.value.copy(
+                        generating = false,
+                        generateNotice = result.message ?: "当前周期还没有记录，先去记几条碎念吧",
+                    )
+                    return@launch
+                }
                 _ui.value = _ui.value.copy(generating = false)
                 refresh()
                 onGenerated(report.id)
@@ -183,6 +193,10 @@ fun ReportsScreen(
             ui.generateError?.let {
                 Spacer(Modifier.height(4.dp))
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            ui.generateNotice?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

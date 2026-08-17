@@ -785,17 +785,23 @@ export async function getReports(): Promise<ReportsResponse> {
   return realFetch<ReportsResponse>("/api/reports")
 }
 
-/** 手动生成本周/本月报告（幂等：同期已有则重新生成覆盖） */
+/**
+ * 手动生成本周/本月报告（幂等：同期已有则重新生成覆盖）。
+ * 空数据窗口（如周一凌晨的「本周」）返回 report: null + 引导文案，不是错误。
+ */
 export async function generateReport(
   which: "this" | "last" = "this",
   period: "week" | "month" = "week",
-): Promise<WeeklyReport> {
-  if (loadSettings().useMock) return mockGenerateReport()
-  const res = await realFetch<{ report: WeeklyReport }>("/api/reports/generate", {
-    method: "POST",
-    body: JSON.stringify({ week: which, which, period }),
-  })
-  return res.report
+): Promise<{ report: WeeklyReport | null; message?: string }> {
+  if (loadSettings().useMock) return { report: await mockGenerateReport() }
+  const res = await realFetch<{ report: WeeklyReport | null; message?: string }>(
+    "/api/reports/generate",
+    {
+      method: "POST",
+      body: JSON.stringify({ week: which, which, period }),
+    },
+  )
+  return { report: res.report ?? null, message: res.message }
 }
 
 /** 今日回顾（那年今日 / 上月今日 / 久未回看） */

@@ -17,6 +17,7 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,6 +26,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -158,6 +161,10 @@ fun OnboardingScreen(
         )
         Spacer(Modifier.height(32.dp))
 
+        // 大字号/窄屏下四段按钮放不下标准字标（文字折行溢出被裁切）：
+        // 收紧字标并去掉选中勾选图标的占位，保证单行完整可读
+        val compactSegments =
+            LocalDensity.current.fontScale >= 1.15f || LocalConfiguration.current.screenWidthDp < 360
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
             listOf(
                 OnboardingMode.Register to "注册",
@@ -169,7 +176,19 @@ fun OnboardingScreen(
                     selected = mode == m,
                     onClick = { mode = m; error = null },
                     shape = SegmentedButtonDefaults.itemShape(index = i, count = 4),
-                ) { Text(label) }
+                    icon = if (compactSegments) {
+                        {}
+                    } else {
+                        { SegmentedButtonDefaults.Icon(mode == m) }
+                    },
+                ) {
+                    Text(
+                        label,
+                        maxLines = 1,
+                        softWrap = false,
+                        style = if (compactSegments) MaterialTheme.typography.labelMedium else LocalTextStyle.current,
+                    )
+                }
             }
         }
         Spacer(Modifier.height(20.dp))

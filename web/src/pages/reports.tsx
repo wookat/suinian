@@ -84,6 +84,7 @@ export function ReportsPage() {
   const [detailError, setDetailError] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
+  const [generateNotice, setGenerateNotice] = useState<string | null>(null)
   const [periodTab, setPeriodTab] = useState<ReportPeriod>("week")
   const settingsVersion = useSettingsVersion()
 
@@ -108,8 +109,13 @@ export function ReportsPage() {
     if (generating) return
     setGenerating(true)
     setGenerateError(null)
+    setGenerateNotice(null)
     try {
-      const report = await generateReport("this", periodTab)
+      const { report, message } = await generateReport("this", periodTab)
+      if (!report) {
+        setGenerateNotice(message ?? "当前周期还没有记录，先去记几条碎念吧")
+        return
+      }
       await load()
       setSelectedId(report.id)
     } catch (e) {
@@ -140,6 +146,7 @@ export function ReportsPage() {
       </Button>
       <p className="text-xs text-muted-foreground">同一周期重复生成会覆盖更新已有报告</p>
       {generateError && <p className="text-sm text-destructive">{generateError}</p>}
+      {generateNotice && <p className="text-sm text-muted-foreground">{generateNotice}</p>}
     </div>
   )
 

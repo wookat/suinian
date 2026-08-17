@@ -3727,8 +3727,14 @@ app.post("/api/reports/generate", async (c) => {
   const which = (body?.which ?? body?.week) === "last" ? "last" : "this";
   const generated = await generatePeriodReport(c.env, c.get("userId"), new Date(), which, period);
   if (!generated) {
+    // 空数据窗口不是错误（audit-r161 P2-5：周一凌晨「本周」必然为空，422 让
+    // 用户以为功能坏了）：返回 200 空态，由客户端渲染得体的引导文案
     const unit = period === "month" ? (which === "this" ? "本月" : "上个月") : which === "this" ? "本周" : "上周";
-    return c.json({ error: which === "this" ? `${unit}还没有记录，先去记几条碎念吧` : `${unit}没有记录，暂无内容可总结` }, 422);
+    const message =
+      which === "this"
+        ? `${unit}还没有记录，随手记下第一条碎念，报告就有素材了`
+        : `${unit}没有记录，暂无内容可总结`;
+    return c.json({ report: null, empty: true, message });
   }
   const { id, week_start } = generated;
   const report = await c.env.DB.prepare("SELECT * FROM weekly_reports WHERE id = ?").bind(id).first<WeeklyReportRow>();

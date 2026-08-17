@@ -278,8 +278,11 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         execute(request("/api/review/today").get().build(), DailyReviewResponse.serializer())
     }
 
-    /** POST /api/reports/generate：手动生成周报/月报（which=this|last，period=week|month） */
-    suspend fun generateReport(which: String = "this", period: String = "week"): Report = withContext(Dispatchers.IO) {
+    /**
+     * POST /api/reports/generate：手动生成周报/月报（which=this|last，period=week|month）。
+     * 空数据窗口返回 report=null + 引导文案（message），不是错误。
+     */
+    suspend fun generateReport(which: String = "this", period: String = "week"): ReportDetail = withContext(Dispatchers.IO) {
         val body = buildJsonObject {
             put("week", which)
             put("which", which)
@@ -295,7 +298,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             val text = it.body?.string().orEmpty()
             if (!it.isSuccessful) throw httpError(it.code, text)
             try {
-                json.decodeFromString(ReportDetail.serializer(), text).report
+                json.decodeFromString(ReportDetail.serializer(), text)
             } catch (e: Exception) {
                 throw ApiException("服务器返回了无法识别的数据", e)
             }
@@ -489,6 +492,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
     /** GET /api/reports/:id */
     suspend fun getReport(id: String): Report = withContext(Dispatchers.IO) {
         execute(request("/api/reports/$id").get().build(), ReportDetail.serializer()).report
+            ?: throw ApiException("报告不存在或已删除")
     }
 
     /** POST /api/ask  {question, history?} 多轮对话 */

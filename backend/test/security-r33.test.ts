@@ -218,7 +218,7 @@ describe("fallback weekly report (H-1 / L-2)", () => {
     expect(await generateWeeklyReport(env, "u1")).toBeNull();
   });
 
-  it("POST /api/reports/generate returns 422 when the week is empty", async () => {
+  it("POST /api/reports/generate returns a graceful empty state when the week is empty", async () => {
     const env = makeEnv([]);
     const res = await app.request(
       req("/api/reports/generate", { method: "POST", token: "token-a", body: JSON.stringify({ week: "this" }) }),
@@ -226,7 +226,11 @@ describe("fallback weekly report (H-1 / L-2)", () => {
       env,
       ctx
     );
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { report: unknown; empty?: boolean; message?: string };
+    expect(body.report).toBeNull();
+    expect(body.empty).toBe(true);
+    expect(body.message).toContain("还没有记录");
   });
 });
 

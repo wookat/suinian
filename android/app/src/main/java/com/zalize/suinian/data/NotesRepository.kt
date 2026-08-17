@@ -223,8 +223,8 @@ class NotesRepository(
         return client.getTodayReview()
     }
 
-    /** 手动生成周报/月报 */
-    suspend fun generateReport(which: String = "this", period: String = "week"): Report {
+    /** 手动生成周报/月报；空数据窗口返回 report=null + 引导文案 */
+    suspend fun generateReport(which: String = "this", period: String = "week"): ReportDetail {
         val (client, mock) = api()
         if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
         return client.generateReport(which, period)

@@ -47,6 +47,10 @@ function fakeEnv(
           throw new Error(`unexpected all(): ${sql}`);
         },
         async first() {
+          if (sql.startsWith("SELECT vector FROM note_embeddings")) {
+            const v = vectors[binds[0] as string];
+            return v ? { vector: JSON.stringify(v) } : null;
+          }
           if (sql.includes("FROM notes n LEFT JOIN note_embeddings")) {
             const candidates = [...noteMap.values()]
               .filter((n) => n.thread_id === binds[0] && n.deleted_at === null && n.is_sensitive === 0)
