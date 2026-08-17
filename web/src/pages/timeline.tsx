@@ -941,6 +941,7 @@ export function TimelinePage() {
                 setSearch(searchInput.trim())
               }
             }}
+            aria-label="搜索笔记"
             placeholder="搜索笔记…"
             className="pl-8"
           />

@@ -169,6 +169,9 @@ export function buildTriagePrompt(
   注意：外部事件/公告（电影定档、发布会日期、新品发售）只是资讯，不是用户要做的事——归 data 或 collect，日期也不是 todo_due；只有内容明确包含用户自己的动作（买票/提醒我看/去参加）才是 todo。判例：
   - 「沙丘 3 定档 10 月 1 日上映」→ data（外部事件公告，不是待办）
   - 「沙丘 3 十月上映，提醒我提前买票」→ todo（含用户动作）
+注意：多行表格式账单（CSV/制表符分隔，每行一笔含金额，如「日期,项目,金额」多行）整体是一条记账笔记——各行都是已发生的消费时 category="expense"，amount=所有行金额之和（如 199+99+38+20 → 356），绝不要因为是表格就归 data、也绝不要把 amount 置 null。判例：
+  - 「日期,项目,金额\n8-1,键盘,199\n8-2,鼠标,99\n8-3,午饭,38\n8-4,打车,20」→ expense，amount=356
+  - 「买菜,55.5\n地铁,4」→ expense，amount=59.5
 - tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）。标签必须是内容的主题词，用能概括这条内容的具体场景词（如打车→「交通」、午饭→「餐饮」、买咖啡→「咖啡」），不要一律套「购物」这类宽泛词。内容开头的方括号前缀标记（如「[QA-123]」「[P0]」「【草稿】」）和序号（「1.」）是元数据记号，不是主题：既不能整个照抄进标签，也不能把括号里的词抽出来当标签${tagHint}
 - title: 一句话短标题（<=20字），同样要忽略开头的方括号前缀/序号，不要抄进标题。判例：「[P0] 修复登录超时」→ title="修复登录超时"，tags 不含 "P0"；「[QA-TEST] 周五交报告」→ title="周五交报告"，tags 不含 "QA-TEST"、"QA"、"TEST"
 - is_sensitive: 是否含真实机密 (boolean)。仅当内容中出现真实可用的机密「具体值」时才为 true：密码/口令/密钥/API key/token 的具体值、完整身份证号、银行卡号、手机号+姓名组合、账号+密码组合。以下情况必须为 false：技术文档/教程/笔记只是讨论密码、token、密钥等概念而未出现具体秘密值；代码片段中的变量名/占位符（如 <token>、your-api-key、xxx）；普通长文、文件内容中的 ID/哈希/版本号等非机密长字符串。判例：
@@ -548,6 +551,78 @@ export async function loadCategoryCorrections(db: D1Database, userId: string): P
   return out;
 }
 
+// ---- 多行表格账单确定性合计（R178 P1-2）----
+// 多行 CSV 账单的合计是结构化数据的确定性解析问题：R170 依赖模型输出多个
+// JSON 对象再求和，生产模型常输出单对象且 amount=null（金额置空漏账）。
+// 内容本身是分隔符表格且金额列无歧义时，解析器直接求和兜底——模型仍是
+// 分类主判，规则只在分类已是记账时锁定金额。
+
+const LEDGER_MONEY_RE = /^[¥￥]?\d+(?:\.\d{1,2})?元?$/;
+
+/** 拆一行 CSV 字段（支持双引号包裹与 "" 转义），分隔符：半/全角逗号、制表符、分号。 */
+export function splitCsvFields(line: string): string[] {
+  const fields: string[] = [];
+  let cur = "";
+  let inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuote) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else inQuote = false;
+      } else cur += ch;
+    } else if (ch === '"') {
+      inQuote = true;
+    } else if (ch === "," || ch === "，" || ch === "\t" || ch === ";" || ch === "；") {
+      fields.push(cur.trim());
+      cur = "";
+    } else cur += ch;
+  }
+  fields.push(cur.trim());
+  return fields;
+}
+
+/** 多行表格账单的确定性合计：内容是 ≥2 行数据的分隔符表格、且存在唯一一列
+ * 每行都是金额时返回该列求和；表头（首行无金额）自动跳过；金额列有歧义
+ *（多列都全是数字）或结构不齐时返回 null（绝不猜）。 */
+export function parseLedgerTable(content: string): { amount: number; rows: number } | null {
+  const lines = content
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length < 2) return null;
+  const rows = lines.map(splitCsvFields);
+  if (rows.some((r) => r.length < 2)) return null;
+  const width = rows[0].length;
+  if (rows.some((r) => r.length !== width)) return null;
+  const isMoney = (s: string) => LEDGER_MONEY_RE.test(s) && parseFloat(s.replace(/[¥￥元]/g, "")) > 0;
+  // 首行没有任何金额字段视作表头跳过
+  const data = rows[0].some(isMoney) ? rows : rows.slice(1);
+  if (data.length < 2) return null;
+  const moneyCols: number[] = [];
+  for (let c = 0; c < width; c++) {
+    if (data.every((r) => isMoney(r[c]))) moneyCols.push(c);
+  }
+  if (moneyCols.length !== 1) return null;
+  const col = moneyCols[0];
+  const sum = data.reduce((s, r) => s + parseFloat(r[col].replace(/[¥￥元]/g, "")), 0);
+  return { amount: Math.round(sum * 100) / 100, rows: data.length };
+}
+
+/** Deterministic backstop: when the model classifies a multi-row ledger table
+ * as finance but leaves amount null (or sums it wrong), lock the amount to the
+ * parser's column sum. Category stays the model's call. */
+export function fixLedgerAmount(content: string, triage: TriageResult): TriageResult {
+  const isFinance = triage.category === "expense" || triage.category === "income" || triage.category === "transfer";
+  if (!isFinance) return triage;
+  const ledger = parseLedgerTable(content);
+  if (!ledger) return triage;
+  if (triage.amount === ledger.amount) return triage;
+  return { ...triage, amount: ledger.amount, currency: triage.currency ?? "CNY" };
+}
+
 export async function triageNote(
   content: string,
   env: Parameters<typeof chatComplete>[0],
@@ -569,6 +644,7 @@ export async function triageNote(
   let result = (text && parseTriageJson(text, tzOffsetString(now, tz))) || null;
   if (result) result = stripMarkerNoise(content, result);
   if (result) result = demoteEventLog(content, fixTransferMisfile(content, fixFinanceDirection(content, result)));
+  if (result) result = fixLedgerAmount(content, result);
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {
     result = result

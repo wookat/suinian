@@ -212,6 +212,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
             void submit()
           }
         }}
+        aria-label="快速记录"
         placeholder={
           command?.kind === "ask"
             ? "问答模式：回车直接向你的笔记提问"
