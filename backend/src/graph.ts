@@ -1,6 +1,6 @@
 import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
-import { embedText, semanticRecall, cosineSim } from "./semantic";
+import { embedText, semanticRecall, cosineSim, noteHasSemanticSignal } from "./semantic";
 
 /** Cosine similarity between entity-name embeddings above which two names are the same entity. */
 const ENTITY_MERGE_SIM = 0.92;
@@ -224,6 +224,13 @@ export async function extractGraph(env: Env, note: NoteRow): Promise<void> {
   try {
     if (note.is_sensitive) {
       await deleteNoteGraph(env, note.id);
+      return;
+    }
+    // zero-signal notes must not enter the graph either: an AI title like
+    // 「庆祝」 would otherwise seed entities for a pure-emoji note (r163 P1-1)
+    if (!noteHasSemanticSignal(note)) {
+      await deleteNoteGraph(env, note.id);
+      await markGraphExtracted(env, note.id);
       return;
     }
     const text = [note.title, note.content.slice(0, 1500), note.url_title, note.url_summary]

@@ -18,7 +18,7 @@ export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
-import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads } from "./threads";
+import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads, detachZeroSignalThreadMembers } from "./threads";
 import {
   createRebuildJob,
   getActiveThreadJob,
@@ -73,7 +73,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, buildFinanceExtremeAnswer, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -144,7 +144,7 @@ app.use(
   cors({
     origin: (origin, c) => corsOrigin(origin, (c.env as Env).CORS_ALLOWED_ORIGINS),
     allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowHeaders: ["Authorization", "Content-Type"],
+    allowHeaders: ["Authorization", "Content-Type", "X-Suinian-Password"],
     maxAge: 86400,
   })
 );
@@ -434,7 +434,8 @@ app.post("/api/admin/purge-low-signal-embeddings", async (c) => {
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (!m || m[1] !== adminToken) return c.json({ error: "unauthorized" }, 401);
   const purged = await purgeLowSignalEmbeddings(c.env);
-  return c.json({ ok: true, purged });
+  const detached = await detachZeroSignalThreadMembers(c.env);
+  return c.json({ ok: true, purged, detached });
 });
 
 // ---- WeChat Official Account callback (公众号, public; guarded by WECHAT_MP_TOKEN) ----
@@ -1357,13 +1358,14 @@ export function matchedTermCount(
   return terms.filter((t) => hay.includes(t.toLowerCase())).length;
 }
 
-function noteFilterConds(filter: {
+export function noteFilterConds(filter: {
   category?: unknown;
   tag?: unknown;
   q?: unknown;
   source?: unknown;
   from?: unknown;
   to?: unknown;
+  url?: unknown;
 }): { conds: string[]; binds: unknown[] } {
   const conds: string[] = ["deleted_at IS NULL"];
   const binds: unknown[] = [];
@@ -1388,6 +1390,11 @@ function noteFilterConds(filter: {
     conds.push("source = ?");
     binds.push(filter.source);
   }
+  // exact-URL lookup: lets clients (extension clip dedupe) find prior notes for a page
+  if (typeof filter.url === "string" && filter.url) {
+    conds.push("url = ?");
+    binds.push(filter.url);
+  }
   if (typeof filter.from === "string" && DATETIME_RE.test(filter.from)) {
     conds.push("created_at >= ?");
     binds.push(filter.from.length === 10 ? `${filter.from} 00:00:00` : filter.from);
@@ -1402,11 +1409,11 @@ function noteFilterConds(filter: {
 // ---- GET /api/notes ----
 app.get("/api/notes", async (c) => {
   const userId = c.get("userId");
-  const { category, tag, q, cursor, source, from, to } = c.req.query();
+  const { category, tag, q, cursor, source, from, to, url } = c.req.query();
   const rawLimit = parseInt(c.req.query("limit") ?? "", 10);
   const limit = Number.isNaN(rawLimit) ? 20 : Math.max(1, Math.min(100, rawLimit));
 
-  const filter = noteFilterConds({ category, tag, q, source, from, to });
+  const filter = noteFilterConds({ category, tag, q, source, from, to, url });
   const conds: string[] = ["user_id = ?", ...filter.conds];
   const binds: unknown[] = [userId, ...filter.binds];
   if (cursor) {
@@ -3321,6 +3328,8 @@ app.post("/api/ask", async (c) => {
     return c.json({ answer: answer + sensitiveHintLine(sensitiveHits, terms), references, notes: refNotes, no_answer: true });
   }
 
+  notes = dedupeNotesByContent(notes);
+
   const noteIds = notes.map((n) => n.id);
   const context = notes
     .map((n, i) => {
@@ -3856,11 +3865,43 @@ app.post("/api/import", async (c) => {
   return c.json({ ...result.stats, assets_dropped: assetsDropped, truncated, failed_items: [...parseFailures, ...result.failures] }, 201);
 });
 
+// 敏感明文整包导出与普通读接口重新分级：长期 bearer token 之外要求随请求
+// 提交密码复核（x-suinian-password 头），把「泄露 token」与「拖走全部敏感
+// 明文」两级风险隔离开。无密码的遗留账号无从复核，维持原行为。
+async function sensitiveExportDenied(
+  c: Context<{ Bindings: Env; Variables: Vars }>
+): Promise<Response | null> {
+  const user = await c.env.DB.prepare("SELECT password_hash FROM users WHERE id = ?")
+    .bind(c.get("userId"))
+    .first<{ password_hash: string | null }>();
+  if (!user?.password_hash) return null;
+  // 复核入口按次限频：拿到 token 的攻击者不能借此在线爆破密码
+  if (!(await checkRateLimit(c.env.DB, "sensitive_export", [c.get("userId")], 5))) {
+    return c.json({ error: "密码验证太频繁了，请稍等一分钟再试", retryable: true }, 429);
+  }
+  // 客户端对密码做 encodeURIComponent 以通过 HTTP 头的 ASCII 限制
+  const raw = c.req.header("x-suinian-password") ?? "";
+  let pw = raw;
+  try {
+    pw = decodeURIComponent(raw);
+  } catch {
+    /* 非法转义序列按原文校验 */
+  }
+  if (!pw || !(await verifyPassword(pw, user.password_hash))) {
+    return c.json({ error: "导出敏感明文需要验证账号密码：请输入密码后重试", password_required: true }, 403);
+  }
+  return null;
+}
+
 // ---- GET /api/export ----
 app.get("/api/export", async (c) => {
   const userId = c.get("userId");
   // sensitive notes are redacted by default; ?include_sensitive=true exports plaintext
   const includeSensitive = c.req.query("include_sensitive") === "true";
+  if (includeSensitive) {
+    const denied = await sensitiveExportDenied(c);
+    if (denied) return denied;
+  }
   const [notesR, threadsR, reportsR] = await Promise.all([
     c.env.DB.prepare("SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at ASC").bind(userId).all<NoteRow>(),
     c.env.DB.prepare("SELECT * FROM threads WHERE user_id = ? ORDER BY updated_at DESC").bind(userId).all<ThreadRow>(),
@@ -3926,6 +3967,10 @@ app.get("/api/export", async (c) => {
 // ?include_sensitive=true (same policy as /api/export).
 app.get("/api/backup", async (c) => {
   const includeSensitive = c.req.query("include_sensitive") === "true";
+  if (includeSensitive) {
+    const denied = await sensitiveExportDenied(c);
+    if (denied) return denied;
+  }
   return buildBackupZip(c.env, c.get("userId"), includeSensitive, (p) => c.executionCtx.waitUntil(p));
 });
 
@@ -4100,6 +4145,8 @@ export default {
       ctx.waitUntil(purgeLowSignalEmbeddings(env).then((n) => {
         if (n > 0) console.log(`semantic: purged ${n} low-signal embeddings`);
       }));
+      // 同源存量清理：把已被吸进线索的零信号笔记摘出并修复受污染摘要（幂等）
+      ctx.waitUntil(detachZeroSignalThreadMembers(env));
       // 存量敏感附件迁移：把仍为明文的敏感笔记 R2 原件加密重写（幂等）
       ctx.waitUntil(sweepUnencryptedSensitiveAttachments(env));
     }

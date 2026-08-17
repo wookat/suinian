@@ -1,4 +1,4 @@
-import { loadSettings, saveNote, pageContent, selectionContent, CATEGORY_OPTIONS, type Category } from "@/utils/api";
+import { loadSettings, saveNote, findDuplicateNote, pageContent, selectionContent, CATEGORY_OPTIONS, type Category } from "@/utils/api";
 import type { ExtractResult } from "@/entrypoints/extract";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -99,6 +99,13 @@ saveBtn.addEventListener("click", async () => {
           excerpt: includeExcerptEl.checked ? extract?.excerpt : undefined,
         });
     const category = (categoryEl.value || undefined) as Category | undefined;
+    if (await findDuplicateNote(tab.url, content)) {
+      setStatus("该页面相同内容已剪藏过，本次未重复保存", "ok");
+      viewLinkEl.hidden = false;
+      openWebEl.href = `${webBase}/#/`;
+      saveBtn.disabled = false;
+      return;
+    }
     await saveNote({ content, url: tab.url, tags, category });
     setStatus("✅ 已保存到碎念", "ok");
     viewLinkEl.hidden = false;

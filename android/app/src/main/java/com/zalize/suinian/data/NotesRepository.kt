@@ -260,10 +260,10 @@ class NotesRepository(
     }
 
     /** 下载全量备份 zip：返回字节 + 文件名。includeSensitive=true 时敏感笔记含明文 */
-    suspend fun downloadBackup(includeSensitive: Boolean = false): Pair<ByteArray, String> {
+    suspend fun downloadBackup(includeSensitive: Boolean = false, password: String? = null): Pair<ByteArray, String> {
         val (client, mock) = api()
         if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
-        return client.downloadBackup(includeSensitive)
+        return client.downloadBackup(includeSensitive, password)
     }
 
     /** 从备份 zip 恢复：返回恢复统计 */

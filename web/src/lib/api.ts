@@ -553,6 +553,7 @@ export async function ask(
 export async function exportData(
   format: "json" | "markdown",
   includeSensitive: boolean,
+  password?: string,
 ): Promise<{ blob: Blob; filename: string }> {
   const { apiBaseUrl, apiToken, useMock } = loadSettings()
   if (useMock || !apiBaseUrl) throw new Error("演示模式不支持导出，请先配置真实 API")
@@ -563,7 +564,10 @@ export async function exportData(
   let res: Response
   try {
     res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/export${qs ? `?${qs}` : ""}`, {
-      headers: { Authorization: `Bearer ${apiToken}` },
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        ...(includeSensitive && password ? { "X-Suinian-Password": encodeURIComponent(password) } : {}),
+      },
     })
   } catch {
     throw new NetworkError("网络连接失败，请检查网络或 API 地址")
@@ -578,14 +582,17 @@ export async function exportData(
 }
 
 /** 下载完整备份 zip（notes.json 全字段 + media/ 原件 + manifest） */
-export async function downloadBackup(includeSensitive: boolean): Promise<{ blob: Blob; filename: string }> {
+export async function downloadBackup(includeSensitive: boolean, password?: string): Promise<{ blob: Blob; filename: string }> {
   const { apiBaseUrl, apiToken, useMock } = loadSettings()
   if (useMock || !apiBaseUrl) throw new Error("演示模式不支持备份，请先配置真实 API")
   const qs = includeSensitive ? "?include_sensitive=true" : ""
   let res: Response
   try {
     res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/backup${qs}`, {
-      headers: { Authorization: `Bearer ${apiToken}` },
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        ...(includeSensitive && password ? { "X-Suinian-Password": encodeURIComponent(password) } : {}),
+      },
     })
   } catch {
     throw new NetworkError("网络连接失败，请检查网络或 API 地址")

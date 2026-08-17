@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import com.zalize.suinian.data.SettingsRepository
 import com.zalize.suinian.data.api.ApiClient
 import com.zalize.suinian.data.api.ApiException
@@ -163,8 +164,20 @@ fun OnboardingScreen(
 
         // 大字号/窄屏下四段按钮放不下标准字标（文字折行溢出被裁切）：
         // 收紧字标并去掉选中勾选图标的占位，保证单行完整可读
-        val compactSegments =
-            LocalDensity.current.fontScale >= 1.15f || LocalConfiguration.current.screenWidthDp < 360
+        val fontScale = LocalDensity.current.fontScale
+        val compactSegments = fontScale >= 1.15f || LocalConfiguration.current.screenWidthDp < 360
+        // 字标可用宽度不随字号档变化：超过 1.3 档（实测恰好放满）后按比例回压
+        // sp 值，把字标的实际渲染尺寸封顶在 1.3 档，任何无障碍档都不再裁切
+        val segmentStyle = if (compactSegments) {
+            val base = MaterialTheme.typography.labelMedium
+            if (fontScale > 1.3f) {
+                val shrink = 1.3f / fontScale
+                base.copy(
+                    fontSize = base.fontSize * shrink,
+                    lineHeight = if (base.lineHeight.isSpecified) base.lineHeight * shrink else base.lineHeight,
+                )
+            } else base
+        } else null
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
             listOf(
                 OnboardingMode.Register to "注册",
@@ -186,7 +199,7 @@ fun OnboardingScreen(
                         label,
                         maxLines = 1,
                         softWrap = false,
-                        style = if (compactSegments) MaterialTheme.typography.labelMedium else LocalTextStyle.current,
+                        style = segmentStyle ?: LocalTextStyle.current,
                     )
                 }
             }

@@ -1,7 +1,7 @@
 import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { findGraphThreadMate } from "./graph";
-import { ensureNoteEmbedding, cosineSim, hasSemanticSignal, noteEmbedText } from "./semantic";
+import { ensureNoteEmbedding, cosineSim, noteHasSemanticSignal } from "./semantic";
 
 // re-export for existing consumers (graph.ts, tests); the implementation
 // lives in semantic.ts next to the vector-store write path
@@ -327,7 +327,7 @@ export async function clusterNote(
     // zero-signal notes (pure emoji/symbol) must not cluster at all: the
     // LLM-only fallbacks have no similarity floor and happily grouped emoji
     // notes into an「情绪变化」thread (audit-r161 P1-1)
-    if (!note.is_sensitive && !hasSemanticSignal(noteEmbedText(note))) {
+    if (!note.is_sensitive && !noteHasSemanticSignal(note)) {
       console.log(`threads: skip zero-signal note=${note.id}`);
       return null;
     }
@@ -628,6 +628,51 @@ export async function reconcileThreads(
       `threads: reconcile${userId ? ` user=${userId}` : ""} deleted=${deleted} dissolved=${dissolved}`
     );
   return { deleted, dissolved };
+}
+
+/**
+ * Stock cleanup (audit-r163 P1-1): detach thread members whose user-original
+ * text carries no semantic signal — they clustered while the gate was judged
+ * on AI-title-included text. Affected threads are reconciled (dissolved when
+ * degenerate) and re-summarized so polluted summaries heal. Idempotent.
+ */
+export async function detachZeroSignalThreadMembers(env: Env): Promise<number> {
+  const affected = new Set<string>();
+  let detached = 0;
+  const BATCH = 400;
+  for (let offset = 0; ; offset += BATCH) {
+    const { results } = await env.DB.prepare(
+      `SELECT id, thread_id, content, url_title, url_summary FROM notes
+       WHERE thread_id IS NOT NULL AND deleted_at IS NULL AND is_sensitive = 0
+       ORDER BY created_at ASC LIMIT ? OFFSET ?`
+    )
+      .bind(BATCH, offset)
+      .all<Pick<NoteRow, "id" | "thread_id" | "content" | "url_title" | "url_summary">>();
+    const rows = results ?? [];
+    const bad = rows.filter((n) => !noteHasSemanticSignal(n));
+    for (const n of bad) {
+      await env.DB.prepare(
+        "UPDATE notes SET thread_id = NULL, updated_at = datetime('now') WHERE id = ?"
+      )
+        .bind(n.id)
+        .run();
+      if (n.thread_id) affected.add(n.thread_id);
+      detached++;
+    }
+    // detached rows leave the thread_id IS NOT NULL result set, shifting later pages
+    offset -= bad.length;
+    if (rows.length < BATCH) break;
+  }
+  for (const threadId of affected) {
+    try {
+      const outcome = await reconcileThread(env, threadId);
+      if (outcome !== "deleted" && outcome !== "dissolved") await summarizeThread(env, threadId);
+    } catch (err) {
+      console.error(`threads: zero-signal detach reconcile failed for thread=${threadId}`, err);
+    }
+  }
+  if (detached > 0) console.log(`threads: detached ${detached} zero-signal thread members`);
+  return detached;
 }
 
 /**
