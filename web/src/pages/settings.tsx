@@ -1296,6 +1296,8 @@ export function SettingsPage() {
           type="file"
           accept={IMPORT_SOURCES.find((o) => o.value === importSource)?.accept}
           className="hidden"
+          aria-hidden="true"
+          tabIndex={-1}
           onChange={(e) => {
             const f = e.target.files?.[0]
             if (f) void handleImportFile(f)
@@ -1406,6 +1408,8 @@ export function SettingsPage() {
           type="file"
           accept=".zip"
           className="hidden"
+          aria-hidden="true"
+          tabIndex={-1}
           onChange={(e) => {
             const f = e.target.files?.[0]
             if (f) void handleRestoreFile(f)

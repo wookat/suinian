@@ -135,6 +135,16 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - R2 残留核对：Cloudflare REST `GET /accounts/<id>/r2/buckets/suinian-media/objects?prefix=media/<uid>/`——WORKERS token 返回 10000 Authentication error，需用 `CLOUDFLARE_GLOBAL_API_TOKEN`。
 - ask 精确统计路由（R126）：极值（最早/最新/最长）、分类计数（待办/想法/收藏/资料）、敏感计数、日均、绝对月份「7 月」（可带空格）均走 SQL，答案带「数据库精确查询/统计」口径。
 
+## Production testing tips (learned R168)
+- Android CJK input IS possible via emulator clipboard sharing: put the text on the HOST clipboard (`printf '中文问题' | xclip -selection clipboard -d :0`), focus the target EditText (adb tap), then `adb shell input keyevent 279` (KEYCODE_PASTE) — the emulator syncs host→guest clipboard automatically. Host Ctrl+V in the emulator window only shows a paste-suggestion chip that may not insert; keyevent 279 inserts reliably. Verify with `uiautomator dump` before sending.
+- `adb exec-out screencap -p` may return a DOWNSCALED image (e.g. 720x1568 for a 1080x2340 device) — always check `adb shell wm size` and scale tap coordinates accordingly, or taps land in the wrong place.
+- Token login on Android: `adb shell input text` can silently drop characters on a long token; clear the field (`input keycombination 113 29` + `keyevent 67`) and type in 8-char chunks with sleeps. Token tab is on the auth screen; send/submit buttons are found via `uiautomator dump` content-desc (提问 for ask).
+- Android timeline may show skeletons for 1-2 min on a slow (swiftshader, nested-virt) emulator over a ~400ms-RTT network — tap a filter chip or wait; check `adb logcat` before declaring a bug.
+- Long-press (mouse down 1.5s) in the emulator window triggers the Android stylus-tutorial dialog — avoid; use keyevent 279 for paste instead.
+- Rate-limit QA (R168): `POST /api/tags/rename` with a non-existent tag returns `{"ok":true,"affected":0}` and still consumes the batch_write bucket — safe way to exhaust 30/min without touching real tags; 31st → 429 「批量操作太频繁了」. `POST /api/notes/:id/refetch-link` 11th → 429 「重试太频繁了」 (media_retry 10/min). Both recover after ~60s.
+- Uploaded CSV/file notes may be triaged as 支出 with 金额待定 — finance compare answers then include them in 「共 N 笔支出」 and list them under 「另有 N 笔未识别出金额，未计入比较」; totals stay exact. Not a bug.
+- Don't run Gradle + emulator + Chrome + recording simultaneously on an 8GB VM — OOM killed X/VNC once (R168). Build first, then start the emulator; recover with vncserver restart + `startplasma-x11` + devin-remote restart if it happens.
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_WORKERS_API_TOKEN` (+ account id auto-resolved) for wrangler d1 remote queries and worker deploys.
 - `CLOUDFLARE_GLOBAL_API_TOKEN` (org) for Workers AI REST calls (`/ai/run/*`, used by thread-cross-eval.ts) and as fallback for wrangler d1.

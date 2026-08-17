@@ -37,12 +37,58 @@ const MIME_KIND: Record<string, FileKind> = {
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
 };
 
-/** 根据文件名扩展名 + mime 判定支持的文件类型；不支持返回 null */
-export function detectFileKind(fileName: string | undefined, mime: string): FileKind | null {
+/** 内容嗅探（magic bytes）：扩展名可伪装，内容特征可信（R168 P2-2）。
+ * 只做高置信度的正向识别（PDF/OOXML zip）；嗅不出时返回 null 交扩展名/mime 判定。 */
+export function sniffFileKind(bytes: Uint8Array): FileKind | null {
+  // %PDF-
+  if (bytes.length >= 5 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 && bytes[4] === 0x2d) {
+    return "pdf";
+  }
+  // PK\x03\x04（zip）：看内部结构区分 xlsx/docx；其他 zip 不认领
+  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
+    try {
+      const files = unzipSync(bytes);
+      if (files["xl/workbook.xml"]) return "xlsx";
+      if (files["word/document.xml"]) return "docx";
+    } catch {
+      /* 损坏/非标准 zip：交扩展名判定 */
+    }
+  }
+  return null;
+}
+
+/** 判定支持的文件类型：内容嗅探优先于扩展名，mime 兜底；不支持返回 null */
+export function detectFileKind(fileName: string | undefined, mime: string, bytes?: Uint8Array): FileKind | null {
+  if (bytes) {
+    const sniffed = sniffFileKind(bytes);
+    if (sniffed) return sniffed;
+  }
   const ext = fileName?.split(".").pop()?.toLowerCase();
   if (ext && EXT_KIND[ext]) return EXT_KIND[ext];
   const base = mime.split(";")[0].trim().toLowerCase();
   return MIME_KIND[base] ?? null;
+}
+
+/**
+ * 文本字节 → 字符串（R168 P2-1）：BOM 嗅探 UTF-16，UTF-8 严格解码失败回退 GBK
+ * （老版 Excel/WPS 导出 CSV 默认 GBK），再失败用 UTF-8 替换符兜底（原件已存档）。
+ */
+export function decodeTextBytes(bytes: Uint8Array): string {
+  try {
+    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder("utf-16le").decode(bytes);
+    if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder("utf-16be").decode(bytes);
+  } catch {
+    /* 编码不受支持：落入下方 UTF-8/GBK 链 */
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+  } catch {
+    try {
+      return new TextDecoder("gbk").decode(bytes);
+    } catch {
+      return new TextDecoder("utf-8").decode(bytes);
+    }
+  }
 }
 
 function decodeXmlEntities(s: string): string {
@@ -153,7 +199,7 @@ export async function extractPdfText(bytes: Uint8Array): Promise<string | null> 
 /** 按类型提取文件文本；失败/无文本返回 null（原件仍存档） */
 export async function extractFileText(kind: FileKind, bytes: Uint8Array): Promise<string | null> {
   if (kind === "txt" || kind === "md" || kind === "csv") {
-    const text = new TextDecoder("utf-8").decode(bytes).trim();
+    const text = decodeTextBytes(bytes).trim();
     return text || null;
   }
   if (kind === "docx") return extractDocxText(bytes);
@@ -170,8 +216,12 @@ export interface FileSummary {
 export async function summarizeFileText(
   env: Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL">,
   fileName: string,
-  text: string
+  text: string,
+  lineCount?: number
 ): Promise<FileSummary | null> {
+  // 行数等结构性数字由解析器确定性统计后注入 prompt，禁止 LLM 对被截断的
+  // 正文自己数（R168 P2-3：6000 行文件摘要谎称「共 231 行」）
+  const structure = lineCount !== undefined ? `结构统计（解析器精确统计，行数/条数以此为准）：全文共 ${lineCount} 行\n` : "";
   const out = await chatComplete(env, {
     temperature: 0.3,
     max_tokens: 400,
@@ -180,9 +230,9 @@ export async function summarizeFileText(
       {
         role: "system",
         content:
-          '你是「碎念」文件归档摘要助手。根据文件名与正文，输出严格 JSON（不要 markdown 代码块），字段：\n- summary: 80-150 字中文摘要，概括文档讲了什么、核心信息/结论，客观陈述，不要"本文""该文档"开头\n- tags: 1-3 个中文短标签数组（主题词，不要 # 前缀）\n只输出 JSON。',
+          '你是「碎念」文件归档摘要助手。根据文件名与正文，输出严格 JSON（不要 markdown 代码块），字段：\n- summary: 80-150 字中文摘要，概括文档讲了什么、核心信息/结论，客观陈述，不要"本文""该文档"开头；正文可能被截断，涉及行数/条数时只能使用「结构统计」给出的数字，绝不自己数\n- tags: 1-3 个中文短标签数组（主题词，不要 # 前缀）\n只输出 JSON。',
       },
-      { role: "user", content: `文件名：${fileName}\n正文：\n${text.slice(0, SUMMARIZE_INPUT_CHARS)}` },
+      { role: "user", content: `文件名：${fileName}\n${structure}正文（超长已截断）：\n${text.slice(0, SUMMARIZE_INPUT_CHARS)}` },
     ],
   });
   if (!out) return null;
@@ -231,12 +281,16 @@ export async function buildFileNote(
     return { content: text, excerpt: null, summarized: false, extracted: true };
   }
   const excerpt = text.slice(0, FILE_EXCERPT_CHARS);
-  const ai = await summarizeFileText(env, fileName, text);
+  const lineCount = text.split("\n").length;
+  // 表格类文件的行数是用户关心的结构信息：解析器精确统计后确定性拼入正文，
+  // 不依赖 LLM 措辞（R168 P2-3）
+  const structSuffix = kind === "csv" || kind === "xlsx" ? `（全文共 ${lineCount} 行）` : "";
+  const ai = await summarizeFileText(env, fileName, text, lineCount);
   if (ai) {
-    return { content: `【${fileName}】${ai.summary}`, excerpt, summarized: true, extracted: true };
+    return { content: `【${fileName}】${ai.summary}${structSuffix}`, excerpt, summarized: true, extracted: true };
   }
   // AI 不可用：截断原文入 content，仍可搜索
-  return { content: text.slice(0, FILE_DIRECT_CHARS * 2), excerpt, summarized: false, extracted: true };
+  return { content: `${text.slice(0, FILE_DIRECT_CHARS * 2)}${structSuffix}`, excerpt, summarized: false, extracted: true };
 }
 
 /** 微信/Web 的文件入库确认文案：已存档：<文件名> · <一句话摘要> */
