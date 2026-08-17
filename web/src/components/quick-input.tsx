@@ -145,7 +145,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
     const isImage = file.type.startsWith("image/")
     const ext = file.name.split(".").pop()?.toLowerCase() ?? ""
     if (!isImage && !SUPPORTED_FILE_EXTS.includes(ext)) {
-      setError("只支持图片或 PDF / txt / md / docx 文件")
+      setError("只支持图片或 PDF / txt / md / docx / csv / xlsx 文件")
       return
     }
     if (file.size > MAX_MEDIA_BYTES) {
@@ -249,7 +249,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*,.pdf,.txt,.md,.markdown,.docx"
+            accept="image/*,.pdf,.txt,.md,.markdown,.docx,.csv,.tsv,.xlsx"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0]

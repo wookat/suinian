@@ -18,9 +18,13 @@ export default defineConfig({
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
+            // only requests carrying the identity fingerprint param are ever
+            // cached, so entries are partitioned per account and an
+            // un-partitioned request can never poison the cache
             urlPattern: ({ url, request }) =>
               request.method === 'GET' &&
-              /^\/api\/(notes|threads|reports)/.test(url.pathname),
+              /^\/api\/(notes|threads|reports)/.test(url.pathname) &&
+              url.searchParams.has('sn_uid'),
             handler: 'NetworkFirst',
             options: {
               cacheName: 'suinian-api',

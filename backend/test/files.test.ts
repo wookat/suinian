@@ -3,6 +3,7 @@ import { zipSync, strToU8 } from "fflate";
 import {
   detectFileKind,
   extractDocxText,
+  extractXlsxText,
   extractFileText,
   buildFileNote,
   buildFileReply,
@@ -17,6 +18,9 @@ describe("detectFileKind", () => {
     expect(detectFileKind("notes.TXT", "application/octet-stream")).toBe("txt");
     expect(detectFileKind("readme.md", "")).toBe("md");
     expect(detectFileKind("doc.docx", "")).toBe("docx");
+    expect(detectFileKind("表格.csv", "application/octet-stream")).toBe("csv");
+    expect(detectFileKind("data.TSV", "")).toBe("csv");
+    expect(detectFileKind("台账.xlsx", "")).toBe("xlsx");
   });
   it("falls back to mime", () => {
     expect(detectFileKind(undefined, "application/pdf")).toBe("pdf");
@@ -24,6 +28,10 @@ describe("detectFileKind", () => {
     expect(
       detectFileKind(undefined, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     ).toBe("docx");
+    expect(detectFileKind(undefined, "text/csv; charset=utf-8")).toBe("csv");
+    expect(
+      detectFileKind(undefined, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    ).toBe("xlsx");
   });
   it("returns null for unsupported types", () => {
     expect(detectFileKind("a.exe", "application/octet-stream")).toBeNull();
@@ -58,11 +66,48 @@ describe("extractDocxText", () => {
   });
 });
 
+function makeXlsx(opts: { shared?: string[]; sheetXml: string }): Uint8Array {
+  const files: Record<string, Uint8Array> = {
+    "xl/worksheets/sheet1.xml": strToU8(
+      `<?xml version="1.0"?><worksheet><sheetData>${opts.sheetXml}</sheetData></worksheet>`
+    ),
+  };
+  if (opts.shared) {
+    files["xl/sharedStrings.xml"] = strToU8(
+      `<?xml version="1.0"?><sst>${opts.shared.map((s) => `<si><t>${s}</t></si>`).join("")}</sst>`
+    );
+  }
+  return zipSync(files);
+}
+
+describe("extractXlsxText", () => {
+  it("resolves shared strings and numeric cells row by row", () => {
+    const bytes = makeXlsx({
+      shared: ["项目", "金额", "房租"],
+      sheetXml:
+        '<row><c t="s"><v>0</v></c><c t="s"><v>1</v></c></row>' +
+        '<row><c t="s"><v>2</v></c><c><v>3200</v></c></row>',
+    });
+    expect(extractXlsxText(bytes)).toBe("项目\t金额\n房租\t3200");
+  });
+  it("reads inline strings", () => {
+    const bytes = makeXlsx({
+      sheetXml: '<row><c t="inlineStr"><is><t>内联 &amp; 文本</t></is></c></row>',
+    });
+    expect(extractXlsxText(bytes)).toBe("内联 & 文本");
+  });
+  it("returns null for non-zip bytes or empty workbooks", () => {
+    expect(extractXlsxText(new Uint8Array([1, 2, 3]))).toBeNull();
+    expect(extractXlsxText(zipSync({ "other.txt": strToU8("hi") }))).toBeNull();
+  });
+});
+
 describe("extractFileText", () => {
-  it("reads txt/md directly as utf-8", async () => {
+  it("reads txt/md/csv directly as utf-8", async () => {
     const bytes = new TextEncoder().encode("你好，碎念\nline2");
     expect(await extractFileText("txt", bytes)).toBe("你好，碎念\nline2");
     expect(await extractFileText("md", bytes)).toBe("你好，碎念\nline2");
+    expect(await extractFileText("csv", new TextEncoder().encode("a,b\n1,2"))).toBe("a,b\n1,2");
   });
   it("returns null for empty text", async () => {
     expect(await extractFileText("txt", new TextEncoder().encode("   \n "))).toBeNull();

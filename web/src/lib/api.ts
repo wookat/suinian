@@ -1,4 +1,5 @@
 import { loadSettings } from "./settings"
+import { identityFingerprint, isCacheableApiPath, withIdentityParam } from "./api-cache"
 import {
   mockAsk,
   mockCreateNote,
@@ -47,10 +48,16 @@ async function realFetch<T>(
 ): Promise<T> {
   const { apiBaseUrl, apiToken } = loadSettings()
   if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  // SW 会缓存这几条 GET 路由：URL 带上当前账号指纹，缓存按身份分区（R166 P1）
+  const method = (init?.method ?? "GET").toUpperCase()
+  const reqPath =
+    method === "GET" && isCacheableApiPath(path)
+      ? withIdentityParam(path, await identityFingerprint(apiToken))
+      : path
   let res: Response
   const timeoutSignal = AbortSignal.timeout(timeoutMs)
   try {
-    res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}${path}`, {
+    res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}${reqPath}`, {
       ...init,
       signal: init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal,
       headers: {
@@ -164,7 +171,7 @@ export function mediaTooLargeText(kind: string, size: number): string {
   return `${kind}过大：最多 ${MAX_MEDIA_BYTES / 1024 / 1024}MB，当前约 ${(size / 1024 / 1024).toFixed(1)}MB`
 }
 
-export const SUPPORTED_FILE_EXTS = ["pdf", "txt", "md", "markdown", "docx"]
+export const SUPPORTED_FILE_EXTS = ["pdf", "txt", "md", "markdown", "docx", "csv", "tsv", "xlsx"]
 
 /** 图片/文件/语音上传：走 /api/ingest/media，后端提取文字/转写/摘要后入库 */
 export async function ingestMedia(file: File, type: "image" | "file" | "audio", clientId?: string): Promise<Note> {
@@ -809,6 +816,13 @@ export async function generateReport(
     },
   )
   return { report: res.report ?? null, message: res.message }
+}
+
+/** 今日到期 + 已逾期的未完成待办（时间流顶部应用内提醒条） */
+export async function getTodosToday(): Promise<{ date: string; items: (Note & { overdue: boolean })[] }> {
+  if (loadSettings().useMock) return { date: "", items: [] }
+  const res = await realFetch<{ date: string; items: Record<string, unknown>[] }>("/api/todos/today")
+  return { date: res.date, items: res.items.map((r) => ({ ...normalizeNote(r), overdue: !!r.overdue })) }
 }
 
 /** 今日回顾（那年今日 / 上月今日 / 久未回看） */

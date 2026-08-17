@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { scrubApiCacheForToken } from "./api-cache"
 
 export interface Settings {
   apiBaseUrl: string
@@ -58,7 +59,10 @@ export function loadSettings(): Settings {
 export const SETTINGS_CHANGED_EVENT = "suinian:settings-changed"
 
 export function saveSettings(s: Settings) {
+  const prevToken = loadSettings().apiToken
   localStorage.setItem(KEY, JSON.stringify(s))
+  // 换号/登出/登录时清掉不属于新身份的 SW api 缓存（R166 P1）
+  if (s.apiToken !== prevToken) void scrubApiCacheForToken(s.apiToken)
   window.dispatchEvent(new Event(SETTINGS_CHANGED_EVENT))
 }
 

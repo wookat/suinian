@@ -57,17 +57,20 @@ private data class SharedItem(
 private const val MAX_IMAGE_BYTES = 10 * 1024 * 1024
 private const val MAX_FILE_BYTES = 10 * 1024 * 1024
 
-/** 后端支持的文档类型：PDF / txt / md / docx（按 mime 或扩展名判断） */
+/** 后端可提取正文的文档类型：PDF / txt / md / docx / csv / xlsx（其余类型后端也会存档原件） */
 private fun isSupportedDocument(mime: String?, name: String?): Boolean {
     when (mime?.substringBefore(';')?.trim()) {
         "application/pdf",
         "text/plain",
         "text/markdown",
+        "text/csv",
+        "text/tab-separated-values",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         -> return true
     }
     val ext = name?.substringAfterLast('.', "")?.lowercase()
-    return ext in setOf("pdf", "txt", "md", "markdown", "docx")
+    return ext in setOf("pdf", "txt", "md", "markdown", "docx", "csv", "tsv", "xlsx")
 }
 
 /** 任何 app「分享 → 碎念」的轻量确认页 */
@@ -123,7 +126,7 @@ class ShareActivity : ComponentActivity() {
             when {
                 mime.startsWith("image/") -> addImage(uri)
                 isSupportedDocument(mime, displayName(uri) ?: uri.lastPathSegment) -> addFile(uri)
-                else -> Toast.makeText(this, "不支持的文件类型：目前支持 PDF / txt / md / docx", Toast.LENGTH_SHORT).show()
+                else -> Toast.makeText(this, "不支持的文件类型：目前支持 PDF / txt / md / docx / csv / xlsx", Toast.LENGTH_SHORT).show()
             }
         }
 

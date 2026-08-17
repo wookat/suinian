@@ -197,7 +197,11 @@ app.get("/health", async (c) => {
   // 充值期间的常态），不是降级——外部告警只看 ok:false（R134 口径）
   if (c.req.query("probe") === "ai") {
     const ai = await aiProbe(c.env);
-    return c.json({ ok: true, ai }, ai.ok ? 200 : 503);
+    // provider/model 是服务器侧配置指纹，只对 ADMIN_TOKEN 持有者暴露；
+    // 外部拨测只需 ok 与状态码（R166 P2-5）
+    const auth = c.req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+    const isAdmin = !!c.env.ADMIN_TOKEN && auth === c.env.ADMIN_TOKEN;
+    return c.json({ ok: true, ai: isAdmin ? ai : { ok: ai.ok } }, ai.ok ? 200 : 503);
   }
   // ?probe=bridge reports the WeChat bridge state from its heartbeat so external
   // monitoring sees the real login state (online / waiting_scan / stale) instead
@@ -2452,10 +2456,10 @@ app.post("/api/ingest/media", async (c) => {
   if (parsed.type === "file") {
     const fileName = parsed.fileName || "file";
     const kind = detectFileKind(parsed.fileName, parsed.mime);
-    if (!kind) {
-      return c.json({ error: "不支持的文件类型：目前支持 PDF / txt / md / docx" }, 400);
-    }
-    const result = await buildFileNote(c.env, kind, fileName, parsed.bytes);
+    // 不认识的类型不再拒收：原件照样存档，笔记正文用文件名占位保证可检索
+    const result = kind
+      ? await buildFileNote(c.env, kind, fileName, parsed.bytes)
+      : { content: `【文件】已存档原件：${fileName}（暂不支持文本提取）`, excerpt: null, summarized: false, extracted: false };
     const tooLongFile = contentTooLong(c, result.content);
     if (tooLongFile) return tooLongFile;
     const meta: NoteMeta = {
@@ -2463,8 +2467,8 @@ app.post("/api/ingest/media", async (c) => {
       file_name: fileName,
       file_mime: parsed.mime,
       file_size: parsed.bytes.length,
-      file_kind: kind,
-      file_status: result.extracted ? "ok" : "extract_failed",
+      ...(kind ? { file_kind: kind } : {}),
+      file_status: result.extracted ? ("ok" as const) : ("extract_failed" as const),
       ...(result.excerpt ? { file_excerpt: result.excerpt } : {}),
     };
     const { note } = await createNote(

@@ -20,6 +20,7 @@ import { EmptyState } from "@/components/empty-state"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { QuickInput } from "@/components/quick-input"
 import { DailyReview } from "@/components/daily-review"
+import { DueTodosBanner } from "@/components/due-todos"
 import { NoteCard } from "@/components/note-card"
 import type { EditResult } from "@/components/note-card"
 import { Input } from "@/components/ui/input"
@@ -60,6 +61,23 @@ const CATEGORY_TABS = [
 ] as const
 
 const SAMPLE_TAG = "示例"
+// 种子示例笔记按 id 记在本机，不再靠 #示例 标签识别：AI 分拣可能给真实
+// 笔记也打上同名标签，「一键清除」不能误删用户数据（R166 P2-2）
+const SAMPLE_IDS_KEY = "suinian.sample-note-ids"
+
+function loadSampleIds(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(SAMPLE_IDS_KEY) ?? "[]") as unknown
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []
+  } catch {
+    return []
+  }
+}
+
+function saveSampleIds(ids: string[]) {
+  if (ids.length > 0) localStorage.setItem(SAMPLE_IDS_KEY, JSON.stringify(ids))
+  else localStorage.removeItem(SAMPLE_IDS_KEY)
+}
 const SAMPLE_NOTES = [
   "周末想试试手冲咖啡，先从 V60 滤杯开始研究，豆子买浅烘的",
   "明天下午三点前给牙医回电话，预约洗牙",
@@ -548,10 +566,14 @@ export function TimelinePage() {
     if (seeding) return
     setSeeding(true)
     try {
+      const ids = loadSampleIds()
       for (const content of SAMPLE_NOTES) {
         const note = await createNote({ source: "web", raw_type: "text", content, tags: [SAMPLE_TAG] })
+        ids.push(note.id)
         handleCreated(note)
       }
+      saveSampleIds(ids)
+      setSeededIds(ids)
       showToast(`已丢入 ${SAMPLE_NOTES.length} 条示例，AI 正在自动分拣…`)
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e))
@@ -560,15 +582,21 @@ export function TimelinePage() {
     }
   }
 
-  const sampleIds = useMemo(() => notes.filter((n) => n.tags.includes(SAMPLE_TAG)).map((n) => n.id), [notes])
+  const [seededIds, setSeededIds] = useState<string[]>(loadSampleIds)
+  const sampleIds = useMemo(
+    () => notes.filter((n) => seededIds.includes(n.id)).map((n) => n.id),
+    [notes, seededIds],
+  )
 
   async function clearSamples() {
-    const ids = sampleIds
+    const ids = seededIds
     if (ids.length === 0) return
     try {
       await batchNotes("delete", ids)
       setNotes((ns) => ns.filter((n) => !ids.includes(n.id)))
       notifyNotesDeleted(ids)
+      saveSampleIds([])
+      setSeededIds([])
       showToast(`已清除 ${ids.length} 条示例笔记`)
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e))
@@ -847,6 +875,8 @@ export function TimelinePage() {
           </div>
         </div>
       )}
+
+      <DueTodosBanner />
 
       <DailyReview onTagClick={setTag} />
 
