@@ -3108,8 +3108,11 @@ app.post("/api/ask", async (c) => {
     });
   }
   const origFinanceIntent = financeAggIntent(intentQuestion);
-  const financeIntent =
+  let financeIntent =
     origFinanceIntent ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeAggIntent(recallQuestion));
+  // 代词追问问的是前轮那个具体事物的价格（「它一共花了多少钱」），改写产物
+  // 提不出干净主题词时也绝不能 fail-closed 复读全账合计——普通召回能直答
+  if (pronounFollowUp && financeIntent === "fail_closed" && !financeTopicTerms(intentQuestion)) financeIntent = null;
   // 财务主题子集合计（R148 P1-2）：「咖啡一共花了多少」——主题词可干净提取时
   // 走 LIKE 圈定子集 + SQL 精确合计（此前一律 fail-closed：诚实但找回失败）
   const subsetTerms =
