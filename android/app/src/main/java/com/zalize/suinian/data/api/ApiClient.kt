@@ -329,7 +329,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
         resp.use {
             val text = it.body?.string().orEmpty()
-            if (it.code == 409) throw ConflictException(parseErrorMessage(text) ?: "这条笔记刚被其他设备修改，请刷新后重试", parseNoteLenient(text))
+            if (it.code == 409) throw ConflictException(parseErrorMessage(text) ?: "这条笔记刚被更新（可能来自其他设备或后台自动整理），请刷新后重试", parseNoteLenient(text))
             if (!it.isSuccessful) throw httpError(it.code, text)
             parseNoteLenient(text)
         }
