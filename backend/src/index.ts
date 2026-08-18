@@ -2867,14 +2867,16 @@ app.post("/api/ask", async (c) => {
   const askMarks: Array<[string, number]> = [];
   // 关键词提取 LLM 调用的预算上限：超时按提取失败降级为朴素分词（best-effort）
   const ASK_KWEXT_BUDGET_MS = 2_000;
-  // query rewrite: resolve pronouns/ordinals against history, then keyword recall
-  const tRewrite = Date.now();
-  const recallQuestion = await rewriteAskQuestion(c.env, question, history);
-  askMarks.push(["rewrite", Date.now() - tRewrite]);
   // 元问题闸（R176 P1-2）：原问题是「最近在想什么/帮我总结」这类生成型元问题时，
   // 一切基于改写产物 recallQuestion 的确定性意图回退全部关闭——改写器可能把
-  // 上一轮的财务措辞注入改写结果，误路由到极值/合计等确定性答案（答非所问）
+  // 上一轮的财务措辞注入改写结果，误路由到极值/合计等确定性答案（答非所问）。
+  // 元问题本身自足（无代词/序数要解析），召回也直接用原问题，不做历史改写——
+  // 否则改写注入的财务措辞会把语义召回带偏到财务笔记上（R184）。
   const metaQuestion = ASK_META_QUESTION_RE.test(question);
+  // query rewrite: resolve pronouns/ordinals against history, then keyword recall
+  const tRewrite = Date.now();
+  const recallQuestion = metaQuestion ? question : await rewriteAskQuestion(c.env, question, history);
+  askMarks.push(["rewrite", Date.now() - tRewrite]);
   // explicit time scope ("上个月/最近一周/去年…") narrows recall to that window
   const timeRange = parseTimeRange(recallQuestion);
   // 财务/统计合计类问题走精确聚合（与周报/月报同一 financeStats 口径），
