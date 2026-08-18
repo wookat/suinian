@@ -3694,11 +3694,22 @@ app.post("/api/ask", async (c) => {
     }
     const { answer, references } = buildNoAnswerResponse(suggestions);
     const sensitiveHits = await countSensitiveHits(c.env, userId, terms);
+    // 凭据类问法在零召回分支同样给敏感指引（与 LLM 拒答分支同一口径）：
+    // 「WiFi 密码」这类关键词变体可能连敏感元数据都匹配不到
+    let zeroHint = sensitiveHintLine(sensitiveHits, terms);
+    if (!zeroHint && CREDENTIAL_Q_RE.test(question)) {
+      const anySensitive = await c.env.DB.prepare(
+        "SELECT 1 FROM notes WHERE user_id = ? AND is_sensitive = 1 AND deleted_at IS NULL LIMIT 1"
+      )
+        .bind(userId)
+        .first();
+      if (anySensitive) zeroHint = credentialHintLine();
+    }
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
     );
-    return c.json({ answer: answer + sensitiveHintLine(sensitiveHits, terms), references, notes: refNotes, no_answer: true });
+    return c.json({ answer: answer + zeroHint, references, notes: refNotes, no_answer: true });
   }
 
   notes = dedupeNotesByContent(notes);

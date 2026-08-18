@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import { parseImageExtraction, imageNoteFields, buildMediaReply, IMAGE_CREDENTIAL_GAP_NOTICE } from "../src/media";
 import { parseLedgerCore, parseLedgerTable, parseTriageJson, fixReceiptDoubleCount, fixLedgerAmount, detectSensitive } from "../src/triage";
 import { applyTriage } from "../src/note-store";
+import { CREDENTIAL_Q_RE, credentialHintLine } from "../src/ask";
 import { decryptContent, ENC_PLACEHOLDER } from "../src/crypto";
 import type { TriageResult } from "../src/types";
 
@@ -188,6 +189,20 @@ describe("applyTriage vision_sensitive 粘性 (R188 P1-1)", () => {
     await applyTriage({ DB: fakeDb(notes), SUINIAN_ENC_KEY: KEY }, "n1", triage, "会议纪要 8月7日");
     expect(notes[0].is_sensitive).toBe(0);
     expect(notes[0].content).toBe("会议纪要 8月7日");
+  });
+});
+
+// ---- P1-1: 凭据类问法识别（QA 实测「WiFi 密码是多少」走零召回分支无指引） ----
+
+describe("CREDENTIAL_Q_RE 凭据问法变体 (R188 P1-1)", () => {
+  it("连字符/大小写变体均识别为凭据类问法", () => {
+    for (const q of ["WiFi 密码是多少", "wifi密码是多少", "Wi-Fi 密码是多少", "助记词还记得吗", "服务器密钥在哪"]) {
+      expect(CREDENTIAL_Q_RE.test(q)).toBe(true);
+    }
+  });
+
+  it("凭据指引文案含原图确认口径", () => {
+    expect(credentialHintLine()).toContain("原图");
   });
 });
 
