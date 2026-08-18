@@ -95,7 +95,7 @@ fun NoteEditSheet(
                         .padding(12.dp),
                 ) {
                     Text(
-                        "这条笔记刚被其他设备修改，你的输入仍保留在下方编辑框，可对照最新版本合并后再保存",
+                        "这条笔记刚被更新（可能来自其他设备或后台自动整理），你的输入仍保留在下方编辑框，可对照最新版本合并后再保存",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onTertiaryContainer,

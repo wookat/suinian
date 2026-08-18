@@ -26,6 +26,7 @@ const ONLY = (process.argv.find((a) => a.startsWith("--only=")) ?? "").replace("
 
 let token = process.env.SUINIAN_TOKEN ?? "";
 let createdAccount = false;
+let accountName = "";
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   for (let attempt = 0; ; attempt++) {
@@ -36,6 +37,15 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     if (res.status === 429 && attempt < 3) {
       const wait = 65_000 * (attempt + 1);
       console.log(`  429 rate-limited on ${path}, retrying in ${wait / 1000}s...`);
+      await sleep(wait);
+      continue;
+    }
+    // 种子 PATCH 与异步分拣写回的 CAS 竞态（R180）：服务端 SELECT→UPDATE 窗口内
+    // 分拣落盘会返 409。eval 里没有真正的多设备冲突，重发同一黄金元数据即可
+    //（manual_override 落盘后分拣不再覆盖），退避重试消除长期抖动误报。
+    if (res.status === 409 && attempt < 5) {
+      const wait = 2_000 * (attempt + 1);
+      console.log(`  409 triage race on ${path}, retrying in ${wait / 1000}s...`);
       await sleep(wait);
       continue;
     }
@@ -82,6 +92,7 @@ async function ensureAccount(): Promise<void> {
   });
   token = res.api_token;
   createdAccount = true;
+  accountName = name;
   console.log(`registered eval account ${res.user.id} (${name})`);
 }
 
@@ -224,7 +235,19 @@ async function cleanup(): Promise<void> {
     return;
   }
   if (createdAccount) {
-    await api("/api/auth/me", { method: "DELETE" });
+    // 删号也要重试（R180）：中途 abort 后绝不留下 QA 账号/数据
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await api("/api/auth/me", { method: "DELETE" });
+        break;
+      } catch (e) {
+        if (attempt >= 2) {
+          console.error(`FAILED to delete eval account ${accountName} — delete it manually!`);
+          throw e;
+        }
+        await sleep(5_000);
+      }
+    }
     console.log("deleted eval account (cascade removed all data)");
   } else {
     // token was provided: only delete the notes this run created

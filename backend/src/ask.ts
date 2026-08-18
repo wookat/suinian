@@ -1,6 +1,7 @@
 import type { Env, NoteRow } from "./types";
 import { formatAmount, type FinanceStats } from "./reports";
 import { chatComplete } from "./ai";
+import { parseLedgerTable } from "./triage";
 
 /**
  * Helpers for /api/ask retrieval quality (R54): deterministic time-range
@@ -430,6 +431,16 @@ export function financeExtremeTopicTerms(question: string): string[] | null {
   return terms.length > 0 && terms.length <= 3 ? terms : null;
 }
 
+/** 台账聚合笔记判定（R180 P2-1）：多行台账笔记的金额是 fixLedgerAmount 锁定的
+ * 列合计（R178），不是一笔消费——极值比较把它当单笔会冒充「最便宜的一把」。
+ * 复用 parseLedgerTable 同一确定性解析器：内容解析出多行台账且笔记金额等于
+ * 该合计时判为聚合笔记（用户手改过金额则金额已非合计，照常参与比较）。 */
+export function isLedgerAggregateNote(n: Pick<NoteRow, "content" | "amount">): boolean {
+  if (typeof n.amount !== "number" || !Number.isFinite(n.amount)) return false;
+  const ledger = parseLedgerTable(n.content);
+  return ledger !== null && Math.abs(n.amount - ledger.amount) < 0.005;
+}
+
 const FINANCE_DIRECTION_LABELS: Record<"expense" | "income", string> = { expense: "支出", income: "收入" };
 
 /** 财务极值的确定性答案：按币种分组比较，敏感笔记只报金额/时间不露内容。 */
@@ -438,14 +449,17 @@ export function buildFinanceExtremeAnswer(
   rows: Pick<NoteRow, "id" | "title" | "content" | "created_at" | "is_sensitive" | "amount" | "currency">[],
   unknownAmount: number,
   phrase: string | null,
-  terms: string[] | null = null
+  terms: string[] | null = null,
+  ledgerExcluded = 0
 ): string {
   const topic = terms && terms.length > 0 ? `「${terms.join("、")}」` : null;
   const scope = `${phrase ?? ""}${topic ? `与${topic}相关的记录里` : phrase ? "" : "全部笔记"}`;
   const label = FINANCE_DIRECTION_LABELS[query.direction];
   const kindLabel = query.kind === "max" ? "金额最大" : "金额最小";
+  const ledgerNote = ledgerExcluded > 0 ? `另有 ${ledgerExcluded} 条多行台账笔记的金额为多笔合计，未参与单笔比较` : "";
   if (rows.length === 0) {
-    return `${scope}没有已识别出金额的${label}记录，无法比较金额大小。${unknownAmount > 0 ? `（另有 ${unknownAmount} 笔${label}未识别出金额。）` : ""}`;
+    const extras = [ledgerNote, unknownAmount > 0 ? `另有 ${unknownAmount} 笔${label}未识别出金额` : ""].filter(Boolean);
+    return `${scope}没有已识别出金额的单笔${label}记录，无法比较金额大小。${extras.length > 0 ? `（${extras.join("；")}。）` : ""}`;
   }
   const lines = rows.map((n, i) => {
     const amount = formatAmount(n.amount ?? 0, n.currency || "CNY");
@@ -459,7 +473,7 @@ export function buildFinanceExtremeAnswer(
       : `- ${n.currency || "CNY"}：${amount}（${when}，北京时间）${cite}${desc}`;
   });
   let md = rows.length === 1 ? lines[0] : `${scope}按币种分别比较（不同币种金额不可直接比较），${kindLabel}的${label}：\n${lines.join("\n")}`;
-  md += `\n\n以上为数据库精确查询结果（${topic ? `按关键词${topic}匹配标题/正文/标签，` : ""}按已识别金额比较，不含已删除笔记${unknownAmount > 0 ? `；另有 ${unknownAmount} 笔未识别出金额，未参与比较` : ""}）。`;
+  md += `\n\n以上为数据库精确查询结果（${topic ? `按关键词${topic}匹配标题/正文/标签，` : ""}按已识别金额比较，不含已删除笔记${unknownAmount > 0 ? `；另有 ${unknownAmount} 笔未识别出金额，未参与比较` : ""}${ledgerNote ? `；${ledgerNote}` : ""}）。`;
   return md;
 }
 
@@ -591,8 +605,9 @@ export function buildFinanceSubsetAnswer(
   const visible = finance.filter((n) => !n.is_sensitive).slice(0, 10);
   const itemLines = visible.map((n, i) => {
     const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
+    const ledger = isLedgerAggregateNote(n) ? "，台账多笔合计" : "";
     const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
-    return `- ${text}（${amount}，${formatShanghai(n.created_at).slice(0, 10)}）[${i + 1}]`;
+    return `- ${text}（${amount}${ledger}，${formatShanghai(n.created_at).slice(0, 10)}）[${i + 1}]`;
   });
   const sensitiveCnt = finance.filter((n) => n.is_sensitive).length;
   const matchScope = tagFallback ? "仅标签命中，标题/正文无直接命中" : "标题/正文";
@@ -698,8 +713,9 @@ export function buildFinanceListAnswer(
   const itemLines = visible.map((n, i) => {
     const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
     const dir = direction === "both" ? (n.category === "income" ? "收入·" : "支出·") : "";
+    const ledger = isLedgerAggregateNote(n) ? "，台账多笔合计" : "";
     const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
-    return `- ${text}（${dir}${amount}，${formatShanghai(n.created_at).slice(0, 10)}）[${i + 1}]`;
+    return `- ${text}（${dir}${amount}${ledger}，${formatShanghai(n.created_at).slice(0, 10)}）[${i + 1}]`;
   });
   const sensitiveCnt = rows.filter((n) => n.is_sensitive).length;
   let md = `${scope}你共记了 ${countParts.join("、")}`;

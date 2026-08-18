@@ -73,7 +73,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, ASK_META_QUESTION_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, isLedgerAggregateNote, ASK_META_QUESTION_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -1590,7 +1590,7 @@ function shouldKickRetriage(userId: string): boolean {
 async function conflictResponse(c: Context<{ Bindings: Env; Variables: Vars }>, id: string) {
   const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
   return c.json(
-    { error: "该笔记刚被其他设备修改，已返回最新内容，请基于最新内容重试", note: note ? await noteToJsonDecrypted(c.env, note) : null },
+    { error: "该笔记刚被更新（可能来自其他设备或后台自动整理），已返回最新内容，请基于最新内容重试", note: note ? await noteToJsonDecrypted(c.env, note) : null },
     409
   );
 }
@@ -2947,22 +2947,32 @@ app.post("/api/ask", async (c) => {
     }
     const xWhere = xConds.join(" AND ");
     const order = finExtreme.kind === "max" ? "DESC" : "ASC";
-    // 每币种取一条极值（窗口函数按币种分组），未识别金额的笔数单独如实说明
+    // 按金额排序取全部候选后在应用层剔除台账聚合行（R180 P2-1：多行台账的
+    // 金额是列合计而非单笔，参与极值比较会冒充「最便宜的一把」），再每币种
+    // 取一条极值；未识别金额的笔数单独如实说明
     const [xr, unknownRow] = await Promise.all([
-      c.env.DB.prepare(
-        `SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY COALESCE(currency, 'CNY') ORDER BY amount ${order}, id ASC) AS rn FROM notes WHERE ${xWhere} AND amount IS NOT NULL) WHERE rn = 1 ORDER BY amount ${order}`
-      )
+      c.env.DB.prepare(`SELECT * FROM notes WHERE ${xWhere} AND amount IS NOT NULL ORDER BY amount ${order}, id ASC LIMIT 2000`)
         .bind(...xBinds)
         .all<NoteRow>(),
       c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM notes WHERE ${xWhere} AND amount IS NULL`)
         .bind(...xBinds)
         .first<{ cnt: number }>(),
     ]);
-    const xRows = xr.results ?? [];
+    const xAll = xr.results ?? [];
+    const xSingles = xAll.filter((n) => !isLedgerAggregateNote(n));
+    const ledgerExcluded = xAll.length - xSingles.length;
+    const seenCurrency = new Set<string>();
+    const xRows = xSingles.filter((n) => {
+      const cur = n.currency || "CNY";
+      if (seenCurrency.has(cur)) return false;
+      seenCurrency.add(cur);
+      return true;
+    });
     // 主题关键词零命中：落回普通召回（语义仍可能兜底），不 dead-end，
-    // 也绝不退回全局极值冒充主题答案
-    if (!(xTerms && xRows.length === 0 && (unknownRow?.cnt ?? 0) === 0)) {
-      const answer = buildFinanceExtremeAnswer(finExtreme, xRows, unknownRow?.cnt ?? 0, xRange?.phrase ?? null, xTerms);
+    // 也绝不退回全局极值冒充主题答案；命中的只有台账聚合行时仍走确定性
+    // 答案（如实说明合计未参与单笔比较），不落回 LLM 猜
+    if (!(xTerms && xRows.length === 0 && (unknownRow?.cnt ?? 0) === 0 && ledgerExcluded === 0)) {
+      const answer = buildFinanceExtremeAnswer(finExtreme, xRows, unknownRow?.cnt ?? 0, xRange?.phrase ?? null, xTerms, ledgerExcluded);
       const xRefRows = xRows.filter((n) => !n.is_sensitive);
       return c.json({
         answer,

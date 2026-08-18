@@ -639,7 +639,7 @@ export function NoteCard({
             {conflictNote && (
               <div className="space-y-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs">
                 <p className="font-medium text-amber-600 dark:text-amber-400">
-                  这条笔记刚被其他设备修改，你的输入仍保留在上方编辑框，可对照最新版本合并后再保存
+                  这条笔记刚被更新（可能来自其他设备或后台自动整理），你的输入仍保留在上方编辑框，可对照最新版本合并后再保存
                 </p>
                 <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-muted-foreground">
                   最新版本：{conflictNote.content}
