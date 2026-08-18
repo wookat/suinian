@@ -71,9 +71,10 @@ export function Onboarding() {
           </span>
           <h2 className="text-lg font-semibold">欢迎来到碎念</h2>
         </div>
-        <p className="mb-4 text-sm text-muted-foreground">
-          像发消息一样记录一切：什么都能丢——想法、链接、语音、账目、密码，AI
-          自动分拣打标签、把碎片串成思考线索，每周告诉你「你最近在想什么」。
+        {/* R182 P2-3：首屏收敛为一句话主张，移动端不再被长段落撑出可视区 */}
+        <p className="mb-1 text-sm font-medium">什么都能丢，AI 帮你想起来。</p>
+        <p className="mb-4 text-xs text-muted-foreground">
+          想法、链接、语音、账目随手丢进来，自动分拣打标签、串成思考线索，随时问随时找回。
         </p>
         <div className="space-y-2">
           {CHOICES.map((c) => {
@@ -113,7 +114,8 @@ export function Onboarding() {
           <ChevronRight className="mt-2 size-4 shrink-0 text-muted-foreground" />
         </button>
 
-        <div className="mt-4">
+        {/* 多端入口展示属于锦上添花，小屏隐藏以保证三个主入口首屏可见 */}
+        <div className="mt-4 hidden sm:block">
           <p className="mb-2 text-xs font-medium text-muted-foreground">哪里都能丢进来</p>
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
             {CHANNELS.map((ch) => {

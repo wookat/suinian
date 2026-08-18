@@ -646,4 +646,58 @@ export const QUESTIONS: EvalQuestion[] = [
     forbidAnswerContains: ["549"],
     holdout: true,
   },
+
+  // —— R182（audit-r181 P1-2）：序数金额提问必须走确定性 SQL 排名 ——
+  // 「第二贵/排名第二/倒数第二」曾走 LLM 猜排序，答错且与台账口径矛盾。
+  // 支出金额序：nz20 549 > exp1 399 > exp2 260。
+  {
+    id: "q113",
+    category: "财务极值",
+    question: "我第二贵的一笔支出是什么",
+    expectAll: ["exp1"],
+    forbid: ["nz20"],
+    expectAnswerContains: ["399", "第 2 大", "数据库精确查询"],
+    forbidAnswerContains: ["549", "260"],
+  },
+  {
+    id: "q114",
+    category: "财务极值",
+    question: "支出排名第二的是哪笔",
+    expectAll: ["exp1"],
+    expectAnswerContains: ["399", "数据库精确查询"],
+    forbidAnswerContains: ["549", "260"],
+    holdout: true,
+  },
+  {
+    id: "q115",
+    category: "财务极值",
+    question: "金额倒数第二的一笔支出是哪笔",
+    expectAll: ["exp1"],
+    expectAnswerContains: ["399", "第 2 小", "数据库精确查询"],
+    forbidAnswerContains: ["549", "260"],
+  },
+  {
+    id: "q116",
+    category: "财务极值",
+    question: "第三贵的一笔支出是多少钱",
+    expectAll: ["exp2"],
+    expectAnswerContains: ["260", "数据库精确查询"],
+    forbidAnswerContains: ["549", "399"],
+    holdout: true,
+  },
+  // 主题内不足 rank 笔：如实说明不存在第 N 名，绝不拿全局排名冒充
+  {
+    id: "q118",
+    category: "财务极值",
+    question: "爬山支出排名第二的一笔是哪笔",
+    expectAnswerContains: ["没有已识别出金额"],
+    forbidAnswerContains: ["549", "399", "260"],
+  },
+  {
+    id: "q117",
+    category: "财务极值",
+    question: "我买过的键盘里第二贵的是哪一把",
+    expectAnswerContains: ["不存在第 2 名"],
+    forbidAnswerContains: ["549", "260"],
+  },
 ];

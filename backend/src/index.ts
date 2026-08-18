@@ -1337,15 +1337,32 @@ export function capBytes(s: string, max: number): string {
 
 const LIKE_TERM_MAX_BYTES = 45;
 
+// LIKE 语义收口为字面子串匹配（R182 P2-1）：用户搜 `_`/`%` 就是找含这些字符的
+// 笔记，不是通配符；所有绑定这些 pattern 的 SQL 必须带 LIKE_ESCAPE
+export const LIKE_ESCAPE = "ESCAPE '\\'";
+
+export function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+/** 裁剪可能截断转义对，去掉末尾落单的 `\`，避免非法 pattern。 */
+function capEscaped(s: string, max: number): string {
+  let out = capBytes(s, max);
+  const trail = out.match(/\\+$/);
+  if (trail && trail[0].length % 2 === 1) out = out.slice(0, -1);
+  return out;
+}
+
 /** Single implementation point for keyword → LIKE pattern (D1 byte cap applied). */
 export function likeContains(term: string): string {
-  return `%${capBytes(term, LIKE_TERM_MAX_BYTES)}%`;
+  return `%${capEscaped(escapeLike(term), LIKE_TERM_MAX_BYTES)}%`;
 }
 
 /** Tag → LIKE pattern over the JSON tags column; overlong tags fall back to prefix match. */
 export function tagLikePattern(tag: string): string {
-  const capped = capBytes(tag, LIKE_TERM_MAX_BYTES);
-  return capped === tag ? `%"${tag}"%` : `%"${capped}%`;
+  const esc = escapeLike(tag);
+  const capped = capEscaped(esc, LIKE_TERM_MAX_BYTES);
+  return capped === esc ? `%"${esc}"%` : `%"${capped}%`;
 }
 
 /** Split a keyword query into up to 5 whitespace-separated terms (each capped for LIKE). */
@@ -1363,7 +1380,7 @@ export function searchTerms(q: string): string[] {
 const KEYWORD_FIELDS = ["content", "title", "url_title", "url_summary", "tags"] as const;
 
 function termCond(): string {
-  return `(${KEYWORD_FIELDS.map((f) => `${f} LIKE ?`).join(" OR ")})`;
+  return `(${KEYWORD_FIELDS.map((f) => `${f} LIKE ? ${LIKE_ESCAPE}`).join(" OR ")})`;
 }
 
 /** How many of the query terms a note matches across the searchable fields. */
@@ -1394,7 +1411,7 @@ export function noteFilterConds(filter: {
     binds.push(filter.category);
   }
   if (typeof filter.tag === "string" && filter.tag) {
-    conds.push("tags LIKE ?");
+    conds.push(`tags LIKE ? ${LIKE_ESCAPE}`);
     binds.push(tagLikePattern(filter.tag));
   }
   if (typeof filter.q === "string" && filter.q.trim()) {
@@ -2299,7 +2316,7 @@ app.get("/api/tags", async (c) => {
  * 重命名/删除后的口径一致，否则按新标签筛选找不回这条。 */
 async function retagUser(env: Env, userId: string, from: string, to: string | null): Promise<number> {
   const { results } = await env.DB.prepare(
-    "SELECT id, tags, is_sensitive FROM notes WHERE user_id = ? AND tags LIKE ?"
+    `SELECT id, tags, is_sensitive FROM notes WHERE user_id = ? AND tags LIKE ? ${LIKE_ESCAPE}`
   )
     .bind(userId, tagLikePattern(from))
     .all<{ id: string; tags: string; is_sensitive: number }>();
@@ -2814,7 +2831,7 @@ export async function rewriteAskQuestion(
 async function countSensitiveHits(env: Env, userId: string, terms: string[]): Promise<number> {
   if (terms.length === 0) return 0;
   try {
-    const ors = terms.map(() => "(title LIKE ? OR tags LIKE ? OR url_title LIKE ?)");
+    const ors = terms.map(() => `(title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE} OR url_title LIKE ? ${LIKE_ESCAPE})`);
     const binds: unknown[] = [userId];
     for (const t of terms) {
       const like = likeContains(t);
@@ -2869,7 +2886,7 @@ app.post("/api/ask", async (c) => {
   if (clarifyTerms) {
     // 时间范围优先取本轮问题，否则沿用上一轮合计答案里的时间短语（口径一致）
     const clRange = parseTimeRange(question) ?? timeRange ?? parseTimeRange(lastAssistant ?? "");
-    const ors = clarifyTerms.map(() => "(content LIKE ? OR title LIKE ? OR tags LIKE ?)").join(" OR ");
+    const ors = clarifyTerms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ");
     const clConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')", `(${ors})`];
     const clBinds: unknown[] = [userId];
     for (const t of clarifyTerms) {
@@ -2933,7 +2950,7 @@ app.post("/api/ask", async (c) => {
     const xConds = ["user_id = ?", "deleted_at IS NULL", "category = ?"];
     const xBinds: unknown[] = [userId, finExtreme.direction];
     if (xTerms) {
-      const likeOrs = xTerms.map(() => "(content LIKE ? OR title LIKE ? OR tags LIKE ?)").join(" OR ");
+      const likeOrs = xTerms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ");
       xConds.push(`(${likeOrs})`);
       xBinds.push(...xTerms.flatMap((t) => Array(3).fill(likeContains(t)) as string[]));
     }
@@ -2961,18 +2978,28 @@ app.post("/api/ask", async (c) => {
     const xAll = xr.results ?? [];
     const xSingles = xAll.filter((n) => !isLedgerAggregateNote(n));
     const ledgerExcluded = xAll.length - xSingles.length;
-    const seenCurrency = new Set<string>();
-    const xRows = xSingles.filter((n) => {
+    // 每币种按序取第 rank 名（R182 P1-2：「第二贵/排名第二/倒数第二」与极值
+    // 同一确定性架构，rank=1 即原极值行为）；某币种不足 rank 笔时如实说明
+    const xRank = finExtreme.rank ?? 1;
+    const byCurrency = new Map<string, NoteRow[]>();
+    for (const n of xSingles) {
       const cur = n.currency || "CNY";
-      if (seenCurrency.has(cur)) return false;
-      seenCurrency.add(cur);
-      return true;
-    });
-    // 主题关键词零命中：落回普通召回（语义仍可能兜底），不 dead-end，
-    // 也绝不退回全局极值冒充主题答案；命中的只有台账聚合行时仍走确定性
-    // 答案（如实说明合计未参与单笔比较），不落回 LLM 猜
-    if (!(xTerms && xRows.length === 0 && (unknownRow?.cnt ?? 0) === 0 && ledgerExcluded === 0)) {
-      const answer = buildFinanceExtremeAnswer(finExtreme, xRows, unknownRow?.cnt ?? 0, xRange?.phrase ?? null, xTerms, ledgerExcluded);
+      const list = byCurrency.get(cur) ?? [];
+      list.push(n);
+      byCurrency.set(cur, list);
+    }
+    const xRows: NoteRow[] = [];
+    const shortCurrencies: { currency: string; count: number }[] = [];
+    for (const [cur, list] of byCurrency) {
+      if (list.length >= xRank) xRows.push(list[xRank - 1]);
+      else shortCurrencies.push({ currency: cur, count: list.length });
+    }
+    // 主题关键词零命中：仅 rank=1 落回普通召回（语义仍可能兜底同义词问法），
+    // 不 dead-end，也绝不退回全局极值冒充主题答案；序数问题（rank>1）LLM
+    // 无法忠实回答金额排名，零命中也必须走确定性「无法比较」答案；命中的
+    // 只有台账聚合行时同样走确定性答案，不落回 LLM 猜
+    if (!(xTerms && xAll.length === 0 && (unknownRow?.cnt ?? 0) === 0 && xRank === 1)) {
+      const answer = buildFinanceExtremeAnswer(finExtreme, xRows, unknownRow?.cnt ?? 0, xRange?.phrase ?? null, xTerms, ledgerExcluded, shortCurrencies);
       const xRefRows = xRows.filter((n) => !n.is_sensitive);
       return c.json({
         answer,
@@ -3084,7 +3111,7 @@ app.post("/api/ask", async (c) => {
       : (financeTopicTerms(question) ?? (metaQuestion || FINANCE_WORD_RE.test(question) ? null : financeTopicTerms(recallQuestion)));
   if (subsetTerms) {
     const sRange = (financeTopicTerms(question) ? parseTimeRange(question) : null) ?? timeRange;
-    const likeOrs = subsetTerms.map(() => "(content LIKE ? OR title LIKE ? OR tags LIKE ?)").join(" OR ");
+    const likeOrs = subsetTerms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ");
     const sConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')", `(${likeOrs})`];
     const sBinds: unknown[] = [userId, ...subsetTerms.flatMap((t) => Array(3).fill(likeContains(t)) as string[])];
     if (sRange?.start) {
@@ -3202,7 +3229,7 @@ app.post("/api/ask", async (c) => {
   const topicCnt = topicCountIntent(question) ?? (metaQuestion ? null : topicCountIntent(recallQuestion));
   if (topicCnt) {
     const tcRange = (topicCountIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
-    const tcConds = ["user_id = ?", "deleted_at IS NULL", "(content LIKE ? OR title LIKE ? OR tags LIKE ?)"];
+    const tcConds = ["user_id = ?", "deleted_at IS NULL", `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`];
     const tcBinds: unknown[] = [userId, ...(Array(3).fill(likeContains(topicCnt)) as string[])];
     if (tcRange?.start) {
       tcConds.push("created_at >= ?");
@@ -3309,7 +3336,7 @@ app.post("/api/ask", async (c) => {
       tConds.push("category = ?");
       tBinds.push(enumCategory);
     } else {
-      tConds.push("(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)");
+      tConds.push(`(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE} OR url_title LIKE ? ${LIKE_ESCAPE})`);
       tBinds.push(like, like, like, like);
     }
     if (timeRange?.start) {
@@ -3441,7 +3468,7 @@ app.post("/api/ask", async (c) => {
   // 的海量命中会把稀有词（「日本語」）的唯一命中挤出 created_at 窗口
   let orderBy = "created_at DESC";
   if (terms.length > 0) {
-    const ors = terms.map(() => "(content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ?)");
+    const ors = terms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE} OR url_title LIKE ? ${LIKE_ESCAPE})`);
     conds.push(`(${ors.join(" OR ")})`);
     for (const t of terms) {
       const like = likeContains(t);
@@ -3459,7 +3486,7 @@ app.post("/api/ask", async (c) => {
   // ORDER BY 的占位符位于 WHERE 之后，其绑定值也必须排在最后
   if (terms.length > 1) {
     const score = terms
-      .map(() => "(CASE WHEN content LIKE ? OR title LIKE ? OR tags LIKE ? OR url_title LIKE ? THEN 1 ELSE 0 END)")
+      .map(() => `(CASE WHEN content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE} OR url_title LIKE ? ${LIKE_ESCAPE} THEN 1 ELSE 0 END)`)
       .join(" + ");
     orderBy = `(${score}) DESC, created_at DESC`;
     for (const t of terms) {

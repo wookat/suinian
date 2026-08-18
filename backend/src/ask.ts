@@ -382,6 +382,31 @@ export interface FinanceExtremeQuery {
   kind: "max" | "min";
   /** 比较对象：支出或收入（默认支出）。 */
   direction: "expense" | "income";
+  /** 排名序号：1=极值（最贵/最便宜），2=第二贵/排名第二……倒数序已归一化
+   * 进 kind（倒数第二贵 = kind:min, rank:2）。 */
+  rank: number;
+}
+
+// 序数排名问法（R182 P1-2）：「第二贵/排名第二/倒数第二」与极值同属
+// ORDER BY amount 的确定性查询（取第 rank 名），绝不交 LLM 猜排序。
+// 形容词定基准方向（贵/高/大/多→max，便宜/低/小/少→min，无形容词的
+// 「排名第N」默认从大到小）；「倒数」翻转基准方向（倒数第二贵=第二便宜）。
+// 「第二次买/第二天」是时间序数不是金额排名：无形容词且无排名词时不收口。
+const ORD_RE = /(倒数)?(排(?:名|行)?)?(倒数)?第([0-9]+|[一二两三四五六七八九十]{1,2})(贵|便宜|高|低|大|小|多|少|狠)?/;
+
+/** 解析序数排名措辞；非排名问法返回 null。 */
+function financeOrdinal(question: string): { kind: "max" | "min"; rank: number } | null {
+  const m = question.match(ORD_RE);
+  if (!m) return null;
+  const [, rev1, rankWord, rev2, num, adj] = m;
+  const reversed = Boolean(rev1 || rev2);
+  // 「第二次买/第二天」是时间序数：无形容词、无排名词、无倒数时不收口
+  if (!adj && !rankWord && !reversed) return null;
+  const rank = parseNum(num);
+  if (!rank || rank < 1 || !Number.isInteger(rank)) return null;
+  const base: "max" | "min" = adj && /便宜|低|小|少/.test(adj) ? "min" : "max";
+  const kind = reversed ? (base === "max" ? "min" : "max") : base;
+  return { kind, rank };
 }
 
 // 元问题（R176 P1-2）：「最近在想什么/帮我总结」这类对全部笔记的生成型提问，
@@ -396,11 +421,14 @@ export function financeExtremeIntent(question: string): FinanceExtremeQuery | nu
   // 「最贵/最便宜」本身就是价格比较语义（R178 P1-3：「键盘里最便宜的是哪一把」
   // 无任何财务词，漏判走 LLM 答错 599 vs 458）——价格固有的极值措辞单独成立；
   // 「最高/最低/最大/最小」仍歧义（最高的山），必须配财务词才收口。
-  const priceInherent = /最贵|最便宜|花得?最[多少]|花钱最[狠多猛]|金额最[大高小低]|数额最[大小]/.test(question);
+  // 「第N贵/第N便宜」与「最贵/最便宜」同为价格固有措辞（R182 P1-2）
+  const priceInherent = /最贵|最便宜|花得?最[多少]|花钱最[狠多猛]|金额最[大高小低]|数额最[大小]/.test(question) || /(倒数)?第([0-9]+|[一二两三四五六七八九十]{1,2})(贵|便宜)/.test(question);
   if (!priceInherent && !FINANCE_WORD_RE.test(question) && !/买|多少钱|花费|费用/.test(question)) return null;
   const direction: "expense" | "income" = /收入|进账|入账|赚|挣/.test(question) ? "income" : "expense";
-  if (/最贵|最高|最大的?一?[笔项]|金额最[大高]|花得?最多|花钱最[狠多猛]|最狠的?一[笔次]|数额最大/.test(question)) return { kind: "max", direction };
-  if (/最便宜|最低|最小的?一?[笔项]|金额最[小低]|花得?最少|数额最小/.test(question)) return { kind: "min", direction };
+  const ord = financeOrdinal(question);
+  if (ord) return { kind: ord.kind, direction, rank: ord.rank };
+  if (/最贵|最高|最大的?一?[笔项]|金额最[大高]|花得?最多|花钱最[狠多猛]|最狠的?一[笔次]|数额最大/.test(question)) return { kind: "max", direction, rank: 1 };
+  if (/最便宜|最低|最小的?一?[笔项]|金额最[小低]|花得?最少|数额最小/.test(question)) return { kind: "min", direction, rank: 1 };
   return null;
 }
 
@@ -410,7 +438,8 @@ export function financeExtremeIntent(question: string): FinanceExtremeQuery | nu
 // 财务词/时间短语/购买动词/量词填充后，残留的干净词即主题限定词。
 const EXTREME_STRIP_RES: RegExp[] = [
   STRIP_RES[0], // 时间短语，与财务聚合同一口径
-  /最贵|最便宜|金额最[大高小低]|最[高低]|最大的?一?[笔项个]|最小的?一?[笔项个]|花得?最[多少]|花钱最[狠多猛]|最狠的?一[笔次]|数额最[大小]|排(?:名)?第一/g,
+  /最贵|最便宜|金额最[大高小低]|最[高低]|最大的?一?[笔项个]|最小的?一?[笔项个]|花得?最[多少]|花钱最[狠多猛]|最狠的?一[笔次]|数额最[大小]|(?:倒数)?排(?:名|行)?(?:倒数)?第(?:[0-9]+|[一二两三四五六七八九十]{1,2})(?:贵|便宜|高|低|大|小|多|少|狠)?|倒数第(?:[0-9]+|[一二两三四五六七八九十]{1,2})(?:贵|便宜|高|低|大|小|多|少|狠)?|第(?:[0-9]+|[一二两三四五六七八九十]{1,2})(?:贵|便宜|高|低|大|小|多|少|狠)/g,
+  /金额|数额/g, // 「金额倒数第二」的「金额」是排名量纲词不是主题限定
   /(?:是)?哪一?[笔项个把只台件本条张部次辆双瓶副架块支款]?|什么|多少钱|多少/g,
   /[一两]笔|[一两]项|[一两]次/g,
   /买[过了的]{0,2}|购入|入手|里面?|之中|当中|其中|这些|那些|所有|全部|历史上|有史以来|记录里|笔记里/g,
@@ -450,15 +479,29 @@ export function buildFinanceExtremeAnswer(
   unknownAmount: number,
   phrase: string | null,
   terms: string[] | null = null,
-  ledgerExcluded = 0
+  ledgerExcluded = 0,
+  shortCurrencies: { currency: string; count: number }[] = []
 ): string {
   const topic = terms && terms.length > 0 ? `「${terms.join("、")}」` : null;
   const scope = `${phrase ?? ""}${topic ? `与${topic}相关的记录里` : phrase ? "" : "全部笔记"}`;
   const label = FINANCE_DIRECTION_LABELS[query.direction];
-  const kindLabel = query.kind === "max" ? "金额最大" : "金额最小";
+  const rank = query.rank ?? 1;
+  const kindLabel =
+    rank === 1
+      ? query.kind === "max"
+        ? "金额最大"
+        : "金额最小"
+      : `金额第 ${rank} ${query.kind === "max" ? "大" : "小"}`;
   const ledgerNote = ledgerExcluded > 0 ? `另有 ${ledgerExcluded} 条多行台账笔记的金额为多笔合计，未参与单笔比较` : "";
+  const shortNote =
+    shortCurrencies.length > 0
+      ? `币种 ${shortCurrencies.map((s) => `${s.currency} 已识别金额的单笔${label}仅 ${s.count} 笔`).join("、")}，不存在第 ${rank} 名`
+      : "";
   if (rows.length === 0) {
-    const extras = [ledgerNote, unknownAmount > 0 ? `另有 ${unknownAmount} 笔${label}未识别出金额` : ""].filter(Boolean);
+    const extras = [shortNote, ledgerNote, unknownAmount > 0 ? `另有 ${unknownAmount} 笔${label}未识别出金额` : ""].filter(Boolean);
+    if (rank > 1 && shortCurrencies.length > 0) {
+      return `${scope}已识别出金额的单笔${label}不足 ${rank} 笔，不存在${kindLabel}的一笔。（${extras.join("；")}。）`;
+    }
     return `${scope}没有已识别出金额的单笔${label}记录，无法比较金额大小。${extras.length > 0 ? `（${extras.join("；")}。）` : ""}`;
   }
   const lines = rows.map((n, i) => {
@@ -473,7 +516,7 @@ export function buildFinanceExtremeAnswer(
       : `- ${n.currency || "CNY"}：${amount}（${when}，北京时间）${cite}${desc}`;
   });
   let md = rows.length === 1 ? lines[0] : `${scope}按币种分别比较（不同币种金额不可直接比较），${kindLabel}的${label}：\n${lines.join("\n")}`;
-  md += `\n\n以上为数据库精确查询结果（${topic ? `按关键词${topic}匹配标题/正文/标签，` : ""}按已识别金额比较，不含已删除笔记${unknownAmount > 0 ? `；另有 ${unknownAmount} 笔未识别出金额，未参与比较` : ""}${ledgerNote ? `；${ledgerNote}` : ""}）。`;
+  md += `\n\n以上为数据库精确查询结果（${topic ? `按关键词${topic}匹配标题/正文/标签，` : ""}按已识别金额${rank === 1 ? "比较" : "排序取第 " + rank + " 名"}，不含已删除笔记${unknownAmount > 0 ? `；另有 ${unknownAmount} 笔未识别出金额，未参与比较` : ""}${ledgerNote ? `；${ledgerNote}` : ""}${shortNote ? `；${shortNote}` : ""}）。`;
   return md;
 }
 

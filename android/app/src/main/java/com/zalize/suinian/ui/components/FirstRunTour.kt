@@ -41,8 +41,8 @@ private data class TourStep(val icon: ImageVector, val title: String, val descri
 private val TOUR_STEPS = listOf(
     TourStep(
         Icons.Outlined.Edit,
-        "丢一条试试",
-        "想法、待办、链接、账目……想到什么就打进速记框，发送就存。不用想放哪儿、也不用打标签。",
+        "想到什么，随手丢",
+        "想法、待办、链接、账目……都能打进速记框，发送就存。不用想放哪儿、也不用打标签。",
     ),
     TourStep(
         Icons.Outlined.AutoAwesome,

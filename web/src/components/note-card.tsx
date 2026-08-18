@@ -44,7 +44,7 @@ import { Input } from "@/components/ui/input"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { downloadNoteFile, refetchLink, retryMedia } from "@/lib/api"
 import { NoteAudio, NoteImage, isAudioAttachment, isImageAttachment } from "@/components/note-media"
-import { cn, formatTime, parseServerTime, parseDue, dueHasTime } from "@/lib/utils"
+import { cn, formatTime, parseServerTime, parseDue, dueHasTime, titleEchoesContent } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
 
 const CATEGORY_META: Record<
@@ -449,8 +449,8 @@ export function NoteCard({
 
   const extraTags = note.tags.length - MAX_TAGS
   const longContent = note.content.length > CLAMP_THRESHOLD
-  // 标题与正文完全相同时（如短记账条）只展示一次，避免卡片重复
-  const bodySameAsTitle = !!note.title && note.content.trim() === note.title.trim()
+  // 标题与正文相同（含仅差末尾标点）时只展示一次，避免卡片重复（R182 P2-2）
+  const bodySameAsTitle = titleEchoesContent(note.title, note.content)
 
   return (
     <Card

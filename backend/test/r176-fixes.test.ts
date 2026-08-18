@@ -99,14 +99,14 @@ describe("meta-question detection (R176 P1-2)", () => {
 
 describe("financeExtremeIntent (R176 P2-2 synonyms)", () => {
   it("routes broadened max-expense wording", () => {
-    expect(financeExtremeIntent("金额最大的一笔支出是什么")).toEqual({ kind: "max", direction: "expense" });
-    expect(financeExtremeIntent("我花钱最狠的一笔是什么")).toEqual({ kind: "max", direction: "expense" });
-    expect(financeExtremeIntent("哪笔消费数额最大")).toEqual({ kind: "max", direction: "expense" });
+    expect(financeExtremeIntent("金额最大的一笔支出是什么")).toEqual({ kind: "max", direction: "expense", rank: 1 });
+    expect(financeExtremeIntent("我花钱最狠的一笔是什么")).toEqual({ kind: "max", direction: "expense", rank: 1 });
+    expect(financeExtremeIntent("哪笔消费数额最大")).toEqual({ kind: "max", direction: "expense", rank: 1 });
   });
   it("keeps original routing intact", () => {
-    expect(financeExtremeIntent("最贵的一笔支出是什么")).toEqual({ kind: "max", direction: "expense" });
-    expect(financeExtremeIntent("最便宜的一笔消费是什么")).toEqual({ kind: "min", direction: "expense" });
-    expect(financeExtremeIntent("收入最高的一笔是什么")).toEqual({ kind: "max", direction: "income" });
+    expect(financeExtremeIntent("最贵的一笔支出是什么")).toEqual({ kind: "max", direction: "expense", rank: 1 });
+    expect(financeExtremeIntent("最便宜的一笔消费是什么")).toEqual({ kind: "min", direction: "expense", rank: 1 });
+    expect(financeExtremeIntent("收入最高的一笔是什么")).toEqual({ kind: "max", direction: "income", rank: 1 });
   });
   it("does not fire on non-finance questions (meta question stays free)", () => {
     expect(financeExtremeIntent("我最近在想什么")).toBe(null);

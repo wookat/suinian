@@ -5,6 +5,16 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/**
+ * 短笔记的 AI 标题常常就是原文（或只差末尾标点）：这种标题不携带增量
+ * 信息，展示两遍是视觉冗余。归一化首尾空白与末尾标点后比较。
+ */
+export function titleEchoesContent(title: string | null | undefined, content: string): boolean {
+  if (!title) return false
+  const norm = (s: string) => s.trim().replace(/[。．.!！?？~～\s]+$/, "")
+  return norm(title) === norm(content)
+}
+
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
 const HAS_OFFSET_RE = /(?:Z|[+-]\d{2}:?\d{2})$/
 

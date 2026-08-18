@@ -121,6 +121,13 @@ Never test against https://suinian-api.zalize.com unless explicitly allowed; if 
 - Prod login API returns the token under `api_token` (not `token`): `SUINIAN_TOKEN=$(curl -s -X POST .../api/auth/login -H 'content-type: application/json' -d '{"name":...,"password":...}' | jq -r .api_token)` — handy for `scripts/triage-eval.ts`.
 - `browser_console`/CDP may fail to attach even with `--remote-debugging-port=9222` up; plan token extraction via the login API rather than localStorage.
 
+## Production testing tips (learned R182)
+- Android capture box: the icons (语音/相册/拍照/文件/记下) sit INSIDE the EditText's lower row (~y=116-140 at 400x860); tapping the box center can open the photo picker. Tap the upper text area (~y=96) to focus, type ASCII, then tap the 记下 icon (~360,128) to submit. AI triage parses "buy X 299 yuan" into a 支出 -¥299 note even in ASCII.
+- Emulator needs KVM: if `emulator` complains about hardware acceleration, `sudo -n chmod 666 /dev/kvm` (KVM exists but perms block it). Package name is `com.zalize.suinian` (not com.suinian.app).
+- Android app has its OWN copies of web UI strings (e.g. FirstRunTour.kt) — web copy changes do not propagate; check android/ sources before flagging stale text as a deploy gap.
+- Pages deploys can be stale relative to the branch: if prod UI shows old copy that the web bundle should contain, check the served JS bundle for the new string before assuming a code bug; ask lead to rebuild/redeploy Pages. After redeploy, hard-refresh (Ctrl+Shift+R) to bypass the SW cache.
+- Ordinal finance asks (第二贵/排名第二/倒数第二) answer deterministically with 「金额第 2 大/小 … 数据库精确查询」; topic-limited ordinal with zero amount-bearing matches must reply 「与「X」相关的记录里没有已识别出金额的单笔支出记录…」 (fixed in worker da25ae07 — earlier builds fell back to the LLM and hallucinated).
+
 ## Production testing tips (learned R122)
 - wrangler d1 remote: `CLOUDFLARE_WORKERS_API_TOKEN` may return 7403 "account not authorized"; fall back to `CLOUDFLARE_GLOBAL_API_TOKEN` (org secret) as `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID=ddff52d24ee44e21a021c15eaffcc86d`.
 - `scripts/triage-eval.ts` fetch window fixed in R122 follow-up (limit=100; must stay ≥ corpus size). Still run it on a dedicated fresh account (register via `/api/auth/register`, delete via `DELETE /api/auth/me`) so pre-existing notes don't eat the window.
