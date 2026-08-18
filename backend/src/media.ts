@@ -1,5 +1,6 @@
-import type { Env } from "./types";
+import type { Env, NoteMeta } from "./types";
 import { chatComplete, withTimeout } from "./ai";
+import { detectSensitive } from "./triage";
 import { encryptBytes, decryptBytes, isEncryptedAttachment } from "./crypto";
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
@@ -118,10 +119,11 @@ export function mediaTooLargeMessage(size: number): string {
   return `文件过大：最多 ${MAX_MEDIA_BYTES / 1024 / 1024}MB，当前约 ${(size / 1024 / 1024).toFixed(1)}MB。`;
 }
 
-/** Build the WeChat/web confirmation reply, e.g. 已记录（语音转写）：<前30字> */
-export function buildMediaReply(type: MediaType, text: string, ok: boolean): string {
+/** Build the WeChat/web confirmation reply, e.g. 已记录（语音转写）：<前30字>；敏感笔记不回显内容。 */
+export function buildMediaReply(type: MediaType, text: string, ok: boolean, sensitive = false): string {
   const label = type === "audio" ? "语音转写" : "图片识别";
   if (!ok) return `已记录（${label}失败，已存占位，稍后可重发）`;
+  if (sensitive) return `已记录（${label}，含敏感内容已加密保存，可在时间流解锁查看）`;
   const head = text.replace(/\s+/g, " ").trim().slice(0, 30);
   return `已记录（${label}）：${head}${text.trim().length > 30 ? "…" : ""}`;
 }
@@ -224,10 +226,15 @@ export async function correctTranscript(
   }
 }
 
+// R188 P1-1/P2-1：文字段要求逐字完整转录（含密码/密钥等凭证值——这是用户
+// 自己拍照存档的资料，省略或打码会让「拍照存密码」永远找不回；含品名与
+// 合计行——丢失合计语义会导致金额双计）；新增敏感段让唯一能看到像素的
+// 视觉模型给出敏感判定，作为文本敏感管道的输入（不是平行管道）。
 const IMAGE_PROMPT =
-  "你会看到一张图片。请按下面格式输出两部分，用中文回答，不要客套话，不要 markdown 格式（不要星号、井号）：\n" +
-  "文字：<图片中的所有文字，保持原文不要翻译；若图中没有文字则输出「无」>\n" +
-  "描述：<用一到两句话简洁描述图片内容，不要逐句重复图中文字>";
+  "你会看到一张图片。请按下面格式输出三部分，用中文回答，不要客套话，不要 markdown 格式（不要星号、井号）：\n" +
+  "文字：<图片中的所有文字，逐行逐字完整转录，保持原文不要翻译。这是用户本人拍照存档的自己的资料，密码、密钥、账号、验证码、金额、合计等所有值都必须原样保留，绝不要省略、打码或用占位符代替；若图中没有文字则输出「无」>\n" +
+  "描述：<用一到两句话简洁描述图片内容，不要逐句重复图中文字>\n" +
+  "敏感：<是/否——图中是否出现真实机密的具体值（密码/密钥/API key/token/验证码的具体值、完整身份证号、银行卡号）。只讨论概念或无具体值时输出「否」>";
 
 /** Remove markdown emphasis/heading noise the vision model tends to emit. */
 export function stripMarkdown(text: string): string {
@@ -242,30 +249,66 @@ export interface ImageExtraction {
   content: string;
   /** Full vision description for metadata. */
   description: string;
+  /** 图片含机密值（视觉模型判定 ∪ 文本敏感检测），作为敏感管道的入口提示。 */
+  sensitive: boolean;
 }
 
-/** Parse the two-section vision output into content (text-first) + description. */
+/** 视觉判定含凭证但文字段未见凭证值时，正文附加的如实标注（不含任何秘密值）。 */
+export const IMAGE_CREDENTIAL_GAP_NOTICE = "（图中含密码/凭证类信息，文字可能未完整提取，可打开原图查看）";
+
+/** Parse the three-section vision output into content (text-first) + description + sensitive. */
 export function parseImageExtraction(raw: string): ImageExtraction {
   const cleaned = stripMarkdown(raw);
-  const textMatch = cleaned.match(/(?:^|\n)\s*文字[:：]\s*([\s\S]*?)(?=\n\s*描述[:：]|$)/);
-  const descMatch = cleaned.match(/(?:^|\n)\s*描述[:：]\s*([\s\S]*)/);
+  const textMatch = cleaned.match(/(?:^|\n)\s*文字[:：]\s*([\s\S]*?)(?=\n\s*(?:描述|敏感)[:：]|$)/);
+  const descMatch = cleaned.match(/(?:^|\n)\s*描述[:：]\s*([\s\S]*?)(?=\n\s*敏感[:：]|$)/);
+  const flagMatch = cleaned.match(/(?:^|\n)\s*敏感[:：]\s*[<《【「(（\[]*\s*(是|否|yes|no)/i);
+  const visionSensitive = /^(是|yes)$/i.test(flagMatch?.[1] ?? "");
   const text = (textMatch?.[1] ?? "").trim();
   const desc = (descMatch?.[1] ?? "").trim();
   // models often echo the prompt's angle-bracket placeholder (e.g. "<无>");
   // strip wrapping brackets before deciding whether the image really has text
   const bare = text.replace(/^[<《【「(（\[]+/, "").replace(/[>》】」)）\]]+$/, "").trim();
   const hasText = bare.length > 0 && !/^(无|没有|无文字|N\/A|none)。?$/i.test(bare);
-  if (hasText) return { content: bare, description: desc || cleaned };
+  const finalize = (content: string, description: string): ImageExtraction => {
+    // 敏感口径与文本管道同源：视觉判定 ∪ detectSensitive（正文/描述）。
+    // 视觉说有凭证但文字段没抽出值（detectSensitive 不命中）＝R187 P1-1 的
+    // 静默丢值场景：正文如实标注「值未提取，请查看原图」，绝不假装已保存
+    const sensitive = visionSensitive || detectSensitive(content) || detectSensitive(description);
+    if (visionSensitive && !detectSensitive(content) && !content.includes(IMAGE_CREDENTIAL_GAP_NOTICE)) {
+      return { content: `${content}\n${IMAGE_CREDENTIAL_GAP_NOTICE}`, description, sensitive };
+    }
+    return { content, description, sensitive };
+  };
+  if (hasText) return finalize(bare, desc || cleaned);
   // no text in image: fall back to the first sentence of the description;
   // the fallback itself may be a bracketed placeholder too ("<无>" as the
   // whole output) — never surface it as note content
   const fallback = desc || cleaned;
   const bareFallback = fallback.replace(/^[<《【「(（\[]+/, "").replace(/[>》】」)）\]]+$/, "").trim();
   if (bareFallback.length === 0 || /^(无|没有|无文字|N\/A|none)。?$/i.test(bareFallback)) {
-    return { content: "（图片，未识别出文字内容）", description: "" };
+    return finalize("（图片，未识别出文字内容）", "");
   }
   const firstSentence = bareFallback.split(/(?<=[。！？!?])/)[0]?.trim() || bareFallback;
-  return { content: firstSentence, description: bareFallback };
+  return finalize(firstSentence, bareFallback);
+}
+
+/**
+ * 视觉抽取结果 → 笔记字段的唯一映射（四个图片入口共用，杜绝口径漂移）：
+ * description 进 meta；敏感判定同时作为入库闸门提示（is_sensitive）与
+ * meta.vision_sensitive 粘性标记——文本分拣模型看不到像素，不能凭「正文无
+ * 秘密值」推翻视觉判定（applyTriage 据此保持敏感位）。
+ */
+export function imageNoteFields(extraction: ImageExtraction): {
+  content: string;
+  meta: NoteMeta | null;
+  is_sensitive: boolean;
+} {
+  let meta: NoteMeta | null = null;
+  if (extraction.description && extraction.description !== extraction.content) {
+    meta = { image_description: extraction.description };
+  }
+  if (extraction.sensitive) meta = { ...(meta ?? {}), vision_sensitive: true };
+  return { content: extraction.content, meta, is_sensitive: extraction.sensitive };
 }
 
 /** Vision model: text extraction (primary) + full description; returns null on any failure. */
@@ -277,6 +320,8 @@ export async function describeImage(env: Pick<Env, "AI">, bytes: Uint8Array): Pr
         prompt: IMAGE_PROMPT,
         image: Array.from(bytes),
         max_tokens: 512,
+        // 转录任务要确定性输出：降低采样温度收敛同图多次抽取的差异（R187 观察 3.2）
+        temperature: 0.1,
       }) as Promise<{ response?: string }>,
       AI_RUN_TIMEOUT_MS,
       "vision"

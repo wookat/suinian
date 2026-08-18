@@ -125,6 +125,7 @@ async function cf(path: string, body: unknown): Promise<any> {
 }
 
 async function accountId(): Promise<string> {
+  if (process.env.CLOUDFLARE_ACCOUNT_ID) return process.env.CLOUDFLARE_ACCOUNT_ID;
   const res = await fetch(`${API}/accounts`, { headers: { Authorization: `Bearer ${TOKEN}` } });
   const json = (await res.json()) as any;
   if (!json.success || !json.result?.[0]?.id) throw new Error("cannot resolve account id");
