@@ -449,6 +449,9 @@ export function financeExtremeIntent(question: string): FinanceExtremeQuery | nu
 const EXTREME_STRIP_RES: RegExp[] = [
   STRIP_RES[0], // 时间短语，与财务聚合同一口径
   /最贵|最便宜|金额最[大高小低]|最[高低]|最大的?一?[笔项个]|最小的?一?[笔项个]|花得?最[多少]|花钱最[狠多猛]|最狠的?一[笔次]|数额最[大小]|(?:倒数)?排(?:名|行)?(?:倒数)?第(?:[0-9]+|[一二两三四五六七八九十]{1,2})(?:贵|便宜|高|低|大|小|多|少|狠)?|倒数第(?:[0-9]+|[一二两三四五六七八九十]{1,2})(?:贵|便宜|高|低|大|小|多|少|狠)?|第(?:[0-9]+|[一二两三四五六七八九十]{1,2})(?:贵|便宜|高|低|大|小|多|少|狠)/g,
+  // 「单笔最贵」的「单笔」是计量口径词、「按金额排」的「按…排」是排序指令词，
+  // 都不是主题限定（R190 P1-1：残渣注入 WHERE 让确定性路线自己否证自己）
+  /单笔|每笔|逐笔|单[次项]|按(?:金额|价格|价钱|数额)?(?:从?[高低大小]到[高低大小])?排(?:序|名|行|列)?/g,
   /金额|数额/g, // 「金额倒数第二」的「金额」是排名量纲词不是主题限定
   /(?:是)?哪一?[笔项个把只台件本条张部次辆双瓶副架块支款]?|什么|多少钱|多少/g,
   /[一两]笔|[一两]项|[一两]次/g,
@@ -456,6 +459,11 @@ const EXTREME_STRIP_RES: RegExp[] = [
   STRIP_RES[2], // 财务动词/名词
   STRIP_RES[3], // 语气/填充
 ];
+
+// 剥词残渣 fail-safe（R190 P1-1，audit-r189 §6.2）：纯由计量/排序/程度功能字
+// 组成的残渣（「单笔」「按排」这类）不是名词性主题，视为无主题限定——绝不
+// 注入 WHERE 后零命中答「没找到」（真值明明在库里）。
+const EXTREME_FUNCTIONAL_RESIDUE_RE = /^[单每逐笔项次个把按排序名行列第倒数高低大小多少贵狠便宜是的]+$/;
 
 /** 从财务极值问法中提取主题限定词（「键盘里最贵的」→「键盘」）；无限定返回 null。 */
 export function financeExtremeTopicTerms(question: string): string[] | null {
@@ -466,7 +474,7 @@ export function financeExtremeTopicTerms(question: string): string[] | null {
   const terms = residual
     .split(/和|跟|以及|、|的/)
     .map((s) => s.trim().replace(/[里中]$/, ""))
-    .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s));
+    .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s) && !EXTREME_FUNCTIONAL_RESIDUE_RE.test(s));
   return terms.length > 0 && terms.length <= 3 ? terms : null;
 }
 
@@ -1343,9 +1351,21 @@ export function sensitiveHintLine(count: number, terms: string[]): string {
  */
 export const CREDENTIAL_Q_RE = /密码|口令|私钥|助记词|恢复码|密钥|passwords?|passphrase|secret key|pin\s?码/i;
 
-/** 凭据类问法的兜底指引（不含计数：关键词没匹配上，计数会误导）。 */
+/**
+ * 敏感兜底指引（R190 P1-2，与 R188 凭据口径同一分支架构）：关键词没匹配上
+ * 敏感元数据时不含计数（会误导），只给解锁/搜索入口。不再依赖凭据关键词
+ * 词典决定给不给（「储物柜暗号」这类问法命中不了词典）：凭据问法仅措辞
+ * 更具体（原图确认提示）。
+ */
+export function sensitiveFallbackHintLine(credential: boolean): string {
+  const subject = credential ? "账号密码这类信息" : "要找的内容";
+  const tail = credential ? "（拍照记的凭证还可打开笔记里的原图确认）" : "";
+  return `\n\n提示：${subject}如果记成了加密的敏感笔记，内容不会进入问答；可到时间流搜索相关关键词后点击解锁查看${tail}。`;
+}
+
+/** 凭据类问法的兜底指引（sensitiveFallbackHintLine 的凭据措辞）。 */
 export function credentialHintLine(): string {
-  return "\n\n提示：账号密码这类信息如果记成了加密的敏感笔记，内容不会进入问答；可到时间流搜索相关关键词后点击解锁查看（拍照记的凭证还可打开笔记里的原图确认）。";
+  return sensitiveFallbackHintLine(true);
 }
 
 /**

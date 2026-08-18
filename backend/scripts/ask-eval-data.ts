@@ -770,4 +770,44 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAnswerContains: ["399"],
     forbidAnswerContains: ["不做心算合计"],
   },
+
+  // —— R190（audit-r189 P1-1）：「单笔…」「按金额排」措辞必须收口确定性
+  // 极值路由——生产实录「单笔最贵…买的什么」剥词残渣「单笔」注入 WHERE
+  // 零命中落回普通召回，被台账明细行 368.5 静默冒充单笔最贵（真值 459）。
+  {
+    id: "q124",
+    category: "财务极值",
+    question: "单笔最贵的一笔支出是多少钱？买的什么？",
+    expectAll: ["nz20"],
+    expectAnswerContains: ["549", "数据库精确查询"],
+    forbidAnswerContains: ["356", "1200", "700"],
+  },
+  {
+    id: "q125",
+    category: "财务极值",
+    question: "单笔最便宜的一笔支出是哪一笔",
+    expectAll: ["exp2"],
+    expectAnswerContains: ["260", "数据库精确查询"],
+    forbidAnswerContains: ["¥77", "356"],
+    holdout: true,
+  },
+  {
+    id: "q126",
+    category: "财务极值",
+    question: "按金额排第二贵的一笔支出是什么",
+    expectAll: ["exp1"],
+    expectAnswerContains: ["399", "数据库精确查询"],
+    forbidAnswerContains: ["549", "260"],
+  },
+
+  // —— R190（audit-r189 P1-2）：敏感笔记零召回必须给 count-only/解锁指引，
+  // 绝不答干巴巴的「没找到」，也绝不泄露密文/标题内容 ——
+  {
+    id: "q127",
+    category: "敏感隔离",
+    question: "路由器管理后台的暗号是什么",
+    forbid: ["sens1"],
+    expectAnswerContains: ["解锁"],
+    forbidAnswerContains: ["qa-r79-demo-9x7"],
+  },
 ];
