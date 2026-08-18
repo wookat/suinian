@@ -3110,9 +3110,9 @@ app.post("/api/ask", async (c) => {
   const origFinanceIntent = financeAggIntent(intentQuestion);
   let financeIntent =
     origFinanceIntent ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeAggIntent(recallQuestion));
-  // 代词追问问的是前轮那个具体事物的价格（「它一共花了多少钱」），改写产物
-  // 提不出干净主题词时也绝不能 fail-closed 复读全账合计——普通召回能直答
-  if (pronounFollowUp && financeIntent === "fail_closed" && !financeTopicTerms(intentQuestion)) financeIntent = null;
+  // 代词追问问的是前轮那个具体事物的价格（「它一共花了多少钱」），绝不能
+  // fail-closed 复读全账合计——主题子集命中则精确直答，否则普通召回能直答
+  if (pronounFollowUp && financeIntent === "fail_closed") financeIntent = null;
   // 财务主题子集合计（R148 P1-2）：「咖啡一共花了多少」——主题词可干净提取时
   // 走 LIKE 圈定子集 + SQL 精确合计（此前一律 fail-closed：诚实但找回失败）
   const subsetTerms =
@@ -3152,24 +3152,29 @@ app.post("/api/ask", async (c) => {
         finance_subset: true,
       });
     }
-    // 关键词零命中：fail-closed 说明 + 全局精确合计兜底，绝不心算估数
-    const fbConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
-    const fbBinds: unknown[] = [userId];
-    if (sRange?.start) {
-      fbConds.push("created_at >= ?");
-      fbBinds.push(sRange.start);
+    // 代词追问的主题词来自改写产物，可能混入金额等噪声（「机械键盘399元」）
+    // 而零命中；此时用户问的是前轮那个具体事物，绝不能兜底复读全账合计——
+    // 回落普通召回直答（R186 生产实测）
+    if (!pronounFollowUp) {
+      // 关键词零命中：fail-closed 说明 + 全局精确合计兜底，绝不心算估数
+      const fbConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
+      const fbBinds: unknown[] = [userId];
+      if (sRange?.start) {
+        fbConds.push("created_at >= ?");
+        fbBinds.push(sRange.start);
+      }
+      if (sRange?.end) {
+        fbConds.push("created_at < ?");
+        fbBinds.push(sRange.end);
+      }
+      const fbr = await c.env.DB.prepare(`SELECT * FROM notes WHERE ${fbConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`)
+        .bind(...fbBinds)
+        .all<NoteRow>();
+      const answer =
+        `按关键词「${subsetTerms.join("、")}」精确匹配（标题/正文/标签）没有找到记账记录；为避免估算出错，我不做心算合计。如果你的记录用了别的说法（比如具体商品/商家名），换个关键词再问试试。\n\n` +
+        buildFinanceAggAnswer(financeStats(fbr.results ?? []), sRange?.phrase ?? null);
+      return c.json({ answer, references: [], notes: [], finance_subset: true, finance_fail_closed: true });
     }
-    if (sRange?.end) {
-      fbConds.push("created_at < ?");
-      fbBinds.push(sRange.end);
-    }
-    const fbr = await c.env.DB.prepare(`SELECT * FROM notes WHERE ${fbConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`)
-      .bind(...fbBinds)
-      .all<NoteRow>();
-    const answer =
-      `按关键词「${subsetTerms.join("、")}」精确匹配（标题/正文/标签）没有找到记账记录；为避免估算出错，我不做心算合计。如果你的记录用了别的说法（比如具体商品/商家名），换个关键词再问试试。\n\n` +
-      buildFinanceAggAnswer(financeStats(fbr.results ?? []), sRange?.phrase ?? null);
-    return c.json({ answer, references: [], notes: [], finance_subset: true, finance_fail_closed: true });
   }
   if (financeIntent) {
     // 时间范围同理优先取自原始问题；原始问题没带时间时才用改写结果

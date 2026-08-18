@@ -760,9 +760,11 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q123",
     category: "多轮指代",
     question: "它一共花了多少钱",
+    // 历史里带金额（R186 生产实测）：改写产物可能把「399 元」混进主题词
+    //（「机械键盘399元」）导致关键词零命中，绝不能兜底复读全账合计
     history: [
       { role: "user", content: "机械键盘是什么时候买的" },
-      { role: "assistant", content: "你 8 天前入手了一把机械键盘，茶轴 [1]。" },
+      { role: "assistant", content: "你 8 天前入手了一把机械键盘，茶轴，399 元 [1]。" },
     ],
     // 强合计词 + 代词：绝不能 fail-closed 复读全账，应答该物价格
     expectAnswerContains: ["399"],
