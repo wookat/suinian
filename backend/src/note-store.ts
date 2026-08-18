@@ -299,9 +299,11 @@ export async function replaceNoteContent(
   db: D1Database,
   noteId: string,
   content: string,
-  meta: NoteMeta
+  meta: NoteMeta,
+  // 提取器自带的敏感判定（如视觉模型看到图中凭证）：与文本预检同门进闸
+  isSensitive = false
 ): Promise<{ storedContent: string; contentEnc: string | null; sensitive: boolean }> {
-  const gated = await sensitiveIngestGate(env, { content, title: null, tags: [], is_sensitive: false }, { rejudge: true });
+  const gated = await sensitiveIngestGate(env, { content, title: null, tags: [], is_sensitive: isSensitive }, { rejudge: true });
   const sensitive = gated.is_sensitive && gated.content_enc !== null;
   const newMeta: NoteMeta = { ...(sensitive ? (scrubDerivedMeta(meta) ?? {}) : meta) };
   if (gated.needs_retriage) newMeta.needs_retriage = true;
@@ -352,6 +354,12 @@ export async function applyTriage(
     return;
   }
   const meta = parseNoteMeta(row.meta);
+  // 图片凭证敏感位粘性（R188 P1-1）：视觉模型判定图中含机密值时，只看文本
+  // 的分拣模型不能凭「正文无秘密值」推翻（值可能正好没被抽入正文，而原图
+  // 里的秘密仍在附件里）：敏感位取两者并集，加密/洗净仍走下方统一管道
+  if (meta?.vision_sensitive && !triage.is_sensitive) {
+    triage = { ...triage, is_sensitive: true };
+  }
   const override = meta?.manual_override;
   const importTags = meta?.import_tags;
   const newMeta: NoteMeta = { ...(meta ?? {}) };

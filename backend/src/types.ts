@@ -94,6 +94,8 @@ export interface NoteMeta {
   media_status?: "ok" | "extract_failed";
   /** Full vision-model description (image notes). */
   image_description?: string;
+  /** 视觉模型判定图片含机密值（image notes）：文本分拣看不到像素，复判不得据「正文无秘密值」解除敏感位。 */
+  vision_sensitive?: boolean;
   /** Site name of the linked page (link notes). */
   link_site?: string;
   /** Extracted article text, first ~2k chars (link notes). */

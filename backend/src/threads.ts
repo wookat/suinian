@@ -16,8 +16,15 @@ const SIM_JOIN = 0.76;
  * while a uniform 0.62 floor reached 84.2% precision at unchanged 88.9%
  * recall). Applies to every pair (idea and collect alike) and to both the
  * request path and the frugal cron backfill.
+ *
+ * R188（audit-r187 P2-2 聚类召回保守）：同语料离线 A/B——floor 0.62 只试单一
+ * 最佳候选时 pair recall 12.9%（precision 92.9%），floor 0.58 + 带内 top-3 逐一
+ * 确认时 recall 29.7%（precision 88.2%），确认调用上限 3 次/条。误合仍由确认
+ * 模型兜底，故降 floor 并列试 top-3。
  */
-const SIM_CONFIRM_FLOOR = 0.62;
+const SIM_CONFIRM_FLOOR = 0.58;
+/** 直连未达时送 LLM 确认的带内候选数上限（按相似度降序逐一确认，命中即止）。 */
+const CONFIRM_TOP_K = 3;
 /** Categories that participate in thread clustering: thoughts and the articles they react to. */
 export const THREAD_CATEGORIES = "('idea','collect')";
 
@@ -260,6 +267,7 @@ export async function clusterNote(
       type Best = { id: string; thread_id: string | null; category: string; title: string | null; content: string; sim: number };
       let best: Best | null = null;
       let bestThreaded: Best | null = null;
+      const inBand: Best[] = [];
       let backfilled = 0;
       for (const r of candidates) {
         let v: number[] | null = null;
@@ -282,26 +290,34 @@ export async function clusterNote(
         const cand: Best = { id: r.id, thread_id: r.thread_id, category: r.category, title: r.title, content: r.content, sim };
         if (!best || sim > best.sim) best = cand;
         if (r.thread_id && (!bestThreaded || sim > bestThreaded.sim)) bestThreaded = cand;
+        if (sim >= SIM_CONFIRM_FLOOR && sim < SIM_JOIN) inBand.push(cand);
       }
       // 已有线索优先（R150 P1-3）：当某条已入线索的笔记本身就达到直连阈值时，
       // 直接并入它的线索；否则一条相似度略高的游离笔记会抢先另起新线索，
       // 同主题被拆成两条（历史回填逐条顺序聚类下的确定性分裂源）。
       if (bestThreaded && bestThreaded.sim >= SIM_JOIN) best = bestThreaded;
       if (best) {
-        const direct = best.sim >= SIM_JOIN;
-        const confirmed =
-          !direct &&
-          best.sim >= SIM_CONFIRM_FLOOR &&
-          (await deepseekConfirmPair(env, note.title || note.content, best.title || best.content));
+        let joined: Best | null = best.sim >= SIM_JOIN ? best : null;
+        if (!joined) {
+          // 带内 top-K 逐一送确认（R188）：只试单一最佳时，同主题次优候选会被
+          // 一次否决整体埋没；命中即止，调用上限 CONFIRM_TOP_K。
+          inBand.sort((a, b) => b.sim - a.sim);
+          for (const cand of inBand.slice(0, CONFIRM_TOP_K)) {
+            if (await deepseekConfirmPair(env, note.title || note.content, cand.title || cand.content)) {
+              joined = cand;
+              break;
+            }
+          }
+        }
         console.log(
-          `threads: cluster note=${note.id} best=${best.id} sim=${best.sim.toFixed(3)} direct=${direct} confirmed=${confirmed}`
+          `threads: cluster note=${note.id} best=${best.id} sim=${best.sim.toFixed(3)} joined=${joined ? `${joined.id}@${joined.sim.toFixed(3)}` : "none"}`
         );
-        if (direct || confirmed) {
-          let threadId = best.thread_id;
+        if (joined) {
+          let threadId = joined.thread_id;
           if (!threadId) {
-            threadId = await newThread(env, note.user_id, best.title || note.title || note.content.slice(0, 20));
-            await attachNoteToThread(env, best.id, threadId);
-            console.log(`threads: created thread ${threadId} for notes ${best.id}, ${note.id}`);
+            threadId = await newThread(env, note.user_id, joined.title || note.title || note.content.slice(0, 20));
+            await attachNoteToThread(env, joined.id, threadId);
+            console.log(`threads: created thread ${threadId} for notes ${joined.id}, ${note.id}`);
           }
           await attachNoteToThread(env, note.id, threadId);
           await summarize(threadId, note.title || undefined);

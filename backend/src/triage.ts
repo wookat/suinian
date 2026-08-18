@@ -173,6 +173,9 @@ export function buildTriagePrompt(
 注意：多行表格式账单（CSV/制表符分隔，每行一笔含金额，如「日期,项目,金额」多行）整体是一条记账笔记——各行都是已发生的消费时 category="expense"，amount=所有行金额之和（如 199+99+38+20 → 356），绝不要因为是表格就归 data、也绝不要把 amount 置 null。判例：
   - 「日期,项目,金额\n8-1,键盘,199\n8-2,鼠标,99\n8-3,午饭,38\n8-4,打车,20」→ expense，amount=356
   - 「买菜,55.5\n地铁,4」→ expense，amount=59.5
+注意：小票/账单里已经写了「合计/总计/实付」金额时，明细行与合计是同一笔交易——amount=合计值，绝不要把明细金额与合计重复相加。判例：
+  - 「咖啡,12.5\n三明治,8.0\n蛋糕,15.8\n合计,36.3」→ expense，amount=36.3（绝不是 72.6）
+  - 「超市小票：牛奶 18 元，面包 12 元，实付 30 元」→ expense，amount=30
 - tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）。标签必须是内容的主题词，用能概括这条内容的具体场景词（如打车→「交通」、午饭→「餐饮」、买咖啡→「咖啡」），不要一律套「购物」这类宽泛词。内容开头的方括号前缀标记（如「[QA-123]」「[P0]」「【草稿】」）和序号（「1.」）是元数据记号，不是主题：既不能整个照抄进标签，也不能把括号里的词抽出来当标签${tagHint}
 - title: 一句话短标题（<=20字），同样要忽略开头的方括号前缀/序号，不要抄进标题。判例：「[P0] 修复登录超时」→ title="修复登录超时"，tags 不含 "P0"；「[QA-TEST] 周五交报告」→ title="周五交报告"，tags 不含 "QA-TEST"、"QA"、"TEST"
 - is_sensitive: 是否含真实机密 (boolean)。仅当内容中出现真实可用的机密「具体值」时才为 true：密码/口令/密钥/API key/token 的具体值、完整身份证号、银行卡号、手机号+姓名组合、账号+密码组合。以下情况必须为 false：技术文档/教程/笔记只是讨论密码、token、密钥等概念而未出现具体秘密值；代码片段中的变量名/占位符（如 <token>、your-api-key、xxx）；普通长文、文件内容中的 ID/哈希/版本号等非机密长字符串。判例：
@@ -490,7 +493,12 @@ export function parseTriageJson(text: string, defaultOffset = "+08:00"): TriageR
   );
   if (isFinance && uniform) {
     const amounts = candidates.map((c) => c.amount).filter((a): a is number => a !== null);
-    const amount = amounts.length > 0 ? Math.round(amounts.reduce((s, a) => s + a, 0) * 100) / 100 : null;
+    // 小票双计防护（R188 P2-1）：模型把合计行也当一笔输出时，某个候选恰等于
+    // 其余候选之和＝同一笔交易的总额，取总额而不是再叠加一遍
+    const grand = amounts.reduce((s, a) => s + a, 0);
+    const total = amounts.length >= 3 ? amounts.find((a) => Math.abs(a - (grand - a)) < 0.005) : undefined;
+    const amount =
+      amounts.length > 0 ? Math.round((total !== undefined ? total : grand) * 100) / 100 : null;
     const tags = sanitizeTags(candidates.flatMap((c) => c.tags));
     return { ...first, amount, currency: amount !== null ? (first.currency ?? "CNY") : null, tags };
   }
@@ -624,8 +632,40 @@ export function parseLedgerCore(content: string): { amount: number; rows: number
   if (moneyCols.length === 0) return null;
   if (moneyCols.length > 1) return "ambiguous";
   const col = moneyCols[0];
+  // 合计行（R188 P2-1）：小票/账单自带「合计/总计/实付」行时，明细与合计是
+  // 同一笔交易的两种写法：金额取合计值，行数只计明细；多个合计行无法归一
+  //（歧义不猜）。非金额字段里出现合计标签才算（避免误伤品名含「共」字）。
+  const totalRows = data.reduce<number[]>((acc, r, i) => {
+    if (r.some((f, c) => c !== col && LEDGER_TOTAL_LABEL_RE.test(f))) acc.push(i);
+    return acc;
+  }, []);
+  if (totalRows.length > 1) return "ambiguous";
+  if (totalRows.length === 1 && data.length >= 2) {
+    const t = parseFloat(data[totalRows[0]][col].replace(/[¥￥元]/g, ""));
+    return { amount: Math.round(t * 100) / 100, rows: data.length - 1 };
+  }
   const sum = data.reduce((s, r) => s + parseFloat(r[col].replace(/[¥￥元]/g, "")), 0);
   return { amount: Math.round(sum * 100) / 100, rows: data.length };
+}
+
+// 合计行标签：只认独立字段就是合计语义的词（可带冗余后缀「金额」）
+const LEDGER_TOTAL_LABEL_RE = /^(?:合计|总计|总共|共计|总额|总金额|总价|应付|实付|实收|应收)(?:金额)?[:：]?$/;
+
+// 散文/小票文本里的合计声明（非表格）：「合计 36.3」「实付：¥30」
+const PROSE_TOTAL_RE = /(?:合计|总计|总共|共计|总额|总金额|应付|实付|实收)[^\S\n]{0,4}[:：]?[^\S\n]*[¥￥]?(\d+(?:\.\d{1,2})?)[^\S\n]*元?/;
+
+/** 小票双计确定性兜底（R188 P2-1，非表格文本）：文中有明确合计值 T 且模型
+ * 金额≈ 2T（明细和与合计被叠加的双计特征）时，锁回合计值。条件故意收紧：
+ * 折扣/拆单等正常差异不命中，主判仍是模型（prompt 已加判例）。 */
+export function fixReceiptDoubleCount(content: string, triage: TriageResult): TriageResult {
+  const isFinance = triage.category === "expense" || triage.category === "income" || triage.category === "transfer";
+  if (!isFinance || triage.amount == null) return triage;
+  const m = content.match(PROSE_TOTAL_RE);
+  if (!m) return triage;
+  const total = parseFloat(m[1]);
+  if (!(total > 0) || triage.amount <= total) return triage;
+  if (Math.abs(triage.amount - 2 * total) >= 0.011) return triage;
+  return { ...triage, amount: total, currency: triage.currency ?? "CNY" };
 }
 
 /** Deterministic backstop: when the model classifies a multi-row ledger table
@@ -664,7 +704,7 @@ export async function triageNote(
   let result = (text && parseTriageJson(text, tzOffsetString(now, tz))) || null;
   if (result) result = stripMarkerNoise(content, result);
   if (result) result = demoteEventLog(content, fixTransferMisfile(content, fixFinanceDirection(content, result)));
-  if (result) result = fixLedgerAmount(content, result);
+  if (result) result = fixReceiptDoubleCount(content, fixLedgerAmount(content, result));
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {
     result = result

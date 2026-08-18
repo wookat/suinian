@@ -60,6 +60,7 @@ import {
   transcribeAudio,
   correctTranscript,
   describeImage,
+  imageNoteFields,
   storeOriginal,
   buildMediaReply,
   reconcileMediaOrphans,
@@ -586,21 +587,17 @@ app.post("/wechat/mp", async (c) => {
 async function ingestWechatImage(env: Env, userId: string, picUrl: string, waitUntil: (p: Promise<unknown>) => void): Promise<void> {
   let content: string | null = null;
   let meta: NoteMeta | null = null;
+  let sensitive = false;
   try {
     const res = await fetch(picUrl);
     if (res.ok) {
       const bytes = new Uint8Array(await res.arrayBuffer());
       const extraction = await describeImage(env, bytes);
-      if (extraction) {
-        content = extraction.content;
-        if (extraction.description && extraction.description !== extraction.content) {
-          meta = { image_description: extraction.description };
-        }
-      }
+      if (extraction) ({ content, meta, is_sensitive: sensitive } = imageNoteFields(extraction));
       const { note } = await createNote(
         { env },
         userId,
-        { content: content ?? IMAGE_FAILED_PLACEHOLDER, source: "wechat", raw_type: "image", meta },
+        { content: content ?? IMAGE_FAILED_PLACEHOLDER, source: "wechat", raw_type: "image", meta, is_sensitive: sensitive },
         waitUntil,
         { syncTriage: false }
       );
@@ -834,6 +831,7 @@ async function handleKfMessage(env: Env, msg: KfMessage, waitUntil: (p: Promise<
 async function ingestKfImage(env: Env, userId: string, mediaId: string, waitUntil: (p: Promise<unknown>) => void): Promise<void> {
   let content: string | null = null;
   let meta: NoteMeta | null = null;
+  let sensitive = false;
   let bytes: Uint8Array | null = null;
   let mime = "image/jpeg";
   try {
@@ -842,12 +840,7 @@ async function ingestKfImage(env: Env, userId: string, mediaId: string, waitUnti
       bytes = media.bytes;
       mime = media.mime;
       const extraction = await describeImage(env, media.bytes);
-      if (extraction) {
-        content = extraction.content;
-        if (extraction.description && extraction.description !== extraction.content) {
-          meta = { image_description: extraction.description };
-        }
-      }
+      if (extraction) ({ content, meta, is_sensitive: sensitive } = imageNoteFields(extraction));
     }
   } catch (e) {
     console.error("wecom kf image ingest failed", e);
@@ -855,7 +848,7 @@ async function ingestKfImage(env: Env, userId: string, mediaId: string, waitUnti
   const { note } = await createNote(
     { env },
     userId,
-    { content: content ?? IMAGE_FAILED_PLACEHOLDER, source: "wechat", raw_type: "image", meta },
+    { content: content ?? IMAGE_FAILED_PLACEHOLDER, source: "wechat", raw_type: "image", meta, is_sensitive: sensitive },
     waitUntil,
     { syncTriage: false }
   );
@@ -1169,7 +1162,16 @@ export function capped(p: Promise<unknown>, ms: number, label: string): Promise<
 async function createNote(
   c: { env: Env },
   userId: string,
-  body: { source?: string; raw_type?: string; content?: string; url?: string; meta?: NoteMeta | null; tags?: string[] },
+  body: {
+    source?: string;
+    raw_type?: string;
+    content?: string;
+    url?: string;
+    meta?: NoteMeta | null;
+    tags?: string[];
+    /** 提取器自带的敏感判定（如视觉模型看到图中凭证）：作为统一敏感闸门的入口提示，不对外部 API 暴露 */
+    is_sensitive?: boolean;
+  },
   waitUntil: (p: Promise<unknown>) => void,
   opts: { syncTriage: boolean; skipTriage?: boolean }
 ): Promise<{ note: NoteRow; triage: TriageResult | null }> {
@@ -1213,6 +1215,7 @@ async function createNote(
       url: url ?? null,
       category: opts.skipTriage ? "idea" : null,
       tags: manualTags,
+      is_sensitive: body.is_sensitive === true,
       meta,
     },
     // 敏感闸门对 skipTriage 同口径（R126 P1-2）：宽口径疑似命中也 fail-closed
@@ -2418,6 +2421,7 @@ app.post("/api/notes/:id/retry-media", async (c) => {
   if (!bytes) return c.json({ error: "原件未存档或无法解密，无法原地重试，请重新上传" }, 404);
 
   let content: string | null = null;
+  let visionSensitive = false;
   const newMeta: NoteMeta = { ...meta };
   if (note.raw_type === "voice") {
     const raw = await transcribeAudio(c.env, bytes);
@@ -2430,10 +2434,12 @@ app.post("/api/notes/:id/retry-media", async (c) => {
   } else if (note.raw_type === "image") {
     const extraction = await describeImage(c.env, bytes);
     if (extraction !== null) {
-      content = extraction.content;
-      if (extraction.description && extraction.description !== extraction.content) {
-        newMeta.image_description = extraction.description;
-      }
+      const fields = imageNoteFields(extraction);
+      content = fields.content;
+      if (fields.meta?.image_description) newMeta.image_description = fields.meta.image_description;
+      if (fields.is_sensitive) newMeta.vision_sensitive = true;
+      else delete newMeta.vision_sensitive;
+      visionSensitive = fields.is_sensitive;
       newMeta.media_status = "ok";
     }
   } else {
@@ -2453,7 +2459,7 @@ app.post("/api/notes/:id/retry-media", async (c) => {
   // same fail-closed sensitive pre-check as createNote (持久层内置）；category
   // back to NULL: the placeholder's triage is meaningless for the real
   // content — the async pipeline below re-sorts it like a fresh note
-  const { storedContent, contentEnc } = await replaceNoteContent(c.env, c.env.DB, id, content, newMeta);
+  const { storedContent, contentEnc } = await replaceNoteContent(c.env, c.env.DB, id, content, newMeta, visionSensitive);
   c.executionCtx.waitUntil(
     capped(
       retriageOne(c.env, { id, user_id: note.user_id, content: storedContent, content_enc: contentEnc, created_at: note.created_at }),
@@ -2664,6 +2670,7 @@ app.post("/api/ingest/media", async (c) => {
 
   let content: string | null = null;
   let meta: NoteMeta | null = null;
+  let sensitive = false;
   if (parsed.type === "audio") {
     const raw = await transcribeAudio(c.env, parsed.bytes);
     if (raw !== null) {
@@ -2673,12 +2680,7 @@ app.post("/api/ingest/media", async (c) => {
     }
   } else {
     const extraction = await describeImage(c.env, parsed.bytes);
-    if (extraction !== null) {
-      content = extraction.content;
-      if (extraction.description && extraction.description !== extraction.content) {
-        meta = { image_description: extraction.description };
-      }
-    }
+    if (extraction !== null) ({ content, meta, is_sensitive: sensitive } = imageNoteFields(extraction));
   }
   const ok = content !== null;
   if (content === null) {
@@ -2695,15 +2697,15 @@ app.post("/api/ingest/media", async (c) => {
   const { note } = await createNote(
     c,
     c.get("userId"),
-    { source: parsed.source || "api", raw_type: parsed.type === "audio" ? "voice" : "image", content, meta },
+    { source: parsed.source || "api", raw_type: parsed.type === "audio" ? "voice" : "image", content, meta, is_sensitive: sensitive },
     (p) => c.executionCtx.waitUntil(p),
     { syncTriage: false }
   );
   // keep the original in R2 (best-effort; extraction result is already saved)
   c.executionCtx.waitUntil(storeOriginal(c.env, c.get("userId"), note.id, parsed));
 
-  const reply = buildMediaReply(parsed.type, content, ok);
-  return c.json({ note: noteToJson(note), text: content, transcribed: ok, reply }, 201);
+  const reply = buildMediaReply(parsed.type, content, ok, !!note.is_sensitive);
+  return c.json({ note: noteToJson(note), text: note.is_sensitive ? note.content : content, transcribed: ok, reply }, 201);
 });
 
 export type AskHistoryMessage = { role: "user" | "assistant"; content: string };
@@ -3692,11 +3694,22 @@ app.post("/api/ask", async (c) => {
     }
     const { answer, references } = buildNoAnswerResponse(suggestions);
     const sensitiveHits = await countSensitiveHits(c.env, userId, terms);
+    // 凭据类问法在零召回分支同样给敏感指引（与 LLM 拒答分支同一口径）：
+    // 「WiFi 密码」这类关键词变体可能连敏感元数据都匹配不到
+    let zeroHint = sensitiveHintLine(sensitiveHits, terms);
+    if (!zeroHint && CREDENTIAL_Q_RE.test(question)) {
+      const anySensitive = await c.env.DB.prepare(
+        "SELECT 1 FROM notes WHERE user_id = ? AND is_sensitive = 1 AND deleted_at IS NULL LIMIT 1"
+      )
+        .bind(userId)
+        .first();
+      if (anySensitive) zeroHint = credentialHintLine();
+    }
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
     );
-    return c.json({ answer: answer + sensitiveHintLine(sensitiveHits, terms), references, notes: refNotes, no_answer: true });
+    return c.json({ answer: answer + zeroHint, references, notes: refNotes, no_answer: true });
   }
 
   notes = dedupeNotesByContent(notes);
