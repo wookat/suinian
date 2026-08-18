@@ -1295,10 +1295,21 @@ export function reconcileAskCitations(
   };
 }
 
-/** The model's answer amounts to "没找到" (no [n] citations backing anything). */
+const REFUSAL_PHRASE_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没有笔记|没提到|未提及|没有提及/;
+
+/** The model's answer amounts to "没找到": either it carries no [n] citations,
+ * or（R183 P1-3）it is a pure single-sentence denial that still carries [n]
+ * markers（「没提到关于洗牙的记录 [1] [2] [3]」）——否认+引用自相矛盾，按拒答
+ * 处理走复问/诚实拒答通道。带转折的部分否认（「没找到电费，但 [2] 提到房租」）
+ * 是正常答案，不算拒答。 */
 export function isRefusalAnswer(answer: string): boolean {
   const hasCitation = /[\[［]\d{1,2}[\]］]/.test(answer);
-  return !hasCitation && /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没有笔记|没提到|未提及|没有提及/.test(answer);
+  if (!hasCitation) return REFUSAL_PHRASE_RE.test(answer);
+  const stripped = answer.replace(CITE_RE, "").trim();
+  if (!REFUSAL_PHRASE_RE.test(stripped)) return false;
+  if (/但是?|不过|然而|however/i.test(stripped)) return false;
+  const sentences = stripped.split(/[。！？!?\n]/).map((s) => s.trim()).filter(Boolean);
+  return sentences.length === 1;
 }
 
 export const NO_ANSWER_TEXT = "没找到相关笔记。";

@@ -804,6 +804,8 @@ export function NoteCard({
           </button>
         ) : isLink ? (
           <div className="min-w-0 flex-1 space-y-2">
+            {/* 抓取失败/无正文时（R183 P2-4）不展示站点级标题与营销摘要，
+                避免把死链包装成看似抓取成功的卡片 */}
             {linkCards(note).map((card, i) => (
               <div
                 key={card.url}
@@ -817,7 +819,11 @@ export function NoteCard({
                 >
                   <div className="flex items-center gap-1.5 text-sm font-medium group-hover/link:text-primary">
                     <LinkIcon className="size-3.5 shrink-0" />
-                    <span className="truncate">{card.title ?? shortLink(card.url)}</span>
+                    <span className="truncate">
+                      {i === 0 && note.meta?.link_status && note.meta.link_status !== "ok"
+                        ? shortLink(card.url)
+                        : (card.title ?? shortLink(card.url))}
+                    </span>
                     {i === 0 &&
                       card.title &&
                       note.meta?.link_site &&
@@ -827,7 +833,7 @@ export function NoteCard({
                       </span>
                     )}
                   </div>
-                  {i === 0 && note.url_summary && (
+                  {i === 0 && note.url_summary && (!note.meta?.link_status || note.meta.link_status === "ok") && (
                     <p
                       className={cn(
                         "mt-1 text-xs leading-relaxed text-muted-foreground",
@@ -855,7 +861,7 @@ export function NoteCard({
                     </button>
                   </div>
                 )}
-                {i === 0 && (note.url_summary || note.meta?.link_excerpt) && (
+                {i === 0 && (!note.meta?.link_status || note.meta.link_status === "ok") && (note.url_summary || note.meta?.link_excerpt) && (
                   <div className="flex items-center gap-3 px-3 pb-2">
                     {note.url_summary && note.url_summary.length > 60 && (
                       <button
