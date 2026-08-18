@@ -32,17 +32,17 @@ describe("buildFinanceExtremeAnswer ledger footnote", () => {
     currency: "CNY",
   };
   it("notes excluded ledger aggregates in the caliber footnote", () => {
-    const md = buildFinanceExtremeAnswer({ kind: "min", direction: "expense" }, [single], 0, null, ["键盘"], 1);
+    const md = buildFinanceExtremeAnswer({ kind: "min", direction: "expense", rank: 1 }, [single], 0, null, ["键盘"], 1);
     expect(md).toContain("¥458");
     expect(md).toContain("1 条多行台账笔记的金额为多笔合计，未参与单笔比较");
   });
   it("answers deterministically when only ledger aggregates matched", () => {
-    const md = buildFinanceExtremeAnswer({ kind: "min", direction: "expense" }, [], 0, null, ["键盘"], 1);
+    const md = buildFinanceExtremeAnswer({ kind: "min", direction: "expense", rank: 1 }, [], 0, null, ["键盘"], 1);
     expect(md).toContain("没有已识别出金额的单笔支出记录");
     expect(md).toContain("1 条多行台账笔记的金额为多笔合计");
   });
   it("omits the footnote when nothing was excluded", () => {
-    const md = buildFinanceExtremeAnswer({ kind: "min", direction: "expense" }, [single], 0, null, ["键盘"]);
+    const md = buildFinanceExtremeAnswer({ kind: "min", direction: "expense", rank: 1 }, [single], 0, null, ["键盘"]);
     expect(md).not.toContain("台账");
   });
 });

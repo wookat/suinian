@@ -240,7 +240,7 @@ export async function semanticRecall(
     // with the query embedding instead of adding a serial D1 round-trip
     const cntPromise = env.VECTORIZE
       ? env.DB.prepare(
-          "SELECT COUNT(*) AS cnt FROM note_embeddings e JOIN notes n ON n.id = e.note_id WHERE n.user_id = ? AND n.is_sensitive = 0 AND e.vector != '[]'"
+          "SELECT COUNT(*) AS cnt FROM note_embeddings e JOIN notes n ON n.id = e.note_id WHERE n.user_id = ? AND n.is_sensitive = 0 AND n.deleted_at IS NULL AND e.vector != '[]'"
         )
           .bind(userId)
           .first<{ cnt: number }>()
@@ -254,15 +254,29 @@ export async function semanticRecall(
     if (env.VECTORIZE) {
       const cnt = await cntPromise;
       const effMin = semanticMinScoreFor(cnt?.cnt ?? 0, minScore);
+      // over-fetch then re-validate against D1: soft-deleted notes keep their
+      // vectors (restore must bring recall back instantly), so the index can
+      // return them and they must not consume the caller's topK slots
       const res = await env.VECTORIZE.query(qv, {
-        topK,
+        topK: Math.min(topK * 2, 50),
         filter: { user_id: userId },
         returnValues: false,
         returnMetadata: "none",
       });
-      const out = (res.matches ?? [])
+      let out = (res.matches ?? [])
         .filter((m) => m.score >= effMin)
         .map((m) => ({ note_id: m.id, score: m.score }));
+      if (out.length > 0) {
+        const ph = out.map(() => "?").join(",");
+        const { results } = await env.DB.prepare(
+          `SELECT id FROM notes WHERE user_id = ? AND is_sensitive = 0 AND deleted_at IS NULL AND id IN (${ph})`
+        )
+          .bind(userId, ...out.map((h) => h.note_id))
+          .all<{ id: string }>();
+        const active = new Set((results ?? []).map((r) => r.id));
+        out = out.filter((h) => active.has(h.note_id));
+      }
+      out = out.slice(0, topK);
       if (timing) timing.scan = Date.now() - tScan;
       return out;
     }
@@ -277,7 +291,7 @@ export async function semanticRecall(
       const { results } = await env.DB.prepare(
         `SELECT e.note_id, e.vector FROM note_embeddings e
          JOIN notes n ON n.id = e.note_id
-         WHERE n.user_id = ? AND n.is_sensitive = 0 AND e.vector != '[]'
+         WHERE n.user_id = ? AND n.is_sensitive = 0 AND n.deleted_at IS NULL AND e.vector != '[]'
          ORDER BY n.created_at DESC LIMIT ? OFFSET ?`
       )
         .bind(userId, BATCH, offset)

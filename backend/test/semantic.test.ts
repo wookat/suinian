@@ -39,13 +39,16 @@ function note(over: Partial<NoteRow>): NoteRow {
 }
 
 /** Minimal fake D1 recording note_embeddings writes/deletes + serving recall queries. */
-function fakeDb(rows: { note_id: string; vector: string }[] = []) {
+function fakeDb(rows: { note_id: string; vector: string }[] = [], activeIds?: string[]) {
   const inserted: unknown[][] = [];
   const deleted: unknown[][] = [];
+  const prepared: string[] = [];
   const db = {
     inserted,
     deleted,
+    prepared,
     prepare(sql: string) {
+      prepared.push(sql);
       let binds: unknown[] = [];
       const stmt = {
         bind(...args: unknown[]) {
@@ -58,6 +61,11 @@ function fakeDb(rows: { note_id: string; vector: string }[] = []) {
           return { meta: { changes: 1 } };
         },
         async all() {
+          if (sql.startsWith("SELECT id FROM notes")) {
+            const asked = binds.slice(1) as string[];
+            const alive = activeIds ? asked.filter((id) => activeIds.includes(id)) : asked;
+            return { results: alive.map((id) => ({ id })) };
+          }
           return { results: rows };
         },
         async first() {
@@ -148,6 +156,18 @@ describe("semanticRecall", () => {
     expect(hits).toEqual([{ note_id: "a", score: 0.8 }]);
   });
 
+  it("Vectorize hits of soft-deleted notes are re-validated against D1 and dropped", async () => {
+    const query = vi.fn(async () => ({
+      matches: [
+        { id: "deleted", score: 0.9 },
+        { id: "alive", score: 0.8 },
+      ],
+    }));
+    const db = fakeDb([], ["alive"]);
+    const hits = await semanticRecall(envWith(db, [1, 0], { query }), "u1", "查询");
+    expect(hits).toEqual([{ note_id: "alive", score: 0.8 }]);
+  });
+
   it("falls back to brute-force cosine over D1 vectors, sorted and thresholded", async () => {
     const db = fakeDb([
       { note_id: "near", vector: JSON.stringify([1, 0.1]) },
@@ -157,6 +177,13 @@ describe("semanticRecall", () => {
     const hits = await semanticRecall(envWith(db, [1, 0]), "u1", "查询");
     expect(hits.map((h) => h.note_id)).toEqual(["near"]);
     expect(hits[0].score).toBeGreaterThan(0.9);
+  });
+
+  it("D1 scan excludes soft-deleted notes from the vector corpus", async () => {
+    const db = fakeDb([{ note_id: "near", vector: JSON.stringify([1, 0.1]) }]);
+    await semanticRecall(envWith(db, [1, 0]), "u1", "查询");
+    const scan = db.prepared.find((s) => s.includes("FROM note_embeddings e"));
+    expect(scan).toContain("n.deleted_at IS NULL");
   });
 
   it("returns [] when the query embedding fails (degrade to keyword)", async () => {

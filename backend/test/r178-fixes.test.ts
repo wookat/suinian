@@ -135,24 +135,24 @@ describe("parseTriageJson multi-object path still sums", () => {
 
 describe("financeExtremeIntent price-inherent wording", () => {
   it("routes 「键盘里最便宜的是哪一把」 without any finance word (R177 3/3 复现)", () => {
-    expect(financeExtremeIntent("键盘里最便宜的是哪一把")).toEqual({ kind: "min", direction: "expense" });
+    expect(financeExtremeIntent("键盘里最便宜的是哪一把")).toEqual({ kind: "min", direction: "expense", rank: 1 });
     expect(financeExtremeTopicTerms("键盘里最便宜的是哪一把")).toEqual(["键盘"]);
   });
   it("covers 最贵 symmetrically", () => {
-    expect(financeExtremeIntent("键盘里最贵的是哪一把")).toEqual({ kind: "max", direction: "expense" });
+    expect(financeExtremeIntent("键盘里最贵的是哪一把")).toEqual({ kind: "max", direction: "expense", rank: 1 });
     expect(financeExtremeTopicTerms("键盘里最贵的是哪一把")).toEqual(["键盘"]);
   });
   it("bare 最贵/最便宜 without topic still routes (global extreme)", () => {
-    expect(financeExtremeIntent("最贵的是哪一个")).toEqual({ kind: "max", direction: "expense" });
-    expect(financeExtremeIntent("最便宜的是哪一把")).toEqual({ kind: "min", direction: "expense" });
+    expect(financeExtremeIntent("最贵的是哪一个")).toEqual({ kind: "max", direction: "expense", rank: 1 });
+    expect(financeExtremeIntent("最便宜的是哪一把")).toEqual({ kind: "min", direction: "expense", rank: 1 });
   });
   it("ambiguous 最高/最低 without finance words stays out", () => {
     expect(financeExtremeIntent("最高的山是哪座")).toBeNull();
     expect(financeExtremeIntent("温度最低的城市")).toBeNull();
   });
   it("existing finance-word paths unchanged", () => {
-    expect(financeExtremeIntent("我买过的键盘里最便宜的是哪一把")).toEqual({ kind: "min", direction: "expense" });
-    expect(financeExtremeIntent("金额最高的收入")).toEqual({ kind: "max", direction: "income" });
+    expect(financeExtremeIntent("我买过的键盘里最便宜的是哪一把")).toEqual({ kind: "min", direction: "expense", rank: 1 });
+    expect(financeExtremeIntent("金额最高的收入")).toEqual({ kind: "max", direction: "income", rank: 1 });
   });
 });
 

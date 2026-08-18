@@ -17,6 +17,12 @@ type Mode = "register" | "login" | "recover"
  */
 export function RecoveryCodeCard({ code, onDone }: { code: string; onDone: () => void }) {
   const [copied, setCopied] = useState(false)
+  // R182 P2-4：恢复码是唯一找回途径，「我已安全保存」需要一次弱确认——
+  // 点过复制，或手动输入末 4 位，二者其一才放行
+  const [confirmed, setConfirmed] = useState(false)
+  const [verifyInput, setVerifyInput] = useState("")
+  const last4 = code.replace(/[^0-9a-zA-Z]/g, "").slice(-4)
+  const verified = confirmed || verifyInput.trim().toLowerCase() === last4.toLowerCase()
   return (
     <Card className="space-y-4 p-4">
       <h2 className="flex items-center gap-2 text-base font-semibold">
@@ -36,6 +42,7 @@ export function RecoveryCodeCard({ code, onDone }: { code: string; onDone: () =>
               .writeText(code)
               .then(() => {
                 setCopied(true)
+                setConfirmed(true)
                 setTimeout(() => setCopied(false), 1500)
               })
               .catch(() => {})
@@ -47,7 +54,18 @@ export function RecoveryCodeCard({ code, onDone }: { code: string; onDone: () =>
           {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
         </button>
       </div>
-      <Button onClick={onDone} className="w-full">
+      {!verified && (
+        <div className="space-y-1">
+          <Input
+            value={verifyInput}
+            onChange={(e) => setVerifyInput(e.target.value)}
+            placeholder={`输入恢复码末 4 位（或点上方复制）确认已保存`}
+            aria-label="输入恢复码末 4 位确认已保存"
+            maxLength={8}
+          />
+        </div>
+      )}
+      <Button onClick={onDone} disabled={!verified} className="w-full">
         我已安全保存，继续
       </Button>
     </Card>

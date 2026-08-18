@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { getTodayReview } from "@/lib/api"
 import { onReviewNotesChanged } from "@/lib/review-bus"
 import { useSettingsVersion } from "@/lib/settings"
-import { cn, parseServerTime } from "@/lib/utils"
+import { cn, parseServerTime, titleEchoesContent } from "@/lib/utils"
 import type { DailyReviewItem } from "@/lib/types"
 
 const COLLAPSE_KEY = "suinian.review.collapsed"
@@ -114,7 +114,10 @@ export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void
             </p>
           )}
           <div className="rounded-lg border bg-card/60 p-3">
-            {item.note.title && !masked && <p className="mb-1 text-sm font-medium">{item.note.title}</p>}
+            {/* 标题与正文相同时（短笔记 AI 标题＝原文）只显示一次，与时间流卡片口径一致 */}
+            {item.note.title && !masked && !titleEchoesContent(item.note.title, item.note.content) && (
+              <p className="mb-1 text-sm font-medium">{item.note.title}</p>
+            )}
             {masked ? (
               <button
                 onClick={() =>

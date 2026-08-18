@@ -33,17 +33,17 @@ function row(over: Partial<NoteRow>): NoteRow {
 
 describe("financeExtremeIntent", () => {
   it("routes 最贵的一笔支出 to max/expense", () => {
-    expect(financeExtremeIntent("我最贵的一笔支出是什么")).toEqual({ kind: "max", direction: "expense" });
-    expect(financeExtremeIntent("最贵的一笔支出")).toEqual({ kind: "max", direction: "expense" });
-    expect(financeExtremeIntent("金额最大的一笔消费")).toEqual({ kind: "max", direction: "expense" });
+    expect(financeExtremeIntent("我最贵的一笔支出是什么")).toEqual({ kind: "max", direction: "expense", rank: 1 });
+    expect(financeExtremeIntent("最贵的一笔支出")).toEqual({ kind: "max", direction: "expense", rank: 1 });
+    expect(financeExtremeIntent("金额最大的一笔消费")).toEqual({ kind: "max", direction: "expense", rank: 1 });
   });
 
   it("routes income extremes to income", () => {
-    expect(financeExtremeIntent("最大的一笔收入是哪笔")).toEqual({ kind: "max", direction: "income" });
+    expect(financeExtremeIntent("最大的一笔收入是哪笔")).toEqual({ kind: "max", direction: "income", rank: 1 });
   });
 
   it("routes min wording", () => {
-    expect(financeExtremeIntent("最便宜的一笔支出")).toEqual({ kind: "min", direction: "expense" });
+    expect(financeExtremeIntent("最便宜的一笔支出")).toEqual({ kind: "min", direction: "expense", rank: 1 });
   });
 
   it("stays null for non-finance superlatives and plain questions", () => {
@@ -83,7 +83,7 @@ describe("financeExtremeTopicTerms", () => {
 describe("buildFinanceExtremeAnswer", () => {
   it("answers single-currency max with amount, time and citation", () => {
     const a = buildFinanceExtremeAnswer(
-      { kind: "max", direction: "expense" },
+      { kind: "max", direction: "expense", rank: 1 },
       [row({ amount: 8999, content: "下单买了 MacBook Air M4，花了 8999 元" })],
       0,
       null
@@ -94,14 +94,14 @@ describe("buildFinanceExtremeAnswer", () => {
   });
 
   it("masks sensitive extreme rows", () => {
-    const a = buildFinanceExtremeAnswer({ kind: "max", direction: "expense" }, [row({ is_sensitive: 1 })], 0, null);
+    const a = buildFinanceExtremeAnswer({ kind: "max", direction: "expense", rank: 1 }, [row({ is_sensitive: 1 })], 0, null);
     expect(a).toContain("敏感笔记");
     expect(a).not.toContain("[1]");
   });
 
   it("lists per-currency extremes without cross-currency comparison", () => {
     const a = buildFinanceExtremeAnswer(
-      { kind: "max", direction: "expense" },
+      { kind: "max", direction: "expense", rank: 1 },
       [row({ amount: 8999 }), row({ id: "n2", amount: 200, currency: "USD" })],
       2,
       null
@@ -111,7 +111,7 @@ describe("buildFinanceExtremeAnswer", () => {
   });
 
   it("handles no comparable rows", () => {
-    const a = buildFinanceExtremeAnswer({ kind: "max", direction: "expense" }, [], 3, null);
+    const a = buildFinanceExtremeAnswer({ kind: "max", direction: "expense", rank: 1 }, [], 3, null);
     expect(a).toContain("无法比较");
   });
 });
