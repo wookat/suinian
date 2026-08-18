@@ -73,7 +73,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, isLedgerAggregateNote, ASK_META_QUESTION_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, isLedgerAggregateNote, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -2879,6 +2879,11 @@ app.post("/api/ask", async (c) => {
   askMarks.push(["rewrite", Date.now() - tRewrite]);
   // explicit time scope ("上个月/最近一周/去年…") narrows recall to that window
   const timeRange = parseTimeRange(recallQuestion);
+  // 指代追问（R186 P1）：原问题含代词/指示词（「它/那条/这笔…」）时不自足，
+  // R113「意图以原始问题为准」的前提不成立——意图判定与召回统一改用改写产物。
+  // 无历史时改写器原样返回，intentQuestion 等于原问题，不影响单轮行为。
+  const pronounFollowUp = !metaQuestion && history.length > 0 && ASK_PRONOUN_REF_RE.test(question);
+  const intentQuestion = pronounFollowUp ? recallQuestion : question;
   // 财务/统计合计类问题走精确聚合（与周报/月报同一 financeStats 口径），
   // 绝不让 LLM 对被 LIMIT 截断的召回结果心算合计（R107 P1-2）。
   // 财务口径澄清追问（R130 P2-1）：上一轮是精确合计时，「包括报销的差旅费
@@ -2943,12 +2948,12 @@ app.post("/api/ask", async (c) => {
   // 时，改写补出的聚合措辞不得覆盖——单项问题必须走普通召回直答该项。
   // 财务极值（R148 P1-2）：「最贵的一笔支出」走 ORDER BY amount 精确查询，
   // 按币种分组比较（不同币种金额不可直接比大小），绝不交 LLM 猜极值。
-  const finExtreme = financeExtremeIntent(question) ?? (metaQuestion || FINANCE_WORD_RE.test(question) ? null : financeExtremeIntent(recallQuestion));
+  const finExtreme = financeExtremeIntent(intentQuestion) ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeExtremeIntent(recallQuestion));
   if (finExtreme) {
-    const xRange = (financeExtremeIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
+    const xRange = (financeExtremeIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     // 主题限定（R174 P1）：「键盘里最贵的」的「键盘」注入 WHERE（与财务
     // 子集同一 LIKE 匹配口径），绝不把主题极值答成全局极值
-    const xTerms = financeExtremeIntent(question) ? financeExtremeTopicTerms(question) : financeExtremeTopicTerms(recallQuestion);
+    const xTerms = financeExtremeIntent(intentQuestion) ? financeExtremeTopicTerms(intentQuestion) : financeExtremeTopicTerms(recallQuestion);
     const xConds = ["user_id = ?", "deleted_at IS NULL", "category = ?"];
     const xBinds: unknown[] = [userId, finExtreme.direction];
     if (xTerms) {
@@ -3014,7 +3019,7 @@ app.post("/api/ask", async (c) => {
   // 财务比较（R168 P1）：「赚得多还是花得多/入不敷出/收支差多少」与环比对比
   // 都必须基于 financeStats 的 SQL 精确聚合做比较后确定性措辞，绝不让 LLM
   // 对被 LIMIT 截断的召回自由加总再比较（R167 P1-1：漏项算错总支出）。
-  const finMom = financeMomIntent(question) ?? (metaQuestion || FINANCE_WORD_RE.test(question) ? null : financeMomIntent(recallQuestion));
+  const finMom = financeMomIntent(intentQuestion) ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeMomIntent(recallQuestion));
   if (finMom) {
     const curRange = parseTimeRange(finMom === "month" ? "本月" : "本周")!;
     const prevRange = parseTimeRange(finMom === "month" ? "上个月" : "上周")!;
@@ -3035,9 +3040,9 @@ app.post("/api/ask", async (c) => {
       finance_compare: true,
     });
   }
-  const finCompare = financeCompareIntent(question) || (metaQuestion || FINANCE_WORD_RE.test(question) ? false : financeCompareIntent(recallQuestion));
+  const finCompare = financeCompareIntent(intentQuestion) || (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? false : financeCompareIntent(recallQuestion));
   if (finCompare) {
-    const cmpRange = (financeCompareIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
+    const cmpRange = (financeCompareIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const cmpConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
     const cmpBinds: unknown[] = [userId];
     if (cmpRange?.start) {
@@ -3066,9 +3071,9 @@ app.post("/api/ask", async (c) => {
   // 时间窗财务列举（R170 P1-1）：「最近一周花了哪些钱」按 category 走 SQL
   // 精确列举（待办/未发生金额绝不计入）；窗内无记录 fail-closed，绝不让
   // top-k 召回漏项或把待办幻觉成已发生支出（R169 实测 12/12 全败）。
-  const finList = financeListIntent(question) ?? (metaQuestion || FINANCE_WORD_RE.test(question) ? null : financeListIntent(recallQuestion));
+  const finList = financeListIntent(intentQuestion) ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeListIntent(recallQuestion));
   if (finList) {
-    const lRange = (financeListIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
+    const lRange = (financeListIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const lConds = ["user_id = ?", "deleted_at IS NULL"];
     const lBinds: unknown[] = [userId];
     if (finList === "both") {
@@ -3102,17 +3107,20 @@ app.post("/api/ask", async (c) => {
       ...(lrows.length === 0 ? { finance_fail_closed: true } : {}),
     });
   }
-  const origFinanceIntent = financeAggIntent(question);
-  const financeIntent =
-    origFinanceIntent ?? (metaQuestion || FINANCE_WORD_RE.test(question) ? null : financeAggIntent(recallQuestion));
+  const origFinanceIntent = financeAggIntent(intentQuestion);
+  let financeIntent =
+    origFinanceIntent ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeAggIntent(recallQuestion));
+  // 代词追问问的是前轮那个具体事物的价格（「它一共花了多少钱」），改写产物
+  // 提不出干净主题词时也绝不能 fail-closed 复读全账合计——普通召回能直答
+  if (pronounFollowUp && financeIntent === "fail_closed" && !financeTopicTerms(intentQuestion)) financeIntent = null;
   // 财务主题子集合计（R148 P1-2）：「咖啡一共花了多少」——主题词可干净提取时
   // 走 LIKE 圈定子集 + SQL 精确合计（此前一律 fail-closed：诚实但找回失败）
   const subsetTerms =
     financeIntent === "exact"
       ? null
-      : (financeTopicTerms(question) ?? (metaQuestion || FINANCE_WORD_RE.test(question) ? null : financeTopicTerms(recallQuestion)));
+      : (financeTopicTerms(intentQuestion) ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeTopicTerms(recallQuestion)));
   if (subsetTerms) {
-    const sRange = (financeTopicTerms(question) ? parseTimeRange(question) : null) ?? timeRange;
+    const sRange = (financeTopicTerms(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const likeOrs = subsetTerms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ");
     const sConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')", `(${likeOrs})`];
     const sBinds: unknown[] = [userId, ...subsetTerms.flatMap((t) => Array(3).fill(likeContains(t)) as string[])];
@@ -3166,7 +3174,7 @@ app.post("/api/ask", async (c) => {
   if (financeIntent) {
     // 时间范围同理优先取自原始问题；原始问题没带时间时才用改写结果
     // （代词追问「那上个月呢」靠历史补出时间是合法的）
-    const fRange = (origFinanceIntent ? parseTimeRange(question) : null) ?? timeRange;
+    const fRange = (origFinanceIntent ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const fConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
     const fBinds: unknown[] = [userId];
     if (fRange?.start) {
@@ -3204,7 +3212,7 @@ app.post("/api/ask", async (c) => {
   }
   // 极值/排序类统计（R126 P1-3）：「最早/最新/最长一条笔记」是一条
   // min/max/order-by SQL 就能精确回答的，绝不交 LLM 对 top-k 召回猜答
-  const extremeKind = extremeQueryIntent(question) ?? (metaQuestion ? null : extremeQueryIntent(recallQuestion));
+  const extremeKind = extremeQueryIntent(intentQuestion) ?? (metaQuestion ? null : extremeQueryIntent(recallQuestion));
   const answerExtreme = async (kind: NonNullable<ReturnType<typeof extremeQueryIntent>>) => {
     const order =
       kind === "earliest"
@@ -3228,9 +3236,9 @@ app.post("/api/ask", async (c) => {
   // R126：分类/敏感/日均限定也是可 SQL 化的精确计数，不再落 fail-closed
   // 主题关键词计数（R148 P1-2）：「记录过几次房租」走 LIKE 精确计数，
   // 答案如实标注按关键词匹配口径（R147 实测：LLM 从 top-k 猜 4 次，实为 6）
-  const topicCnt = topicCountIntent(question) ?? (metaQuestion ? null : topicCountIntent(recallQuestion));
+  const topicCnt = topicCountIntent(intentQuestion) ?? (metaQuestion ? null : topicCountIntent(recallQuestion));
   if (topicCnt) {
-    const tcRange = (topicCountIntent(question) ? parseTimeRange(question) : null) ?? timeRange;
+    const tcRange = (topicCountIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const tcConds = ["user_id = ?", "deleted_at IS NULL", `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`];
     const tcBinds: unknown[] = [userId, ...(Array(3).fill(likeContains(topicCnt)) as string[])];
     if (tcRange?.start) {
@@ -3260,10 +3268,10 @@ app.post("/api/ask", async (c) => {
       topic_count: true,
     });
   }
-  const origCountQuery = countQueryIntent(question);
+  const origCountQuery = countQueryIntent(intentQuestion);
   const countQuery = origCountQuery ?? (metaQuestion ? null : countQueryIntent(recallQuestion));
   if (countQuery) {
-    const cRange = (origCountQuery ? parseTimeRange(question) : null) ?? timeRange;
+    const cRange = (origCountQuery ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const cConds = ["user_id = ?", "deleted_at IS NULL"];
     const cBinds: unknown[] = [userId];
     if (cRange?.start) {
@@ -3322,7 +3330,7 @@ app.post("/api/ask", async (c) => {
   // 枚举正则同时命中时交 LLM 统一分类主判，正则只做 fail-closed 兜底；
   // 单家族命中与全未命中（R132 LLM 补路由）行为不变。
   const tRoute = Date.now();
-  const enumRoute = await resolveAskEnumIntent(c.env, question, metaQuestion ? question : recallQuestion);
+  const enumRoute = await resolveAskEnumIntent(c.env, intentQuestion, metaQuestion ? question : recallQuestion);
   askMarks.push(["route", Date.now() - tRoute]);
   if (enumRoute.extreme) return answerExtreme(enumRoute.extreme);
   const enumTopic = enumRoute.topic;
@@ -3507,7 +3515,7 @@ app.post("/api/ask", async (c) => {
 
   // 元属性召回（R134 D-3，P2-1）：问题按输入形态提问（语音/图片/文件）时，
   // 把该 raw_type 的最近笔记并入候选——形态词不在转写正文里，关键词与语义都够不着
-  const mediaType = mediaTypeIntent(question) ?? mediaTypeIntent(recallQuestion);
+  const mediaType = mediaTypeIntent(intentQuestion) ?? mediaTypeIntent(recallQuestion);
   if (mediaType) {
     const mConds = ["user_id = ?", "is_sensitive = 0", "deleted_at IS NULL", "raw_type = ?"];
     const mBinds: unknown[] = [userId, mediaType];
@@ -3888,12 +3896,17 @@ app.post("/api/ask", async (c) => {
 // last_note_at = newest fragment's created_at; the list sorts by it so that
 // "recently written-into" threads rank first (updated_at is bumped by the
 // daily summary refresh for every thread and doesn't reflect real activity).
+// note_count 与列表/图谱同口径活算（deleted_at IS NULL）：物化列只供聚类/巡检，
+// 软删后不等 reconcile 就能看到新计数（R186 P2）。
 app.get("/api/threads", async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT t.*, (SELECT MAX(n.created_at) FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL) AS last_note_at,
+    `SELECT t.id, t.user_id, t.title, t.summary, t.updated_at,
+            (SELECT COUNT(*) FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL) AS note_count,
+            (SELECT MAX(n.created_at) FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL) AS last_note_at,
             (SELECT MIN(n.created_at) FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL) AS first_note_at,
             (SELECT COUNT(*) FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL AND n.created_at >= datetime('now', '-7 days')) AS week_new_count
-       FROM threads t WHERE t.user_id = ? AND t.note_count > 0
+       FROM threads t
+      WHERE t.user_id = ? AND EXISTS (SELECT 1 FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL)
       ORDER BY last_note_at DESC LIMIT 100`
   )
     .bind(c.get("userId"))
@@ -3990,7 +4003,11 @@ app.get("/api/threads/rebuild/:jobId", async (c) => {
 // ---- GET /api/threads/:id ----
 app.get("/api/threads/:id", async (c) => {
   const userId = c.get("userId");
-  const thread = await c.env.DB.prepare("SELECT * FROM threads WHERE id = ? AND user_id = ?")
+  const thread = await c.env.DB.prepare(
+    `SELECT t.id, t.user_id, t.title, t.summary, t.updated_at,
+            (SELECT COUNT(*) FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL) AS note_count
+       FROM threads t WHERE t.id = ? AND t.user_id = ?`
+  )
     .bind(c.req.param("id"), userId)
     .first<ThreadRow>();
   if (!thread) return c.json({ error: "not found" }, 404);

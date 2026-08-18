@@ -27,6 +27,11 @@ function fakeEnv(
 ) {
   const noteMap = new Map(notes.map((n) => [n.id, { ...n }]));
   const threadMap = new Map(threads.map((t) => [t.id, { ...t }]));
+  // 新 SQL 的线索诞生时间 = 最早一条未删笔记的 created_at
+  const bornAt = (threadId: string): string | null => {
+    const ts = [...noteMap.values()].filter((n) => n.thread_id === threadId && n.deleted_at === null).map((n) => n.created_at);
+    return ts.length ? ts.reduce((a, b) => (a < b ? a : b)) : null;
+  };
   const db = {
     prepare(sql: string) {
       let binds: unknown[] = [];
@@ -36,12 +41,12 @@ function fakeEnv(
           return stmt;
         },
         async all() {
-          if (sql.includes("FROM threads WHERE user_id")) {
+          if (sql.includes("FROM threads t WHERE t.user_id")) {
             return {
               results: [...threadMap.values()]
                 .filter((t) => t.user_id === binds[0] && t.note_count > 0)
-                .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
-                .map((t) => ({ id: t.id, created_at: t.created_at })),
+                .sort((a, b) => ((bornAt(a.id) ?? "") < (bornAt(b.id) ?? "") ? -1 : 1))
+                .map((t) => ({ id: t.id, created_at: bornAt(t.id) })),
             };
           }
           throw new Error(`unexpected all(): ${sql}`);
