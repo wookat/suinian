@@ -71,6 +71,7 @@ describe("financeExtremeIntent ordinal (R182 P1-2)", () => {
   });
 
   it("keeps topic qualifiers with ordinal wording", () => {
+    expect(financeExtremeTopicTerms("金额倒数第二的一笔支出是哪笔")).toBeNull();
     expect(financeExtremeTopicTerms("我买过的键盘里第二贵的是哪一把")).toEqual(["键盘"]);
     expect(financeExtremeTopicTerms("键盘里排名第二贵的是哪把")).toEqual(["键盘"]);
     expect(financeExtremeTopicTerms("第二贵的一笔支出")).toBeNull();
