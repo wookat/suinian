@@ -106,7 +106,7 @@ export async function attachNoteToThread(env: Env, noteId: string, threadId: str
     .bind(threadId, noteId)
     .run();
   await env.DB.prepare(
-    "UPDATE threads SET note_count = (SELECT COUNT(*) FROM notes WHERE thread_id = ?), updated_at = datetime('now') WHERE id = ?"
+    "UPDATE threads SET note_count = (SELECT COUNT(*) FROM notes WHERE thread_id = ? AND deleted_at IS NULL), updated_at = datetime('now') WHERE id = ?"
   )
     .bind(threadId, threadId)
     .run();
@@ -696,11 +696,16 @@ export async function mergeDuplicateThreads(
 ): Promise<number> {
   try {
     const { results } = await env.DB.prepare(
-      "SELECT id, created_at, title FROM threads WHERE user_id = ? AND note_count > 0 ORDER BY created_at ASC LIMIT 100"
+      // threads 表没有 created_at 列（R186：旧 SQL 引用不存在的列，整个合并被
+      // 外层 catch 静默吞掉）：线索的诞生时间 = 最早一条在内笔记的 created_at
+      `SELECT t.id, t.title,
+              (SELECT MIN(n.created_at) FROM notes n WHERE n.thread_id = t.id AND n.deleted_at IS NULL) AS created_at
+         FROM threads t WHERE t.user_id = ? AND t.note_count > 0 ORDER BY created_at ASC LIMIT 100`
     )
       .bind(userId)
-      .all<{ id: string; created_at: string; title: string }>();
-    let threads = results ?? [];
+      .all<{ id: string; created_at: string | null; title: string }>();
+    // 成员全被软删的线索无诞生时间可比，交给 reconcile 处理，不参与合并
+    let threads = (results ?? []).filter((t): t is { id: string; created_at: string; title: string } => t.created_at !== null);
     if (threads.length < 2) return 0;
     let merged = 0;
     // identical-title fold first (R132 D-4): two threads carrying the exact

@@ -727,4 +727,45 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAnswerContains: ["不存在第 5 名"],
     forbidAnswerContains: ["356", "1200", "¥77"],
   },
+
+  // —— R186（audit-r185 P1-1）：代词追问（「它/那次/这个」）指向前轮实体时，
+  // 原始问题不自足，意图判定改用改写产物——生产实录「它花了多少钱」被
+  // financeAggIntent 判成全账 exact 聚合，答成收支汇总而非该物价格。
+  {
+    id: "q121",
+    category: "多轮指代",
+    question: "它花了多少钱",
+    history: [
+      { role: "user", content: "机械键盘是什么时候买的" },
+      { role: "assistant", content: "你 8 天前入手了一把机械键盘，茶轴 [1]。" },
+    ],
+    expectAny: ["exp1"],
+    expectAnswerContains: ["399"],
+    forbidAnswerContains: ["口径与周报/月报一致", "不做心算合计"],
+  },
+  {
+    id: "q122",
+    category: "多轮指代",
+    question: "那次花了多少钱",
+    history: [
+      { role: "user", content: "我带猫打过疫苗吗" },
+      { role: "assistant", content: "打过，你带猫去打了三联疫苗 [1]。" },
+    ],
+    expectAny: ["exp2"],
+    expectAnswerContains: ["260"],
+    forbidAnswerContains: ["口径与周报/月报一致", "不做心算合计"],
+    holdout: true,
+  },
+  {
+    id: "q123",
+    category: "多轮指代",
+    question: "它一共花了多少钱",
+    history: [
+      { role: "user", content: "机械键盘是什么时候买的" },
+      { role: "assistant", content: "你 8 天前入手了一把机械键盘，茶轴 [1]。" },
+    ],
+    // 强合计词 + 代词：绝不能 fail-closed 复读全账，应答该物价格
+    expectAnswerContains: ["399"],
+    forbidAnswerContains: ["不做心算合计"],
+  },
 ];

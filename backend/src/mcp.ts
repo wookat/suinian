@@ -284,7 +284,7 @@ export function buildMcpServer(api: ApiCall): McpServer {
     {
       title: "删除笔记",
       description:
-        "删除一条笔记（软删除）：笔记先进入「最近删除」，30 天内可用 restore_notes 撤销，之后才会被彻底清理。用户说「把 XX 删了 / 删掉那条」时，先用 search_notes 找到笔记 id 再调用本工具。",
+        "删除一条笔记（软删除）：笔记先进入「最近删除」，30 天内可用 restore_notes 撤销，之后才会被彻底清理。确认约定（必须遵守）：这是破坏性操作，调用前必须先用 search_notes 找到具体笔记，向用户复述将删除的笔记内容摘要并得到明确同意；用户指令含糊（如「清理一下」）时绝不得自行批量删除。",
       inputSchema: {
         note_id: z.string().min(1).describe("要删除的笔记 id"),
       },

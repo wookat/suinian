@@ -185,6 +185,9 @@ export function isFinanceAggQuestion(question: string): boolean {
 const FACT_QUERY_RE = /叫什么|是什么|什么名|名字|哪几?[本个件家部条]|哪些|分别|各是|什么时候|在哪|为什么|依据/;
 
 export function financeAggIntent(question: string): "exact" | "fail_closed" | null {
+  // 「它花了多少钱」问的是某个具体事物的价格，不是全账聚合：代词剥词后残留
+  // 不足 2 字会被误判成 exact（R186 P1 根因），指代问法一律走普通召回。
+  if (ASK_PRONOUN_REF_RE.test(question)) return null;
   if (isFinanceAggQuestion(question)) return "exact";
   if (FACT_QUERY_RE.test(question)) return null;
   if (FINANCE_WORD_RE.test(question) && STRONG_AGG_RE.test(question)) return "fail_closed";
@@ -413,6 +416,13 @@ function financeOrdinal(question: string): { kind: "max" | "min"; rank: number }
 // 意图判定必须以原始问题为准（R113 原则）——改写器可能把上一轮的财务措辞注入
 // recallQuestion，绝不允许改写产物把元问题劫持进确定性财务/统计路由。
 export const ASK_META_QUESTION_RE = /在想什么|在想些什么|想了?些?什么|总结一下|帮我总结|概括一下|梳理一下|回顾一下|最近在忙什么|近况/;
+
+// 指代追问（R186 P1）：问题里的代词/指示词（「它/那条/这笔…」）指向前轮实体，
+// 原始问题不自足——R113「意图以原始问题为准」的前提（原始问题可独立理解）
+// 不成立，此时意图判定与召回一致，都以改写产物为准。「这个月/那个星期」是
+// 时间限定不是指代；「其它」不是代词「它」。
+export const ASK_PRONOUN_REF_RE =
+  /(?<!其)它|他们|她们|这条|那条|这笔|那笔|这个(?!月|周|星期|礼拜)|那个(?!月|周|星期|礼拜)|这次|那次|这件|那件|这本|那本|这台|那台|这部|那部|这家|那家|这只|那只|这张|那张/;
 
 /** 识别财务极值问题（最贵/最大/最小一笔支出、金额最高的收入等）。 */
 export function financeExtremeIntent(question: string): FinanceExtremeQuery | null {
