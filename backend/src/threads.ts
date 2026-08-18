@@ -25,8 +25,23 @@ const SIM_JOIN = 0.76;
 const SIM_CONFIRM_FLOOR = 0.58;
 /** 直连未达时送 LLM 确认的带内候选数上限（按相似度降序逐一确认，命中即止）。 */
 const CONFIRM_TOP_K = 3;
-/** Categories that participate in thread clustering: thoughts and the articles they react to. */
-export const THREAD_CATEGORIES = "('idea','collect')";
+/**
+ * 游离配对下限（R190 P1-3）：带内确认落空后，再对仍游离（无线索）的候选在
+ * [LEFTOVER_FLOOR, SIM_CONFIRM_FLOOR) 低带内做严格口径确认配对。跨类别混合
+ * 语料离线 A/B（scripts/thread-eligibility-eval.ts）：基线 pair recall 47.1%
+ * / precision 100%、零线索主题组 2；资格解耦+低带游离配对+严格口径后
+ * recall 60.8% / precision 96.9%、零线索主题组 0。
+ */
+const LEFTOVER_FLOOR = 0.5;
+/**
+ * Categories that participate in thread clustering. R190 P1-3（audit-r189
+ * D-1）：聚类资格与分拣类别解耦——同一件事的推进天然横跨 idea/todo/data
+ * （「装修想法→约量房→报价单」），原 idea/collect 资格把 todo/data 挡在
+ * 聚类池外，是四主题组零线索的根因；财务三类（expense/income/transfer）
+ * 仍不参与（记账走确定性财务路线，不是思考线索）。
+ */
+export const THREAD_CATEGORIES = "('idea','collect','todo','data')";
+const THREAD_CATEGORY_SET = new Set(["idea", "collect", "todo", "data"]);
 
 const CJK = "\\u4e00-\\u9fff\\u3400-\\u4dbf";
 const CJK_BEFORE_LATIN = new RegExp(`([${CJK}])([A-Za-z0-9])`, "g");
@@ -177,15 +192,30 @@ async function deepseekPickNote(
   return n !== null && n >= 1 ? notes[n - 1].id : null;
 }
 
-/** DeepSeek: confirm whether two idea snippets are the same topic (borderline embedding match). */
-async function deepseekConfirmPair(env: Env, a: string, b: string): Promise<boolean> {
+/**
+ * DeepSeek: confirm whether two note snippets are the same topic (borderline
+ * embedding match). strict 口径用于 todo/data 参与的配对和低带游离配对：只认
+ * 「同一件具体的事」，体裁相似（都是缴费/预约/杂务）不算——离线 A/B 中宽口径
+ * 会把「转房租」并进「装修量房」（precision 92.3%→96.9%）。
+ */
+async function deepseekConfirmPair(env: Env, a: string, b: string, strict = false): Promise<boolean> {
   const n = await deepseekPickNumber(
     env,
-    "判断下面两条想法是否属于同一主题（可以串成同一条思考线索）。是则输出 1，否则输出 0。只输出数字。",
-    `想法A：${a.slice(0, 400)}\n\n想法B：${b.slice(0, 400)}`,
+    strict
+      ? "判断下面两条笔记是否在记录同一件具体的事（同一个项目/主题的推进，可以串成同一条线索）。只是体裁相似（都是缴费、都是预约、都是杂务）或泛泛相关不算。是则输出 1，否则输出 0。只输出数字。"
+      : "判断下面两条想法是否属于同一主题（可以串成同一条思考线索）。是则输出 1，否则输出 0。只输出数字。",
+    strict
+      ? `笔记A：${a.slice(0, 400)}\n\n笔记B：${b.slice(0, 400)}`
+      : `想法A：${a.slice(0, 400)}\n\n想法B：${b.slice(0, 400)}`,
     1
   );
   return n === 1;
+}
+
+/** strict 确认口径的适用面：新开放的 todo/data 类别参与的任何配对。 */
+function pairNeedsStrictConfirm(catA: string | null, catB: string | null): boolean {
+  const strictCat = (c: string | null) => c === "todo" || c === "data";
+  return strictCat(catA) || strictCat(catB);
 }
 
 /**
@@ -206,7 +236,7 @@ export async function clusterNote(
     ? async () => {}
     : (threadId: string, fallbackTitle?: string) => summarizeThread(env, threadId, fallbackTitle);
   try {
-    if (note.category !== "idea" && note.category !== "collect") return null;
+    if (!note.category || !THREAD_CATEGORY_SET.has(note.category)) return null;
     // graph signal first: an idea sharing entities/relations with an existing
     // idea joins its thread regardless of embedding similarity. Collect notes
     // skip this path: with no similarity floor, entity overlap alone (e.g. a
@@ -268,6 +298,7 @@ export async function clusterNote(
       let best: Best | null = null;
       let bestThreaded: Best | null = null;
       const inBand: Best[] = [];
+      const lowBandLoose: Best[] = [];
       let backfilled = 0;
       for (const r of candidates) {
         let v: number[] | null = null;
@@ -291,6 +322,7 @@ export async function clusterNote(
         if (!best || sim > best.sim) best = cand;
         if (r.thread_id && (!bestThreaded || sim > bestThreaded.sim)) bestThreaded = cand;
         if (sim >= SIM_CONFIRM_FLOOR && sim < SIM_JOIN) inBand.push(cand);
+        else if (!r.thread_id && sim >= LEFTOVER_FLOOR && sim < SIM_CONFIRM_FLOOR) lowBandLoose.push(cand);
       }
       // 已有线索优先（R150 P1-3）：当某条已入线索的笔记本身就达到直连阈值时，
       // 直接并入它的线索；否则一条相似度略高的游离笔记会抢先另起新线索，
@@ -303,7 +335,26 @@ export async function clusterNote(
           // 一次否决整体埋没；命中即止，调用上限 CONFIRM_TOP_K。
           inBand.sort((a, b) => b.sim - a.sim);
           for (const cand of inBand.slice(0, CONFIRM_TOP_K)) {
-            if (await deepseekConfirmPair(env, note.title || note.content, cand.title || cand.content)) {
+            if (
+              await deepseekConfirmPair(
+                env,
+                note.title || note.content,
+                cand.title || cand.content,
+                pairNeedsStrictConfirm(note.category, cand.category)
+              )
+            ) {
+              joined = cand;
+              break;
+            }
+          }
+        }
+        if (!joined) {
+          // 低带游离配对（R190 P1-3）：只对仍无线索的候选、只用严格口径，把
+          // 相似度在带下但确属同一件事的碎片配成线索（离线 A/B 中零线索主题组
+          // 2→0 全部来自这一段），已有线索不参与，避免低带误并扩散。
+          lowBandLoose.sort((a, b) => b.sim - a.sim);
+          for (const cand of lowBandLoose.slice(0, CONFIRM_TOP_K)) {
+            if (await deepseekConfirmPair(env, note.title || note.content, cand.title || cand.content, true)) {
               joined = cand;
               break;
             }
@@ -326,10 +377,10 @@ export async function clusterNote(
       } else {
         console.log(`threads: cluster note=${note.id} no comparable idea notes`);
       }
-      // frugal path stops here: embedding prescreen + at most one confirm call.
-      // collect notes also stop: the LLM-only fallbacks have no similarity
-      // floor, so one-off article collects would over-join (see eval script)
-      if (opts?.frugal || note.category === "collect") return null;
+      // frugal path stops here: embedding prescreen + bounded confirm calls.
+      // non-idea notes also stop: the LLM-only fallbacks have no similarity
+      // floor, so one-off collects/todo/data would over-join (see eval script)
+      if (opts?.frugal || note.category !== "idea") return null;
       // borderline/no embedding match: still try DeepSeek against existing thread titles
       const picked = await pickThreadByDeepseek(env, note);
       if (picked) {
@@ -339,7 +390,7 @@ export async function clusterNote(
       }
       return null;
     }
-    if (opts?.frugal || note.category === "collect") return null;
+    if (opts?.frugal || note.category !== "idea") return null;
     // zero-signal notes (pure emoji/symbol) must not cluster at all: the
     // LLM-only fallbacks have no similarity floor and happily grouped emoji
     // notes into an「情绪变化」thread (audit-r161 P1-1)
