@@ -536,7 +536,13 @@ function PushPreferencesCard() {
     try {
       setPrefs(await updatePreferences({ [key]: next[key] }))
     } catch (e) {
-      setPrefs(prefs)
+      // 请求超时不代表服务端没生效（R189 P3-3）：回读服务端真实状态收敛 UI，
+      // 避免盲目回滚后用户反复点击让开关来回翻转
+      try {
+        setPrefs(await getPreferences())
+      } catch {
+        setPrefs(prefs)
+      }
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)

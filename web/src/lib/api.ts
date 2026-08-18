@@ -1085,7 +1085,9 @@ export interface AuthResult {
   recovery_code?: string | null
 }
 
-const AUTH_TIMEOUT_MS = 30_000
+/** 登录/注册走 PBKDF2 + 冷启动，生产慢往返实测可超 30s（R189 P3-3）：
+ * 超时窗与通用请求兜底对齐，只兜真正的悬挂 */
+const AUTH_TIMEOUT_MS = 60_000
 
 async function authPost(baseUrl: string, path: string, body: unknown): Promise<AuthResult> {
   let res: Response

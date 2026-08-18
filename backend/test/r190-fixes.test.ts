@@ -5,6 +5,8 @@
 // P1-2 敏感零召回指引——不再依赖凭据关键词词典，凭据/非凭据同一分支架构
 //      （sensitiveFallbackHintLine），count-only 绝不露标题/正文/凭据。
 import { describe, it, expect } from "vitest";
+import { app, stripTermFunctionalWrap, extractAskTerms } from "../src/index";
+import type { Env } from "../src/types";
 import {
   financeExtremeIntent,
   financeExtremeTopicTerms,
@@ -141,5 +143,66 @@ describe("sensitiveFallbackHintLine (R190 P1-2)", () => {
     expect(hint).toContain("2 条");
     expect(hint).toContain("储物柜");
     expect(hint).toContain("解锁");
+  });
+});
+
+// ---- P2-3: 问句功能词包裹剥离（LIKE 召回不再依赖 LLM 关键词抽取） ----
+
+describe("stripTermFunctionalWrap (R190 P2-3)", () => {
+  it("剥掉「我记的…是哪条笔记」包裹，内层实词直接召回", () => {
+    expect(stripTermFunctionalWrap("我记的空气炸锅是哪条笔记")).toBe("空气炸锅");
+    expect(stripTermFunctionalWrap("我收藏的咖啡视频")).toBe("咖啡视频");
+    expect(stripTermFunctionalWrap("记的路由器密码是什么")).toBe("路由器密码");
+  });
+
+  it("剥后不足 2 字或无包裹时保留原词", () => {
+    expect(stripTermFunctionalWrap("记账")).toBe("记账");
+    expect(stripTermFunctionalWrap("写作计划")).toBe("写作计划");
+    expect(stripTermFunctionalWrap("周报")).toBe("周报");
+    expect(stripTermFunctionalWrap("在哪")).toBe("在哪");
+  });
+
+  it("extractAskTerms 全链路：包裹句产出可 LIKE 命中的短词", () => {
+    expect(extractAskTerms("我记的空气炸锅是哪条笔记？", [])).toEqual(["空气炸锅"]);
+  });
+});
+
+// ---- D-3: /health 不对外披露 enc_key 配置位 ----
+
+describe("GET /health enc_key admin gating (R190 D-3)", () => {
+  const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext;
+  const env = { ADMIN_TOKEN: "adm-secret", SUINIAN_ENC_KEY: "k" } as unknown as Env;
+
+  it("公开拨测只返回 ok，不含 enc_key", async () => {
+    const res = await app.request(new Request("http://x/health"), undefined, env, ctx);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it("ADMIN_TOKEN 持有者可见 enc_key 配置位", async () => {
+    const res = await app.request(
+      new Request("http://x/health", { headers: { authorization: "Bearer adm-secret" } }),
+      undefined,
+      env,
+      ctx
+    );
+    expect(await res.json()).toEqual({ ok: true, enc_key: true });
+  });
+
+  it("错误 token 与未配置 ADMIN_TOKEN 时都不暴露", async () => {
+    const bad = await app.request(
+      new Request("http://x/health", { headers: { authorization: "Bearer nope" } }),
+      undefined,
+      env,
+      ctx
+    );
+    expect(await bad.json()).toEqual({ ok: true });
+    const noAdmin = await app.request(
+      new Request("http://x/health", { headers: { authorization: "Bearer adm-secret" } }),
+      undefined,
+      { SUINIAN_ENC_KEY: "k" } as unknown as Env,
+      ctx
+    );
+    expect(await noAdmin.json()).toEqual({ ok: true });
   });
 });
