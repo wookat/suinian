@@ -74,7 +74,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, credentialHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, isLedgerAggregateNote, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, isLedgerAggregateNote, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -229,8 +229,11 @@ app.get("/health", async (c) => {
     );
   }
   // enc_key：敏感内容静态加密密钥是否已配置（R153 D-1：缺失时敏感内容
-  // fail-open 明文落库，外部监控可据此告警）
-  return c.json({ ok: true, enc_key: !!c.env.SUINIAN_ENC_KEY });
+  // fail-open 明文落库，监控可据此告警）。配置位属于内部信息，只对
+  // ADMIN_TOKEN 持有者暴露；公开拨测只需 ok（R166 P2-5 同一口径）
+  const auth = c.req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const isAdmin = !!c.env.ADMIN_TOKEN && auth === c.env.ADMIN_TOKEN;
+  return c.json(isAdmin ? { ok: true, enc_key: !!c.env.SUINIAN_ENC_KEY } : { ok: true });
 });
 
 // ---- public auth: register / login (mounted before the bearer middleware) ----
@@ -1793,6 +1796,24 @@ async function purgeNotesBatch(
   waitUntil: (p: Promise<unknown>) => void
 ): Promise<void> {
   for (const chunk of chunkIds(ids)) {
+    // D1 偶发瞬时错误会让整个清理请求 500（刚批量软删后立即清空时复现过）：
+    // 块内全是幂等 DELETE，失败整块重试一次再放弃
+    try {
+      await purgeNotesChunk(env, chunk, waitUntil);
+    } catch (e) {
+      console.error("purgeNotesBatch: chunk failed, retrying once", e);
+      await sleep(300);
+      await purgeNotesChunk(env, chunk, waitUntil);
+    }
+  }
+}
+
+async function purgeNotesChunk(
+  env: Env,
+  chunk: string[],
+  waitUntil: (p: Promise<unknown>) => void
+): Promise<void> {
+  {
     const ph = chunk.map(() => "?").join(",");
     const atts = await env.DB.prepare(`SELECT r2_key FROM attachments WHERE note_id IN (${ph})`)
       .bind(...chunk)
@@ -1940,21 +1961,28 @@ app.post("/api/notes/purge", async (c) => {
 app.post("/api/notes/trash/empty", async (c) => {
   const userId = c.get("userId");
   let purged = 0;
-  for (;;) {
-    const { results } = await c.env.DB.prepare(
-      `SELECT id FROM notes WHERE user_id = ? AND deleted_at IS NOT NULL LIMIT ${PURGE_BATCH}`
-    )
-      .bind(userId)
-      .all<{ id: string }>();
-    const rows = results ?? [];
-    if (rows.length === 0) break;
-    await purgeNotesBatch(
-      c.env,
-      rows.map((r) => r.id),
-      (p) => c.executionCtx.waitUntil(p)
-    );
-    purged += rows.length;
-    if (rows.length < PURGE_BATCH) break;
+  try {
+    for (;;) {
+      const { results } = await c.env.DB.prepare(
+        `SELECT id FROM notes WHERE user_id = ? AND deleted_at IS NOT NULL LIMIT ${PURGE_BATCH}`
+      )
+        .bind(userId)
+        .all<{ id: string }>();
+      const rows = results ?? [];
+      if (rows.length === 0) break;
+      await purgeNotesBatch(
+        c.env,
+        rows.map((r) => r.id),
+        (p) => c.executionCtx.waitUntil(p)
+      );
+      purged += rows.length;
+      if (rows.length < PURGE_BATCH) break;
+    }
+  } catch (e) {
+    // 重试后仍失败：已清的批次不会回滚，给出可重试提示而不是裸 500
+    console.error("trash/empty failed", e);
+    if (purged > 0) c.executionCtx.waitUntil(reconcileThreads(c.env, userId));
+    return c.json({ error: "清空回收站未完成，请稍后重试", retryable: true, purged }, 503);
   }
   if (purged > 0) c.executionCtx.waitUntil(reconcileThreads(c.env, userId));
   return c.json({ ok: true, purged });
@@ -2736,7 +2764,7 @@ export function extractAskTerms(question: string, history: AskHistoryMessage[]):
   const split = (s: string) =>
     s
       .split(/[\s,，。？?！!、;；:：]+/)
-      .map((t) => capBytes(t.trim(), 45))
+      .map((t) => capBytes(stripTermFunctionalWrap(t.trim()), 45))
       .filter((t) => t.length >= 2);
   const terms: string[] = [];
   const push = (t: string) => {
@@ -2746,6 +2774,21 @@ export function extractAskTerms(question: string, history: AskHistoryMessage[]):
   const recentUser = history.filter((m) => m.role === "user").slice(-2);
   for (const m of recentUser) for (const t of split(m.content)) push(t);
   return terms;
+}
+
+// 问句功能词包裹（R189 P2-3）：「我记的空气炸锅是哪条笔记」整句作为 LIKE
+// 关键词永远命中不了笔记——剥掉前后的指代载体词，让内层实词直接召回，
+// 不依赖 LLM 关键词抽取兼作其失败时的兜底。剥后不足 2 字则保留原词。
+const TERM_WRAP_LEAD_RE = /^(?:我(?:记|存|写|拍|收藏)[过了下]{0,2}的?|(?:记|存|写|拍|收藏)[过了下]{0,2}的)(?:那条|这条|一条)?/;
+const TERM_WRAP_TAIL_RES = [
+  /(?:是|在)?哪一?[条个篇张则]?(?:笔记|记录)?$/,
+  /(?:的|那条|这条)(?:笔记|记录)$/,
+  /是什么$/,
+];
+export function stripTermFunctionalWrap(term: string): string {
+  let t = term.replace(TERM_WRAP_LEAD_RE, "");
+  for (const re of TERM_WRAP_TAIL_RES) t = t.replace(re, "");
+  return t.length >= 2 ? t : term;
 }
 
 const CJK_RE = /[\u4e00-\u9fff]/;
@@ -2770,7 +2813,7 @@ export function needsBilingualKeywordExtraction(question: string): boolean {
 }
 
 const ASK_KEYWORDS_SYSTEM =
-  "你是检索关键词抽取器。从问题中抽取 2-6 个最能定位相关笔记的关键词（具体的名词、动词或专有名词，每个 2-6 个字），用空格分隔输出，不要任何标点、解释或前缀。问题里的具体数字/金额/价格/型号/电话等细节词（如「8.5元」「iPhone 15」）也是关键词，要保留其核心词（如「报价」「8.5」）。忽略疑问词（什么/哪个/怎么/是啥/what/which/how）、时间词（今天/最近几天/上个月/去年/recently/last week）、代词和语气助词。若问题含英文词，除英文关键词外还要同时输出其中文对应词（因为笔记多为中文）。关键词有常见同义词、别称或另一种语言写法时，要一并输出（笔记原文可能用的是别的说法）：如「苹果电脑」也输出「MacBook」、「日语」也输出「日本語」、「书摘」也输出「摘录 书名」。例如「最近几天收藏的那个咖啡视频讲什么」输出「咖啡 视频 收藏」；「What did I note about the coffee shop idea」输出「coffee shop 咖啡馆 点子」。";
+  "你是检索关键词抽取器。从问题中抽取 2-6 个最能定位相关笔记的关键词（具体的名词、动词或专有名词，每个 2-6 个字），用空格分隔输出，不要任何标点、解释或前缀。问题里的具体数字/金额/价格/型号/电话等细节词（如「8.5元」「iPhone 15」）也是关键词，要保留其核心词（如「报价」「8.5」）。忽略疑问词（什么/哪个/哪条/怎么/是啥/what/which/how）、时间词（今天/最近几天/上个月/去年/recently/last week）、代词、语气助词，以及「笔记/记录/记的/存的」这类指代载体词（它们几乎出现在每条笔记里，不能定位）。若问题含英文词，除英文关键词外还要同时输出其中文对应词（因为笔记多为中文）。关键词有常见同义词、别称或另一种语言写法时，要一并输出（笔记原文可能用的是别的说法）：如「苹果电脑」也输出「MacBook」、「日语」也输出「日本語」、「书摘」也输出「摘录 书名」。例如「最近几天收藏的那个咖啡视频讲什么」输出「咖啡 视频 收藏」；「What did I note about the coffee shop idea」输出「coffee shop 咖啡馆 点子」。";
 
 /**
  * LLM keyword extraction for unsegmented CJK questions (query-rewrite stage):
@@ -2848,6 +2891,25 @@ async function countSensitiveHits(env: Env, userId: string, terms: string[]): Pr
   } catch {
     return 0;
   }
+}
+
+/**
+ * 零召回/拒答时的敏感指引（R190 P1-2，两个兜底分支同一架构）：优先按关键词
+ * 匹配敏感元数据给 count-only 指引；匹配不到时不再依赖凭据关键词词典——
+ * 只要账号确有加密敏感笔记，就给同一套解锁/搜索指引（凭据问法仅措辞更
+ * 具体）。只输出计数与入口，绝不露标题/正文/凭据。
+ */
+async function sensitiveNoRecallHint(env: Env, userId: string, terms: string[], question: string): Promise<string> {
+  const hits = await countSensitiveHits(env, userId, terms);
+  const line = sensitiveHintLine(hits, terms);
+  if (line) return line;
+  const anySensitive = await env.DB.prepare(
+    "SELECT 1 FROM notes WHERE user_id = ? AND is_sensitive = 1 AND deleted_at IS NULL LIMIT 1"
+  )
+    .bind(userId)
+    .first();
+  if (!anySensitive) return "";
+  return sensitiveFallbackHintLine(CREDENTIAL_Q_RE.test(question));
 }
 
 // ---- POST /api/ask ----
@@ -3693,18 +3755,7 @@ app.post("/api/ask", async (c) => {
       suggestions = topicHits.length > 0 ? topicHits : [];
     }
     const { answer, references } = buildNoAnswerResponse(suggestions);
-    const sensitiveHits = await countSensitiveHits(c.env, userId, terms);
-    // 凭据类问法在零召回分支同样给敏感指引（与 LLM 拒答分支同一口径）：
-    // 「WiFi 密码」这类关键词变体可能连敏感元数据都匹配不到
-    let zeroHint = sensitiveHintLine(sensitiveHits, terms);
-    if (!zeroHint && CREDENTIAL_Q_RE.test(question)) {
-      const anySensitive = await c.env.DB.prepare(
-        "SELECT 1 FROM notes WHERE user_id = ? AND is_sensitive = 1 AND deleted_at IS NULL LIMIT 1"
-      )
-        .bind(userId)
-        .first();
-      if (anySensitive) zeroHint = credentialHintLine();
-    }
+    const zeroHint = await sensitiveNoRecallHint(c.env, userId, terms, question);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
@@ -3736,6 +3787,16 @@ app.post("/api/ask", async (c) => {
   // 全文 + references，客户端一次性替换，保证引证角标确定性）。
   const wantsStream = (c.req.header("accept") ?? "").includes("text/event-stream");
 
+  // 金额比较/排名护栏（R190 P1-1，audit-r189 §6.2）：极值/排名问法落到 LLM
+  // （确定性路线主题零命中回落，或意图词表漏判）时，检索片段不完整且台账
+  // 明细行不是单笔，LLM 不得据此推断金额极值/排名——只允许给出片段里
+  // 明写的价格并声明无法确定排名，绝不静默错答（R189：台账明细行 368.5
+  // 冒充单笔最贵，真值 459）。
+  const amountRankQ =
+    Boolean(finExtreme) || /最贵|最便宜|(?:倒数)?第[0-9一二两三四五六七八九十]{1,2}(?:贵|便宜)|按金额|金额排|价格排/.test(question);
+  const amountRankGuard = amountRankQ
+    ? "\n特别注意：这个问题涉及金额的最大/最小/排名比较。检索片段不是全量记账数据，多行台账表格里的明细行金额也只是台账的组成部分而不是单独一笔支出：你不得据此推断哪笔金额最大/最小或第几名。可以列出片段中明写的相关价格，但必须明确说明片段不足以确定金额排名，绝不要给出肯定的排名结论。"
+    : "";
   const runGeneration = async (onDelta?: (text: string) => void): Promise<Record<string, unknown>> => {
   const tGen = Date.now();
   const genOpts: ChatOptions = {
@@ -3746,7 +3807,7 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用；回答「A 和 B 是否同一/对应/一体」这类跨片段对应问题时，对应双方各自的片段都必须标注 [序号] 引用，不能只引其中一方。「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）；汇总计算时也不要解释为什么排除某一项（如「68 元（买书，不属于吃的，忽略）」这类筛选过程），算式里只列入选项。涉及金额汇总时，不同币种（如 CNY 与 USD）绝不能直接相加，必须分币种分别合计并注明币种；分类为 transfer（资金往来：内转/提现/借入）的金额不是支出也不是收入，不要计入收支合计。引用角标只标注直接支撑该句结论的片段，每处至多 3 个，不要把命中的片段序号成串堆在句尾。回答用中文，简洁。",
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用；回答「A 和 B 是否同一/对应/一体」这类跨片段对应问题时，对应双方各自的片段都必须标注 [序号] 引用，不能只引其中一方。「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）；汇总计算时也不要解释为什么排除某一项（如「68 元（买书，不属于吃的，忽略）」这类筛选过程），算式里只列入选项。涉及金额汇总时，不同币种（如 CNY 与 USD）绝不能直接相加，必须分币种分别合计并注明币种；分类为 transfer（资金往来：内转/提现/借入）的金额不是支出也不是收入，不要计入收支合计。引用角标只标注直接支撑该句结论的片段，每处至多 3 个，不要把命中的片段序号成串堆在句尾。回答用中文，简洁。" + amountRankGuard,
       },
       // 元问题（「我最近在想什么」等自我回顾）不带对话历史生成：这类问题
       // 自足、答案只应来自笔记片段，带历史会让模型把「在想什么」误答成
@@ -3824,18 +3885,7 @@ app.post("/api/ask", async (c) => {
         ? "not_in_notes"
         : "no_recall";
     const { answer: noAnswer, references } = buildNoAnswerResponse(suggestions, mode);
-    const sensitiveHits = await countSensitiveHits(c.env, userId, terms);
-    // 凭据类问题关键词没匹配到敏感元数据时，只要用户确有敏感笔记，
-    // 也给同一套敏感指引（不报计数，避免误导）
-    let hint = sensitiveHintLine(sensitiveHits, terms);
-    if (!hint && credentialQ) {
-      const anySensitive = await c.env.DB.prepare(
-        "SELECT 1 FROM notes WHERE user_id = ? AND is_sensitive = 1 AND deleted_at IS NULL LIMIT 1"
-      )
-        .bind(userId)
-        .first();
-      if (anySensitive) hint = credentialHintLine();
-    }
+    const hint = await sensitiveNoRecallHint(c.env, userId, terms, question);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))

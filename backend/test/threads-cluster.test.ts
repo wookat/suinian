@@ -14,7 +14,8 @@ function fakeDb() {
     return c;
   }
 
-  const inThreadCats = (n: NoteRow) => n.category === "idea" || n.category === "collect";
+  const inThreadCats = (n: NoteRow) =>
+    n.category === "idea" || n.category === "collect" || n.category === "todo" || n.category === "data";
 
   const db = {
     notes,
@@ -240,21 +241,55 @@ describe("clusterNote cold start (no threads exist yet)", () => {
     expect(db.threads.size).toBe(1);
   });
 
-  it("does not ask the LLM below the unified 0.62 confirm floor (R106)", async () => {
+  it("does not ask the LLM below the leftover floor 0.50 (R106/R190)", async () => {
     const db = fakeDb();
-    // collect notes: below the floor they stop cold (no DeepSeek-only fallback),
-    // so a merge here could only come from a floor regression
+    // collect notes: below every band they stop cold (no DeepSeek-only
+    // fallback), so a merge here could only come from a floor regression
     const a = makeNote("a", "做一个 AI 收件箱", { category: "collect" });
     const b = makeNote("b", "AI 收件箱要支持微信", { category: "collect" });
     db.notes.set("a", a);
     db.notes.set("b", b);
-    // cosine ≈ 0.55: inside the old 0.5 idea band, below the unified floor —
-    // even an eager LLM (always answers "1") must not merge them
-    const ai = fakeAi({ "做一个 AI 收件箱": [1, 0, 0], "AI 收件箱要支持微信": [0.55, 0.835, 0] });
+    // cosine ≈ 0.45: below the R190 leftover floor — even an eager LLM
+    // (always answers "1") must not merge them
+    const ai = fakeAi({ "做一个 AI 收件箱": [1, 0, 0], "AI 收件箱要支持微信": [0.45, 0.893, 0] });
     const env = makeEnv(db, ai, "1");
     await clusterNote(env, a);
     await clusterNote(env, b);
     expect(db.threads.size).toBe(0);
+  });
+
+  it("pairs two loose notes in the low band [0.50, 0.58) via strict confirm (R190)", async () => {
+    const db = fakeDb();
+    const a = makeNote("a", "装修风格想走奸改风");
+    const b = makeNote("b", "约了装修公司周六量房", { category: "todo", created_at: "2026-08-02 00:00:00" });
+    db.notes.set("a", a);
+    db.notes.set("b", b);
+    // cosine ≈ 0.55: below the confirm floor but inside the leftover band
+    const ai = fakeAi({ 装修风格想走奸改风: [1, 0, 0], 约了装修公司周六量房: [0.55, 0.835, 0] });
+    const env = makeEnv(db, ai, "1");
+    await clusterNote(env, a);
+    await clusterNote(env, b);
+    expect(db.threads.size).toBe(1);
+    const threadId = [...db.threads.keys()][0];
+    expect(db.notes.get("a")!.thread_id).toBe(threadId);
+    expect(db.notes.get("b")!.thread_id).toBe(threadId);
+  });
+
+  it("low band never joins an already-threaded candidate (R190)", async () => {
+    const db = fakeDb();
+    db.threads.set("t1", { id: "t1", user_id: "u1", title: "装修", note_count: 2 });
+    const a = makeNote("a", "装修风格想走奸改风", { thread_id: "t1" });
+    const b = makeNote("b", "约了装修公司周六量房", { category: "todo", created_at: "2026-08-02 00:00:00" });
+    db.notes.set("a", a);
+    db.notes.set("b", b);
+    db.embeddings.set("a", JSON.stringify([1, 0, 0]));
+    // cosine ≈ 0.55 against a threaded note: below the confirm floor and
+    // ineligible for leftover pairing — must stay loose (avoid low-band
+    // mis-joins diffusing into established threads)
+    const ai = fakeAi({ 约了装修公司周六量房: [0.55, 0.835, 0] });
+    const env = makeEnv(db, ai, "1");
+    await clusterNote(env, b);
+    expect(db.notes.get("b")!.thread_id).toBeNull();
   });
 
   it("does not merge dissimilar ideas", async () => {
@@ -300,13 +335,27 @@ describe("clusterNote merge into existing thread", () => {
     expect(db.notes.get("b")!.thread_id).toBe("t1");
   });
 
-  it("ignores notes outside idea/collect (todo/expense/data)", async () => {
+  it("ignores finance notes (expense/income/transfer) — R190 eligibility excludes only finance", async () => {
     const db = fakeDb();
-    const t = makeNote("t", "买牛奶", { category: "todo" });
+    const t = makeNote("t", "午饭黄焖鸡 23 块", { category: "expense", amount: 23 });
     db.notes.set("t", t);
-    const env = makeEnv(db, fakeAi({ 买牛奶: [1, 0, 0] }));
+    const env = makeEnv(db, fakeAi({ 午饭黄焖鸡: [1, 0, 0] }), "1");
     await clusterNote(env, t);
     expect(db.threads.size).toBe(0);
+  });
+
+  it("attaches a highly similar todo to the matched idea's thread (R190 decoupled eligibility)", async () => {
+    const db = fakeDb();
+    db.threads.set("t1", { id: "t1", user_id: "u1", title: "装修", note_count: 1 });
+    const a = makeNote("a", "装修风格想走奸改风", { thread_id: "t1" });
+    const b = makeNote("b", "约装修公司周六上门量房", { category: "todo", created_at: "2026-08-02 00:00:00" });
+    db.notes.set("a", a);
+    db.notes.set("b", b);
+    db.embeddings.set("a", JSON.stringify([1, 0, 0]));
+    const ai = fakeAi({ 约装修公司周六上门量房: [0.99, 0.1, 0] });
+    const env = makeEnv(db, ai);
+    await clusterNote(env, b);
+    expect(db.notes.get("b")!.thread_id).toBe("t1");
   });
 
   it("attaches a highly similar collect to the matched idea's thread", async () => {
