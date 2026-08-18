@@ -144,6 +144,7 @@ export function buildTriagePrompt(
   - 「9月1号起各部门预算表改用新模板」→ data（带日期的说明仍是资料，不是待办）
   - 「9月1号起预算表改用新模板，找行政领新版」→ todo（制度/流程变更但含需要本人去做的动作，如“找…领”“去…办”，以动作为准归 todo）
   - 「回头把冰箱滤芯换了」→ todo（无时间也是待办，todo_due=null）
+  - 「昨天就该给妈妈回电话（已经拖了一天）」→ todo，todo_due=${iso}（已拖欠的事记今天，进今日待办）
   - 「https://example.com/abc 一篇讲向量检索的文章」→ collect（纯链接即收藏）
   - 「明天下午3点和设计师对稿」→ todo，todo_due=${tomorrow.iso}T15:00:00${off}
   - 「下周一晚上8点提醒我给客户回邮件」→ todo，todo_due=${nextMon.iso}T20:00:00${off}
@@ -184,7 +185,7 @@ export function buildTriagePrompt(
 - currency: 仅 expense/income/transfer 且 amount 非 null 时输出 ISO 4217 代码（人民币/块/元默认 "CNY"，美元 "USD"），否则 null
 - merchant: 仅 expense/income/transfer 时输出的商家或用途短语（<=12字），推断不出则 null
 - is_question: 内容是否在向自己的笔记库提问 (boolean)。疑问句语气（哪些/什么/多少/怎么/为什么/吗/呢等）且意图是想得到回答时为 true，即使句尾没打问号——如「最近一周我花了哪些钱」。以下必须为 false：记录信息/想法/待办（即使含疑问词，如「查一下明天几点开会」是待办）、自问自答式的思考记录（「要不要做 X？我觉得可以」）、修辞性反问
-- todo_due: 若是待办且能推断截止时间，基于上面给出的今天日期与星期换算（如"周五之前"= 从今天起最近的周五）。内容中有具体时刻（如"下午三点半""晚上8点"）时输出带时刻和时区偏移的 ISO 8601 "YYYY-MM-DDTHH:mm:00${off}"（24 小时制，时刻按用户时区 ${tz} 理解，偏移固定写 ${off}，如 "${tomorrow.iso}T15:30:00${off}"）；只有日期没有时刻时仅输出 "YYYY-MM-DD"；无法推断则 null。绝不要输出早于今天的日期
+- todo_due: 若是待办且能推断截止时间，基于上面给出的今天日期与星期换算（如"周五之前"= 从今天起最近的周五）。内容中有具体时刻（如"下午三点半""晚上8点"）时输出带时刻和时区偏移的 ISO 8601 "YYYY-MM-DDTHH:mm:00${off}"（24 小时制，时刻按用户时区 ${tz} 理解，偏移固定写 ${off}，如 "${tomorrow.iso}T15:30:00${off}"）；只有日期没有时刻时仅输出 "YYYY-MM-DD"；无法推断则 null。绝不要输出早于今天的日期；内容表达「已经拖欠/早该做了」（如“昨天就该……”“拖了两天”“早该回电话了”）时输出今天 "${iso}"，让它进入今日待办而不是永远沉没
 ${
     corrections.length
       ? `\n用户此前手动指定过下列内容的分类（这是该用户的既定偏好，遇到同类内容优先照此归类）：\n${corrections
@@ -588,16 +589,31 @@ export function splitCsvFields(line: string): string[] {
  * 每行都是金额时返回该列求和；表头（首行无金额）自动跳过；金额列有歧义
  *（多列都全是数字）或结构不齐时返回 null（绝不猜）。 */
 export function parseLedgerTable(content: string): { amount: number; rows: number } | null {
+  const parsed = parseLedgerCore(content);
+  return parsed === "ambiguous" ? null : parsed;
+}
+
+/** 同 parseLedgerTable，但区分「非表格」（null）与「是表格但金额列歧义」
+ *（"ambiguous"）：歧义表格不允许模型自行猜总和（R183 P2-2）。 */
+export function parseLedgerCore(content: string): { amount: number; rows: number } | "ambiguous" | null {
   const lines = content
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
   if (lines.length < 2) return null;
-  const rows = lines.map(splitCsvFields);
+  const isMoney = (s: string) => LEDGER_MONEY_RE.test(s) && parseFloat(s.replace(/[¥￥元]/g, "")) > 0;
+  const allRows = lines.map(splitCsvFields);
+  // 标题/落款行（R183 P1-1）：真实用户常在表格前后写单字段的说明行
+  //（「购物清单」）；不含金额的单字段行从两端剥掉，表格主体照常解析
+  let start = 0;
+  let end = allRows.length;
+  while (start < end && allRows[start].length < 2 && !allRows[start].some(isMoney)) start++;
+  while (end > start && allRows[end - 1].length < 2 && !allRows[end - 1].some(isMoney)) end--;
+  const rows = allRows.slice(start, end);
+  if (rows.length < 2) return null;
   if (rows.some((r) => r.length < 2)) return null;
   const width = rows[0].length;
   if (rows.some((r) => r.length !== width)) return null;
-  const isMoney = (s: string) => LEDGER_MONEY_RE.test(s) && parseFloat(s.replace(/[¥￥元]/g, "")) > 0;
   // 首行没有任何金额字段视作表头跳过
   const data = rows[0].some(isMoney) ? rows : rows.slice(1);
   if (data.length < 2) return null;
@@ -605,7 +621,8 @@ export function parseLedgerTable(content: string): { amount: number; rows: numbe
   for (let c = 0; c < width; c++) {
     if (data.every((r) => isMoney(r[c]))) moneyCols.push(c);
   }
-  if (moneyCols.length !== 1) return null;
+  if (moneyCols.length === 0) return null;
+  if (moneyCols.length > 1) return "ambiguous";
   const col = moneyCols[0];
   const sum = data.reduce((s, r) => s + parseFloat(r[col].replace(/[¥￥元]/g, "")), 0);
   return { amount: Math.round(sum * 100) / 100, rows: data.length };
@@ -617,8 +634,11 @@ export function parseLedgerTable(content: string): { amount: number; rows: numbe
 export function fixLedgerAmount(content: string, triage: TriageResult): TriageResult {
   const isFinance = triage.category === "expense" || triage.category === "income" || triage.category === "transfer";
   if (!isFinance) return triage;
-  const ledger = parseLedgerTable(content);
+  const ledger = parseLedgerCore(content);
   if (!ledger) return triage;
+  // 金额列歧义的表格（R183 P2-2）：模型自行猜的总和不可信，按「歧义不猜」
+  // 置空金额，等用户手动确认
+  if (ledger === "ambiguous") return triage.amount == null ? triage : { ...triage, amount: null };
   if (triage.amount === ledger.amount) return triage;
   return { ...triage, amount: ledger.amount, currency: triage.currency ?? "CNY" };
 }

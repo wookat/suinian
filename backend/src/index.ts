@@ -68,7 +68,7 @@ import {
   AUDIO_FAILED_PLACEHOLDER,
   IMAGE_FAILED_PLACEHOLDER,
 } from "./media";
-import { detectFileKind, buildFileNote, buildFileReply, FILE_FAILED_PLACEHOLDER } from "./files";
+import { detectFileKind, buildFileNote, buildFileReply, FILE_FAILED_PLACEHOLDER, decodeTextBytes, looksBinaryText } from "./files";
 import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMPORT_ITEMS, type ImportSource, type ImportItem, type ImportFailure } from "./import";
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
@@ -4213,8 +4213,14 @@ app.post("/api/import", async (c) => {
         } else {
           return c.json({ error: "该来源不支持 zip 文件，请选择 Cubox / flomo / Notion / Obsidian / Apple 备忘录来源上传 zip" }, 400);
         }
+      } else if (looksBinaryText(bytes)) {
+        // 二进制伪装文本（R183 P2-1）：PNG 等 magic bytes / NUL 密集内容拒收，
+        // 不把乱码写进时间流；与文件上传管线同一嗅探口径（R170 P2-2）
+        return c.json({ error: "文件不是文本内容（疑似图片/压缩包等二进制文件），请改用「记录」页上传文件，或确认导出格式后重试" }, 400);
       } else {
-        text = new TextDecoder().decode(bytes);
+        // 编码嗅探（R183 P1-2）：老版 Excel/WPS 导出常为 GBK/Big5，与文件
+        // 上传管线复用同一解码器，不再 UTF-8 硬解成乱码
+        text = decodeTextBytes(bytes);
       }
     }
   } else {
