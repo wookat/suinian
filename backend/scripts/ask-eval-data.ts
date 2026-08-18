@@ -687,6 +687,13 @@ export const QUESTIONS: EvalQuestion[] = [
   },
   // 主题内不足 rank 笔：如实说明不存在第 N 名，绝不拿全局排名冒充
   {
+    id: "q118",
+    category: "财务极值",
+    question: "爬山支出排名第二的一笔是哪笔",
+    expectAnswerContains: ["没有已识别出金额"],
+    forbidAnswerContains: ["549", "399", "260"],
+  },
+  {
     id: "q117",
     category: "财务极值",
     question: "我买过的键盘里第二贵的是哪一把",

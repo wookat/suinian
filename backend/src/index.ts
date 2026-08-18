@@ -2994,10 +2994,11 @@ app.post("/api/ask", async (c) => {
       if (list.length >= xRank) xRows.push(list[xRank - 1]);
       else shortCurrencies.push({ currency: cur, count: list.length });
     }
-    // 主题关键词零命中：落回普通召回（语义仍可能兜底），不 dead-end，
-    // 也绝不退回全局极值冒充主题答案；命中的只有台账聚合行时仍走确定性
-    // 答案（如实说明合计未参与单笔比较），不落回 LLM 猜
-    if (!(xTerms && xAll.length === 0 && (unknownRow?.cnt ?? 0) === 0)) {
+    // 主题关键词零命中：仅 rank=1 落回普通召回（语义仍可能兜底同义词问法），
+    // 不 dead-end，也绝不退回全局极值冒充主题答案；序数问题（rank>1）LLM
+    // 无法忠实回答金额排名，零命中也必须走确定性「无法比较」答案；命中的
+    // 只有台账聚合行时同样走确定性答案，不落回 LLM 猜
+    if (!(xTerms && xAll.length === 0 && (unknownRow?.cnt ?? 0) === 0 && xRank === 1)) {
       const answer = buildFinanceExtremeAnswer(finExtreme, xRows, unknownRow?.cnt ?? 0, xRange?.phrase ?? null, xTerms, ledgerExcluded, shortCurrencies);
       const xRefRows = xRows.filter((n) => !n.is_sensitive);
       return c.json({
