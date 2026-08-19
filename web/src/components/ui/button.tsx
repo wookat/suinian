@@ -11,7 +11,8 @@ const buttonVariants = cva(
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
         outline: "border border-input bg-transparent hover:bg-accent hover:text-accent-foreground",
-        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+        // 暗色下 --destructive 偏亮（对白色前景仅 3.43:1），实底按钮压深到 red-700 满足 AA 4.5:1
+        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90 dark:bg-red-700 dark:hover:bg-red-700/90",
       },
       size: {
         default: "h-9 px-4 py-2",

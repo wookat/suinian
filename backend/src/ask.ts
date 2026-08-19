@@ -391,6 +391,37 @@ export interface FinanceExtremeQuery {
   /** 「倒数第N便宜/贵」的形容词（R198，audit-r197 P3-4）：倒序问法有两种
    * 自然语义，答案里附排序口径消歧义。 */
   reversedAdj?: string;
+  /** 验证式提问的金额前提（R200，audit-r199 P2-1）：「最贵的一笔支出是 400 元吗」
+   * 的「400 元」是待验证的前提而非主题词——按精确查询结果如实答是/否。 */
+  premise?: { amount: number; currency: string | null };
+}
+
+// 验证式金额前提（R200，audit-r199 P2-1）：「是 N 元吗 / 是不是 N 块」。
+// 语气助词或「是不是/是否」二选一必须在场，否则「第 2 大」这类序数里的
+// 数字不会被误认成前提。币种词缺省视为与记录同币种比较。
+const EXTREME_PREMISE_RE =
+  /(是不是|是否|是|为)?\s*(\d+(?:\.\d+)?)\s*(元|块钱?|人民币|rmb|cny|美元|美金|usd|日元|jpy|欧元|eur|英镑|gbp|港[币元]|hkd|韩元|krw)?\s*(?:钱)?\s*([吗么嘛吧])?/gi;
+
+const PREMISE_CURRENCY: Record<string, string> = {
+  元: "CNY", 块: "CNY", 块钱: "CNY", 人民币: "CNY", rmb: "CNY", cny: "CNY",
+  美元: "USD", 美金: "USD", usd: "USD",
+  日元: "JPY", jpy: "JPY",
+  欧元: "EUR", eur: "EUR",
+  英镑: "GBP", gbp: "GBP",
+  港币: "HKD", 港元: "HKD", hkd: "HKD",
+  韩元: "KRW", krw: "KRW",
+};
+
+/** 解析验证式金额前提；非验证式问法返回 null。 */
+export function financeExtremePremise(question: string): { amount: number; currency: string | null } | null {
+  for (const m of question.matchAll(EXTREME_PREMISE_RE)) {
+    const [, lead, num, unit, particle] = m;
+    if (!particle && lead !== "是不是" && lead !== "是否") continue;
+    const amount = Number(num);
+    if (!Number.isFinite(amount)) continue;
+    return { amount, currency: unit ? (PREMISE_CURRENCY[unit.toLowerCase()] ?? null) : null };
+  }
+  return null;
 }
 
 // 序数排名问法（R182 P1-2）：「第二贵/排名第二/倒数第二」与极值同属
@@ -450,10 +481,12 @@ export function financeExtremeIntent(question: string): FinanceExtremeQuery | nu
   const priceInherent = /最贵|最便宜|花得?最[多少]|花钱最[狠多猛]|金额最[大高小低]|数额最[大小]/.test(question) || /(倒数)?第[ \t]*([0-9]+|[一二两三四五六七八九十]{1,2})[ \t]*(贵|便宜)/.test(question) || Boolean(sortM);
   if (!priceInherent && !FINANCE_WORD_RE.test(question) && !/买|多少钱|花费|费用/.test(question)) return null;
   const direction: "expense" | "income" = /收入|进账|入账|赚|挣/.test(question) ? "income" : "expense";
+  const premise = financeExtremePremise(question);
+  const p = premise ? { premise } : {};
   const ord = financeOrdinal(question, sortM ? (sortM[1] && /[低小]/.test(sortM[1]) ? "min" : "max") : null);
-  if (ord) return { kind: ord.kind, direction, rank: ord.rank, ...(ord.reversedAdj ? { reversedAdj: ord.reversedAdj } : {}) };
-  if (/最贵|最高|最大的?一?[笔项]|金额最[大高]|花得?最多|花钱最[狠多猛]|最狠的?一[笔次]|数额最大/.test(question)) return { kind: "max", direction, rank: 1 };
-  if (/最便宜|最低|最小的?一?[笔项]|金额最[小低]|花得?最少|数额最小/.test(question)) return { kind: "min", direction, rank: 1 };
+  if (ord) return { kind: ord.kind, direction, rank: ord.rank, ...(ord.reversedAdj ? { reversedAdj: ord.reversedAdj } : {}), ...p };
+  if (/最贵|最高|最大的?一?[笔项]|金额最[大高]|花得?最多|花钱最[狠多猛]|最狠的?一[笔次]|数额最大/.test(question)) return { kind: "max", direction, rank: 1, ...p };
+  if (/最便宜|最低|最小的?一?[笔项]|金额最[小低]|花得?最少|数额最小/.test(question)) return { kind: "min", direction, rank: 1, ...p };
   return null;
 }
 
@@ -469,7 +502,7 @@ const EXTREME_STRIP_RES: RegExp[] = [
   /单笔|每笔|逐笔|单[次项]|按(?:金额|价格|价钱|数额)?(?:从?[高低大小]到[高低大小])?排(?:序|名|行|列)?/g,
   /金额|数额/g, // 「金额倒数第二」的「金额」是排名量纲词不是主题限定
   /(?:是)?哪一?[笔项个把只台件本条张部次辆双瓶副架块支款]?|什么|多少钱|多少/g,
-  /[一两]笔|[一两]项|[一两]次/g,
+  /[一两][笔项次个把只台件本条张部辆双瓶副架块支款]/g,
   /买[过了的]{0,2}|购入|入手|里面?|之中|当中|其中|这些|那些|所有|全部|历史上|有史以来|记录里|笔记里/g,
   STRIP_RES[2], // 财务动词/名词
   STRIP_RES[3], // 语气/填充
@@ -480,16 +513,23 @@ const EXTREME_STRIP_RES: RegExp[] = [
 // 注入 WHERE 后零命中答「没找到」（真值明明在库里）。
 const EXTREME_FUNCTIONAL_RESIDUE_RE = /^[单每逐笔项次个把按排序名行列第倒数高低大小多少贵狠便宜是的]+$/;
 
+// 金额 token 不是主题词（R200，audit-r199 P2-1）：「最贵的一笔支出是 400 元吗」
+// 的「400元」注入 WHERE 会让确定性路线自己否证自己（正文「学费 400」不含
+// 「400元」字样 → 零命中 →「没找到」）。小数形态因「.」不在主题词字符集里
+// 本就被滤掉，整数与带币种词形态在此统一剥除；孤立纯数字残渣同样不是主题。
+const AMOUNT_TOKEN_RE = /\d+(?:\.\d+)?\s*(?:元|块钱?|人民币|美元|美金|日元|欧元|英镑|港[币元]|韩元|rmb|cny|usd|jpy|eur|gbp|hkd|krw)/gi;
+const PURE_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+
 /** 从财务极值问法中提取主题限定词（「键盘里最贵的」→「键盘」）；无限定返回 null。 */
 export function financeExtremeTopicTerms(question: string): string[] | null {
   if (!financeExtremeIntent(question)) return null;
-  let residual = question;
+  let residual = question.replace(AMOUNT_TOKEN_RE, "");
   for (const re of EXTREME_STRIP_RES) residual = residual.replace(re, "");
   residual = residual.replace(/^的+|的+$/g, "");
   const terms = residual
     .split(/和|跟|以及|、|的/)
     .map((s) => s.trim().replace(/[里中]$/, ""))
-    .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s) && !EXTREME_FUNCTIONAL_RESIDUE_RE.test(s));
+    .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s) && !EXTREME_FUNCTIONAL_RESIDUE_RE.test(s) && !PURE_NUMBER_RE.test(s));
   return terms.length > 0 && terms.length <= 3 ? terms : null;
 }
 
@@ -548,7 +588,20 @@ export function buildFinanceExtremeAnswer(
       ? `${topic ? `${scope}，` : ""}你${kindLabel}的一笔${label}是 ${amount}（${when}，北京时间）${cite}${desc}`
       : `- ${n.currency || "CNY"}：${amount}（${when}，北京时间）${cite}${desc}`;
   });
-  let md = rows.length === 1 ? lines[0] : `${scope}按币种分别比较（不同币种金额不可直接比较），${kindLabel}的${label}：\n${lines.join("\n")}`;
+  // 验证式前提（R200，audit-r199 P2-1）：有确定的比较对象才给是/否判定；
+  // 多币种无法定位目标币种时不强判，只列事实。
+  let verdict = "";
+  if (query.premise) {
+    const target =
+      rows.length === 1 && !query.premise.currency
+        ? rows[0]
+        : rows.find((r) => (r.currency || "CNY") === (query.premise!.currency ?? "CNY"));
+    if (target) {
+      const eq = Math.abs((target.amount ?? 0) - query.premise.amount) < 0.005;
+      verdict = eq ? "是的。" : "不是。";
+    }
+  }
+  let md = rows.length === 1 ? verdict + lines[0] : `${verdict}${scope}按币种分别比较（不同币种金额不可直接比较），${kindLabel}的${label}：\n${lines.join("\n")}`;
   md += `\n\n以上为数据库精确查询结果（${topic ? `按关键词${topic}匹配标题/正文/标签，` : ""}按已识别金额${rank === 1 ? "比较" : "排序取第 " + rank + " 名"}，不含已删除笔记${phrase ? "；时间范围按笔记记录时间划定，不按正文里写的时间" : ""}${unknownAmount > 0 ? `；另有 ${unknownAmount} 笔未识别出金额，未参与比较` : ""}${ledgerNote ? `；${ledgerNote}` : ""}${shortNote ? `；${shortNote}` : ""}）。`;
   if (query.reversedAdj) {
     md += `\n（排序口径：“倒数第 ${rank} ${query.reversedAdj}”按“${query.reversedAdj}榜倒序”理解，即金额第 ${rank} ${query.kind === "max" ? "大" : "小"}；如你想问金额第 ${rank} ${query.kind === "max" ? "小" : "大"}，请直接问“第 ${rank} ${query.kind === "max" ? "便宜" : "贵"}”。）`;
@@ -676,9 +729,17 @@ export function financeTopicTerms(question: string): string[] | null {
   return subsetTopicExtract(question);
 }
 
+// 量词短语尾巴不是主题的一部分（R200，audit-r199 P2-1 同根因家族）：
+// 「车厘子买几斤」「咖啡机除垢剂一次」整串注入 LIKE 必零命中，
+// 剥掉尾部「（买/吃…）+ 数量 + 单位」后留下名词主题。
+const QUANTIFIER_TAIL_RE =
+  /(?:买|吃|喝|用|囤|购|拿|来)?[了过的]{0,2}(?:每|一|两|几|多少|\d+)(?:多)?(?:斤|克|千克|公斤|磅|升|毫升|次|回|趟|顿|份|包|袋|盒|瓶|箱|杯|桶|支|卷|片|粒|颗|双|对|套|罐|听)(?:用|吃|喝|买|囤|服)?$/;
+
 /** 主题词剥离流水线（financeTopicTerms / financeShortTopicTerms 共用）。 */
 function subsetTopicExtract(question: string): string[] | null {
-  let residual = question;
+  // 金额 token 不是主题词（R200，audit-r199 P2-1）：改写产物/追问里混入的
+  // 「399元」这类金额残片不得注入 LIKE
+  let residual = question.replace(AMOUNT_TOKEN_RE, "");
   for (const re of STRIP_RES) residual = residual.replace(re, "");
   // 时间限定词不属于主题（「2026年7月咖啡」→「咖啡」）：时间过滤由
   // parseTimeRange 负责，残留的年月日 token 一律剥掉
@@ -689,8 +750,8 @@ function subsetTopicExtract(question: string): string[] | null {
   if (stripped.length >= 2) residual = stripped;
   const terms = residual
     .split(/和|跟|以及|、/)
-    .map((s) => s.trim())
-    .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s));
+    .map((s) => s.trim().replace(QUANTIFIER_TAIL_RE, ""))
+    .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s) && !PURE_NUMBER_RE.test(s));
   return terms.length > 0 && terms.length <= 3 ? terms : null;
 }
 
@@ -1468,6 +1529,71 @@ export function reconcileAskCitations(
 }
 
 const REFUSAL_PHRASE_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没有笔记|没提到|未提及|没有提及/;
+
+// ---- 否定话术实体后校验（R200，audit-r199 P3-1）----
+// R198 已在 prompt 中约束「没提到」类否定话术只能复述问句/片段里出现过的
+// 实体，但 LLM 路径无法保证 100% 服从（生产残留：「没有提到手机壳是在
+// 淘宝买的」「没有提到具体是人民公园」——淘宝/人民公园均未出现）。这里做
+// 确定性输出侧收口：否定分句的宾语里出现问句与片段中都不存在的实体串时，
+// 整个宾语改写成不引入任何新实体的通用指代。误伤（同义改述被改写成通用
+// 指代）只损失一点具体性，仍然诚实；漏判只剩单字实体与恰好是原文
+// 子串的实体，均不构成「编造实体」。
+
+const NEGATION_CLAUSE_RE =
+  /(没有?|未|不曾)((?:具体|明确)?(?:提到|提及|说明|写明|写到|写清|记录|标注|注明|指明)(?:过)?(?:具体)?(?:是)?)([^，。；！？!?\n]{1,40})/g;
+
+// 宾语切块的功能字/疑问代词/引用角标：切完剩下的 ≥2 字块才是实体候选
+const NEGATION_SPLIT_RE =
+  /[\[［]\d{1,2}[\]］]|[是在的了吗么呢啊吧其到底和或与从由给对被把你我他她它们这那哪谁]|什么|怎么|为何|以及|还有|具体|明确|\s+/g;
+
+// 泛指属性名词不是实体（问句常以别的说法问同一属性，如「多少钱」→「价格」）
+const NEGATION_GENERIC_RE =
+  /^(?:价格|价钱|金额|费用|多少钱|品牌|牌子|型号|颜色|地点|地方|位置|时间|日期|时候|原因|名字|名称|店铺|店名|商家|平台|渠道|来源|信息|细节|内容|数量|大小|尺寸|款式|口味|购买|地址|哪里|哪儿|买的)$/;
+
+// 无来源金额后校验（R200 生产 QA 实测）：肯定句里编造金额（「周六和周日各花
+// 20 元买菜」，笔记原文只有「超市买菜花了 82.5 元」）不在否定分句捕获范围内。
+// 金额是笔记问答里最不允许编造的事实：答案中「数字+币种」token 的数值若在
+// 问句与召回片段中都不存在，整句剥除（宁可少说、不可编造）；全被剥空则由
+// 调用方回落诚实拒答通道。数字比对带边界（20 不匹配 2026/820），千分位与
+// 尾零归一（8,000≒8000、82.50≒82.5）。
+const ANSWER_AMOUNT_RE =
+  /[¥￥$€£]\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:元|块钱?|人民币|美元|美金|日元|欧元|英镑|港[币元]|韩元|rmb|cny|usd|jpy|eur|gbp|hkd|krw)/gi;
+
+export function scrubUnsourcedAmounts(answer: string, source: string): string {
+  const src = source.replace(/,/g, "");
+  const sourced = (raw: string): boolean => {
+    const plain = raw.replace(/,/g, "");
+    const n = Number(plain);
+    if (!Number.isFinite(n)) return true;
+    const variants = new Set([plain, String(n)]);
+    for (const v of variants) {
+      if (new RegExp(`(?<![\\d.])${v.replace(".", "\\.")}(?!\\d)`).test(src)) return true;
+    }
+    return false;
+  };
+  return answer
+    .split(/(?<=[。！？!?\n])/)
+    .filter((sentence) => {
+      for (const m of sentence.matchAll(ANSWER_AMOUNT_RE)) {
+        const num = m[1] ?? m[2];
+        if (num && !sourced(num)) return false;
+      }
+      return true;
+    })
+    .join("");
+}
+
+/** 否定分句引入了问句与片段中都不存在的实体时，把宾语改写成通用指代。 */
+export function scrubUnsourcedNegations(answer: string, source: string): string {
+  return answer.replace(NEGATION_CLAUSE_RE, (whole, neg: string, verb: string, obj: string) => {
+    const chunks = obj
+      .split(NEGATION_SPLIT_RE)
+      .map((s) => (s ?? "").trim())
+      .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,}$/.test(s) && !NEGATION_GENERIC_RE.test(s));
+    const invented = chunks.some((c) => !source.includes(c));
+    return invented ? `${neg}${verb}你问的这个信息` : whole;
+  });
+}
 
 /** The model's answer amounts to "没找到": either it carries no [n] citations,
  * or（R183 P1-3）it is a pure single-sentence denial that still carries [n]
