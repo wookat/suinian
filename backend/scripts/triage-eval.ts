@@ -140,7 +140,7 @@ const CASES: EvalCase[] = [
   // R194 P2-2：剪藏外壳包裹的无主题词凭证对（R193 6/6 复现）必须判敏感
   {
     content: `${PREFIX} 剪藏含凭证：测试环境后台 admin / Ext-R194-clip-7742\n摘录自内部 wiki 的部署说明片段\nhttps://wiki.example.com/deploy`,
-    category: "data",
+    category: "collect",
     sensitive: true,
   },
   { content: `${PREFIX} 测试环境后台 admin / Sx-R194-mx-77`, category: "data", sensitive: true },

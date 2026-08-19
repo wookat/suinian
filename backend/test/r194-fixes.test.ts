@@ -13,7 +13,24 @@ import { describe, it, expect } from "vitest";
 import { zipSync, strToU8 } from "fflate";
 import { app } from "../src/index";
 import { parseLedgerTable, parseLedgerCore, detectSensitive, maybeSensitive } from "../src/triage";
-import { isLedgerAggregateNote } from "../src/ask";
+import { financeExtremeIntent, isLedgerAggregateNote } from "../src/ask";
+
+// 序数问法数字两侧带空格（「第 2 大」，R193 生产原文）也必须收口
+// 进确定性财务极值/序数路由，不得漏给 LLM 猜排序。
+describe("带空格序数问法收口 (R194 P1)", () => {
+  it("第 2 大的一笔支出（阿拉伯数字带空格）", () => {
+    expect(financeExtremeIntent("第 2 大的一笔支出是哪笔？")).toEqual({ kind: "max", direction: "expense", rank: 2 });
+  });
+  it("倒数第 3 便宜", () => {
+    expect(financeExtremeIntent("倒数第 3 便宜的支出是什么")).toEqual({ kind: "max", direction: "expense", rank: 3 });
+  });
+  it("不带空格行为不变", () => {
+    expect(financeExtremeIntent("第2大的一笔支出是哪笔")).toEqual({ kind: "max", direction: "expense", rank: 2 });
+  });
+  it("时间序数不误收口", () => {
+    expect(financeExtremeIntent("我第 2 次买咖啡是什么时候")).toBeNull();
+  });
+});
 import { restoreBackup, BACKUP_FORMAT } from "../src/backup";
 import type { Env } from "../src/types";
 
