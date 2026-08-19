@@ -358,9 +358,13 @@ export function fixTransferMisfile(content: string, triage: TriageResult): Triag
 }
 
 /** Deterministic finance-direction backstop: flip income↔expense when the
- * content's money-flow verbs unambiguously contradict the model's verdict. */
+ * content's money-flow verbs unambiguously contradict the model's verdict.
+ * 多行台账不适用整条词面兜底（R196 P1-1）：名词式明细行不含方向动词，
+ * 一行「快递退款 -34.5」会让整表词面呈现「钱进来」而把净支出台账翻成
+ * income——台账的方向语义在整表层面，交回模型主判。 */
 export function fixFinanceDirection(content: string, triage: TriageResult): TriageResult {
   if (triage.category !== "expense" && triage.category !== "income") return triage;
+  if (parseLedgerCore(content) !== null) return triage;
   const out = EXPENSE_DIRECTION_RE.test(content);
   const inn = INCOME_DIRECTION_RE.test(content);
   if (triage.category === "income" && out && !inn) return { ...triage, category: "expense" };
@@ -634,6 +638,21 @@ export function parseLedgerTable(content: string): { amount: number; rows: numbe
 /** 同 parseLedgerTable，但区分「非表格」（null）与「是表格但金额列歧义」
  *（"ambiguous"）：歧义表格不允许模型自行猜总和（R183 P2-2）。 */
 export function parseLedgerCore(content: string): { amount: number; rows: number } | "ambiguous" | null {
+  const t = ledgerTableRows(content);
+  if (t === null || t === "ambiguous") return t;
+  const { data, col, totalIdx } = t;
+  if (totalIdx !== null) {
+    const total = moneyValue(data[totalIdx][col]);
+    return { amount: Math.round(total * 100) / 100, rows: data.length - 1 };
+  }
+  const sum = data.reduce((s, r) => s + moneyValue(r[col]), 0);
+  return { amount: Math.round(sum * 100) / 100, rows: data.length };
+}
+
+/** 台账表格的结构化行：数据行 + 唯一金额列 + 合计行下标（无则 null）。 */
+function ledgerTableRows(
+  content: string
+): { data: string[][]; col: number; totalIdx: number | null } | "ambiguous" | null {
   const lines = content
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -670,12 +689,23 @@ export function parseLedgerCore(content: string): { amount: number; rows: number
     return acc;
   }, []);
   if (totalRows.length > 1) return "ambiguous";
-  if (totalRows.length === 1 && data.length >= 2) {
-    const t = moneyValue(data[totalRows[0]][col]);
-    return { amount: Math.round(t * 100) / 100, rows: data.length - 1 };
-  }
-  const sum = data.reduce((s, r) => s + moneyValue(r[col]), 0);
-  return { amount: Math.round(sum * 100) / 100, rows: data.length };
+  return { data, col, totalIdx: totalRows.length === 1 ? totalRows[0] : null };
+}
+
+/** 台账行级明细查询（R196 P2-1）：从台账表格里找出名目字段含任一关键词的
+ * 明细行，返回 [名目, 带符号金额]；合计行不参与匹配，非台账/歧义表返回空。 */
+export function ledgerRowsMatching(content: string, terms: string[]): { label: string; amount: number }[] {
+  const t = ledgerTableRows(content);
+  if (t === null || t === "ambiguous") return [];
+  const { data, col, totalIdx } = t;
+  const out: { label: string; amount: number }[] = [];
+  data.forEach((r, i) => {
+    if (i === totalIdx) return;
+    const label = r.filter((_, c) => c !== col).join(" ").trim();
+    if (!terms.some((term) => label.includes(term))) return;
+    out.push({ label, amount: moneyValue(r[col]) });
+  });
+  return out;
 }
 
 // 合计行标签：只认独立字段就是合计语义的词（可带冗余后缀「金额」）

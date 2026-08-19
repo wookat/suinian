@@ -153,6 +153,33 @@ const CASES: EvalCase[] = [
     amount: 420.5,
     currency: "CNY",
   },
+  // R196 P1-1：含「退款」行、无支出动词的净正额台账不得被方向兜底改判 income
+  // （与 R194 台账形态用例集合并：分隔符×正负号×方向×合计行）
+  {
+    content: `${PREFIX} 上周办公台账：\n打印纸 120\n工位绿植 368.5\n快递退款 -34.5\n合计 454`,
+    category: "expense",
+    amount: 454,
+    currency: "CNY",
+  },
+  {
+    content: `${PREFIX} 二组采购台账\n胶带,20\n标签纸,45.5\n运费退款,-12`,
+    category: "expense",
+    amount: 53.5,
+    currency: "CNY",
+  },
+  {
+    content: `${PREFIX} 家居台账\n窗帘\t180\n地垫退货退款\t-30\n合计\t150`,
+    category: "expense",
+    amount: 150,
+    currency: "CNY",
+  },
+  // 方向对照：到账语义的回款台账仍是 income
+  {
+    content: `${PREFIX} 五月回款台账\n项目A尾款到账，5000\n项目B预付款到账，3000`,
+    category: "income",
+    amount: 8000,
+    currency: "CNY",
+  },
   // R120 P2：已敲定的决定是记录不是待办
   { content: `${PREFIX} 公众号选题定了：只写三篇论文精读`, category: "idea" },
   // R108：完成式日志不是待办（R107 P2-3：误标 todo 污染悬而未决）

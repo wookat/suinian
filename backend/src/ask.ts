@@ -1,7 +1,7 @@
 import type { Env, NoteRow } from "./types";
 import { formatAmount, type FinanceStats } from "./reports";
 import { chatComplete } from "./ai";
-import { parseLedgerTable } from "./triage";
+import { parseLedgerTable, ledgerRowsMatching } from "./triage";
 
 /**
  * Helpers for /api/ask retrieval quality (R54): deterministic time-range
@@ -676,22 +676,38 @@ export function buildFinanceSubsetAnswer(
   const tagOnly = financeAll.filter((n) => !subsetDirectHit(n, terms));
   const tagFallback = direct.length === 0;
   const finance = tagFallback ? financeAll : direct;
+  // 台账行级明细（R196 P2-1）：关键词命中的是台账里某一行名目（标题不含
+  // 该词、正文明细行含）时，该台账按命中行的行级金额计入，不拿整表合计
+  // 答行级问题；标题命中（问的是台账本身）仍用整表合计。
+  const rowHits = new Map<string, { label: string; amount: number }[]>();
+  for (const n of finance) {
+    if (n.is_sensitive || !isLedgerAggregateNote(n)) continue;
+    if (terms.some((t) => (n.title ?? "").includes(t))) continue;
+    const hits = ledgerRowsMatching(n.content, terms);
+    if (hits.length > 0) rowHits.set(n.id, hits);
+  }
+  const effAmount = (n: (typeof rows)[number]): number | null => {
+    const hits = rowHits.get(n.id);
+    if (hits) return Math.round(hits.reduce((s, r) => s + r.amount, 0) * 100) / 100;
+    return typeof n.amount === "number" && Number.isFinite(n.amount) ? n.amount : null;
+  };
   const totals: Record<string, { expense: number; income: number }> = {};
   let expenseCount = 0;
   let incomeCount = 0;
   let unknown = 0;
   for (const n of finance) {
-    if (typeof n.amount !== "number" || !Number.isFinite(n.amount)) {
+    const amt = effAmount(n);
+    if (amt === null) {
       unknown++;
       continue;
     }
     const cur = n.currency || "CNY";
     totals[cur] ??= { expense: 0, income: 0 };
     if (n.category === "expense") {
-      totals[cur].expense += n.amount;
+      totals[cur].expense += amt;
       expenseCount++;
     } else {
-      totals[cur].income += n.amount;
+      totals[cur].income += amt;
       incomeCount++;
     }
   }
@@ -703,10 +719,18 @@ export function buildFinanceSubsetAnswer(
   });
   const visible = finance.filter((n) => !n.is_sensitive).slice(0, 10);
   const itemLines = visible.map((n, i) => {
+    const date = formatShanghai(n.created_at).slice(0, 10);
+    const hits = rowHits.get(n.id);
+    if (hits) {
+      const cur = n.currency || "CNY";
+      const rowsTxt = hits.map((r) => `${r.label} ${formatAmount(r.amount, cur)}`).join("、");
+      const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+      return `- ${text} → ${rowsTxt}（台账行级明细，${date}）[${i + 1}]`;
+    }
     const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
     const ledger = isLedgerAggregateNote(n) ? "，台账多笔合计" : "";
     const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
-    return `- ${text}（${amount}${ledger}，${formatShanghai(n.created_at).slice(0, 10)}）[${i + 1}]`;
+    return `- ${text}（${amount}${ledger}，${date}）[${i + 1}]`;
   });
   const sensitiveCnt = finance.filter((n) => n.is_sensitive).length;
   const matchScope = tagFallback ? "仅标签命中，标题/正文无直接命中" : "标题/正文";
@@ -714,6 +738,7 @@ export function buildFinanceSubsetAnswer(
   if (itemLines.length > 0) md += `\n\n逐笔明细${finance.length > visible.length ? `（共 ${finance.length} 笔，仅展示前 ${visible.length} 笔）` : ""}：\n${itemLines.join("\n")}`;
   if (sensitiveCnt > 0) md += `\n（含 ${sensitiveCnt} 笔加密的敏感记录，金额已计入合计，内容不在问答中展示。）`;
   if (unknown > 0) md += `\n（另有 ${unknown} 笔未识别出金额，未计入合计。）`;
+  if (rowHits.size > 0) md += `\n（台账笔记按命中「${kw}」的明细行行级计入，不计整表合计。）`;
   if (!tagFallback && tagOnly.length > 0) {
     const tagItems = tagOnly
       .filter((n) => !n.is_sensitive)

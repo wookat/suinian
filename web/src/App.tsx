@@ -106,6 +106,19 @@ function useMockMode(): boolean {
   return mock
 }
 
+// 双导航只露出当前断点可见的那一套（R196 P3-1）：侧栏与底栏同在 DOM（仅 CSS
+// 隐藏其一）会让 aria-current="page" 每路由命中 2 个元素；隐藏侧 aria-hidden。
+function useIsDesktop(): boolean {
+  const [desktop, setDesktop] = useState(() => window.matchMedia("(min-width: 768px)").matches)
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)")
+    const onChange = () => setDesktop(mq.matches)
+    mq.addEventListener("change", onChange)
+    return () => mq.removeEventListener("change", onChange)
+  }, [])
+  return desktop
+}
+
 // off-nav route: 最近删除 recycle bin (linked from settings)
 const TRASH_ROUTE = {
   path: "trash",
@@ -151,6 +164,7 @@ export default function App() {
   const Page = active.page
   const isMock = useMockMode()
   const onboarded = useOnboarded()
+  const isDesktop = useIsDesktop()
 
   // 浏览器时区同步到服务端偏好：首次加载 + 注册/登录（settings 变更）后
   useEffect(() => {
@@ -196,7 +210,11 @@ export default function App() {
         </div>
       )}
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-20 hidden w-52 flex-col border-r bg-card p-4 md:flex print:hidden">
+      <aside
+        aria-label="导航侧栏"
+        aria-hidden={isDesktop ? undefined : true}
+        className="fixed inset-y-0 left-0 z-20 hidden w-52 flex-col border-r bg-card p-4 md:flex print:hidden"
+      >
         <div className="mb-6 flex items-center gap-2 px-2">
           <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
             碎
@@ -213,7 +231,7 @@ export default function App() {
               <a
                 key={r.path}
                 href={`#/${r.path}`}
-                aria-current={active.path === r.path ? "page" : undefined}
+                aria-current={isDesktop && active.path === r.path ? "page" : undefined}
                 className={cn(
                   "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                   active.path === r.path
@@ -250,7 +268,7 @@ export default function App() {
               <Page />
             </Suspense>
           </main>
-          <aside className="hidden w-72 shrink-0 pt-1 xl:block print:hidden">
+          <aside aria-label="辅助信息栏" className="hidden w-72 shrink-0 pt-1 xl:block print:hidden">
             <div className="sticky top-6">
               <RightRail />
             </div>
@@ -259,14 +277,18 @@ export default function App() {
       </div>
 
       {/* Mobile bottom nav */}
-      <nav aria-label="底部导航" className="fixed inset-x-0 bottom-0 z-20 flex border-t bg-card/95 backdrop-blur md:hidden print:hidden">
+      <nav
+        aria-label="底部导航"
+        aria-hidden={isDesktop ? true : undefined}
+        className="fixed inset-x-0 bottom-0 z-20 flex border-t bg-card/95 backdrop-blur md:hidden print:hidden"
+      >
         {ROUTES.map((r) => {
           const Icon = r.icon
           return (
             <a
               key={r.path}
               href={`#/${r.path}`}
-              aria-current={active.path === r.path ? "page" : undefined}
+              aria-current={!isDesktop && active.path === r.path ? "page" : undefined}
               className={cn(
                 "flex flex-1 flex-col items-center gap-0.5 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] text-[11px] font-medium transition-colors",
                 active.path === r.path ? "text-primary" : "text-muted-foreground",
