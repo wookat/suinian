@@ -17,6 +17,8 @@ export type Env = {
   CORS_ALLOWED_ORIGINS?: string;
   /** Secret token guarding /api/admin/* maintenance endpoints; unset = endpoints disabled. */
   ADMIN_TOKEN?: string;
+  /** 专用 bridge 心跳凭证（R194 P2-5）：/api/bridge/heartbeat 只认它或 ADMIN_TOKEN */
+  BRIDGE_TOKEN?: string;
   /** VAPID keypair for Web Push (base64url); unset = push endpoints disabled. */
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;

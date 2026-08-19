@@ -56,7 +56,9 @@ export interface TodayTodosResponse {
 
 /** 后端 HTTP 客户端：Bearer 鉴权 + 超时 + 指数退避重试 */
 export class SuinianClient {
-  constructor(private readonly cfg: Pick<BridgeConfig, 'apiUrl' | 'token' | 'requestTimeoutMs' | 'maxRetries'>) {}
+  constructor(
+    private readonly cfg: Pick<BridgeConfig, 'apiUrl' | 'token' | 'bridgeToken' | 'requestTimeoutMs' | 'maxRetries'>
+  ) {}
 
   ingest(payload: IngestPayload): Promise<IngestResponse> {
     return this.post<IngestResponse>('/api/ingest/wechat', payload)
@@ -85,16 +87,21 @@ export class SuinianClient {
     return this.post<MediaIngestResponse>('/api/ingest/media', payload)
   }
 
-  /** 上报桥接状态心跳，供 /health?probe=bridge 如实暴露登录状态 */
+  /** 上报桥接状态心跳，供 /health?probe=bridge 如实暴露登录状态。
+   * 心跳写的是全局共享状态，后端只认专用 BRIDGE_TOKEN（R194 P2-5）。 */
   heartbeat(status: 'starting' | 'waiting_scan' | 'online', detail?: string): Promise<{ ok: boolean }> {
-    return this.post<{ ok: boolean }>('/api/bridge/heartbeat', { status, ...(detail ? { detail } : {}) })
+    return this.post<{ ok: boolean }>(
+      '/api/bridge/heartbeat',
+      { status, ...(detail ? { detail } : {}) },
+      this.cfg.bridgeToken
+    )
   }
 
-  private post<T>(path: string, body: unknown): Promise<T> {
-    return this.request<T>('POST', path, body)
+  private post<T>(path: string, body: unknown, token?: string): Promise<T> {
+    return this.request<T>('POST', path, body, token)
   }
 
-  private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+  private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown, token?: string): Promise<T> {
     let lastErr: unknown
     for (let attempt = 0; attempt <= this.cfg.maxRetries; attempt++) {
       try {
@@ -102,7 +109,7 @@ export class SuinianClient {
           method,
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${this.cfg.token}`,
+            Authorization: `Bearer ${token ?? this.cfg.token}`,
           },
           ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
           signal: AbortSignal.timeout(this.cfg.requestTimeoutMs),

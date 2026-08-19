@@ -732,6 +732,12 @@ export interface RestoreStats {
   notes_skipped: number
   /** 脱敏备份里的「[已加密内容]」占位壳：无明文可恢复，服务端跳过不导入 */
   sensitive_skipped: number
+  /** 备份里的历史周报/月报导入条数 */
+  reports_imported: number
+  /** 同周期已存在或字段无效而跳过的报告条数 */
+  reports_skipped: number
+  /** 备份里的线索条数：不直接导入，由后台聚类重建 */
+  threads_rebuilt: number
   media_imported: number
   media_skipped: number
   /** 单个文件超过大小上限，服务端主动跳过未导入 */

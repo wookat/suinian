@@ -6,6 +6,8 @@ services:
     environment:
       SUINIAN_API_URL: ${SUINIAN_API_URL:?后端地址必填}
       SUINIAN_TOKEN: ${SUINIAN_TOKEN:?后端token必填}
+      # 专用心跳凭证（与 worker secret BRIDGE_TOKEN 一致，R194 P2-5）
+      SUINIAN_BRIDGE_TOKEN: ${SUINIAN_BRIDGE_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       REPLY_INTERVAL_MS: ${REPLY_INTERVAL_MS:-3000}
     volumes:

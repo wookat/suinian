@@ -137,6 +137,22 @@ const CASES: EvalCase[] = [
   // 反例：商家退货退款仍是 income（不被借还/押金规则误伤，语料见上方 R118 组退款条）
   // R120 P2：AA 净额——记自己实际承担的份额，不是垫付总额
   { content: `${PREFIX} 晚饭 AA 一共 480，四个人平摊，我先垫付了`, category: "expense", amount: 120, currency: "CNY" },
+  // R194 P2-2：剪藏外壳包裹的无主题词凭证对（R193 6/6 复现）必须判敏感
+  {
+    content: `${PREFIX} 剪藏含凭证：测试环境后台 admin / Ext-R194-clip-7742\n摘录自内部 wiki 的部署说明片段\nhttps://wiki.example.com/deploy`,
+    category: "data",
+    sensitive: true,
+  },
+  { content: `${PREFIX} 测试环境后台 admin / Sx-R194-mx-77`, category: "data", sensitive: true },
+  // 反例：非凭证的斜杠写法不得误判敏感
+  { content: `${PREFIX} A/B 测试方案 v2 的分流比例定 50/50`, category: "data", sensitive: false },
+  // R194 P1：含退款/负数行的多行台账，金额是带符号列合计
+  {
+    content: `${PREFIX} 早餐豆浆油条,12.5\n请客吃饭,155\n快递退款,-33.5\n团建烧烤,286.5`,
+    category: "expense",
+    amount: 420.5,
+    currency: "CNY",
+  },
   // R120 P2：已敲定的决定是记录不是待办
   { content: `${PREFIX} 公众号选题定了：只写三篇论文精读`, category: "idea" },
   // R108：完成式日志不是待办（R107 P2-3：误标 todo 污染悬而未决）

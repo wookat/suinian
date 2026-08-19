@@ -224,6 +224,14 @@ export function normalizeDigitRuns(content: string): string {
 // values that are placeholders/templates, not real secrets
 const PLACEHOLDER_VALUE_RE = /^(<|\{|\[|\*{2,}|x{3,}|你的|your[-_]?|占位)/i;
 
+// 无主题词的凭证对（R194 P2-2）：「admin / Sx-R193-mx-77」这类斜杠/竖线分隔的
+// 账号-口令对没有「密码/token」等主题词，被剪藏外壳包裹时模型常判成 collect
+// 而明文回流。确定性收口：左侧是典型账号词（admin/root 等）或紧跟在「账号/
+// 用户名」后的标识符，右侧是同时含字母与数字的 ≥6 位口令形态串；纯数字、
+// 日期分数、URL 路径片段都不命中。
+const SENSITIVE_CRED_PAIR_RE =
+  /(?:(?<![/.@\w-])(?:admin(?:istrator)?|root|sa)\b|(?:账号|帐号|账户|用户名|登录名|user(?:name)?)[^\S\n]{0,4}[:：]?[^\S\n]{0,4}[A-Za-z][\w.\-]{1,31})[^\S\n]{0,4}[/／|｜][^\S\n]{0,4}((?=[^\s/]*[A-Za-z])(?=[^\s/]*\d)[A-Za-z0-9][A-Za-z0-9_\-@#$%.!]{5,63})(?![^\s]*\/)/i;
+
 // Fail-closed hint for the pre-triage window: any credential-ish topic word at
 // all. Much broader than detectSensitive on purpose — a hit only means "treat
 // as sensitive until the model has classified", never a final verdict. The
@@ -246,6 +254,8 @@ export function maybeSensitive(content: string): boolean {
 export function detectSensitive(content: string): boolean {
   const assign = content.match(SENSITIVE_ASSIGN_RE);
   if (assign && !PLACEHOLDER_VALUE_RE.test(assign[3])) return true;
+  const pair = content.match(SENSITIVE_CRED_PAIR_RE);
+  if (pair && !PLACEHOLDER_VALUE_RE.test(pair[1])) return true;
   if (SENSITIVE_KEY_LITERAL_RE.test(content)) return true;
   // 数字类规则同时跑原文与归一化文本：空格/连字符/全角/分段变体不再绕过
   const normalized = normalizeDigitRuns(content);
@@ -566,7 +576,14 @@ export async function loadCategoryCorrections(db: D1Database, userId: string): P
 // 内容本身是分隔符表格且金额列无歧义时，解析器直接求和兜底——模型仍是
 // 分类主判，规则只在分类已是记账时锁定金额。
 
-const LEDGER_MONEY_RE = /^[¥￥]?\d+(?:\.\d{1,2})?元?$/;
+// 负数/退款行是合法记账方向（「快递费,-34.5」）：金额单元允许负号在币种
+// 符号前或后（-¥34.5 / ¥-34.5），一行退款绝不让整表不成台账（R194 P1）
+const LEDGER_MONEY_RE = /^(?:[-−][¥￥]?|[¥￥][-−]?)?\d+(?:\.\d{1,2})?元?$/;
+
+/** 金额单元 → 数值：剥币种符号并把 U+2212 负号归一成 ASCII 负号。 */
+function moneyValue(s: string): number {
+  return parseFloat(s.replace(/[¥￥元]/g, "").replace("−", "-"));
+}
 
 /** 拆一行 CSV 字段（支持双引号包裹与 "" 转义），分隔符：半/全角逗号、制表符、
  * 分号；整行无显式分隔符且未用引号、末段是金额时退回按最后一段空白切分
@@ -622,7 +639,7 @@ export function parseLedgerCore(content: string): { amount: number; rows: number
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
   if (lines.length < 2) return null;
-  const isMoney = (s: string) => LEDGER_MONEY_RE.test(s) && parseFloat(s.replace(/[¥￥元]/g, "")) > 0;
+  const isMoney = (s: string) => LEDGER_MONEY_RE.test(s) && Number.isFinite(moneyValue(s)) && moneyValue(s) !== 0;
   const allRows = lines.map(splitCsvFields);
   // 标题/落款行（R183 P1-1）：真实用户常在表格前后写单字段的说明行
   //（「购物清单」）；不含金额的单字段行从两端剥掉，表格主体照常解析
@@ -654,10 +671,10 @@ export function parseLedgerCore(content: string): { amount: number; rows: number
   }, []);
   if (totalRows.length > 1) return "ambiguous";
   if (totalRows.length === 1 && data.length >= 2) {
-    const t = parseFloat(data[totalRows[0]][col].replace(/[¥￥元]/g, ""));
+    const t = moneyValue(data[totalRows[0]][col]);
     return { amount: Math.round(t * 100) / 100, rows: data.length - 1 };
   }
-  const sum = data.reduce((s, r) => s + parseFloat(r[col].replace(/[¥￥元]/g, "")), 0);
+  const sum = data.reduce((s, r) => s + moneyValue(r[col]), 0);
   return { amount: Math.round(sum * 100) / 100, rows: data.length };
 }
 

@@ -158,6 +158,11 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
       const note = await ingestMedia(file, isImage ? "image" : "file")
       onCreated(note)
     } catch (e) {
+      // 离线/网络失败：图片与文件同文本/语音一样进 IndexedDB 离线队列，
+      // 联网后自动补传，不再失败即丢
+      if (e instanceof NetworkError && !loadSettings().useMock) {
+        if (await enqueueMedia(file, isImage ? "image" : "file", file.name)) return
+      }
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setUploading(false)
@@ -314,7 +319,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
           className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
           title="点击立即重试同步"
         >
-          <CloudOff className="size-3.5" /> {pendingSync} 条离线速记待同步，联网后自动补发
+          <CloudOff className="size-3.5" /> {pendingSync} 条离线记录（含图片/文件/录音）待同步，联网后自动补发
         </button>
       )}
     </div>

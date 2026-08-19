@@ -450,6 +450,27 @@ app.post("/api/admin/purge-low-signal-embeddings", async (c) => {
   return c.json({ ok: true, purged, detached });
 });
 
+// ---- POST /api/bridge/heartbeat ----
+// The VPS bridge reports its login state every minute; /health?probe=bridge
+// (and UptimeRobot on it) reads this row — a global shared row, so writes
+// require the dedicated BRIDGE_TOKEN (or ADMIN_TOKEN) instead of any user
+// token: an ordinary account must not be able to fake the bridge "online"
+// and fool the health probe / external monitoring (R194 P2-5). Mounted
+// before the user bearer middleware, same pattern as /api/admin/*.
+app.post("/api/bridge/heartbeat", async (c) => {
+  const expected = c.env.BRIDGE_TOKEN || c.env.ADMIN_TOKEN;
+  if (!expected) return c.json({ error: "not found" }, 404);
+  const auth = c.req.header("authorization") || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m || (m[1] !== c.env.BRIDGE_TOKEN && m[1] !== c.env.ADMIN_TOKEN)) return c.json({ error: "unauthorized" }, 401);
+  const body = await c.req.json<{ status?: unknown; detail?: unknown }>().catch(() => null);
+  const status = typeof body?.status === "string" && BRIDGE_STATUSES.has(body.status) ? body.status : null;
+  if (!status) return c.json({ error: "status must be one of: " + [...BRIDGE_STATUSES].join("/") }, 400);
+  const detail = typeof body?.detail === "string" ? body.detail.slice(0, 200) : undefined;
+  await writeCronHeartbeat(c.env, "wechat_bridge", "bridge", { status, ...(detail ? { detail } : {}) });
+  return c.json({ ok: true });
+});
+
 // ---- WeChat Official Account callback (公众号, public; guarded by WECHAT_MP_TOKEN) ----
 // GET = URL 验证 (echostr); POST = 消息推送. Disabled (404) unless the token is set.
 
@@ -2574,19 +2595,6 @@ app.post("/api/ingest/wechat", async (c) => {
     reply = `已存 · ${label}${tagStr ? " " + tagStr : ""}`;
   }
   return c.json({ note: await noteToJsonDecrypted(c.env, note), reply }, 201);
-});
-
-// ---- POST /api/bridge/heartbeat ----
-// The VPS bridge reports its login state every minute; /health?probe=bridge
-// (and UptimeRobot on it) reads this row, so a missing/stale heartbeat means
-// the bridge is down and "waiting_scan" means the boss needs to re-scan.
-app.post("/api/bridge/heartbeat", async (c) => {
-  const body = await c.req.json<{ status?: unknown; detail?: unknown }>().catch(() => null);
-  const status = typeof body?.status === "string" && BRIDGE_STATUSES.has(body.status) ? body.status : null;
-  if (!status) return c.json({ error: "status must be one of: " + [...BRIDGE_STATUSES].join("/") }, 400);
-  const detail = typeof body?.detail === "string" ? body.detail.slice(0, 200) : undefined;
-  await writeCronHeartbeat(c.env, "wechat_bridge", "bridge", { status, ...(detail ? { detail } : {}) });
-  return c.json({ ok: true });
 });
 
 // ---- WeChat binding (authed; shared by 公众号 and 企微客服 channels) ----

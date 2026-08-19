@@ -1,4 +1,5 @@
-import { RefreshCw, X } from "lucide-react"
+import { useState } from "react"
+import { CloudOff, RefreshCw, X } from "lucide-react"
 import { useRegisterSW } from "virtual:pwa-register/react"
 import { Button } from "@/components/ui/button"
 
@@ -9,6 +10,7 @@ const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
 const INSTALL_RETRY_DELAY_MS = 45 * 1000
 
 export function ReloadPrompt() {
+  const [registerError, setRegisterError] = useState(false)
   const {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker,
@@ -29,7 +31,27 @@ export function ReloadPrompt() {
         if (navigator.onLine && !r.active && !r.installing) void r.update().catch(() => {})
       }, INSTALL_RETRY_DELAY_MS)
     },
+    // SW 注册失败意味着离线缓存/推送不可用：可见化降级提示而非静默失效（R194 P2-3）
+    onRegisterError() {
+      setRegisterError(true)
+    },
   })
+
+  if (registerError && !needRefresh) {
+    return (
+      <div className="fixed inset-x-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-50 mx-auto flex max-w-sm items-center gap-3 rounded-xl border bg-popover p-3 shadow-lg md:bottom-6">
+        <CloudOff className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <p className="min-w-0 flex-1 text-sm">离线缓存不可用（Service Worker 注册失败），在线功能不受影响；可刷新重试</p>
+        <button
+          onClick={() => setRegisterError(false)}
+          aria-label="关闭"
+          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+    )
+  }
 
   if (!needRefresh) return null
 
