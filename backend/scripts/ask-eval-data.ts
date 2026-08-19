@@ -65,6 +65,14 @@ export const NOTES: EvalNote[] = [
   // led3 标题/正文避免「本月/最近」等时间词：q108「我最近在想什么」走普通
   // 召回，台账种子不应因时间词与元问题撞车（否则是种子污染而非产品缺陷）
   N("led3", 23, "expense", "大件采购台账", "大件采购记录\n项目,金额\n显示器,700\n办公椅,500", ["记账"]),
+  // —— 分隔符全变体台账（R192：audit-r191 P1-1 锁定）——空格/制表符/分号/
+  // 混合分隔的多行台账合计（454/233/123/350）同样绝不冒充单笔参与
+  // 极值/序数排名；空格分隔是 R191 生产实测逃逸变体（合计 454 冒充
+  // 「支出第二高」）。
+  N("led4", 17, "expense", "本周餐饮台账", "早餐豆浆油条 12.5\n请客吃饭 155\n团建烧烤 286.5", ["记账"]),
+  N("led5", 21, "expense", "日用品台账", "项目\t金额\n洗衣液\t89\n纸巾\t144", ["记账"]),
+  N("led6", 24, "expense", "咖啡耗材台账", "咖啡豆;98\n滤纸;25", ["记账"]),
+  N("led7", 26, "expense", "办公采购台账", "打印纸,45\n墨盒 268\n订书机\t37", ["记账"]),
   // —— 图片描述（模拟 vision 提取结果） ——
   N("img1", 18, "data", "白板照片：Q3 目标", "白板照片：Q3 目标——1. 上线快闪店预约小程序 2. 跑通咖啡豆供应链 3. 做 3 场市集活动", ["咖啡馆"]),
   // —— 敏感（绝不能出现在召回/回答里） ——
@@ -780,7 +788,7 @@ export const QUESTIONS: EvalQuestion[] = [
     question: "单笔最贵的一笔支出是多少钱？买的什么？",
     expectAll: ["nz20"],
     expectAnswerContains: ["549", "数据库精确查询"],
-    forbidAnswerContains: ["356", "1200", "700"],
+    forbidAnswerContains: ["356", "1200", "700", "454"],
   },
   {
     id: "q125",
@@ -809,5 +817,63 @@ export const QUESTIONS: EvalQuestion[] = [
     forbid: ["sens1"],
     expectAnswerContains: ["解锁"],
     forbidAnswerContains: ["qa-r79-demo-9x7"],
+  },
+
+  // —— R192（audit-r191 P1-1）：分隔符全变体台账 × 极值/序数组合锁定——
+  // 空格/制表符/分号/混合分隔的台账合计（454/233/123/350）绝不冒充单笔。
+  // 生产实录：空格台账合计 454 冒充「支出第二高」（真值 399）。
+  {
+    id: "q128",
+    category: "财务极值",
+    question: "支出第二高的是哪一笔？",
+    expectAll: ["exp1"],
+    expectAnswerContains: ["399", "数据库精确查询"],
+    forbidAnswerContains: ["454", "350", "233", "123"],
+  },
+  {
+    id: "q129",
+    category: "财务极值",
+    question: "按金额排，第二贵的东西是什么",
+    expectAll: ["exp1"],
+    expectAnswerContains: ["399"],
+    forbidAnswerContains: ["454", "549"],
+    holdout: true,
+  },
+  {
+    id: "q130",
+    category: "财务极值",
+    question: "我最贵的一笔支出是什么",
+    expectAll: ["nz20"],
+    expectAnswerContains: ["549"],
+    forbidAnswerContains: ["454", "1200", "350"],
+  },
+  {
+    id: "q131",
+    category: "财务极值",
+    question: "金额倒数第一的支出是哪笔",
+    expectAll: ["exp2"],
+    expectAnswerContains: ["260"],
+    forbidAnswerContains: ["123", "233", "¥77"],
+    holdout: true,
+  },
+
+  // —— R192（audit-r191 P2-1）：无财务词的排序指令序数问法收口确定性路线——
+  {
+    id: "q132",
+    category: "财务极值",
+    question: "按价格从高到低排，第三名是什么？",
+    expectAll: ["exp2"],
+    expectAnswerContains: ["260", "数据库精确查询"],
+    forbidAnswerContains: ["454", "356", "1200"],
+  },
+
+  // —— R192（audit-r191 P2-2）：财务子集关键词整串零命中降级重试——
+  {
+    id: "q133",
+    category: "财务聚合",
+    question: "账本里机械键盘花了多少钱",
+    expectAny: ["exp1"],
+    expectAnswerContains: ["399"],
+    forbidAnswerContains: ["没有找到记账记录"],
   },
 ];

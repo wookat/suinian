@@ -120,6 +120,7 @@ export function AskChat({
   onInitialQuestionConsumed,
   initialInput,
   onInitialInputConsumed,
+  onClose,
 }: {
   onTagClick?: (tag: string) => void
   /** 首页速记框 `?问题` 内联指令带过来的问题，挂载/变化时自动发送 */
@@ -128,6 +129,8 @@ export function AskChat({
   /** 预填到输入框但不自动发送（搜索空态「用 AI 问问看」：由用户确认后再消耗 AI 调用） */
   initialInput?: string | null
   onInitialInputConsumed?: () => void
+  /** Esc 关闭面板（与删除确认弹窗行为一致） */
+  onClose?: () => void
 }) {
   const [messages, setMessages] = useState<AskChatMessage[]>(loadMessages)
   const [input, setInput] = useState("")
@@ -157,6 +160,16 @@ export function AskChat({
   useEffect(() => {
     saveMessages(messages)
   }, [messages])
+
+  // Esc 关闭问答面板；确认弹窗打开时让弹窗自己处理 Esc，不双重关闭
+  useEffect(() => {
+    if (!onClose || confirmClear) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose()
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [onClose, confirmClear])
 
   const hasStreamText = streamState.text.length > 0
   useEffect(() => {

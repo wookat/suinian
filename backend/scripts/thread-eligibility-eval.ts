@@ -26,6 +26,14 @@
  * eval's blind spot) and the number of ZERO-THREAD topic groups.
  *
  * Usage: CLOUDFLARE_API_TOKEN=... npx tsx scripts/thread-eligibility-eval.ts
+ *
+ * R192 calibration (audit-r191 D-3): the R191 production probe on a fresh
+ * cross-category corpus measured 61.1% precision / 45.8% recall vs the 96.9%
+ * / 60.8% this eval reported on its own (easier) corpus. This eval now folds
+ * in the R191 hard-case FORMS (surface-word overlap traps: 窗帘报价 vs 遮光
+ * 窗帘助眠, 纸质书噪声 vs 睡前阅读, 跨语种学习, 旧硬件再利用) and sweeps the
+ * production thresholds (policy D = production, E/F = stricter variants) to
+ * decide recalibrate-vs-keep on evidence.
  */
 
 const SIM_JOIN = 0.76;
@@ -81,6 +89,8 @@ const CORPUS: Frag[] = [
   { id: "c2", topic: "C", category: "idea", title: null, content: "新到的耶加雪菲日晒豆，干香是莓果调，冲出来居然有酒感" },
   { id: "c3", topic: "C", category: "idea", title: null, content: "对比了 C40 和泰摩栗子磨豆机，C40 细粉少，手冲层次干净" },
   { id: "c4", topic: "C", category: "idea", title: null, content: "冷萃试验：1:12 粉水比冷藏 16 小时，比热冲甜感高不少" },
+  // Z' 装修硬例（R192：R191 误并形态——装修报价单曾被并进「窗帘购买」（睡眠））
+  { id: "z5", topic: "Z", category: "data", title: "窗帘报价", content: "定制窗帘报价：客厅遮光帘含轨道安装 1800，卧室 1200，工期两周，装修尾期一起验收" },
   // S 睡眠 (6 idea) — corpus B precision watch（此前把写作 w1 误吸入）
   { id: "s1", topic: "S", category: "idea", title: null, content: "最近入睡困难，试了睡前一小时不看手机，好像有点用" },
   { id: "s2", topic: "S", category: "idea", title: null, content: "查了睡眠卫生的资料：卧室温度 19 度左右最利于入睡" },
@@ -88,6 +98,8 @@ const CORPUS: Frag[] = [
   { id: "s4", topic: "S", category: "idea", title: null, content: "睡眠实验第三天：下午两点后不喝咖啡，入睡时间提前了半小时" },
   { id: "s5", topic: "S", category: "idea", title: null, content: "白噪音助眠试了雨声，比风扇声更容易让人放松入睡" },
   { id: "s6", topic: "S", category: "idea", title: null, content: "睡眠追踪一周数据：深睡占比 18%，周末补觉反而让周一更困" },
+  // S' 睡眠硬例（R192：R191 误并形态——噪声「纸质书」表面词重叠被吸入睡眠线索）
+  { id: "s7", topic: "S", category: "idea", title: null, content: "睡前把刷手机换成读几页纸质书，半小时就有睡意，比数羊管用" },
   // 干扰项：一次性笔记，正确行为是保持孤点（跨类别，特别是放开资格后的
   // todo/data 误聚风险）
   { id: "d01", topic: null, category: "todo", title: null, content: "下周三之前给房东转这个季度的房租" },
@@ -105,6 +117,11 @@ const CORPUS: Frag[] = [
   { id: "d13", topic: null, category: "collect", title: null, content: "https://example.com/article 收藏一篇讲拖延症心理机制的长文" },
   { id: "d14", topic: null, category: "data", title: null, content: "家里 WiFi 信道换到 149 之后测速稳定在 800M" },
   { id: "d15", topic: null, category: "todo", title: null, content: "把阳台的绿萝分盆，顺便买两袋营养土" },
+  // R192 硬例噪声（R191 误并形态回放：表面词重叠/题材相似，正确行为是孤点）
+  { id: "d16", topic: null, category: "idea", title: null, content: "通勤地铁上重新开始看纸质书，比刷手机充实，一周看完半本" },
+  { id: "d17", topic: null, category: "todo", title: null, content: "报名了西班牙语线上体验课，周四晚上八点记得上" },
+  { id: "d18", topic: null, category: "idea", title: null, content: "旧笔记本换块电池还能用，给爸妈当备用机正好" },
+  { id: "d19", topic: null, category: "data", title: "洗牙预约", content: "口腔诊所洗牙预约：周六上午十点，提前 15 分钟到，医保可刷" },
 ];
 
 const API = "https://api.cloudflare.com/client/v4";
@@ -175,12 +192,22 @@ async function llmConfirmPair(acc: string, a: string, b: string, strict = false)
 async function simulate(
   acc: string,
   vecs: Map<string, number[]>,
-  opts: { eligible: (f: Frag) => boolean; leftoverPass: boolean; strictCross?: boolean }
+  opts: {
+    eligible: (f: Frag) => boolean;
+    leftoverPass: boolean;
+    strictCross?: boolean;
+    simJoin?: number;
+    confirmFloor?: number;
+    strictAll?: boolean;
+  }
 ): Promise<Map<string, string>> {
+  const simJoin = opts.simJoin ?? SIM_JOIN;
+  const confirmFloor = opts.confirmFloor ?? SIM_CONFIRM_FLOOR;
   // strictCross: pairs where either side is todo/data (the newly-opened pool)
   // and all leftover-pass pairs use the strict "same concrete matter" prompt
   const isStrict = (a: Frag, b: Frag) =>
-    Boolean(opts.strictCross) && (a.category === "todo" || a.category === "data" || b.category === "todo" || b.category === "data");
+    Boolean(opts.strictAll) ||
+    (Boolean(opts.strictCross) && (a.category === "todo" || a.category === "data" || b.category === "todo" || b.category === "data"));
   const threadOf = new Map<string, string>();
   let nextThread = 0;
   const seen: Frag[] = [];
@@ -191,11 +218,11 @@ async function simulate(
       .sort((a, b) => b.sim - a.sim);
     let joined: Frag | null = null;
     let how = "";
-    if (sims.length > 0 && sims[0].sim >= SIM_JOIN) {
+    if (sims.length > 0 && sims[0].sim >= simJoin) {
       joined = sims[0].frag;
       how = `direct sim=${sims[0].sim.toFixed(3)}`;
     } else {
-      const band = sims.filter((s) => s.sim >= SIM_CONFIRM_FLOOR && s.sim < SIM_JOIN).slice(0, CONFIRM_TOP_K);
+      const band = sims.filter((s) => s.sim >= confirmFloor && s.sim < simJoin).slice(0, CONFIRM_TOP_K);
       for (const cand of band) {
         if (await llmConfirmPair(acc, f.title || f.content, cand.frag.title || cand.frag.content, isStrict(f, cand.frag))) {
           joined = cand.frag;
@@ -226,7 +253,7 @@ async function simulate(
       const cands = leftovers
         .filter((p) => p.id !== f.id)
         .map((p) => ({ frag: p, sim: cosineSim(vecs.get(f.id)!, vecs.get(p.id)!) }))
-        .filter((s) => s.sim >= LEFTOVER_FLOOR && s.sim < SIM_CONFIRM_FLOOR)
+        .filter((s) => s.sim >= LEFTOVER_FLOOR && s.sim < confirmFloor)
         .sort((a, b) => b.sim - a.sim)
         .slice(0, CONFIRM_TOP_K);
       for (const cand of cands) {
@@ -303,8 +330,20 @@ async function main() {
   console.log("\n=== C: B + leftover pairing pass (0.50 prescreen + confirm) ===");
   score("C decoupled + leftover pass", await simulate(acc, vecs, { eligible: signalGate, leftoverPass: true }));
 
-  console.log("\n=== D: C + strict confirm for todo/data pairs & leftover pass ===");
-  score("D decoupled + leftover + strict cross", await simulate(acc, vecs, { eligible: signalGate, leftoverPass: true, strictCross: true }));
+  console.log("\n=== D: C + strict confirm for todo/data pairs & leftover pass (PRODUCTION) ===");
+  score("D production", await simulate(acc, vecs, { eligible: signalGate, leftoverPass: true, strictCross: true }));
+
+  // R192 threshold sweep (audit-r191 D-3): decide recalibrate-vs-keep on the
+  // hardened corpus. E = strict prompt for ALL confirms; F = E + higher
+  // confirm floor; G = E + higher direct-join bar.
+  console.log("\n=== E: D + strict confirm for ALL pairs ===");
+  score("E strict-all", await simulate(acc, vecs, { eligible: signalGate, leftoverPass: true, strictCross: true, strictAll: true }));
+
+  console.log("\n=== F: E + confirm floor 0.58 -> 0.62 ===");
+  score("F strict-all floor=0.62", await simulate(acc, vecs, { eligible: signalGate, leftoverPass: true, strictCross: true, strictAll: true, confirmFloor: 0.62 }));
+
+  console.log("\n=== G: E + direct join 0.76 -> 0.80 ===");
+  score("G strict-all join=0.80", await simulate(acc, vecs, { eligible: signalGate, leftoverPass: true, strictCross: true, strictAll: true, simJoin: 0.8 }));
 }
 
 main().catch((err) => {

@@ -397,20 +397,28 @@ export interface FinanceExtremeQuery {
 // 「第二次买/第二天」是时间序数不是金额排名：无形容词且无排名词时不收口。
 const ORD_RE = /(倒数)?(排(?:名|行)?)?(倒数)?第([0-9]+|[一二两三四五六七八九十]{1,2})(贵|便宜|高|低|大|小|多|少|狠)?/;
 
-/** 解析序数排名措辞；非排名问法返回 null。 */
-function financeOrdinal(question: string): { kind: "max" | "min"; rank: number } | null {
+/** 解析序数排名措辞；非排名问法返回 null。sortBase 为「按金额/价格…排」
+ * 排序指令短语给出的基准方向（R192 P2-1）：此语境下「第三名」这类无形容词
+ * 序数也是金额排名，按排序方向收口。 */
+function financeOrdinal(question: string, sortBase: "max" | "min" | null = null): { kind: "max" | "min"; rank: number } | null {
   const m = question.match(ORD_RE);
   if (!m) return null;
   const [, rev1, rankWord, rev2, num, adj] = m;
   const reversed = Boolean(rev1 || rev2);
-  // 「第二次买/第二天」是时间序数：无形容词、无排名词、无倒数时不收口
-  if (!adj && !rankWord && !reversed) return null;
+  // 「第二次买/第二天」是时间序数：无形容词、无排名词、无倒数、无排序指令
+  // 短语时不收口
+  if (!adj && !rankWord && !reversed && !sortBase) return null;
   const rank = parseNum(num);
   if (!rank || rank < 1 || !Number.isInteger(rank)) return null;
-  const base: "max" | "min" = adj && /便宜|低|小|少/.test(adj) ? "min" : "max";
+  const base: "max" | "min" = adj ? (/便宜|低|小|少/.test(adj) ? "min" : "max") : (sortBase ?? "max");
   const kind = reversed ? (base === "max" ? "min" : "max") : base;
   return { kind, rank };
 }
+
+// 排序指令短语（R192 P2-1，audit-r191）：「按价格从高到低排，第三名是什么」
+// 无任何 FINANCE_WORD，但金额/价格排序语义已经明确——序数在此语境下收口进
+// 确定性路线，不再整条路由落空给「没找到」+ 敏感误导提示。
+const PRICE_SORT_RE = /按(?:金额|价格|价钱|数额)(?:从?([高低大小])到[高低大小])?排/;
 
 // 元问题（R176 P1-2）：「最近在想什么/帮我总结」这类对全部笔记的生成型提问，
 // 意图判定必须以原始问题为准（R113 原则）——改写器可能把上一轮的财务措辞注入
@@ -432,10 +440,11 @@ export function financeExtremeIntent(question: string): FinanceExtremeQuery | nu
   // 无任何财务词，漏判走 LLM 答错 599 vs 458）——价格固有的极值措辞单独成立；
   // 「最高/最低/最大/最小」仍歧义（最高的山），必须配财务词才收口。
   // 「第N贵/第N便宜」与「最贵/最便宜」同为价格固有措辞（R182 P1-2）
-  const priceInherent = /最贵|最便宜|花得?最[多少]|花钱最[狠多猛]|金额最[大高小低]|数额最[大小]/.test(question) || /(倒数)?第([0-9]+|[一二两三四五六七八九十]{1,2})(贵|便宜)/.test(question);
+  const sortM = question.match(PRICE_SORT_RE);
+  const priceInherent = /最贵|最便宜|花得?最[多少]|花钱最[狠多猛]|金额最[大高小低]|数额最[大小]/.test(question) || /(倒数)?第([0-9]+|[一二两三四五六七八九十]{1,2})(贵|便宜)/.test(question) || Boolean(sortM);
   if (!priceInherent && !FINANCE_WORD_RE.test(question) && !/买|多少钱|花费|费用/.test(question)) return null;
   const direction: "expense" | "income" = /收入|进账|入账|赚|挣/.test(question) ? "income" : "expense";
-  const ord = financeOrdinal(question);
+  const ord = financeOrdinal(question, sortM ? (sortM[1] && /[低小]/.test(sortM[1]) ? "min" : "max") : null);
   if (ord) return { kind: ord.kind, direction, rank: ord.rank };
   if (/最贵|最高|最大的?一?[笔项]|金额最[大高]|花得?最多|花钱最[狠多猛]|最狠的?一[笔次]|数额最大/.test(question)) return { kind: "max", direction, rank: 1 };
   if (/最便宜|最低|最小的?一?[笔项]|金额最[小低]|花得?最少|数额最小/.test(question)) return { kind: "min", direction, rank: 1 };
@@ -448,7 +457,7 @@ export function financeExtremeIntent(question: string): FinanceExtremeQuery | nu
 // 财务词/时间短语/购买动词/量词填充后，残留的干净词即主题限定词。
 const EXTREME_STRIP_RES: RegExp[] = [
   STRIP_RES[0], // 时间短语，与财务聚合同一口径
-  /最贵|最便宜|金额最[大高小低]|最[高低]|最大的?一?[笔项个]|最小的?一?[笔项个]|花得?最[多少]|花钱最[狠多猛]|最狠的?一[笔次]|数额最[大小]|(?:倒数)?排(?:名|行)?(?:倒数)?第(?:[0-9]+|[一二两三四五六七八九十]{1,2})(?:贵|便宜|高|低|大|小|多|少|狠)?|倒数第(?:[0-9]+|[一二两三四五六七八九十]{1,2})(?:贵|便宜|高|低|大|小|多|少|狠)?|第(?:[0-9]+|[一二两三四五六七八九十]{1,2})(?:贵|便宜|高|低|大|小|多|少|狠)/g,
+  /最贵|最便宜|金额最[大高小低]|最[高低]|最大的?一?[笔项个]|最小的?一?[笔项个]|花得?最[多少]|花钱最[狠多猛]|最狠的?一[笔次]|数额最[大小]|(?:倒数)?排(?:名|行)?(?:倒数)?第(?:[0-9]+|[一二两三四五六七八九十]{1,2})(?:贵|便宜|高|低|大|小|多|少|狠)?|倒数第(?:[0-9]+|[一二两三四五六七八九十]{1,2})(?:贵|便宜|高|低|大|小|多|少|狠)?|第(?:[0-9]+|[一二两三四五六七八九十]{1,2})(?:贵|便宜|高|低|大|小|多|少|狠|名)/g,
   // 「单笔最贵」的「单笔」是计量口径词、「按金额排」的「按…排」是排序指令词，
   // 都不是主题限定（R190 P1-1：残渣注入 WHERE 让确定性路线自己否证自己）
   /单笔|每笔|逐笔|单[次项]|按(?:金额|价格|价钱|数额)?(?:从?[高低大小]到[高低大小])?排(?:序|名|行|列)?/g,
@@ -610,6 +619,34 @@ export function financeTopicTerms(question: string): string[] | null {
     .map((s) => s.trim())
     .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s));
   return terms.length > 0 && terms.length <= 3 ? terms : null;
+}
+
+// 财务子集关键词降级重试（R192 P2-2，audit-r191）：整串 LIKE 零命中不再一次
+// miss 即 fail-closed——先剥掉台账/账本等容器残片与「什么牌子」类疑问残片，
+// 剥不动的长词再按「的」拆开，产出一组降级关键词重试一次。
+const SUBSET_TERM_LEAD_RE = /^(?:台账|账本|流水|账单|明细|记账|记录|笔记)(?:[里中上]的?|的)/;
+const SUBSET_TERM_TAIL_RE = /(?:是|的)?(?:什么|啥|哪个|哪家)?(?:牌子|品牌|型号|颜色|款式|口味|尺寸)$|(?:是)?(?:什么|啥)$|买的$/;
+
+/** 生成财务子集关键词的降级重试词集；无可降级时返回 null。 */
+export function degradeFinanceSubsetTerms(terms: string[]): string[] | null {
+  const out: string[] = [];
+  const push = (s: string) => {
+    const t = s.trim();
+    if (t.length >= 2 && t.length <= 8 && !TOPIC_ENUM_GENERIC_RE.test(t) && !out.includes(t)) out.push(t);
+  };
+  for (const t of terms) {
+    const stripped = t.replace(SUBSET_TERM_LEAD_RE, "").replace(SUBSET_TERM_TAIL_RE, "");
+    if (stripped !== t && stripped.length >= 2) {
+      push(stripped);
+    } else if (t.length >= 5 && t.includes("的")) {
+      for (const piece of t.split("的")) push(piece);
+    } else {
+      push(t);
+    }
+  }
+  if (out.length === 0 || out.length > 3) return null;
+  if (out.length === terms.length && out.every((t, i) => t === terms[i])) return null;
+  return out;
 }
 
 /** 命中层级：标题/正文直接命中，还是仅靠分拣标签命中（R151 P2-1）。

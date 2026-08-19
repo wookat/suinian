@@ -299,6 +299,7 @@ function TagManagerCard() {
                       if (e.key === "Enter" && !e.nativeEvent.isComposing) void handleRename(tag)
                       if (e.key === "Escape") setEditingTag(null)
                     }}
+                    aria-label={`重命名标签 ${tag}`}
                     className="h-8 w-40"
                     autoFocus
                   />
@@ -1164,7 +1165,7 @@ export function SettingsPage() {
           <RecoveryCodeCard code={newRecoveryCode} onDone={() => setNewRecoveryCode(null)} />
         )}
         <p className="text-xs text-muted-foreground">
-          恢复码是忘记密码时找回账号的唯一方式，丢失或泄露时可在这里重新生成（旧码同时作废）
+          恢复码是忘记密码时找回账号的唯一方式，丢失或泄露时可在这里重新生成（旧码同时作废）。用恢复码找回账号会同时作废所有旧 token：其他设备、浏览器扩展、MCP/API 集成需重新登录或重新配置
         </p>
         <p className="text-xs text-muted-foreground">
           退出登录仅清除本机登录状态，云端数据不受影响，重新登录即可找回全部笔记
@@ -1211,6 +1212,12 @@ export function SettingsPage() {
             注意：导出的文件将包含敏感笔记的明文（如密码），请妥善保管，不要上传到不可信的地方。恢复导入时会重新加密存储
           </p>
         )}
+        <p className="text-xs text-muted-foreground" role="status">
+          当前导出口径：
+          {includeSensitive
+            ? "包含敏感内容明文（完整灾备/搬家包）"
+            : "敏感内容已脱敏（正文为占位符、附件不打包）——用作唯一灾备或迁移敏感笔记请先勾选上方「包含敏感内容」"}
+        </p>
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <Button
             onClick={() => void handleExport("backup")}
@@ -1557,12 +1564,14 @@ export function SettingsPage() {
       <Card className="p-4">
         <h2 className="text-sm font-medium">外观</h2>
         <p className="mt-1 text-xs text-muted-foreground">主题设置保存在本机浏览器</p>
-        <div className="mt-2 flex gap-1 rounded-lg bg-secondary p-1">
+        <div role="radiogroup" aria-label="主题" className="mt-2 flex gap-1 rounded-lg bg-secondary p-1">
           {THEME_OPTIONS.map((opt) => {
             const Icon = opt.icon
             return (
               <button
                 key={opt.value}
+                role="radio"
+                aria-checked={theme === opt.value}
                 onClick={() => {
                   setTheme(opt.value)
                   setThemeState(opt.value)
@@ -1581,10 +1590,12 @@ export function SettingsPage() {
           })}
         </div>
         <p className="mt-3 text-xs text-muted-foreground">字号</p>
-        <div className="mt-1 flex gap-1 rounded-lg bg-secondary p-1">
+        <div role="radiogroup" aria-label="字号" className="mt-1 flex gap-1 rounded-lg bg-secondary p-1">
           {FONT_SIZE_OPTIONS.map((opt) => (
             <button
               key={opt.value}
+              role="radio"
+              aria-checked={fontSize === opt.value}
               onClick={() => {
                 setFontSize(opt.value)
                 setFontSizeState(opt.value)

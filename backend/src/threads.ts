@@ -194,28 +194,23 @@ async function deepseekPickNote(
 
 /**
  * DeepSeek: confirm whether two note snippets are the same topic (borderline
- * embedding match). strict 口径用于 todo/data 参与的配对和低带游离配对：只认
- * 「同一件具体的事」，体裁相似（都是缴费/预约/杂务）不算——离线 A/B 中宽口径
- * 会把「转房租」并进「装修量房」（precision 92.3%→96.9%）。
+ * embedding match). 统一严格口径（R192，audit-r191 D-3 校准）：只认「同一件
+ * 具体的事」，体裁相似（都是缴费/预约/杂务）或表面词重叠（窗帘报价 vs 遮光
+ * 窗帘助眠）不算。此前宽口径仅限 idea/collect 配对，加入 R191 硬例后离线
+ * A/B（scripts/thread-eligibility-eval.ts，多次重放）：原口径 pair precision
+ * 74.5% / recall 57.4%（每次一致），全部改严格口径后 precision 78.3%~90.0%
+ *（确认模型对个别边界对非严格确定）/ recall 59.0%，两项均不劣于原口径。数值阈值
+ *（SIM_JOIN/SIM_CONFIRM_FLOOR/LEFTOVER_FLOOR）维持不变：再收紧只损召回不换
+ * 精度（floor 0.62 → 93.3%/45.9%），提 join 0.80 无增益（与严格口径同分）。
  */
-async function deepseekConfirmPair(env: Env, a: string, b: string, strict = false): Promise<boolean> {
+async function deepseekConfirmPair(env: Env, a: string, b: string): Promise<boolean> {
   const n = await deepseekPickNumber(
     env,
-    strict
-      ? "判断下面两条笔记是否在记录同一件具体的事（同一个项目/主题的推进，可以串成同一条线索）。只是体裁相似（都是缴费、都是预约、都是杂务）或泛泛相关不算。是则输出 1，否则输出 0。只输出数字。"
-      : "判断下面两条想法是否属于同一主题（可以串成同一条思考线索）。是则输出 1，否则输出 0。只输出数字。",
-    strict
-      ? `笔记A：${a.slice(0, 400)}\n\n笔记B：${b.slice(0, 400)}`
-      : `想法A：${a.slice(0, 400)}\n\n想法B：${b.slice(0, 400)}`,
+    "判断下面两条笔记是否在记录同一件具体的事（同一个项目/主题的推进，可以串成同一条线索）。只是体裁相似（都是缴费、都是预约、都是杂务）或泛泛相关不算。是则输出 1，否则输出 0。只输出数字。",
+    `笔记A：${a.slice(0, 400)}\n\n笔记B：${b.slice(0, 400)}`,
     1
   );
   return n === 1;
-}
-
-/** strict 确认口径的适用面：新开放的 todo/data 类别参与的任何配对。 */
-function pairNeedsStrictConfirm(catA: string | null, catB: string | null): boolean {
-  const strictCat = (c: string | null) => c === "todo" || c === "data";
-  return strictCat(catA) || strictCat(catB);
 }
 
 /**
@@ -336,12 +331,7 @@ export async function clusterNote(
           inBand.sort((a, b) => b.sim - a.sim);
           for (const cand of inBand.slice(0, CONFIRM_TOP_K)) {
             if (
-              await deepseekConfirmPair(
-                env,
-                note.title || note.content,
-                cand.title || cand.content,
-                pairNeedsStrictConfirm(note.category, cand.category)
-              )
+              await deepseekConfirmPair(env, note.title || note.content, cand.title || cand.content)
             ) {
               joined = cand;
               break;
@@ -354,7 +344,7 @@ export async function clusterNote(
           // 2→0 全部来自这一段），已有线索不参与，避免低带误并扩散。
           lowBandLoose.sort((a, b) => b.sim - a.sim);
           for (const cand of lowBandLoose.slice(0, CONFIRM_TOP_K)) {
-            if (await deepseekConfirmPair(env, note.title || note.content, cand.title || cand.content, true)) {
+            if (await deepseekConfirmPair(env, note.title || note.content, cand.title || cand.content)) {
               joined = cand;
               break;
             }

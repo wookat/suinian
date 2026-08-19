@@ -568,11 +568,14 @@ export async function loadCategoryCorrections(db: D1Database, userId: string): P
 
 const LEDGER_MONEY_RE = /^[¥￥]?\d+(?:\.\d{1,2})?元?$/;
 
-/** 拆一行 CSV 字段（支持双引号包裹与 "" 转义），分隔符：半/全角逗号、制表符、分号。 */
+/** 拆一行 CSV 字段（支持双引号包裹与 "" 转义），分隔符：半/全角逗号、制表符、
+ * 分号；整行无显式分隔符且未用引号、末段是金额时退回按最后一段空白切分
+ *（「早餐豆浆油条 12.5」式空格台账与显式分隔符走同一识别口径，R192 P1）。 */
 export function splitCsvFields(line: string): string[] {
   const fields: string[] = [];
   let cur = "";
   let inQuote = false;
+  let sawQuote = false;
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
     if (inQuote) {
@@ -584,12 +587,22 @@ export function splitCsvFields(line: string): string[] {
       } else cur += ch;
     } else if (ch === '"') {
       inQuote = true;
+      sawQuote = true;
     } else if (ch === "," || ch === "，" || ch === "\t" || ch === ";" || ch === "；") {
       fields.push(cur.trim());
       cur = "";
     } else cur += ch;
   }
   fields.push(cur.trim());
+  if (fields.length === 1 && !sawQuote) {
+    // 空白退化只认「……<空白>金额」形态的数据行，切成 [名目, 金额] 两列：
+    // 名目本身可含空格（说明前缀/多词品名），非数据行（说明/表头，末段不是
+    // 金额）保持单字段，仍走两端剥离与表头跳过逻辑，不会被当成假数据行
+    const ws = fields[0].split(/\s+/).filter((f) => f.length > 0);
+    if (ws.length > 1 && LEDGER_MONEY_RE.test(ws[ws.length - 1])) {
+      return [ws.slice(0, -1).join(" "), ws[ws.length - 1]];
+    }
+  }
   return fields;
 }
 
