@@ -398,9 +398,10 @@ export interface FinanceExtremeQuery {
 
 // 验证式金额前提（R200，audit-r199 P2-1）：「是 N 元吗 / 是不是 N 块」。
 // 语气助词或「是不是/是否」二选一必须在场，否则「第 2 大」这类序数里的
-// 数字不会被误认成前提。币种词缺省视为与记录同币种比较。
+// 数字不会被误认成前提。「是否为/是否是/是不是为 N 块钱」这类双动词变体
+// 同样是验证式问法（R202，audit-r201 P3-1）。币种词缺省视为与记录同币种比较。
 const EXTREME_PREMISE_RE =
-  /(是不是|是否|是|为)?\s*(\d+(?:\.\d+)?)\s*(元|块钱?|人民币|rmb|cny|美元|美金|usd|日元|jpy|欧元|eur|英镑|gbp|港[币元]|hkd|韩元|krw)?\s*(?:钱)?\s*([吗么嘛吧])?/gi;
+  /(是不是|是否|是|为)?[是为]?\s*(\d+(?:\.\d+)?)\s*(元|块钱?|人民币|rmb|cny|美元|美金|usd|日元|jpy|欧元|eur|英镑|gbp|港[币元]|hkd|韩元|krw)?\s*(?:钱)?\s*([吗么嘛吧])?/gi;
 
 const PREMISE_CURRENCY: Record<string, string> = {
   元: "CNY", 块: "CNY", 块钱: "CNY", 人民币: "CNY", rmb: "CNY", cny: "CNY",
@@ -511,7 +512,9 @@ const EXTREME_STRIP_RES: RegExp[] = [
 // 剥词残渣 fail-safe（R190 P1-1，audit-r189 §6.2）：纯由计量/排序/程度功能字
 // 组成的残渣（「单笔」「按排」这类）不是名词性主题，视为无主题限定——绝不
 // 注入 WHERE 后零命中答「没找到」（真值明明在库里）。
-const EXTREME_FUNCTIONAL_RESIDUE_RE = /^[单每逐笔项次个把按排序名行列第倒数高低大小多少贵狠便宜是的]+$/;
+// 「否/为」是「是否为 N 块钱」验证式问法（R202 P3-1）剥掉金额后的系词残渣，
+// 不是主题；真主题词（如「华为手机」）因含其他实义字不受影响
+const EXTREME_FUNCTIONAL_RESIDUE_RE = /^[单每逐笔项次个把按排序名行列第倒数高低大小多少贵狠便宜是否为的]+$/;
 
 // 金额 token 不是主题词（R200，audit-r199 P2-1）：「最贵的一笔支出是 400 元吗」
 // 的「400元」注入 WHERE 会让确定性路线自己否证自己（正文「学费 400」不含
@@ -571,7 +574,15 @@ export function buildFinanceExtremeAnswer(
       ? `币种 ${shortCurrencies.map((s) => `${s.currency} 已识别金额的单笔${label}仅 ${s.count} 笔`).join("、")}，不存在第 ${rank} 名`
       : "";
   if (rows.length === 0) {
-    const extras = [shortNote, ledgerNote, unknownAmount > 0 ? `另有 ${unknownAmount} 笔${label}未识别出金额` : ""].filter(Boolean);
+    // 时间口径明示（R202，audit-r201 P3-3）：带时间短语却零命中时，说明范围
+    // 按记录时间划定——「本月最大收入」查不到正文写「三月」的当月新笔记时，
+    // 用户能看出口径差异而不是以为数据丢了
+    const extras = [
+      shortNote,
+      ledgerNote,
+      unknownAmount > 0 ? `另有 ${unknownAmount} 笔${label}未识别出金额` : "",
+      phrase ? "时间范围按笔记记录时间划定，不按正文里写的时间" : "",
+    ].filter(Boolean);
     if (rank > 1 && shortCurrencies.length > 0) {
       return `${scope}已识别出金额的单笔${label}不足 ${rank} 笔，不存在${kindLabel}的一笔。（${extras.join("；")}。）`;
     }

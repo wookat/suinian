@@ -967,6 +967,29 @@ async function ingestKfFile(
   }
 }
 
+// ---- public beacon: SW 注册失败上报（R202，audit-r201 §1）----
+// 只写结构化日志（Workers 可观测性里按 message 聚合失败原因分布），不落库、
+// 不接收任何用户内容或凭据；注册失败时页面多半没有可用 token，故为公开
+// 端点，按 IP 限频防刷（复用 auth 同一 D1 限频器）。
+app.post("/api/metrics/sw-error", async (c) => {
+  if (!(await checkRateLimit(c.env.DB, "sw_error_report", [clientIp(c.req.raw)]))) {
+    return c.json({ error: "too many reports" }, 429);
+  }
+  const body = await c.req.json<{ name?: unknown; message?: unknown; retry?: unknown }>().catch(() => null);
+  const clean = (v: unknown, max: number) =>
+    typeof v === "string" ? v.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, max) : "";
+  console.error(
+    "sw register error",
+    JSON.stringify({
+      name: clean(body?.name, 80),
+      message: clean(body?.message, 300),
+      retry: typeof body?.retry === "number" && Number.isFinite(body.retry) ? body.retry : null,
+      ua: clean(c.req.header("user-agent"), 200),
+    })
+  );
+  return c.json({ ok: true });
+});
+
 // ---- auth ----
 app.use("/api/*", async (c, next) => {
   const auth = c.req.header("authorization") || "";
