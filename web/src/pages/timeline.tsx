@@ -1045,6 +1045,7 @@ export function TimelinePage() {
           <button
             key={t.value}
             onClick={() => setCategory(t.value)}
+            aria-pressed={category === t.value}
             className={cn(
               "shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors",
               category === t.value

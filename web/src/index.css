@@ -19,7 +19,8 @@
   --card-foreground: oklch(0.24 0.01 260);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.24 0.01 260);
-  --primary: oklch(0.55 0.14 155);
+  /* L=0.52：白字（--primary-foreground 0.99）对比度 5.0:1 ≥ WCAG AA 4.5:1 */
+  --primary: oklch(0.52 0.14 155);
   --primary-foreground: oklch(0.99 0 0);
   --secondary: oklch(0.96 0.004 90);
   --secondary-foreground: oklch(0.32 0.01 260);
