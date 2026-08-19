@@ -6,9 +6,10 @@
 #   密码登录时预先导出 SSHPASS 并确保本机装有 sshpass（脚本自动使用）。
 #
 # 首次部署需在服务器 /etc/suinian-bridge.env 写入（脚本会在缺失时用环境变量
-# SUINIAN_API_URL / SUINIAN_TOKEN 生成，不落仓库明文）：
+# SUINIAN_API_URL / SUINIAN_TOKEN / SUINIAN_BRIDGE_TOKEN 生成，不落仓库明文）：
 #   SUINIAN_API_URL=https://suinian-api.zalize.com
 #   SUINIAN_TOKEN=sn_xxx
+#   SUINIAN_BRIDGE_TOKEN=与 worker secret BRIDGE_TOKEN 一致（专用心跳凭证，R194 P2-5）
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -49,7 +50,7 @@ REMOTE
 
 if [ -n "${SUINIAN_API_URL:-}" ] && [ -n "${SUINIAN_TOKEN:-}" ]; then
   echo "==> 写入 /etc/suinian-bridge.env（600 权限）"
-  printf 'SUINIAN_API_URL=%s\nSUINIAN_TOKEN=%s\nLOG_LEVEL=info\nREPLY_INTERVAL_MS=3000\n' "$SUINIAN_API_URL" "$SUINIAN_TOKEN" \
+  printf 'SUINIAN_API_URL=%s\nSUINIAN_TOKEN=%s\nSUINIAN_BRIDGE_TOKEN=%s\nLOG_LEVEL=info\nREPLY_INTERVAL_MS=3000\n' "$SUINIAN_API_URL" "$SUINIAN_TOKEN" "${SUINIAN_BRIDGE_TOKEN:-}" \
     | $SSH 'cat > /etc/suinian-bridge.env && chmod 600 /etc/suinian-bridge.env'
 fi
 

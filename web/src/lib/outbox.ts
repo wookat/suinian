@@ -110,7 +110,7 @@ export async function enqueueNote(payload: CreateNotePayload): Promise<boolean> 
   }
 }
 
-/** 离线录音进队列；入队成功返回 true。 */
+/** 离线媒体（图片/文件/录音）进队列；入队成功返回 true。 */
 export async function enqueueMedia(blob: Blob, type: MediaOutboxItem["type"], fileName: string): Promise<boolean> {
   try {
     await tx("readwrite", (s) => s.add({ blob, type, fileName, queued_at: new Date().toISOString(), client_id: crypto.randomUUID() }), MEDIA_STORE)

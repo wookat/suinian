@@ -73,6 +73,10 @@ export const NOTES: EvalNote[] = [
   N("led5", 21, "expense", "日用品台账", "项目\t金额\n洗衣液\t89\n纸巾\t144", ["记账"]),
   N("led6", 24, "expense", "咖啡耗材台账", "咖啡豆;98\n滤纸;25", ["记账"]),
   N("led7", 26, "expense", "办公采购台账", "打印纸,45\n墨盒 268\n订书机\t37", ["记账"]),
+  // —— 含退款/负数行台账（R194：audit-r193 P1 锁定）——一行退款曾让整表
+  // 不成台账，合计 454 冒充「第 2 大的一笔支出」（真值 155）；带退款行
+  // 的合计 420.5 同样绝不冒充单笔参与极值/序数排名。
+  N("led8", 28, "expense", "含退款台账", "早餐豆浆油条,12.5\n请客吃饭,155\n快递退款,-33.5\n团建烧烤,286.5", ["记账"]),
   // —— 图片描述（模拟 vision 提取结果） ——
   N("img1", 18, "data", "白板照片：Q3 目标", "白板照片：Q3 目标——1. 上线快闪店预约小程序 2. 跑通咖啡豆供应链 3. 做 3 场市集活动", ["咖啡馆"]),
   // —— 敏感（绝不能出现在召回/回答里） ——
@@ -875,5 +879,26 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAny: ["exp1"],
     expectAnswerContains: ["399"],
     forbidAnswerContains: ["没有找到记账记录"],
+  },
+
+  // —— R194（audit-r193 P1）：含退款行台账 × 极值/序数组合锁定——
+  // 生产实录：退款行让整表逃逸台账识别，合计 454 被肯定语气报成
+  // 「第 2 大的一笔支出」；收口后带退款台账合计（420.5）绝不参与排名。
+  {
+    id: "q134",
+    category: "财务极值",
+    question: "第 2 大的一笔支出是哪笔？",
+    expectAll: ["exp1"],
+    expectAnswerContains: ["399", "数据库精确查询"],
+    forbidAnswerContains: ["420.5", "454"],
+  },
+  {
+    id: "q135",
+    category: "财务极值",
+    question: "我最贵的一笔支出是多少钱",
+    expectAll: ["nz20"],
+    expectAnswerContains: ["549"],
+    forbidAnswerContains: ["420.5", "454"],
+    holdout: true,
   },
 ];

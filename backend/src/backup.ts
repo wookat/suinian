@@ -301,6 +301,13 @@ export interface RestoreStats {
   notes_skipped: number;
   /** 脱敏备份里的「[已加密内容]」占位壳：无明文可恢复，跳过不导入（R112 P2-2） */
   sensitive_skipped: number;
+  /** 备份里的历史周报/月报（reports.json）导入条数（R194 P2-1） */
+  reports_imported: number;
+  /** 同周期已存在或字段无效而跳过的报告条数 */
+  reports_skipped: number;
+  /** 备份里的线索条数：线索是笔记的派生归组（新笔记 id 已变），不直接导入，
+   * 由后台聚类重建；显式上报而非静默丢弃（R194 P2-1） */
+  threads_rebuilt: number;
   media_imported: number;
   media_skipped: number;
   /** 单个文件超过大小上限，主动跳过未导入（区别于真正的导入失败） */
@@ -361,6 +368,9 @@ export async function restoreBackup(
     notes_imported: 0,
     notes_skipped: 0,
     sensitive_skipped: 0,
+    reports_imported: 0,
+    reports_skipped: 0,
+    threads_rebuilt: 0,
     media_imported: 0,
     media_skipped: 0,
     media_oversized: 0,
@@ -384,7 +394,7 @@ export async function restoreBackup(
     const name = file.name;
     const isNotes = name === "notes.json";
     const isMedia = name.startsWith("media/");
-    if (!isNotes && !isMedia) return;
+    if (!isNotes && !isMedia && name !== "reports.json" && name !== "threads.json") return;
     if (isMedia && file.originalSize !== undefined && file.originalSize > MAX_MEDIA_ENTRY_BYTES) {
       stats.media_oversized++;
       return;
@@ -516,6 +526,39 @@ export async function restoreBackup(
     return null;
   };
 
+  // 历史周报/月报是用户可见的成品（过去周期不会重新生成），恢复时直接导入；
+  // 同周期（week_start + period）已有报告时跳过，重复恢复幂等（R194 P2-1）
+  const processReports = async (data: Uint8Array): Promise<void> => {
+    const parsed = safeParse<unknown>(strFromU8(data));
+    if (!Array.isArray(parsed)) return;
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    for (const raw of parsed) {
+      const r = raw as Record<string, unknown>;
+      const weekStart = typeof r?.week_start === "string" && DATE_RE.test(r.week_start) ? r.week_start : null;
+      const period = r?.period === "month" ? "month" : r?.period === "week" || r?.period === undefined ? "week" : null;
+      const md = typeof r?.content_md === "string" && r.content_md.length > 0 ? r.content_md : null;
+      if (!weekStart || !period || !md) {
+        stats.reports_skipped++;
+        continue;
+      }
+      const existing = await env.DB.prepare(
+        "SELECT id FROM weekly_reports WHERE user_id = ? AND week_start = ? AND period = ?"
+      )
+        .bind(userId, weekStart, period)
+        .first<{ id: string }>();
+      if (existing) {
+        stats.reports_skipped++;
+        continue;
+      }
+      await env.DB.prepare(
+        "INSERT INTO weekly_reports (id, user_id, week_start, period, content_md) VALUES (?, ?, ?, ?, ?)"
+      )
+        .bind(crypto.randomUUID(), userId, weekStart, period, md.slice(0, 100_000))
+        .run();
+      stats.reports_imported++;
+    }
+  };
+
   const storeMedia = async (entry: ZipEntry): Promise<void> => {
     // 每个被跳过的媒体只在这里计一次（R118 P2：笔记循环不再预计，
     // 避免重复恢复时 media_skipped 翻倍）：父笔记被跳过/重复的媒体没有
@@ -557,6 +600,13 @@ export async function restoreBackup(
         // media that arrived before notes.json (foreign zip ordering)
         while (pendingMedia.length > 0) await storeMedia(pendingMedia.shift()!);
         pendingBytes = 0;
+      } else if (entry.name === "reports.json") {
+        await processReports(entry.data);
+      } else if (entry.name === "threads.json") {
+        // 线索行指向旧笔记 id，恢复后 id 全部重发，直接导入只会产生孤儿组；
+        // 计数上报「将由后台聚类重建」，不再静默丢弃
+        const parsed = safeParse<unknown>(strFromU8(entry.data));
+        if (Array.isArray(parsed)) stats.threads_rebuilt = parsed.length;
       } else if (!notesSeen) {
         pendingBytes += entry.data.length;
         if (pendingBytes > MAX_PENDING_MEDIA_BYTES) {
