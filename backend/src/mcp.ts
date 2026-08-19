@@ -103,7 +103,7 @@ export function buildMcpServer(api: ApiCall): McpServer {
           .optional()
           .describe("限定分类（可选）"),
         tag: z.string().optional().describe("限定标签（可选）"),
-        source: z.string().optional().describe('限定来源（可选：如 "web" / "api" / "mcp" / "extension" / "wechat"）'),
+        source: z.string().optional().describe('限定来源（可选：如 "web" / "api" / "mcp" / "extension"（浏览器剪藏，用户说「剪藏/收藏的网页文章」时用这个）/ "wechat"）'),
         from: z.string().optional().describe('创建时间下限（可选，"YYYY-MM-DD" 或 "YYYY-MM-DD HH:mm"，含当天/当刻）'),
         to: z.string().optional().describe('创建时间上限（可选，同 from 格式，含当天/当刻）'),
         limit: z.number().int().min(1).max(50).optional().describe("最多返回条数，默认 20"),
