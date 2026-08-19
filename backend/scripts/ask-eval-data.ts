@@ -77,6 +77,10 @@ export const NOTES: EvalNote[] = [
   // 不成台账，合计 454 冒充「第 2 大的一笔支出」（真值 155）；带退款行
   // 的合计 420.5 同样绝不冒充单笔参与极值/序数排名。
   N("led8", 28, "expense", "含退款台账", "早餐豆浆油条,12.5\n请客吃饭,155\n快递退款,-33.5\n团建烧烤,286.5", ["记账"]),
+  // —— 单行散文式台账（R198：audit-r197 P1 锁定）——散文句内嵌明细+
+  // 退款负数行+合计；「退款」词面绝不把整条翻成收入，合计 224 绝不
+  // 冒充单笔参与极值/序数排名，行级问答按命中行金额作答。
+  N("led9", 27, "expense", "周末出行开销", "周末出行开销：车费 46，门票 120，午餐 88，纪念品退款 -30，合计 224", ["记账"]),
   // —— 图片描述（模拟 vision 提取结果） ——
   N("img1", 18, "data", "白板照片：Q3 目标", "白板照片：Q3 目标——1. 上线快闪店预约小程序 2. 跑通咖啡豆供应链 3. 做 3 场市集活动", ["咖啡馆"]),
   // —— 敏感（绝不能出现在召回/回答里） ——
@@ -900,5 +904,111 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAnswerContains: ["549"],
     forbidAnswerContains: ["420.5", "454"],
     holdout: true,
+  },
+
+  // —— R198（audit-r197 P1）：单行散文式台账 × 极值锁定——散文句合计
+  // 224 绝不冒充单笔参与极值排名（若泄漏，224 < 260 会顶掉真值）。
+  {
+    id: "q136",
+    category: "财务极值",
+    question: "金额最小的一笔支出是多少",
+    expectAll: ["exp2"],
+    expectAnswerContains: ["260"],
+    forbidAnswerContains: ["224"],
+  },
+
+  // —— R198（audit-r197 §3）：短问法「X多少钱」数据门控路由——主题词
+  // 命中财务笔记标题/正文（含台账行名目）才走确定性子集答案，行级
+  // 问答按命中行金额作答；零命中回落普通召回，绝不落全账合计兜底。
+  {
+    id: "q137",
+    category: "财务聚合",
+    question: "门票多少钱？",
+    expectAny: ["led9"],
+    expectAnswerContains: ["120"],
+    forbidAnswerContains: ["224"],
+  },
+  {
+    id: "q138",
+    category: "财务聚合",
+    question: "团建烧烤多少钱？",
+    expectAny: ["led4"],
+    expectAnswerContains: ["286.5"],
+    forbidAnswerContains: ["454"],
+  },
+  {
+    id: "q139",
+    category: "财务聚合",
+    question: "墨盒多少钱",
+    expectAny: ["led7"],
+    expectAnswerContains: ["268"],
+    holdout: true,
+  },
+  {
+    id: "q140",
+    category: "财务聚合",
+    question: "快递退款多少？",
+    expectAny: ["led8"],
+    expectAnswerContains: ["33.5"],
+    holdout: true,
+  },
+  // 零命中对照（audit-r197 §3）：库里无「杂粮米」，绝不触发全账合计兜底
+  {
+    id: "q141",
+    category: "财务聚合",
+    question: "杂粮米多少钱？",
+    forbidAnswerContains: ["口径与周报/月报一致"],
+  },
+  {
+    id: "q142",
+    category: "财务聚合",
+    question: "打印纸多少钱？",
+    expectAny: ["led7"],
+    expectAnswerContains: ["45"],
+    forbidAnswerContains: ["350"],
+  },
+  {
+    id: "q143",
+    category: "财务聚合",
+    question: "跑鞋多少钱",
+    expectAny: ["nz20"],
+    expectAnswerContains: ["549"],
+    holdout: true,
+  },
+  // 零命中对照 2：库里无「空气净化器」，绝不触发全账合计兜底
+  {
+    id: "q144",
+    category: "财务聚合",
+    question: "空气净化器多少钱？",
+    forbidAnswerContains: ["口径与周报/月报一致"],
+    holdout: true,
+  },
+
+  // —— R198（audit-r197 §3 第 5 点）：台账行级极值路由——主题词命中台账
+  // 标题/行名目时按解析出的明细行金额比较作答，合计行绝不参与。
+  {
+    id: "q145",
+    category: "财务极值",
+    question: "餐饮台账里最贵的一项是什么？",
+    expectAny: ["led4"],
+    expectAnswerContains: ["团建烧烤", "286.5"],
+    forbidAnswerContains: ["454"],
+  },
+  {
+    id: "q146",
+    category: "财务极值",
+    question: "含退款台账里最便宜的明细是哪项？",
+    expectAny: ["led8"],
+    expectAnswerContains: ["12.5"],
+    forbidAnswerContains: ["420.5", "33.5"],
+    holdout: true,
+  },
+  {
+    id: "q147",
+    category: "财务极值",
+    question: "周末出行开销里最贵的一项是什么",
+    expectAny: ["led9"],
+    expectAnswerContains: ["门票", "120"],
+    forbidAnswerContains: ["224"],
   },
 ];

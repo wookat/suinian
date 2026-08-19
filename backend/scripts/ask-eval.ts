@@ -153,7 +153,9 @@ async function waitForEmbeddings(): Promise<void> {
  * (财务极值/聚合类问题依赖 amount 列，triage 队列慢时会整类误判「无金额」). */
 async function waitForAmounts(idByKey: Map<string, string>): Promise<void> {
   const financeKeys = NOTES.filter((n) => n.category === "expense" || n.category === "income").map((n) => n.key);
-  for (let i = 0; i < 60; i++) {
+  // 金额由 */10 分钟的复判 cron 补齐（导入后手动定分类会走 needs_retriage
+  // 队列），等待窗口必须覆盖一个完整 cron 周期，否则整类误判「无金额」
+  for (let i = 0; i < 150; i++) {
     await sleep(5000);
     const res: { notes: (NoteJson & { amount?: number | null })[] } = await api("/api/notes?limit=100");
     const byId = new Map(res.notes.map((n) => [n.id, n]));

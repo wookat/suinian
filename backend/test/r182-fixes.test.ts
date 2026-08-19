@@ -45,7 +45,7 @@ describe("financeExtremeIntent ordinal (R182 P1-2)", () => {
   });
 
   it("倒数第二贵 = 第二便宜 (min rank 2)", () => {
-    expect(financeExtremeIntent("倒数第二贵的一笔支出")).toEqual({ kind: "min", direction: "expense", rank: 2 });
+    expect(financeExtremeIntent("倒数第二贵的一笔支出")).toEqual({ kind: "min", direction: "expense", rank: 2, reversedAdj: "贵" });
   });
 
   it("routes 第二便宜 to min rank 2", () => {

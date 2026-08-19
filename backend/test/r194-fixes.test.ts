@@ -22,7 +22,7 @@ describe("带空格序数问法收口 (R194 P1)", () => {
     expect(financeExtremeIntent("第 2 大的一笔支出是哪笔？")).toEqual({ kind: "max", direction: "expense", rank: 2 });
   });
   it("倒数第 3 便宜", () => {
-    expect(financeExtremeIntent("倒数第 3 便宜的支出是什么")).toEqual({ kind: "max", direction: "expense", rank: 3 });
+    expect(financeExtremeIntent("倒数第 3 便宜的支出是什么")).toEqual({ kind: "max", direction: "expense", rank: 3, reversedAdj: "便宜" });
   });
   it("不带空格行为不变", () => {
     expect(financeExtremeIntent("第2大的一笔支出是哪笔")).toEqual({ kind: "max", direction: "expense", rank: 2 });

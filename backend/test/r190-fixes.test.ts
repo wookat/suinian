@@ -34,7 +34,7 @@ describe("financeExtremeIntent R189 实测缝隙 (R190 P1-1)", () => {
   it("既有问法不回归", () => {
     expect(financeExtremeIntent("最贵的一笔花销是什么")).toEqual({ kind: "max", direction: "expense", rank: 1 });
     expect(financeExtremeIntent("花得最多的一笔是哪个")).toEqual({ kind: "max", direction: "expense", rank: 1 });
-    expect(financeExtremeIntent("倒数第二贵的支出")).toEqual({ kind: "min", direction: "expense", rank: 2 });
+    expect(financeExtremeIntent("倒数第二贵的支出")).toEqual({ kind: "min", direction: "expense", rank: 2, reversedAdj: "贵" });
     expect(financeExtremeIntent("最大的一笔收入是哪笔")).toEqual({ kind: "max", direction: "income", rank: 1 });
     expect(financeExtremeIntent("最长的一条笔记是哪条")).toBeNull();
     expect(financeExtremeIntent("咖啡一共花了多少")).toBeNull();
