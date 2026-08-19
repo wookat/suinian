@@ -37,6 +37,22 @@ describe("验证式金额前提双动词变体 (R202 P3-1)", () => {
   });
 });
 
+describe("「最大收入/最小支出」无「一笔」的极值问法 (R202 生产 QA 回归修复)", () => {
+  it("「本月最大收入是 4500 元吗」走精确极值路径且无主题词残渣", () => {
+    const q = financeExtremeIntent("本月最大收入是 4500 元吗");
+    expect(q).toMatchObject({ kind: "max", direction: "income", rank: 1 });
+    expect(q?.premise).toEqual({ amount: 4500, currency: "CNY" });
+    expect(financeExtremeTopicTerms("本月最大收入是 4500 元吗")).toBeNull();
+  });
+  it("「最小的支出是哪笔」同族收口", () => {
+    expect(financeExtremeIntent("最小的支出是哪笔")).toMatchObject({ kind: "min", direction: "expense", rank: 1 });
+    expect(financeExtremeTopicTerms("最小的支出是哪笔")).toBeNull();
+  });
+  it("非财务的「最高/最大」不误收（歧义保护不回归）", () => {
+    expect(financeExtremeIntent("最高的山是哪座")).toBeNull();
+  });
+});
+
 describe("财务极值零命中的时间口径明示 (R202 P3-3)", () => {
   const q = financeExtremeIntent("本月最大的一笔收入是 4500 元吗")!;
   it("带时间短语零命中时明示记录时间口径", () => {

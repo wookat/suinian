@@ -36,6 +36,8 @@ description: How to run and test suinian (backend Worker + web SPA) fully locall
 - Launch the emulator with capped resources or the VM OOM-kills qemu (also killing VNC): `emulator -avd qa156 -memory 1536 -cores 2 -gpu swiftshader_indirect -no-audio`.
 - Dismiss stylus-tutorial / "System UI isn't responding" overlays with `adb shell input keyevent 4` (BACK) rather than clicking in the emulator window.
 - Drive the app via adb, not host clicks: `adb shell uiautomator dump /sdcard/ui.xml` to find bounds/content-desc, `adb shell input tap X Y`, `adb shell input text 'word%sword'` (spaces must be `%s`; CJK is impossible via `input text` — use ASCII content or skip).
+- Android account deletion (设置 → 危险操作 → 永久注销账号) requires typing CJK 「注销」; `adb shell cmd clipboard set-text` is unsupported on the emulator image ("No shell command implementation"), so the dialog can't be completed via adb. Instead extract the token from the debug app and call the API: `adb shell run-as com.zalize.suinian cat files/datastore/settings.preferences_pb` — the token is the 48-hex string after the protobuf length bytes (strings output shows `2*<49 chars>`; drop the leading `*0` framing, verify with GET /api/auth/me) — then `curl -X DELETE .../api/auth/me`.
+- Emulator screenshots (`adb exec-out screencap -p`) come out 743px wide for a 1080x2280 device: multiply screenshot coords by ~1.4535 for `input tap`.
 - Login screen tabs: 注册/登录/Token/找回; capture EditText is the top box, send button content-desc is 记下.
 
 ## Production DB verification (learned R156)

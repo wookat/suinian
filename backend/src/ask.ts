@@ -486,8 +486,10 @@ export function financeExtremeIntent(question: string): FinanceExtremeQuery | nu
   const p = premise ? { premise } : {};
   const ord = financeOrdinal(question, sortM ? (sortM[1] && /[低小]/.test(sortM[1]) ? "min" : "max") : null);
   if (ord) return { kind: ord.kind, direction, rank: ord.rank, ...(ord.reversedAdj ? { reversedAdj: ord.reversedAdj } : {}), ...p };
-  if (/最贵|最高|最大的?一?[笔项]|金额最[大高]|花得?最多|花钱最[狠多猛]|最狠的?一[笔次]|数额最大/.test(question)) return { kind: "max", direction, rank: 1, ...p };
-  if (/最便宜|最低|最小的?一?[笔项]|金额最[小低]|花得?最少|数额最小/.test(question)) return { kind: "min", direction, rank: 1, ...p };
+  // 「最大收入/最小支出」这类极值词直接修饰财务名词（无「一笔」）同样是
+  // 单笔极值问法（R202：「本月最大收入是 4500 元吗」漏判落 RAG 自相矛盾）
+  if (/最贵|最高|最大的?一?[笔项]|最[大高]的?(?:收入|进账|入账|支出|消费|开销|花销|花费)|金额最[大高]|花得?最多|花钱最[狠多猛]|最狠的?一[笔次]|数额最大/.test(question)) return { kind: "max", direction, rank: 1, ...p };
+  if (/最便宜|最低|最小的?一?[笔项]|最[小低]的?(?:收入|进账|入账|支出|消费|开销|花销|花费)|金额最[小低]|花得?最少|数额最小/.test(question)) return { kind: "min", direction, rank: 1, ...p };
   return null;
 }
 
@@ -514,7 +516,7 @@ const EXTREME_STRIP_RES: RegExp[] = [
 // 注入 WHERE 后零命中答「没找到」（真值明明在库里）。
 // 「否/为」是「是否为 N 块钱」验证式问法（R202 P3-1）剥掉金额后的系词残渣，
 // 不是主题；真主题词（如「华为手机」）因含其他实义字不受影响
-const EXTREME_FUNCTIONAL_RESIDUE_RE = /^[单每逐笔项次个把按排序名行列第倒数高低大小多少贵狠便宜是否为的]+$/;
+const EXTREME_FUNCTIONAL_RESIDUE_RE = /^[单每逐笔项次个把按排序名行列第倒数最高低大小多少贵狠便宜是否为的来源]+$/;
 
 // 金额 token 不是主题词（R200，audit-r199 P2-1）：「最贵的一笔支出是 400 元吗」
 // 的「400元」注入 WHERE 会让确定性路线自己否证自己（正文「学费 400」不含
