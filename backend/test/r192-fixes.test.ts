@@ -17,10 +17,16 @@ import {
 // ---- P1-1: 空格分隔台账 ----
 
 describe("splitCsvFields 空白退化切分 (R192 P1)", () => {
-  it("无显式分隔符的行按连续空白切分", () => {
+  it("无显式分隔符、末段是金额的行按最后一段空白切成 [名目, 金额]", () => {
     expect(splitCsvFields("早餐豆浆油条 12.5")).toEqual(["早餐豆浆油条", "12.5"]);
-    expect(splitCsvFields("午饭  盖浇饭   21")).toEqual(["午饭", "盖浇饭", "21"]);
+    expect(splitCsvFields("午饭  盖浇饭   21")).toEqual(["午饭 盖浇饭", "21"]);
     expect(splitCsvFields("打车\u3000368.5")).toEqual(["打车", "368.5"]);
+  });
+
+  it("末段不是金额的行保持单字段（说明/表头行不被切成假数据行）", () => {
+    expect(splitCsvFields("大件采购记录")).toEqual(["大件采购记录"]);
+    expect(splitCsvFields("[QA-R79] 大件采购记录")).toEqual(["[QA-R79] 大件采购记录"]);
+    expect(splitCsvFields("项目 金额")).toEqual(["项目 金额"]);
   });
 
   it("有显式分隔符的行不受影响", () => {
@@ -51,6 +57,11 @@ describe("parseLedgerTable 分隔符全变体 (R192 P1)", () => {
   it("空格台账带标题行/表头照常解析", () => {
     expect(parseLedgerTable("本周餐饮台账\n早餐豆浆油条 12.5\n请客吃饭 155\n团建烧烤 286.5")).toEqual(EXPECT);
     expect(parseLedgerTable("项目 金额\n早餐豆浆油条 12.5\n请客吃饭 155\n团建烧烤 286.5")).toEqual(EXPECT);
+  });
+  it("标题/说明行本身含空格（如 QA 前缀、多词说明）不破坏表格识别", () => {
+    expect(parseLedgerTable("[QA-R79] 本周餐饮台账\n早餐豆浆油条 12.5\n请客吃饭 155\n团建烧烤 286.5")).toEqual(EXPECT);
+    expect(parseLedgerTable("[QA-R79] 大件采购记录\n项目,金额\n显示器,700\n办公椅,500")).toEqual({ amount: 1200, rows: 2 });
+    expect(parseLedgerTable("这周的开销 记一下\n买菜,44\n地铁,33")).toEqual({ amount: 77, rows: 2 });
   });
   it("空格台账带合计行取合计值", () => {
     expect(parseLedgerTable("早餐 12.5\n午饭 21\n合计 33.5")).toEqual({ amount: 33.5, rows: 2 });
