@@ -74,7 +74,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, isLedgerAggregateNote, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -3185,29 +3185,40 @@ app.post("/api/ask", async (c) => {
       : (financeTopicTerms(intentQuestion) ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeTopicTerms(recallQuestion)));
   if (subsetTerms) {
     const sRange = (financeTopicTerms(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
-    const likeOrs = subsetTerms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ");
-    const sConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')", `(${likeOrs})`];
-    const sBinds: unknown[] = [userId, ...subsetTerms.flatMap((t) => Array(3).fill(likeContains(t)) as string[])];
-    if (sRange?.start) {
-      sConds.push("created_at >= ?");
-      sBinds.push(sRange.start);
+    // 关键词降级重试（R192 P2-2）：整串零命中时剥残片/拆词再试一次，
+    // 答案口径如实标注实际命中的关键词
+    const degraded = degradeFinanceSubsetTerms(subsetTerms);
+    let usedTerms = subsetTerms;
+    let srows: NoteRow[] = [];
+    for (const terms of degraded ? [subsetTerms, degraded] : [subsetTerms]) {
+      const likeOrs = terms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ");
+      const sConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')", `(${likeOrs})`];
+      const sBinds: unknown[] = [userId, ...terms.flatMap((t) => Array(3).fill(likeContains(t)) as string[])];
+      if (sRange?.start) {
+        sConds.push("created_at >= ?");
+        sBinds.push(sRange.start);
+      }
+      if (sRange?.end) {
+        sConds.push("created_at < ?");
+        sBinds.push(sRange.end);
+      }
+      const sr = await c.env.DB.prepare(
+        `SELECT * FROM notes WHERE ${sConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
+      )
+        .bind(...sBinds)
+        .all<NoteRow>();
+      srows = sr.results ?? [];
+      if (srows.length > 0) {
+        usedTerms = terms;
+        break;
+      }
     }
-    if (sRange?.end) {
-      sConds.push("created_at < ?");
-      sBinds.push(sRange.end);
-    }
-    const sr = await c.env.DB.prepare(
-      `SELECT * FROM notes WHERE ${sConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
-    )
-      .bind(...sBinds)
-      .all<NoteRow>();
-    const srows = sr.results ?? [];
     if (srows.length > 0) {
-      const answer = buildFinanceSubsetAnswer(subsetTerms, srows, sRange?.phrase ?? null);
+      const answer = buildFinanceSubsetAnswer(usedTerms, srows, sRange?.phrase ?? null);
       // references 必须与答案里的逐笔明细同一个集合同一顺序（直接命中优先，
       // 仅标签命中单列不进引用；R151 P2-1）
       const sFinance = srows.filter((n) => n.category === "expense" || n.category === "income");
-      const sDirect = sFinance.filter((n) => subsetDirectHit(n, subsetTerms));
+      const sDirect = sFinance.filter((n) => subsetDirectHit(n, usedTerms));
       const sRefRows = (sDirect.length > 0 ? sDirect : sFinance).filter((n) => !n.is_sensitive).slice(0, 10);
       return c.json({
         answer,
@@ -3235,7 +3246,7 @@ app.post("/api/ask", async (c) => {
         .bind(...fbBinds)
         .all<NoteRow>();
       const answer =
-        `按关键词「${subsetTerms.join("、")}」精确匹配（标题/正文/标签）没有找到记账记录；为避免估算出错，我不做心算合计。如果你的记录用了别的说法（比如具体商品/商家名），换个关键词再问试试。\n\n` +
+        `按关键词「${(degraded ?? subsetTerms).join("、")}」精确匹配（标题/正文/标签）没有找到记账记录；为避免估算出错，我不做心算合计。如果你的记录用了别的说法（比如具体商品/商家名），换个关键词再问试试。\n\n` +
         buildFinanceAggAnswer(financeStats(fbr.results ?? []), sRange?.phrase ?? null);
       return c.json({ answer, references: [], notes: [], finance_subset: true, finance_fail_closed: true });
     }

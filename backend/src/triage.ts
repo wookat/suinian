@@ -568,11 +568,14 @@ export async function loadCategoryCorrections(db: D1Database, userId: string): P
 
 const LEDGER_MONEY_RE = /^[¥￥]?\d+(?:\.\d{1,2})?元?$/;
 
-/** 拆一行 CSV 字段（支持双引号包裹与 "" 转义），分隔符：半/全角逗号、制表符、分号。 */
+/** 拆一行 CSV 字段（支持双引号包裹与 "" 转义），分隔符：半/全角逗号、制表符、
+ * 分号；整行无显式分隔符且未用引号时退回按连续空白切分（「早餐豆浆油条 12.5」
+ * 式空格台账与显式分隔符走同一识别口径，R192 P1）。 */
 export function splitCsvFields(line: string): string[] {
   const fields: string[] = [];
   let cur = "";
   let inQuote = false;
+  let sawQuote = false;
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
     if (inQuote) {
@@ -584,12 +587,17 @@ export function splitCsvFields(line: string): string[] {
       } else cur += ch;
     } else if (ch === '"') {
       inQuote = true;
+      sawQuote = true;
     } else if (ch === "," || ch === "，" || ch === "\t" || ch === ";" || ch === "；") {
       fields.push(cur.trim());
       cur = "";
     } else cur += ch;
   }
   fields.push(cur.trim());
+  if (fields.length === 1 && !sawQuote) {
+    const ws = fields[0].split(/\s+/).filter((f) => f.length > 0);
+    if (ws.length > 1) return ws;
+  }
   return fields;
 }
 

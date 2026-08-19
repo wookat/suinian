@@ -1035,6 +1035,7 @@ export function TimelinePage() {
             onInitialQuestionConsumed={() => setAskPrefill(null)}
             initialInput={askInputPrefill}
             onInitialInputConsumed={() => setAskInputPrefill(null)}
+            onClose={() => setAskMode(false)}
           />
         </Suspense>
       )}

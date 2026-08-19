@@ -15,7 +15,16 @@ type Mode = "register" | "login" | "recover"
  * 一次性恢复码展示（R144 P1-2）：服务端只存哈希，明文仅此处出现一次，
  * 必须让用户主动确认已保存后才继续。
  */
-export function RecoveryCodeCard({ code, onDone }: { code: string; onDone: () => void }) {
+export function RecoveryCodeCard({
+  code,
+  onDone,
+  tokensRotated = false,
+}: {
+  code: string
+  onDone: () => void
+  /** 找回/重置场景：旧 token 已全部作废，需提醒重配集成（audit-r191 D-2） */
+  tokensRotated?: boolean
+}) {
   const [copied, setCopied] = useState(false)
   // R182 P2-4：恢复码是唯一找回途径，「我已安全保存」需要一次弱确认——
   // 点过复制，或手动输入末 4 位，二者其一才放行
@@ -29,9 +38,14 @@ export function RecoveryCodeCard({ code, onDone }: { code: string; onDone: () =>
         <KeyRound className="size-4" /> 请保存你的恢复码
       </h2>
       <p className="text-sm text-muted-foreground">
-        忘记密码时，这个恢复码是找回账号的唯一方式（产品不收集邮箱/手机号）。
-        它只显示这一次，服务端不保存明文，丢失后无法找回——请抄下来或存进密码管理器。
+        忘记密码时，这个恢复码是找回账号的唯一方式（产品不收集邮箱/手机号，无人工申诉渠道）。
+        它只显示这一次，服务端不保存明文；若密码和恢复码同时丢失，账号将永久无法找回——请抄下来或存进密码管理器。
       </p>
+      {tokensRotated && (
+        <p className="text-sm text-amber-600 dark:text-amber-400">
+          找回已重置全部登录凭证：其他设备、浏览器扩展、MCP/API 集成的旧 token 已全部失效，需重新登录或到设置页复制新 token 重新配置。
+        </p>
+      )}
       <div className="flex items-center gap-2 rounded-lg border bg-muted/40 p-3">
         <code className="min-w-0 flex-1 select-all break-all font-mono text-sm font-semibold tracking-wide">
           {code}
@@ -261,6 +275,7 @@ export function AuthPage() {
       <div className="mx-auto max-w-sm space-y-4">
         <RecoveryCodeCard
           code={recoveryCode}
+          tokensRotated={mode === "recover"}
           onDone={() => {
             setRecoveryCode(null)
             continueAfterAuth()

@@ -632,6 +632,14 @@ export function NoteCard({
                 setEditValue(e.target.value)
                 if (editError && e.target.value.trim()) setEditError(null)
               }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && !saving) {
+                  e.stopPropagation()
+                  setEditError(null)
+                  setConflictNote(null)
+                  setEditing(false)
+                }
+              }}
               className="min-h-[80px] text-sm"
               autoFocus
             />

@@ -162,6 +162,17 @@ export default function App() {
 
   return (
     <div className="min-h-dvh">
+      {/* skip link：hash 路由下不能真跳 anchor（会改写路由），改为直接把焦点移到主内容 */}
+      <a
+        href="#main-content"
+        onClick={(e) => {
+          e.preventDefault()
+          document.getElementById("main-content")?.focus()
+        }}
+        className="sr-only z-50 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
+      >
+        跳过导航，直达主要内容
+      </a>
       {!onboarded && <Onboarding />}
       {isMock && (
         <div className="flex items-center justify-center gap-2 border-b border-amber-500/30 bg-amber-500/15 px-4 py-2 text-sm text-amber-800 backdrop-blur dark:text-amber-300 md:pl-52">
@@ -195,13 +206,14 @@ export default function App() {
             <p className="text-xs text-muted-foreground">AI 收件箱</p>
           </div>
         </div>
-        <nav className="space-y-1">
+        <nav aria-label="侧栏导航" className="space-y-1">
           {ROUTES.map((r) => {
             const Icon = r.icon
             return (
               <a
                 key={r.path}
                 href={`#/${r.path}`}
+                aria-current={active.path === r.path ? "page" : undefined}
                 className={cn(
                   "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                   active.path === r.path
@@ -229,7 +241,9 @@ export default function App() {
         <div className="mx-auto flex max-w-2xl gap-8 px-4 pb-24 pt-4 md:pb-8 md:pt-6 lg:max-w-3xl xl:max-w-6xl">
           <main
             key={active.path}
-            className="min-w-0 flex-1 space-y-5 animate-in fade-in duration-300 xl:max-w-3xl"
+            id="main-content"
+            tabIndex={-1}
+            className="min-w-0 flex-1 space-y-5 outline-none animate-in fade-in duration-300 xl:max-w-3xl"
           >
             <PageHeader title={active.title} description={active.description} />
             <Suspense fallback={null}>
@@ -245,13 +259,14 @@ export default function App() {
       </div>
 
       {/* Mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t bg-card/95 backdrop-blur md:hidden print:hidden">
+      <nav aria-label="底部导航" className="fixed inset-x-0 bottom-0 z-20 flex border-t bg-card/95 backdrop-blur md:hidden print:hidden">
         {ROUTES.map((r) => {
           const Icon = r.icon
           return (
             <a
               key={r.path}
               href={`#/${r.path}`}
+              aria-current={active.path === r.path ? "page" : undefined}
               className={cn(
                 "flex flex-1 flex-col items-center gap-0.5 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] text-[11px] font-medium transition-colors",
                 active.path === r.path ? "text-primary" : "text-muted-foreground",
