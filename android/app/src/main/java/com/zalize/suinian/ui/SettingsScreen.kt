@@ -629,7 +629,7 @@ fun SettingsScreen(
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                "完整备份包含全部笔记字段与语音/图片/文件原件，可在下方「从备份恢复」无损搬家到新账号/新实例",
+                "完整备份包含全部笔记字段、历史周报/月报与语音/图片/文件原件，可在下方「从备份恢复」搬家到新账号/新实例；线索归组不随包迁移，恢复后由后台聚类自动重建",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
