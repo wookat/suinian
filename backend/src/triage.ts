@@ -649,7 +649,8 @@ export function parseLedgerCore(content: string): { amount: number; rows: number
   return { amount: Math.round(sum * 100) / 100, rows: data.length };
 }
 
-/** 台账表格的结构化行：数据行 + 唯一金额列 + 合计行下标（无则 null）。 */
+/** 台账表格的结构化行：数据行 + 唯一金额列 + 合计行下标（无则 null）。
+ * 多行表格与单行散文式台账（R198 P1）走同一结构识别口径。 */
 function ledgerTableRows(
   content: string
 ): { data: string[][]; col: number; totalIdx: number | null } | "ambiguous" | null {
@@ -657,7 +658,34 @@ function ledgerTableRows(
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
+  if (lines.length === 1) return inlineLedgerRows(lines[0]);
   if (lines.length < 2) return null;
+  return ledgerRowsFromLines(lines);
+}
+
+/** 单行散文式台账（R198 P1，audit-r197）：「周末出行开销：车费 46，门票 120，
+ * 纪念品退款 -30，合计 224」按逗号/顿号/分号分段后逐段当作台账行，复用
+ * ledgerRowsFromLines 同一结构识别（不新增平行解析逻辑）。为避免误伤普通
+ * 含数句子，仅当解析出合计行或负数（退款）行时才认作台账；歧义不认。 */
+function inlineLedgerRows(line: string): { data: string[][]; col: number; totalIdx: number | null } | null {
+  let segs = line
+    .split(/[，,；;、]/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (segs.length < 3) return null;
+  // 首段的「说明：」前缀拆成独立伪行（「周末出行开销：车费 46」→「周末出行开销」
+  // +「车费 46」），交给既有的标题剥离逻辑；纯数字前缀（如时刻 8:30）不拆
+  const m = segs[0].match(/^([^：:]*[^\d：:][^：:]*)[：:]\s*(.+)$/);
+  if (m) segs = [m[1].trim(), m[2].trim(), ...segs.slice(1)];
+  const r = ledgerRowsFromLines(segs);
+  if (r === null || r === "ambiguous") return null;
+  if (r.totalIdx === null && !r.data.some((row) => moneyValue(row[r.col]) < 0)) return null;
+  return r;
+}
+
+function ledgerRowsFromLines(
+  lines: string[]
+): { data: string[][]; col: number; totalIdx: number | null } | "ambiguous" | null {
   const isMoney = (s: string) => LEDGER_MONEY_RE.test(s) && Number.isFinite(moneyValue(s)) && moneyValue(s) !== 0;
   const allRows = lines.map(splitCsvFields);
   // 标题/落款行（R183 P1-1）：真实用户常在表格前后写单字段的说明行
@@ -694,7 +722,7 @@ function ledgerTableRows(
 
 /** 台账行级明细查询（R196 P2-1）：从台账表格里找出名目字段含任一关键词的
  * 明细行，返回 [名目, 带符号金额]；合计行不参与匹配，非台账/歧义表返回空。 */
-export function ledgerRowsMatching(content: string, terms: string[]): { label: string; amount: number }[] {
+export function ledgerRowsMatching(content: string, terms: string[] | null): { label: string; amount: number }[] {
   const t = ledgerTableRows(content);
   if (t === null || t === "ambiguous") return [];
   const { data, col, totalIdx } = t;
@@ -702,7 +730,7 @@ export function ledgerRowsMatching(content: string, terms: string[]): { label: s
   data.forEach((r, i) => {
     if (i === totalIdx) return;
     const label = r.filter((_, c) => c !== col).join(" ").trim();
-    if (!terms.some((term) => label.includes(term))) return;
+    if (terms !== null && !terms.some((term) => label.includes(term))) return;
     out.push({ label, amount: moneyValue(r[col]) });
   });
   return out;

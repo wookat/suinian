@@ -74,7 +74,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -3084,6 +3084,24 @@ app.post("/api/ask", async (c) => {
       if (list.length >= xRank) xRows.push(list[xRank - 1]);
       else shortCurrencies.push({ currency: cur, count: list.length });
     }
+    // 台账行级极值（R198，audit-r197 §3 第 5 点）：主题词命中的只有台账
+    // 聚合笔记、无单笔可比（「餐饮台账里最贵的一项」）时，用台账明细行
+    // 金额做确定性排序作答，不再答「无法比较」
+    if (xTerms && xRows.length === 0 && ledgerExcluded > 0) {
+      const lr = buildLedgerRowExtremeAnswer(finExtreme, xAll.filter((n) => isLedgerAggregateNote(n)), xTerms, xRange?.phrase ?? null);
+      if (lr) {
+        const lrNotes = lr.noteIds
+          .map((id) => xAll.find((n) => n.id === id))
+          .filter((n): n is NoteRow => Boolean(n));
+        return c.json({
+          answer: lr.answer,
+          references: lrNotes.map((n, i) => ({ index: i + 1, note_id: n.id })),
+          notes: lrNotes.map((n) => noteToJson(n)),
+          finance_extreme: true,
+          ledger_row_extreme: true,
+        });
+      }
+    }
     // 主题关键词零命中：仅 rank=1 落回普通召回（语义仍可能兜底同义词问法），
     // 不 dead-end，也绝不退回全局极值冒充主题答案；序数问题（rank>1）LLM
     // 无法忠实回答金额排名，零命中也必须走确定性「无法比较」答案；命中的
@@ -3273,6 +3291,53 @@ app.post("/api/ask", async (c) => {
         buildFinanceAggAnswer(financeStats(fbr.results ?? []), sRange?.phrase ?? null);
       return c.json({ answer, references: [], notes: [], finance_subset: true, finance_fail_closed: true });
     }
+  }
+  // 短问法数据门控路由（R198，audit-r197 §3）：「X多少钱？」无财务词，
+  // 词典门槛不放宽（FINANCE_WORD_RE 不动）；主题词先查库，命中财务笔记
+  // 的标题/正文（含台账行名目，仅标签命中不算）才走确定性子集答案；
+  // 零命中回落普通召回，绝不落全账合计兜底也绝不 fail-closed dead-end。
+  const shortTerms = subsetTerms || mixedSubQ || pronounFollowUp ? null : financeShortTopicTerms(intentQuestion);
+  if (shortTerms) {
+    const shRange = parseTimeRange(intentQuestion) ?? timeRange;
+    const likeOrs = shortTerms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ");
+    const shConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')", `(${likeOrs})`];
+    const shBinds: unknown[] = [userId, ...shortTerms.flatMap((t) => Array(3).fill(likeContains(t)) as string[])];
+    if (shRange?.start) {
+      shConds.push("created_at >= ?");
+      shBinds.push(shRange.start);
+    }
+    if (shRange?.end) {
+      shConds.push("created_at < ?");
+      shBinds.push(shRange.end);
+    }
+    const shr = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE ${shConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
+    )
+      .bind(...shBinds)
+      .all<NoteRow>();
+    const shRows = shr.results ?? [];
+    // 门控：至少一笔非敏感收/支笔记的标题或正文明文命中（敏感笔记正文
+    // 加密无法核验、仅标签命中信号太弱，都不作为短问法收口依据）
+    const shGated = shRows.some(
+      (n) =>
+        (n.category === "expense" || n.category === "income") &&
+        !n.is_sensitive &&
+        shortTerms.some((t) => (n.title ?? "").includes(t) || n.content.includes(t))
+    );
+    if (shGated) {
+      const answer = buildFinanceSubsetAnswer(shortTerms, shRows, shRange?.phrase ?? null);
+      const shFinance = shRows.filter((n) => n.category === "expense" || n.category === "income");
+      const shDirect = shFinance.filter((n) => subsetDirectHit(n, shortTerms));
+      const shRefRows = (shDirect.length > 0 ? shDirect : shFinance).filter((n) => !n.is_sensitive).slice(0, 10);
+      return c.json({
+        answer,
+        references: shRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
+        notes: shRefRows.map((n) => noteToJson(n)),
+        finance_subset: true,
+        finance_short_route: true,
+      });
+    }
+    // 零命中/仅标签命中：不是财务问题的概率更大（「身高多少」），回落普通召回
   }
   if (financeIntent) {
     // 时间范围同理优先取自原始问题；原始问题没带时间时才用改写结果
@@ -3841,7 +3906,7 @@ app.post("/api/ask", async (c) => {
       {
         role: "system",
         content:
-          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用；回答「A 和 B 是否同一/对应/一体」这类跨片段对应问题时，对应双方各自的片段都必须标注 [序号] 引用，不能只引其中一方。「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；片段括号里的分类与「标签:」是系统自动分拣的归类元数据，不是用户记录的事实，绝不能把它们演绎成事实性描述（比如标签是「家电」绝不代表“在家电商店买的”）：商家/店铺/地点/品牌等信息只有片段正文明写才能回答，否则回答「笔记里没提到」；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）；汇总计算时也不要解释为什么排除某一项（如「68 元（买书，不属于吃的，忽略）」这类筛选过程），算式里只列入选项。涉及金额汇总时，不同币种（如 CNY 与 USD）绝不能直接相加，必须分币种分别合计并注明币种；分类为 transfer（资金往来：内转/提现/借入）的金额不是支出也不是收入，不要计入收支合计。引用角标只标注直接支撑该句结论的片段，每处至多 3 个，不要把命中的片段序号成串堆在句尾。问题包含多个子问题（如「多少钱？什么牌子？」）时逐一回答每个子问题，不要只答其中一个。给出确定答案后不要再附加与答案矛盾的不确定附注。回答用中文，简洁。" + amountRankGuard,
+          "你是「碎念」个人笔记问答助手。根据下面用户的笔记片段回答问题，引用时用 [序号] 标注。每个片段括号里的日期是记录时间——问题限定了时间范围（如上个月/最近一周）时，只依据落在该范围内的片段作答；范围外的可提一句但要说明时间对不上。标注「图谱关联」的片段是沿知识图谱找到的强关联碎片，标注「二跳关联」的片段是顺着首轮命中笔记二次检索到的后续/对应碎片，回答因果、对应、后续进展类问题时请优先结合它们并标注引用；回答「A 和 B 是否同一/对应/一体」这类跨片段对应问题时，对应双方各自的片段都必须标注 [序号] 引用，不能只引其中一方。「实体关系」列出了笔记间的关系脉络——回答涉及跨碎片关联时请说明依据（如某想法的前提/支撑来自哪条）。回答演化/决策类问题（怎么变化的/做过哪些决定）时，按时间顺序逐步列出，从起点（如立项/最初想法）到最新状态，每一步都要标注对应片段的 [序号]。可结合之前的对话上下文理解代词与省略。问题问到具体数字（价格/报价/金额/日期/电话等）时，必须逐字引用片段中的原始数字，不要四舍五入或省略单位；只要某个片段包含与问题主题对应的数字（如问「土鸡蛋报价」而片段写着「土鸡蛋报价：每斤 8.5 元」），就直接给出该数字作答，绝不要以「没找到」开头再自我矛盾地补充。只有当所有片段都与问题无关时，才直接说没找到，绝不要编造或强行凑答案；片段括号里的分类与「标签:」是系统自动分拣的归类元数据，不是用户记录的事实，绝不能把它们演绎成事实性描述（比如标签是「家电」绝不代表“在家电商店买的”）：商家/店铺/地点/品牌等信息只有片段正文明写才能回答，否则回答「笔记里没提到」；笔记里没提到的事实不要自行断定（如「不支持/没有」），应说「笔记里没提到」；「没提到」类否定话术只能复述问句或片段里出现过的实体，绝不自行举例引入两者都没有的具体平台/商家/品牌名（如凭空说「没有说明是在淘宝买的」）；回答不要以「不是」等否定词开头，除非确实在纠正问题里的错误前提。只输出结论本身，不要输出检索/推理过程或对片段相关性的逐条评论（如「[1]、[2] 中没有直接相关的信息，但根据…」这类过程碎碎念）；汇总计算时也不要解释为什么排除某一项（如「68 元（买书，不属于吃的，忽略）」这类筛选过程），算式里只列入选项。涉及金额汇总时，不同币种（如 CNY 与 USD）绝不能直接相加，必须分币种分别合计并注明币种；分类为 transfer（资金往来：内转/提现/借入）的金额不是支出也不是收入，不要计入收支合计。引用角标只标注直接支撑该句结论的片段，每处至多 3 个，不要把命中的片段序号成串堆在句尾。问题包含多个子问题（如「多少钱？什么牌子？」）时逐一回答每个子问题，不要只答其中一个。给出确定答案后不要再附加与答案矛盾的不确定附注。回答用中文，简洁。" + amountRankGuard,
       },
       // 元问题（「我最近在想什么」等自我回顾）不带对话历史生成：这类问题
       // 自足、答案只应来自笔记片段，带历史会让模型把「在想什么」误答成
