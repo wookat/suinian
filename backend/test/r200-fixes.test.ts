@@ -16,6 +16,7 @@ import {
   financeTopicTerms,
   financeShortTopicTerms,
   scrubUnsourcedNegations,
+  scrubUnsourcedAmounts,
 } from "../src/ask";
 
 const note = (extra: Partial<NoteRow>): Pick<NoteRow, "id" | "title" | "content" | "created_at" | "is_sensitive" | "amount" | "currency"> => ({
@@ -151,5 +152,34 @@ describe("否定话术实体后校验 (R200 P3-1)", () => {
   it("肯定句不受影响", () => {
     const ans = "手机壳的图案是山水画 [1]。";
     expect(scrubUnsourcedNegations(ans, src1)).toBe(ans);
+  });
+});
+
+describe("无来源金额后校验 (R200 生产 QA 残留)", () => {
+  const src = "周末我做了什么？\n超市买菜花了 82.5 元。周日去公园散步。";
+  it("生产实测原文：编造「各花 20 元」整句剥除", () => {
+    const ans = "周末你去了超市和公园，周六和周日各花 20 元买菜 [1]。周日去公园散步 [1]。";
+    const out = scrubUnsourcedAmounts(ans, src);
+    expect(out).not.toContain("20 元");
+    expect(out).toContain("周日去公园散步 [1]。");
+  });
+  it("有来源的金额（含小数/货币符号）原样保留", () => {
+    for (const ans of ["买菜花了 82.5 元 [1]。", "买菜花了 ¥82.5 [1]。", "买菜共 82.50 元 [1]。"]) {
+      expect(scrubUnsourcedAmounts(ans, src)).toBe(ans);
+    }
+  });
+  it("数字边界：源文 2026 不为「20 元」提供来源", () => {
+    expect(scrubUnsourcedAmounts("花了 20 元。", "2026年记的笔记")).toBe("");
+  });
+  it("千分位归一：源文 8000 支持答案「8,000 元」", () => {
+    const ans = "收入 8,000 元 [1]。";
+    expect(scrubUnsourcedAmounts(ans, "本月工资到账 8000")).toBe(ans);
+  });
+  it("全句被剥空返回空串（调用方回落诚实拒答）", () => {
+    expect(scrubUnsourcedAmounts("你花了 999 元。", src)).toBe("");
+  });
+  it("不带币种的裸数字不在管辖范围（年份/数量不误伤）", () => {
+    const ans = "你记了 3 条笔记，2026 年开始的。";
+    expect(scrubUnsourcedAmounts(ans, src)).toBe(ans);
   });
 });

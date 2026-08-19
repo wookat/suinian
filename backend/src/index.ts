@@ -74,7 +74,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, scrubUnsourcedNegations, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -3953,6 +3953,14 @@ app.post("/api/ask", async (c) => {
       answer2 = retry;
     }
   }
+  // 无来源金额后校验（R200 生产 QA 实测）：肯定句编造金额整句剥除；全被
+  // 剥空则按拒答处理，走下方诚实拒答通道给建议，绝不把编造金额递给用户
+  const askScrubSource = `${question}\n${recallQuestion}\n${context}\n${graphTriples.join("\n")}`;
+  if (answer2) {
+    const amtScrubbed = scrubUnsourcedAmounts(answer2, askScrubSource);
+    if (amtScrubbed !== answer2) console.log("ask: unsourced amount sentence scrubbed");
+    answer2 = amtScrubbed.trim() === "" ? "没找到" : amtScrubbed;
+  }
   askMarks.push(["gen", Date.now() - tGen]);
   // 流式分支的响应头已发出，Server-Timing 只在整段 JSON 分支可设
   if (!onDelta) c.header("Server-Timing", serverTimingHeader([...askMarks, ["total", Date.now() - askT0]]));
@@ -3994,10 +4002,7 @@ app.post("/api/ask", async (c) => {
   // 否定话术实体后校验（R200，audit-r199 P3-1）：否定分句引入问句与片段中
   // 都不存在的实体时改写成通用指代（流式 delta 原样透传，done 事件全文替换
   // 时生效——与引证补全同一收口时机）
-  const negScrubbed = scrubUnsourcedNegations(
-    answer2 ?? "",
-    `${question}\n${recallQuestion}\n${context}\n${graphTriples.join("\n")}`
-  );
+  const negScrubbed = scrubUnsourcedNegations(answer2 ?? "", askScrubSource);
   // weak semantic-only hits stay in the context but never surface as
   // citations; the answer text and the references array are rewritten
   // together so no [n] marker dangles

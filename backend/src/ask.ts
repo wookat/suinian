@@ -1550,6 +1550,39 @@ const NEGATION_SPLIT_RE =
 const NEGATION_GENERIC_RE =
   /^(?:价格|价钱|金额|费用|多少钱|品牌|牌子|型号|颜色|地点|地方|位置|时间|日期|时候|原因|名字|名称|店铺|店名|商家|平台|渠道|来源|信息|细节|内容|数量|大小|尺寸|款式|口味|购买|地址|哪里|哪儿|买的)$/;
 
+// 无来源金额后校验（R200 生产 QA 实测）：肯定句里编造金额（「周六和周日各花
+// 20 元买菜」，笔记原文只有「超市买菜花了 82.5 元」）不在否定分句捕获范围内。
+// 金额是笔记问答里最不允许编造的事实：答案中「数字+币种」token 的数值若在
+// 问句与召回片段中都不存在，整句剥除（宁可少说、不可编造）；全被剥空则由
+// 调用方回落诚实拒答通道。数字比对带边界（20 不匹配 2026/820），千分位与
+// 尾零归一（8,000≒8000、82.50≒82.5）。
+const ANSWER_AMOUNT_RE =
+  /[¥￥$€£]\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:元|块钱?|人民币|美元|美金|日元|欧元|英镑|港[币元]|韩元|rmb|cny|usd|jpy|eur|gbp|hkd|krw)/gi;
+
+export function scrubUnsourcedAmounts(answer: string, source: string): string {
+  const src = source.replace(/,/g, "");
+  const sourced = (raw: string): boolean => {
+    const plain = raw.replace(/,/g, "");
+    const n = Number(plain);
+    if (!Number.isFinite(n)) return true;
+    const variants = new Set([plain, String(n)]);
+    for (const v of variants) {
+      if (new RegExp(`(?<![\\d.])${v.replace(".", "\\.")}(?!\\d)`).test(src)) return true;
+    }
+    return false;
+  };
+  return answer
+    .split(/(?<=[。！？!?\n])/)
+    .filter((sentence) => {
+      for (const m of sentence.matchAll(ANSWER_AMOUNT_RE)) {
+        const num = m[1] ?? m[2];
+        if (num && !sourced(num)) return false;
+      }
+      return true;
+    })
+    .join("");
+}
+
 /** 否定分句引入了问句与片段中都不存在的实体时，把宾语改写成通用指代。 */
 export function scrubUnsourcedNegations(answer: string, source: string): string {
   return answer.replace(NEGATION_CLAUSE_RE, (whole, neg: string, verb: string, obj: string) => {
