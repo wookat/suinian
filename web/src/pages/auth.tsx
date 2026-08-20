@@ -42,7 +42,7 @@ export function RecoveryCodeCard({
         它只显示这一次，服务端不保存明文；若密码和恢复码同时丢失，账号将永久无法找回——请抄下来或存进密码管理器。
       </p>
       {tokensRotated && (
-        <p className="text-sm text-amber-600 dark:text-amber-400">
+        <p className="text-sm text-amber-700 dark:text-amber-400">
           找回已重置全部登录凭证：其他设备、浏览器扩展、MCP/API 集成的旧 token 已全部失效，需重新登录或到设置页复制新 token 重新配置。
         </p>
       )}

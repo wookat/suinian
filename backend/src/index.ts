@@ -1745,12 +1745,15 @@ app.patch("/api/notes/:id", async (c) => {
     extraBinds.push(normalizeTodoDue(body.todo_due));
     override.todo_due = true;
   }
-  // 用户改过正文＝完成人工核对，转写/识别存疑提示随之清除（R212 P2-1/P3-3）
+  // 用户改过正文＝完成人工核对，转写/识别存疑提示随之清除（R212 P2-1/P3-3）；
+  // 核对后的内容标 needs_retriage 交 cron 重分拣，恢复被存疑态抑制的
+  // 待办/金额提取（R218 P2-2）
   if (typeof patch.content === "string" && patch.content !== existing.content) {
     const meta = parseNoteMeta(existing.meta) ?? {};
     if (meta.transcript_suspect || meta.ocr_suspect) {
       delete meta.transcript_suspect;
       delete meta.ocr_suspect;
+      meta.needs_retriage = true;
       patch.meta = meta;
     }
   }
@@ -2505,10 +2508,14 @@ app.post("/api/notes/:id/retry-media", async (c) => {
     .first<NoteRow>();
   if (!note) return c.json({ error: "not found" }, 404);
   const meta = parseNoteMeta(note.meta) ?? {};
+  // 存疑转写/识别（transcript_suspect / ocr_suspect）同样开放原地重试
+  //（R218 P2-2，audit-r217 §3：噪音幻听笔记无重试入口，用户只能手改或删）
   const failed =
     (note.raw_type === "file" && meta.file_status === "extract_failed") ||
     ((note.raw_type === "voice" || note.raw_type === "image") &&
       (meta.media_status === "extract_failed" ||
+        meta.transcript_suspect === true ||
+        meta.ocr_suspect === true ||
         note.content.startsWith(AUDIO_FAILED_PLACEHOLDER) ||
         note.content.startsWith(IMAGE_FAILED_PLACEHOLDER)));
   if (!failed) return c.json({ error: "该笔记无需重试" }, 400);
@@ -2527,11 +2534,20 @@ app.post("/api/notes/:id/retry-media", async (c) => {
     if (t !== null) {
       content = t.content;
       if (t.content !== t.raw) newMeta.raw_transcript = t.raw;
+      else delete newMeta.raw_transcript;
       if (t.suspect) newMeta.transcript_suspect = true;
       else delete newMeta.transcript_suspect;
       if (t.logprob !== null) newMeta.transcript_logprob = Math.round(t.logprob * 1000) / 1000;
       else delete newMeta.transcript_logprob;
       newMeta.media_status = "ok";
+    } else if (meta.transcript_suspect === true && !note.content.startsWith(AUDIO_FAILED_PLACEHOLDER)) {
+      // 存疑笔记重试后确认无有效语音（如已知幻觉串被拦截）：把幻听内容
+      // 替换成诚实失败占位，原件保留仍可再试（R218 P2-2）
+      content = AUDIO_FAILED_PLACEHOLDER;
+      delete newMeta.transcript_suspect;
+      delete newMeta.raw_transcript;
+      delete newMeta.transcript_logprob;
+      newMeta.media_status = "extract_failed";
     }
   } else if (note.raw_type === "image") {
     const extraction = await describeImage(c.env, bytes);

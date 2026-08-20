@@ -518,6 +518,10 @@ export async function rebuildStep(env: Env, userId: string, state: RebuildState,
           await clusterNote(env, n, { useGraph: state.useGraph, deferSummaries: true });
         }
         state.processed++;
+        // 重整期间异步分拣可把新笔记补进线索分类，扫描数会超过 reset 时的
+        // 快照总数（R218 P3-4：processed 134 > total 123 使进度超 100%）；
+        // 把 total 抬到已处理数，保持 processed ≤ total 的进度口径
+        if (state.processed > state.total) state.total = state.processed;
         state.cursorCreatedAt = n.created_at;
         state.cursorId = n.id;
         if (Date.now() >= deadline) return state;

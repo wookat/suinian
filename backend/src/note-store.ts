@@ -360,6 +360,20 @@ export async function applyTriage(
   if (meta?.vision_sensitive && !triage.is_sensitive) {
     triage = { ...triage, is_sensitive: true };
   }
+  // 存疑转写禁强副作用（R218 P2-2，audit-r217 §3）：transcript_suspect 的语音
+  // 内容本身不可信（噪音幻听可被纠错成看似正常的中文），分拣结果不得凭空产生
+  // 待办与账目——todo 降级 idea、todo_due/amount/merchant 置空。用户编辑核对
+  // （清 suspect 位并标 needs_retriage）或 retry-media 成功后恢复正常口径。
+  if (meta?.transcript_suspect) {
+    triage = {
+      ...triage,
+      category: triage.category === "todo" ? "idea" : triage.category,
+      todo_due: null,
+      amount: null,
+      currency: null,
+      merchant: null,
+    };
+  }
   const override = meta?.manual_override;
   const importTags = meta?.import_tags;
   const newMeta: NoteMeta = { ...(meta ?? {}) };
