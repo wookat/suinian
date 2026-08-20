@@ -27,7 +27,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
-import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, restoreCategories, getThreads, ApiError, NetworkError } from "@/lib/api"
+import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, restoreCategories, getThreads, getStats, ApiError, NetworkError } from "@/lib/api"
 import type { BatchFilter } from "@/lib/api"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
@@ -144,6 +144,46 @@ function dayLabel(iso: string): string {
   return d.getFullYear() === now.getFullYear() ? date : `${d.getFullYear()}年${date}`
 }
 
+// R206 P3-1：批量导入后分拣积压进度横幅——已加载列表里出现成批待分拣的
+// 导入笔记时，用既有 /api/stats 的 pending 计数展示全库剩余量并定时刷新，
+// 迁移大库用户首小时能看到消化进度而不是满屏转圈无反馈
+const BACKLOG_BANNER_MIN = 5
+const BACKLOG_POLL_MS = 60_000
+
+function TriageBacklogBanner({ notes }: { notes: Note[] }) {
+  const [backlog, setBacklog] = useState<number | null>(null)
+  const loadedPending = notes.filter((n) => n.category === null && n.meta?.imported_at != null).length
+  const active = loadedPending >= BACKLOG_BANNER_MIN
+  useEffect(() => {
+    if (!active) {
+      setBacklog(null)
+      return
+    }
+    let stopped = false
+    const tick = async () => {
+      try {
+        const s = await getStats(1)
+        if (!stopped) setBacklog(s.categories.find((c) => c.category === "pending")?.count ?? 0)
+      } catch {
+        // 锦上添花的进度提示：拿不到计数就不展示，不报错
+      }
+    }
+    void tick()
+    const id = window.setInterval(() => void tick(), BACKLOG_POLL_MS)
+    return () => {
+      stopped = true
+      window.clearInterval(id)
+    }
+  }, [active])
+  if (!active || backlog === null || backlog === 0) return null
+  return (
+    <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+      <Loader2 className="size-4 shrink-0 animate-spin" />
+      导入的笔记正在后台排队分拣：还剩 {backlog.toLocaleString()} 条待分拣，自动完成无需等待，期间搜索与时间流不受影响
+    </div>
+  )
+}
+
 export function TimelinePage() {
   const [notes, setNotes] = useState<Note[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
@@ -168,6 +208,7 @@ export function TimelinePage() {
   const [debouncing, setDebouncing] = useState(false)
   const debounceRef = useRef<number | null>(null)
   const [newIds, setNewIds] = useState<Set<string>>(() => new Set())
+  const [sensitivePendingIds, setSensitivePendingIds] = useState<Set<string>>(() => new Set())
   const abortRef = useRef<AbortController | null>(null)
   const pollersRef = useRef<Map<string, number>>(new Map())
   const quickInputRef = useRef<HTMLDivElement>(null)
@@ -847,13 +888,23 @@ export function TimelinePage() {
     }
   }
 
+  // R206 P2-2：敏感标记切换加 pending 态——在途请求去重（同一笔记只允许一个
+  // PATCH），慢网下菜单项禁用+徽标转圈，终态与最后一次意图一致
   async function handleToggleSensitive(note: Note) {
+    if (sensitivePendingIds.has(note.id)) return
     const next = note.is_sensitive === 1 ? 0 : 1
+    setSensitivePendingIds((ids) => new Set(ids).add(note.id))
     try {
       const fresh = await patchNote(note.id, { is_sensitive: next })
       setNotes((ns) => ns.map((n) => (n.id === note.id ? fresh : n)))
     } catch {
       // keep original note on failure
+    } finally {
+      setSensitivePendingIds((ids) => {
+        const s = new Set(ids)
+        s.delete(note.id)
+        return s
+      })
     }
   }
 
@@ -902,6 +953,8 @@ export function TimelinePage() {
       )}
 
       <DueTodosBanner />
+
+      <TriageBacklogBanner notes={notes} />
 
       <DailyReview onTagClick={setTag} />
 
@@ -1224,6 +1277,7 @@ export function TimelinePage() {
                     onEdit={handleEdit}
                     onDelete={(note) => void handleDelete(note)}
                     onToggleSensitive={(note) => void handleToggleSensitive(note)}
+                    sensitivePending={sensitivePendingIds.has(n.id)}
                     categoryFilterActive={category === n.category}
                     selectable={selectMode}
                     selected={selectedIds.has(n.id)}

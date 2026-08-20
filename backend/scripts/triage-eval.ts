@@ -180,6 +180,35 @@ const CASES: EvalCase[] = [
     amount: 8000,
     currency: "CNY",
   },
+  // R206 P2-1（audit-r205 生产 6/6 复现，与台账形态用例集合并：收入向×退款行×分隔符×极值）
+  // case B：无「到账」动词的收入向台账不得归 data、amount 不得置 null
+  {
+    content: `${PREFIX} 回款台账\n3月项目尾款 4500\n4月咨询费 3200\n5月维护费 1800`,
+    category: "income",
+    amount: 9500,
+    currency: "CNY",
+  },
+  // case A：正数书写的退款行必须从合计冲减（净额 226，绝不是 1134）
+  {
+    content: `${PREFIX} 办公用品台账\n打印纸 120\n墨盒 260\n耗材 300\n供应商退款 454`,
+    category: "expense",
+    amount: 226,
+    currency: "CNY",
+  },
+  // 收入向台账×退款行（正数书写）×逗号分隔符：净额冲减方向一致
+  {
+    content: `${PREFIX} 客户收款台账\n项目款,8000\n客户退款,500`,
+    category: "income",
+    amount: 7500,
+    currency: "CNY",
+  },
+  // 收入向×制表符分隔×小额极值行
+  {
+    content: `${PREFIX} 渠道入账流水\n渠道A\t2000\n渠道B\t1500\n渠道C\t0.5`,
+    category: "income",
+    amount: 3500.5,
+    currency: "CNY",
+  },
   // R204 P3-1：英文/中英混合财务笔记不得因语言漏判（audit-r203：coffee beans 128 CNY → collect 且 amount=null）
   { content: `${PREFIX} coffee beans 128 CNY`, category: "expense", amount: 128, currency: "CNY" },
   { content: `${PREFIX} bought a mechanical keyboard for $45`, category: "expense", amount: 45, currency: "USD" },

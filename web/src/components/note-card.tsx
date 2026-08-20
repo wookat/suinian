@@ -298,6 +298,8 @@ interface NoteCardProps {
   onEdit?: (note: Note, patch: NotePatch) => EditResult | Promise<EditResult>
   onDelete?: (note: Note) => void
   onToggleSensitive?: (note: Note) => void
+  /** 敏感标记 PATCH 在途：菜单项禁用防连发，徽标转圈给反馈 */
+  sensitivePending?: boolean
   categoryFilterActive?: boolean
   /** 多选模式：显示选择框并点击卡片切换选中 */
   selectable?: boolean
@@ -317,6 +319,7 @@ export function NoteCard({
   onEdit,
   onDelete,
   onToggleSensitive,
+  sensitivePending = false,
   categoryFilterActive = false,
   selectable = false,
   selected = false,
@@ -501,11 +504,18 @@ export function NoteCard({
               自动分拣失败
             </span>
           )}
-          {sensitive && (
+          {sensitivePending ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-600 dark:text-orange-400">
-              <ShieldAlert className="size-3" />
-              敏感
+              <Loader2 className="size-3 animate-spin" />
+              {sensitive ? "取消敏感中…" : "标记敏感中…"}
             </span>
+          ) : (
+            sensitive && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-600 dark:text-orange-400">
+                <ShieldAlert className="size-3" />
+                敏感
+              </span>
+            )
           )}
           {note.category === "todo" && <DueChip due={note.todo_due} />}
           {(note.category === "expense" || note.category === "income" || note.category === "transfer") && <AmountChip note={note} />}
@@ -584,10 +594,17 @@ export function NoteCard({
                         setMenuOpen(false)
                         onToggleSensitive(note)
                       }}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent"
+                      disabled={sensitivePending}
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent disabled:opacity-60"
                     >
-                      {sensitive ? <ShieldOff className="size-3.5" /> : <ShieldAlert className="size-3.5" />}
-                      {sensitive ? "取消敏感标记" : "标记为敏感"}
+                      {sensitivePending ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : sensitive ? (
+                        <ShieldOff className="size-3.5" />
+                      ) : (
+                        <ShieldAlert className="size-3.5" />
+                      )}
+                      {sensitivePending ? "更新中…" : sensitive ? "取消敏感标记" : "标记为敏感"}
                     </button>
                   )}
                   {onDelete && (

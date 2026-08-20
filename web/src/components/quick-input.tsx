@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Send, Loader2, Paperclip, Sparkles, Lock, Tag, CloudOff } from "lucide-react"
+import { Send, Loader2, Paperclip, Sparkles, Lock, Tag, CloudOff, ChevronDown, ChevronUp, RefreshCw } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { ApiError, NetworkError, createNote, ingestMedia, MAX_MEDIA_BYTES, mediaTooLargeText, SUPPORTED_FILE_EXTS } from "@/lib/api"
-import { enqueueMedia, enqueueNote, flushOutbox, onOutboxCount, onOutboxFlushed, startOutboxAutoFlush } from "@/lib/outbox"
+import { enqueueMedia, enqueueNote, flushOutbox, onOutboxCount, onOutboxFlushed, outboxPreviews, startOutboxAutoFlush } from "@/lib/outbox"
+import type { OutboxPreview } from "@/lib/outbox"
 import { VoiceRecorder, voiceSupported } from "@/components/voice-recorder"
 import { loadSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
@@ -62,6 +63,9 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pendingSync, setPendingSync] = useState(0)
+  // R206 P3-3：横幅可展开查看排队中的具体内容，不再只有一个计数
+  const [queueOpen, setQueueOpen] = useState(false)
+  const [queueItems, setQueueItems] = useState<OutboxPreview[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -81,6 +85,12 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 补发/新入队时刷新展开中的预览；清零后收起
+  useEffect(() => {
+    if (pendingSync === 0) setQueueOpen(false)
+    else if (queueOpen) void outboxPreviews().then(setQueueItems).catch(() => {})
+  }, [pendingSync, queueOpen])
 
   const length = value.length
   const overLimit = length > MAX_CONTENT_CHARS
@@ -314,13 +324,37 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
       )}
       {error && !overLimit && <p className="mt-1 text-xs text-destructive">{error}</p>}
       {pendingSync > 0 && (
-        <button
-          onClick={() => void flushOutbox()}
-          className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-          title="点击立即重试同步"
-        >
-          <CloudOff className="size-3.5" /> {pendingSync} 条离线记录（含图片/文件/录音）待同步，联网后自动补发
-        </button>
+        <div className="mt-1 text-xs text-muted-foreground">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                const next = !queueOpen
+                setQueueOpen(next)
+                if (next) void outboxPreviews().then(setQueueItems).catch(() => setQueueItems([]))
+              }}
+              className="inline-flex items-center gap-1 transition-colors hover:text-foreground"
+              title="展开查看排队中的内容"
+            >
+              <CloudOff className="size-3.5" /> {pendingSync} 条离线记录（含图片/文件/录音）待同步，联网后自动补发
+              {queueOpen ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+            </button>
+            <button
+              onClick={() => void flushOutbox()}
+              className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+            >
+              <RefreshCw className="size-3" /> 立即重试
+            </button>
+          </div>
+          {queueOpen && queueItems.length > 0 && (
+            <ul className="mt-1 space-y-0.5 rounded-md border bg-muted/40 px-2 py-1.5">
+              {queueItems.map((it, i) => (
+                <li key={i} className="truncate" title={it.label}>
+                  • {it.label.length > 60 ? `${it.label.slice(0, 60)}…` : it.label}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   )

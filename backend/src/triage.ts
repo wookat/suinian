@@ -187,6 +187,9 @@ export function buildTriagePrompt(
 注意：小票/账单里已经写了「合计/总计/实付」金额时，明细行与合计是同一笔交易——amount=合计值，绝不要把明细金额与合计重复相加。判例：
   - 「咖啡,12.5\n三明治,8.0\n蛋糕,15.8\n合计,36.3」→ expense，amount=36.3（绝不是 72.6）
   - 「超市小票：牛奶 18 元，面包 12 元，实付 30 元」→ expense，amount=30
+注意：收入向的多行台账（回款/收款/入账/货款等台账，每行一笔已到账的钱）整体是一条 income 记账——amount=各行合计，绝不要因为是台账就归 data、也绝不要把 amount 置 null；台账里的「退款」行是钱退回去/退回来，合计时必须按相反方向扣减。判例：
+  - 「回款台账\n3月项目尾款 4500\n4月咨询费 3200\n5月维护费 1800」→ income，amount=9500（收入向台账，不是 data）
+  - 「办公用品台账\n打印纸 120\n墨盒 260\n耗材 300\n供应商退款 454」→ expense，amount=226（退款行冲减：120+260+300−454，绝不是 1134）
 - tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）。标签必须是内容的主题词，用能概括这条内容的具体场景词（如打车→「交通」、午饭→「餐饮」、买咖啡→「咖啡」），不要一律套「购物」这类宽泛词。内容开头的方括号前缀标记（如「[QA-123]」「[P0]」「【草稿】」）和序号（「1.」）是元数据记号，不是主题：既不能整个照抄进标签，也不能把括号里的词抽出来当标签${tagHint}
 - title: 一句话短标题（<=20字），同样要忽略开头的方括号前缀/序号，不要抄进标题。判例：「[P0] 修复登录超时」→ title="修复登录超时"，tags 不含 "P0"；「[QA-TEST] 周五交报告」→ title="周五交报告"，tags 不含 "QA-TEST"、"QA"、"TEST"
 - is_sensitive: 是否含真实机密 (boolean)。仅当内容中出现真实可用的机密「具体值」时才为 true：密码/口令/密钥/API key/token 的具体值、完整身份证号、银行卡号、手机号+姓名组合、账号+密码组合。以下情况必须为 false：技术文档/教程/笔记只是讨论密码、token、密钥等概念而未出现具体秘密值；代码片段中的变量名/占位符（如 <token>、your-api-key、xxx）；普通长文、文件内容中的 ID/哈希/版本号等非机密长字符串。判例：
@@ -595,6 +598,19 @@ export async function loadCategoryCorrections(db: D1Database, userId: string): P
 // 符号前或后（-¥34.5 / ¥-34.5），一行退款绝不让整表不成台账（R194 P1）
 const LEDGER_MONEY_RE = /^(?:[-−][¥￥]?|[¥￥][-−]?)?\d+(?:\.\d{1,2})?元?$/;
 
+// 退款/退货名目行（R206 P2-1，audit-r205 case A）：明细行金额写成正数但名目
+// 是退款语义时，方向与其它行相反——合计时按负值冲减，否则「供应商退款 454」
+// 会被当作支出并入合计（120+260+300+454=1134，实应净额 226）。已显式写负号
+// 的退款行不重复取反。
+const LEDGER_REFUND_LABEL_RE = /退款|退货|退回|返现|返款/;
+
+/** 台账明细行的带方向金额：正数金额 + 退款语义名目 → 取负冲减。 */
+function signedRowAmount(row: string[], col: number): number {
+  const v = moneyValue(row[col]);
+  if (v > 0 && row.some((f, c) => c !== col && LEDGER_REFUND_LABEL_RE.test(f))) return -v;
+  return v;
+}
+
 /** 金额单元 → 数值：剥币种符号并把 U+2212 负号归一成 ASCII 负号。 */
 function moneyValue(s: string): number {
   return parseFloat(s.replace(/[¥￥元]/g, "").replace("−", "-"));
@@ -656,7 +672,7 @@ export function parseLedgerCore(content: string): { amount: number; rows: number
     const total = moneyValue(data[totalIdx][col]);
     return { amount: Math.round(total * 100) / 100, rows: data.length - 1 };
   }
-  const sum = data.reduce((s, r) => s + moneyValue(r[col]), 0);
+  const sum = data.reduce((s, r) => s + signedRowAmount(r, col), 0);
   return { amount: Math.round(sum * 100) / 100, rows: data.length };
 }
 
@@ -690,7 +706,7 @@ function inlineLedgerRows(line: string): { data: string[][]; col: number; totalI
   if (m) segs = [m[1].trim(), m[2].trim(), ...segs.slice(1)];
   const r = ledgerRowsFromLines(segs);
   if (r === null || r === "ambiguous") return null;
-  if (r.totalIdx === null && !r.data.some((row) => moneyValue(row[r.col]) < 0)) return null;
+  if (r.totalIdx === null && !r.data.some((row) => signedRowAmount(row, r.col) < 0)) return null;
   return r;
 }
 
@@ -742,7 +758,7 @@ export function ledgerRowsMatching(content: string, terms: string[] | null): { l
     if (i === totalIdx) return;
     const label = r.filter((_, c) => c !== col).join(" ").trim();
     if (terms !== null && !terms.some((term) => label.includes(term))) return;
-    out.push({ label, amount: moneyValue(r[col]) });
+    out.push({ label, amount: signedRowAmount(r, col) });
   });
   return out;
 }
@@ -765,6 +781,27 @@ export function fixReceiptDoubleCount(content: string, triage: TriageResult): Tr
   if (!(total > 0) || triage.amount <= total) return triage;
   if (Math.abs(triage.amount - 2 * total) >= 0.011) return triage;
   return { ...triage, amount: total, currency: triage.currency ?? "CNY" };
+}
+
+// 收入向台账分类收口（R206 P2-1，audit-r205 case B）：「回款台账」这类收入向
+// 多行台账被模型判成 data 时，既无 income 方向也无合计金额，周报与财务问答
+// 直接漏计。表格结构可确定性解析、且全文只有单一方向的台账词面证据时，把
+// 非财务分类收口成对应方向（金额随后由 fixLedgerAmount 锁定）；模型已判财务
+// 方向时不动（R196：台账方向模型主判），双向词面或无词面证据也不动。
+// 「退款」不算收入向证据（退款行属冲减，见 signedRowAmount）。
+const LEDGER_INCOME_HINT_RE = /回款|收款|收入|入账|到账|进账|货款/;
+const LEDGER_EXPENSE_HINT_RE = /支出|开销|开支|花销|消费|采购|购物|费用|账单/;
+
+export function fixLedgerCategory(content: string, triage: TriageResult): TriageResult {
+  if (triage.category === "expense" || triage.category === "income" || triage.category === "transfer") {
+    return triage;
+  }
+  const ledger = parseLedgerCore(content);
+  if (ledger === null || ledger === "ambiguous") return triage;
+  const inn = LEDGER_INCOME_HINT_RE.test(content);
+  const out = LEDGER_EXPENSE_HINT_RE.test(content);
+  if (inn === out) return triage;
+  return { ...triage, category: inn ? "income" : "expense", amount: null };
 }
 
 /** Deterministic backstop: when the model classifies a multi-row ledger table
@@ -803,7 +840,7 @@ export async function triageNote(
   let result = (text && parseTriageJson(text, tzOffsetString(now, tz))) || null;
   if (result) result = stripMarkerNoise(content, result);
   if (result) result = demoteEventLog(content, fixTransferMisfile(content, fixFinanceDirection(content, result)));
-  if (result) result = fixReceiptDoubleCount(content, fixLedgerAmount(content, result));
+  if (result) result = fixReceiptDoubleCount(content, fixLedgerAmount(content, fixLedgerCategory(content, result)));
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {
     result = result

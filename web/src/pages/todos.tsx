@@ -40,6 +40,7 @@ export function TodosPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [doneExpanded, setDoneExpanded] = useState(false)
+  const [sensitivePendingIds, setSensitivePendingIds] = useState<Set<string>>(() => new Set())
   const settingsVersion = useSettingsVersion()
 
   const load = useCallback(async () => {
@@ -71,13 +72,22 @@ export function TodosPage() {
     }
   }
 
+  // R206 P2-2：同一笔记在途去重 + pending 反馈（与 timeline 同口径）
   async function handleToggleSensitive(note: Note) {
+    if (sensitivePendingIds.has(note.id)) return
     const next = note.is_sensitive === 1 ? 0 : 1
+    setSensitivePendingIds((ids) => new Set(ids).add(note.id))
     try {
       const fresh = await patchNote(note.id, { is_sensitive: next })
       setNotes((ns) => ns.map((n) => (n.id === note.id ? fresh : n)))
     } catch {
       // keep original note on failure
+    } finally {
+      setSensitivePendingIds((ids) => {
+        const s = new Set(ids)
+        s.delete(note.id)
+        return s
+      })
     }
   }
 
@@ -175,6 +185,7 @@ export function TodosPage() {
                 onEdit={handleEdit}
                 onDelete={(note) => void handleDelete(note)}
                 onToggleSensitive={(note) => void handleToggleSensitive(note)}
+                sensitivePending={sensitivePendingIds.has(n.id)}
               />
             ))}
           </section>
@@ -204,6 +215,7 @@ export function TodosPage() {
                 onEdit={handleEdit}
                 onDelete={(note) => void handleDelete(note)}
                 onToggleSensitive={(note) => void handleToggleSensitive(note)}
+                sensitivePending={sensitivePendingIds.has(n.id)}
               />
             ))}
         </section>

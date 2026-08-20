@@ -91,6 +91,24 @@ export function onOutboxFlushed(listener: FlushListener): () => void {
   return () => flushListeners.delete(listener)
 }
 
+/** 排队条目的内容预览（R206 P3-3）：横幅可展开查看排队中的具体内容 */
+export interface OutboxPreview {
+  label: string
+  queued_at: string
+}
+
+export async function outboxPreviews(): Promise<OutboxPreview[]> {
+  const [notes, media] = await Promise.all([
+    tx("readonly", (s) => s.getAll()) as Promise<OutboxItem[]>,
+    tx("readonly", (s) => s.getAll(), MEDIA_STORE) as Promise<MediaOutboxItem[]>,
+  ])
+  const kind = { audio: "录音", image: "图片", file: "文件" } as const
+  return [
+    ...notes.map((n) => ({ label: n.payload.content, queued_at: n.queued_at })),
+    ...media.map((m) => ({ label: `[${kind[m.type]}] ${m.fileName}`, queued_at: m.queued_at })),
+  ].sort((a, b) => (a.queued_at < b.queued_at ? -1 : 1))
+}
+
 export async function outboxCount(): Promise<number> {
   const [notes, media] = await Promise.all([
     tx("readonly", (s) => s.count()),
