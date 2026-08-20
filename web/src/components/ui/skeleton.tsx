@@ -29,12 +29,24 @@ function NoteCardSkeleton() {
   )
 }
 
+const SLOW_LOAD_HINT_MS = 5000
+
 function NoteListSkeleton({ count = 3 }: { count?: number }) {
+  const [slow, setSlow] = React.useState(false)
+  React.useEffect(() => {
+    const t = window.setTimeout(() => setSlow(true), SLOW_LOAD_HINT_MS)
+    return () => window.clearTimeout(t)
+  }, [])
   return (
     <div className="space-y-3" role="status" aria-label="加载中">
       {Array.from({ length: count }, (_, i) => (
         <NoteCardSkeleton key={i} />
       ))}
+      {slow && (
+        <p className="text-center text-sm text-muted-foreground" aria-live="polite">
+          加载时间较长，可能是网络较慢，正在继续尝试……
+        </p>
+      )}
     </div>
   )
 }
