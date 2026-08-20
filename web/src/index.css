@@ -19,8 +19,8 @@
   --card-foreground: oklch(0.24 0.01 260);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.24 0.01 260);
-  /* L=0.52：白字（--primary-foreground 0.99）对比度 5.0:1 ≥ WCAG AA 4.5:1 */
-  --primary: oklch(0.52 0.14 155);
+  /* L=0.48：白字对比 6.1:1；text-primary 落在 bg-primary/15 上也 ≥4.8:1（R218 P3-2） */
+  --primary: oklch(0.48 0.14 155);
   --primary-foreground: oklch(0.99 0 0);
   --secondary: oklch(0.96 0.004 90);
   --secondary-foreground: oklch(0.32 0.01 260);
@@ -29,7 +29,8 @@
   --muted-foreground: oklch(0.49 0.012 260);
   --accent: oklch(0.95 0.02 155);
   --accent-foreground: oklch(0.3 0.06 155);
-  --destructive: oklch(0.6 0.2 25);
+  /* L=0.55：白字与白底上的红字对比度均 ≥5.3:1 ≥ WCAG AA 4.5:1（R218 P3-2） */
+  --destructive: oklch(0.55 0.2 25);
   --destructive-foreground: oklch(0.99 0 0);
   --border: oklch(0.91 0.004 90);
   --input: oklch(0.91 0.004 90);

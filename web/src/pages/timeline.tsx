@@ -1258,7 +1258,8 @@ export function TimelinePage() {
           )}
           {grouped.map((g) => (
             <section key={g.label}>
-              <div className="sticky top-[52px] z-10 -mx-1 bg-background/95 px-1 py-1.5 backdrop-blur md:top-0">
+              {/* 不做 -mx-1 负边距出血：rem 随字号档缩放，特大档会溢出主栏右缘（R218 P3-1） */}
+              <div className="sticky top-[52px] z-10 bg-background/95 py-1.5 backdrop-blur md:top-0">
                 <span className="text-xs font-medium text-muted-foreground">
                   {g.label}
                 </span>

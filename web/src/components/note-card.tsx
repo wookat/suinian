@@ -54,7 +54,7 @@ const CATEGORY_META: Record<
   idea: {
     label: "想法",
     icon: Lightbulb,
-    activeClassName: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    activeClassName: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
   },
   todo: {
     label: "待办",
@@ -69,7 +69,7 @@ const CATEGORY_META: Record<
   data: {
     label: "资料",
     icon: Database,
-    activeClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    activeClassName: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
   },
   expense: {
     label: "支出",
@@ -79,7 +79,7 @@ const CATEGORY_META: Record<
   income: {
     label: "收入",
     icon: Coins,
-    activeClassName: "bg-green-500/10 text-green-600 dark:text-green-400",
+    activeClassName: "bg-green-500/10 text-green-700 dark:text-green-400",
   },
   transfer: {
     label: "资金往来",
@@ -159,9 +159,9 @@ export function DueChip({ due }: { due: string | null }) {
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
         overdue
-          ? "bg-red-500/15 text-red-600 ring-1 ring-red-500/40 dark:text-red-400"
+          ? "bg-red-500/15 text-red-700 ring-1 ring-red-500/40 dark:text-red-400"
           : dueSoon
-            ? "bg-amber-500/15 text-amber-600 ring-1 ring-amber-500/40 dark:text-amber-400"
+            ? "bg-amber-500/15 text-amber-800 ring-1 ring-amber-500/40 dark:text-amber-400"
             : "bg-muted text-muted-foreground",
       )}
     >
@@ -193,8 +193,8 @@ export function AmountChip({ note }: { note: Note }) {
         note.amount == null || note.category === "transfer"
           ? "bg-muted text-muted-foreground"
           : note.category === "income"
-            ? "bg-green-500/10 text-green-600 dark:text-green-400"
-            : "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+            ? "bg-green-500/10 text-green-700 dark:text-green-400"
+            : "bg-rose-500/10 text-rose-700 dark:text-rose-400",
       )}
       title={merchant ? `商家/用途：${merchant}` : undefined}
     >
@@ -479,13 +479,13 @@ export function NoteCard({
               onCheckedChange={() => onSelectToggle?.(note)}
               onClick={(e) => e.stopPropagation()}
               aria-label={selected ? "取消选择" : "选择这条笔记"}
-              className="mr-0.5 size-5 sm:size-4"
+              className="mr-0.5 size-6 sm:size-4"
             />
           )}
           {pending ? (
             pendingLate ? (
               <span
-                className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"
+                className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400"
                 title="AI 分拣暂时不可用，内容已安全保存，服务恢复后会自动补分拣"
               >
                 <CircleAlert className="size-3" />
@@ -502,7 +502,7 @@ export function NoteCard({
           )}
           {!pending && note.meta?.triage_failed && (
             <span
-              className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"
+              className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400"
               title="AI 多次尝试仍无法自动分拣，已按兜底分类保存；手动改分类即可修正"
             >
               <CircleAlert className="size-3" />
@@ -510,13 +510,13 @@ export function NoteCard({
             </span>
           )}
           {sensitivePending ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-600 dark:text-orange-400">
+            <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-700 dark:text-orange-400">
               <Loader2 className="size-3 animate-spin" />
               {sensitive ? "取消敏感中…" : "标记敏感中…"}
             </span>
           ) : (
             sensitive && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-600 dark:text-orange-400">
+              <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-700 dark:text-orange-400">
                 <ShieldAlert className="size-3" />
                 敏感
               </span>
@@ -644,7 +644,7 @@ export function NoteCard({
             checked={done}
             onCheckedChange={() => onToggleTodo?.(note)}
             aria-label={done ? "标记为未完成" : "标记为完成"}
-            className="mt-0.5 size-5 sm:size-4"
+            className="mt-0.5 size-6 sm:size-4"
           />
         )}
         {editing ? (
@@ -669,7 +669,7 @@ export function NoteCard({
             {editError && <p className="text-xs text-destructive">{editError}</p>}
             {conflictNote && (
               <div className="space-y-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs">
-                <p className="font-medium text-amber-600 dark:text-amber-400">
+                <p className="font-medium text-amber-700 dark:text-amber-400">
                   这条笔记刚被更新（可能来自其他设备或后台自动整理），你的输入仍保留在上方编辑框，可对照最新版本合并后再保存
                 </p>
                 <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-muted-foreground">
@@ -832,7 +832,7 @@ export function NoteCard({
             <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border bg-secondary px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
               <Eye className="size-3" /> 敏感内容，点击查看
             </span>
-            <span className="w-full text-xs leading-relaxed text-muted-foreground/80">
+            <span className="w-full text-xs leading-relaxed text-muted-foreground">
               检测到密码/凭据类信息，已自动加密保护，不进入问答与搜索；若属误判，可在右上角菜单「取消敏感标记」
             </span>
           </button>
@@ -981,7 +981,7 @@ export function NoteCard({
               </div>
             )}
             {!mediaFailed && mediaSuspect && (
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-600 dark:text-amber-500">
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-700 dark:text-amber-500">
                 <CircleAlert className="size-3.5 shrink-0" />
                 <span>{note.raw_type === "voice" ? "转写可能不准，建议核对" : "文字识别可能不准，建议核对原图"}</span>
                 {onEdit && (
@@ -1000,6 +1000,16 @@ export function NoteCard({
                     <Pencil className="size-3" /> 纠错
                   </button>
                 )}
+                {/* 存疑也开放原地重试（R218 P2-2）：噪音幻听等无效语音可原地重跑转写 */}
+                <button
+                  onClick={() => void retryMediaExtract()}
+                  disabled={retryingMedia}
+                  className="inline-flex items-center gap-1 font-medium text-primary hover:underline disabled:opacity-60"
+                >
+                  <RefreshCw className={cn("size-3", retryingMedia && "animate-spin")} />
+                  {retryingMedia ? "重试中…" : "原地重试"}
+                </button>
+                {retryMediaError && <span className="w-full text-destructive">{retryMediaError}</span>}
               </div>
             )}
             {fileMeta && (

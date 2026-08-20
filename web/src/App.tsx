@@ -183,7 +183,7 @@ export default function App() {
           e.preventDefault()
           document.getElementById("main-content")?.focus()
         }}
-        className="sr-only z-50 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
+        className="sr-only z-50 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:inline-flex focus:min-h-6 focus:min-w-6 focus:items-center"
       >
         跳过导航，直达主要内容
       </a>

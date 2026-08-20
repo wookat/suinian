@@ -117,7 +117,7 @@ export function FirstRunTour({ onDone }: { onDone: () => void }) {
                 </Button>
               )}
               {pushState === "on" && (
-                <p className="inline-flex items-center gap-1 text-sm font-medium text-green-600 dark:text-green-400">
+                <p className="inline-flex items-center gap-1 text-sm font-medium text-green-700 dark:text-green-400">
                   <Check className="size-4" />
                   已开启，每天早上见
                 </p>

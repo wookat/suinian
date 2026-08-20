@@ -150,9 +150,17 @@ export { withTimeout } from "./ai";
 const WHISPER_HALLUCINATION_RE =
   /^(thank you( for watching)?|thanks for watching|please subscribe.*|谢谢(大家|观看|收看)?|请不吝点赞.*|字幕制作.*|字幕by.*|amara\.org.*)[\s.。!！]*$/i;
 
+// 纯噪音幻听扩充（R218 P2-2，audit-r217 §3）：白/粉噪音在生产被 whisper 幻听成
+// 跨语种固定串（实测两例均为俄语 "Продолжение следует..."，logprob -0.2 级别、
+// 置信信号并不低），再经 LLM 纠错变成一句看似正常的中文入库。已知幻觉串按
+// 「无语音」确定性拦截，与纯静音同路径（诚实失败占位 + retry-media 可重试）。
+const WHISPER_HALLUCINATION_I18N_RE =
+  /^(продолжение следует|субтитры\s.*|редактор субтитров\s.*|спасибо за просмотр|ご視聴ありがとうございました|チャンネル登録.*お願い.*|字幕由\s?amara\.org.*|구독과 좋아요.*|시청해\s?주셔서 감사합니다|see you (in the )?next (video|time)|don'?t forget to (like and )?subscribe.*)[\s.。!！…]*$/i;
+
 export function isWhisperHallucination(text: string): boolean {
   const t = text.trim();
-  return t.length <= 24 && WHISPER_HALLUCINATION_RE.test(t);
+  if (t.length <= 24 && WHISPER_HALLUCINATION_RE.test(t)) return true;
+  return t.length <= 48 && WHISPER_HALLUCINATION_I18N_RE.test(t);
 }
 
 /**

@@ -152,6 +152,7 @@ export function buildTriagePrompt(
   - 「freelance payment 3000 CNY received」→ income，amount=3000，currency="CNY"
   多金额句式口径（总额/人均/份额并存时，amount＝记录者本人实际支付出去的钱，且必须是文本中出现的数字）：
   - 本人付了总额（请客/买单/垫付/我先付了/我付的/我掏的）→ amount=总额，即使句中同时给出人均/每人——「聚餐一共 900，我买单，人均 150」→ expense，amount=900（绝不是 150）；「团建 640 我垫付的，人均 160」→ expense，amount=640（垫付出去的钱是本人实际支付，之后收回时再另记一笔收入）
+  - 先付/垫付 X 与别人回款 Y 同句出现 → expense，amount=X（本人实付的总额），绝不要把 X−Y 净额化、也绝不因「回我/转我」把方向记成 income 或 transfer——「我先付了聚餐 480 元，其他人回我 360 元」→ expense，amount=480（绝不是 120）；「聚餐 AA，我先垫付 480 元，其他人收回给我 360 元」→ expense，amount=480（垫付是支出，收回的 360 之后另记一笔收入）；「帮同事垫付门票 300 元，他微信转我 300 元」→ expense，amount=300（不是 transfer）
   - 明确只付自己那份 → amount=自己的份额——「四人聚餐共 520，我只付了自己那份 130」→ expense，amount=130；明确 AA/平摊且本人没有垫付总额时记自己份额（「晚饭 AA 一共 480，四个人平摊，各付各的」→ amount=120，480÷4），份额与人数都不明时 amount=null，绝不猜
   - 「总额 X 人均 Y」没说谁付的钱 → 固定取总额 X——「聚餐 480 元人均 80」→ expense，amount=480（保守取总额，绝不取人均，同样的句式绝不摇摆）
   - 绝不要用 人均×人数 等算式推算出文本中不存在的金额——「聚餐 480 元人均 80，八个人」→ amount=480（绝不是 80×8=640：640 在原文任何位置都不存在）
@@ -1073,13 +1074,43 @@ export function fixProseTotalDirection(content: string, triage: TriageResult): T
 
 // AA/垫付收回是收入回补不是资金平移（R212 P2-2，audit-r211：「公司团建 AA
 // 收回 240」判 transfer 导致收入统计漏计）。词面同时命中 AA/平摊/垫付 与
-// 收回/收到 才收口，普通借还往来不受影响。
-const AA_REIMBURSE_RE = /(?:AA|平摊|均摊|人均|垫付)[^。\n]{0,10}(?:收回|收到|回来了|到账)/i;
+// 收回/收到/转我/回我 等回款动词才收口，普通借还往来不受影响
+//（回款动词扩展见 R218 P2-1，audit-r217 §1.2：追记既往垫付的「转我」回款句）。
+const AA_REIMBURSE_RE = /(?:AA|平摊|均摊|人均|垫付)[^。\n]{0,10}(?:收回|收到|回来了|到账|转(?:给)?我|打给我|回我|还我)/i;
 
 export function fixAaReimburse(content: string, triage: TriageResult): TriageResult {
   if (triage.category !== "transfer") return triage;
   if (!AA_REIMBURSE_RE.test(content)) return triage;
   return { ...triage, category: "income" };
+}
+
+// ---- 垫付×回款同句净额化收口（R218 P2-1，audit-r217 §1.2）----
+// 「我先付 480，其他人回我 360」被净额化成 transfer/120，AA 变体反转成
+// income/120。口径（audit-r215 §2.3）：amount=记录者本人实际发生金额＝先付/
+// 垫付的总额 X（回款 Y 之后另记一笔收入）。词面须同时命中「先付/垫付＋金额 X」
+// 与「回我/还我/转我/收回＋金额 Y」两个带金额短语才收口；追记既往垫付的
+// 回款句（上次/之前垫付的…收回）是收款事件，交 fixAaReimburse/模型主判；
+// 台账/合计管道不适用。
+const ADVANCE_PAY_RE =
+  /(?:先付了?|先垫付?了?|垫付了?|先掏了?|我先出了?|[帮替给][^。\n，,]{0,6}垫付?了?)[^0-9\n]{0,8}(\d+(?:\.\d{1,2})?)/;
+const REPAY_BACK_RE =
+  /(?:回我|还我|转我|转给我|打给我|退我|发我|收回(?:给我)?)[^0-9\n]{0,6}(\d+(?:\.\d{1,2})?)|(?:[转还打退]了?)\s*(\d+(?:\.\d{1,2})?)\s*(?:元|块钱?|块)?\s*给我/;
+const PAST_ADVANCE_RE = /(?:上次|上回|之前|先前|早前|昨天|前天)[^。\n]{0,8}(?:垫付|先付|垫)/;
+
+export function fixAdvanceRepayAmount(content: string, triage: TriageResult): TriageResult {
+  const isFinance = triage.category === "expense" || triage.category === "income" || triage.category === "transfer";
+  if (!isFinance) return triage;
+  if (parseLedgerCore(content) !== null) return triage;
+  if (OWN_SHARE_RE.test(content) || PAST_ADVANCE_RE.test(content)) return triage;
+  const adv = content.match(ADVANCE_PAY_RE);
+  if (!adv) return triage;
+  const back = content.match(REPAY_BACK_RE);
+  if (!back) return triage;
+  const paid = parseFloat(adv[1]);
+  const repaid = parseFloat(back[1] ?? back[2]);
+  if (!(paid > 0) || !(repaid > 0) || repaid > paid) return triage;
+  if (triage.category === "expense" && triage.amount === paid) return triage;
+  return { ...triage, category: "expense", amount: paid, currency: triage.currency ?? "CNY" };
 }
 
 // ---- 多金额句式口径兜底（R216 P2-2，audit-r215 §2）----
@@ -1161,7 +1192,7 @@ export async function triageNoteDetailed(
   if (result) result = stripMarkerNoise(content, result);
   if (result) result = demoteEventLog(content, fixTransferMisfile(content, fixFinanceDirection(content, result)));
   if (result) result = fixLedgerNetDirection(content, fixReceiptDoubleCount(content, fixLedgerAmount(content, fixLedgerCategory(content, result))));
-  if (result) result = fixSplitBillAmount(content, fixAaReimburse(content, fixProseTotalDirection(content, result)));
+  if (result) result = fixAdvanceRepayAmount(content, fixSplitBillAmount(content, fixAaReimburse(content, fixProseTotalDirection(content, result))));
   if (result) result = fixWeekdayDue(content, result, now, tz);
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {

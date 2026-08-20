@@ -180,7 +180,7 @@ function SwStatusCard() {
       <p
         className={cn(
           "mt-2 flex items-center gap-1.5 text-sm",
-          ok ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground",
+          ok ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground",
         )}
       >
         {ok ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
@@ -329,7 +329,7 @@ function TagManagerCard() {
                   <button
                     onClick={() => void handleDelete(tag, count)}
                     disabled={busy}
-                    className="text-xs font-medium text-destructive/80 hover:text-destructive"
+                    className="text-xs font-medium text-destructive hover:underline"
                   >
                     删除
                   </button>
@@ -353,7 +353,7 @@ function TagManagerCard() {
         <p
           className={cn(
             "flex items-center gap-1.5 text-sm",
-            msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+            msg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
           )}
         >
           {msg.ok ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
@@ -483,7 +483,7 @@ function BrowserNotificationsCard() {
         <p
           className={cn(
             "flex items-center gap-1.5 text-sm",
-            msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+            msg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
           )}
         >
           {msg.ok ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
@@ -687,12 +687,12 @@ function WechatBindingCard() {
             <div className="space-y-2">
               {status.bindings.map((b) => (
                 <p key={b.openid_masked} className="flex items-center gap-1.5 text-sm">
-                  <CircleCheck className="size-4 text-green-600" /> 已绑定公众号微信 {b.openid_masked}（{b.created_at}）
+                  <CircleCheck className="size-4 text-green-700" /> 已绑定公众号微信 {b.openid_masked}（{b.created_at}）
                 </p>
               ))}
               {(status.kf_bindings ?? []).map((b) => (
                 <p key={`kf-${b.openid_masked}`} className="flex items-center gap-1.5 text-sm">
-                  <CircleCheck className="size-4 text-green-600" /> 已绑定企微客服微信 {b.openid_masked}（{b.created_at}）
+                  <CircleCheck className="size-4 text-green-700" /> 已绑定企微客服微信 {b.openid_masked}（{b.created_at}）
                 </p>
               ))}
               <Button variant="outline" size="sm" disabled={busy} onClick={() => void unbind()}>
@@ -1089,7 +1089,7 @@ export function SettingsPage() {
             className={cn(
               "flex items-center gap-1.5 text-sm",
               testResult.ok
-                ? "text-emerald-600 dark:text-emerald-400"
+                ? "text-emerald-700 dark:text-emerald-400"
                 : "text-destructive",
             )}
           >
@@ -1179,7 +1179,7 @@ export function SettingsPage() {
           <p
             className={cn(
               "flex items-center gap-1.5 text-sm",
-              accountMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+              accountMsg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
             )}
           >
             {accountMsg.ok ? (
@@ -1207,7 +1207,7 @@ export function SettingsPage() {
           包含敏感内容（明文导出密码等加密笔记，含其附件原件）
         </label>
         {includeSensitive && (
-          <p className="flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400">
+          <p className="flex items-center gap-1.5 text-sm text-amber-700 dark:text-amber-400">
             <CircleAlert className="size-4 shrink-0" />
             注意：导出的文件将包含敏感笔记的明文（如密码），请妥善保管，不要上传到不可信的地方。恢复导入时会重新加密存储
           </p>
@@ -1274,7 +1274,7 @@ export function SettingsPage() {
           <p
             className={cn(
               "flex items-center gap-1.5 text-sm",
-              exportMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+              exportMsg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
             )}
           >
             {exportMsg.ok ? (
@@ -1403,7 +1403,7 @@ export function SettingsPage() {
           <p
             className={cn(
               "flex items-center gap-1.5 text-sm",
-              importMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+              importMsg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
             )}
           >
             {importMsg.ok ? (
@@ -1481,7 +1481,7 @@ export function SettingsPage() {
           <p
             className={cn(
               "flex items-center gap-1.5 text-sm",
-              restoreMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+              restoreMsg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
             )}
           >
             {restoreMsg.ok ? (
