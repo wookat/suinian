@@ -177,6 +177,38 @@ const CASES: EvalCase[] = [
     amount: 150,
     currency: "CNY",
   },
+  // R210 P2-1（audit-r209）：显式分隔符台账首行为负数尾注行不被表头吞行
+  {
+    content: `${PREFIX} 快递费,-34.5 (破损赔付)\n文具,28\n打印,12`,
+    category: "expense",
+    amount: 5.5,
+    currency: "CNY",
+  },
+  {
+    content: `${PREFIX} 快递费\t-34.5 (破损赔付)\n文具\t28\n打印\t12`,
+    category: "expense",
+    amount: 5.5,
+    currency: "CNY",
+  },
+  // R210 P2-2（audit-r209）：短句混合正负走台账管道，净额符号仲裁方向
+  {
+    content: `${PREFIX} 午饭 20 咖啡 -5(退款)`,
+    category: "expense",
+    amount: 15,
+    currency: "CNY",
+  },
+  {
+    content: `${PREFIX} 咖啡 -5(退款) 午饭 20`,
+    category: "expense",
+    amount: 15,
+    currency: "CNY",
+  },
+  {
+    content: `${PREFIX} 零食 8 退货 -30(质量差)`,
+    category: "income",
+    amount: 22,
+    currency: "CNY",
+  },
   // 方向对照：到账语义的回款台账仍是 income
   {
     content: `${PREFIX} 五月回款台账\n项目A尾款到账，5000\n项目B预付款到账，3000`,
@@ -258,12 +290,25 @@ async function main() {
   await api("/api/preferences", { method: "PATCH", body: JSON.stringify({ tz: "Asia/Shanghai" }) });
   const created: string[] = [];
   try {
+    // 写接口限流 60/min：逐条限速创建，429 时退避重试
     for (const c of CASES) {
-      const { note } = await api<{ note: NoteJson }>("/api/notes", {
-        method: "POST",
-        body: JSON.stringify({ source: "api", raw_type: "text", content: c.content }),
-      });
-      created.push(note.id);
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const { note } = await api<{ note: NoteJson }>("/api/notes", {
+            method: "POST",
+            body: JSON.stringify({ source: "api", raw_type: "text", content: c.content }),
+          });
+          created.push(note.id);
+          break;
+        } catch (e) {
+          if (attempt < 3 && String(e).includes(" 429 ")) {
+            await sleep(15_000);
+            continue;
+          }
+          throw e;
+        }
+      }
+      await sleep(1100);
     }
     console.log(`created ${created.length} notes, waiting for triage...`);
 

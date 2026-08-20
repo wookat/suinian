@@ -422,6 +422,10 @@ const TODO_DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::\d{2})?\s*(Z|[+
 // 与之不符时，按「从今天（用户时区）起最近的该星期」纯日期算术纠正日期，
 // 时刻与偏移保持不变。内容含显式日期/其它相对日词或多个周X时不动（歧义不猜）。
 const BARE_WEEKDAY_RE = /(?<![下上])(?:本|这)?周([一二三四五六日天])/g;
+// 「下周X」确定性后校验（R210 P3-1，audit-r209）：周起始日为周一的中文口径下，
+// 「下周日」是下个日历周的周日；LLM 按周日起始会把它算进本周。同口径：
+// 内容唯一提到一个「下周X」且 due 日期不符时纠正，时刻与偏移保持不变。
+const NEXT_WEEK_WEEKDAY_RE = /(?<!下)下周([一二三四五六日天])/g;
 const WEEKDAY_NUM: Record<string, number> = { 日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6 };
 const OTHER_DATE_HINT_RE = /\d{1,2}\s*月|\d{1,3}\s*[号日]|今天|今晚|今早|明天|明晚|后天|大后天|月底|月初|年底|周末/;
 
@@ -433,16 +437,27 @@ export function fixWeekdayDue(
 ): TriageResult {
   if (triage.category !== "todo" || !triage.todo_due) return triage;
   if (OTHER_DATE_HINT_RE.test(content)) return triage;
-  const targets = new Set<number>();
-  for (const m of content.matchAll(BARE_WEEKDAY_RE)) targets.add(WEEKDAY_NUM[m[1]]);
-  if (targets.size !== 1) return triage;
-  const target = [...targets][0];
+  const bare = new Set<number>();
+  for (const m of content.matchAll(BARE_WEEKDAY_RE)) bare.add(WEEKDAY_NUM[m[1]]);
+  const nextWeek = new Set<number>();
+  for (const m of content.matchAll(NEXT_WEEK_WEEKDAY_RE)) nextWeek.add(WEEKDAY_NUM[m[1]]);
+  if (bare.size + nextWeek.size !== 1) return triage;
   const m = triage.todo_due.match(TODO_DUE_RE);
   if (!m) return triage;
-  const dueDow = new Date(`${m[1]}T00:00:00Z`).getUTCDay();
-  if (dueDow === target) return triage;
   const todayDow = new Date(now.getTime() + tzOffsetMs(now, tz)).getUTCDay();
-  const expected = zonedDate(now, tz, (target - todayDow + 7) % 7).iso;
+  let expected: string;
+  if (bare.size === 1) {
+    const target = [...bare][0];
+    const dueDow = new Date(`${m[1]}T00:00:00Z`).getUTCDay();
+    if (dueDow === target) return triage;
+    expected = zonedDate(now, tz, (target - todayDow + 7) % 7).iso;
+  } else {
+    if (/下下周/.test(content)) return triage;
+    const target = [...nextWeek][0];
+    const toNextMonday = ((1 - todayDow + 7) % 7) || 7;
+    expected = zonedDate(now, tz, toNextMonday + (target === 0 ? 6 : target - 1)).iso;
+    if (m[1] === expected) return triage;
+  }
   const due = m[2]
     ? `${expected}T${m[2]}:00${normalizeOffset(m[3], tzOffsetString(now, tz))}`
     : expected;
@@ -655,6 +670,23 @@ function splitTrailingNote(s: string): { core: string; note: string } {
 // 的退款行不重复取反。
 const LEDGER_REFUND_LABEL_RE = /退款|退货|退回|返现|返款/;
 
+/** 显式分隔符单元格统一过尾注剥离（R210 P2-1，audit-r209）：「快递费,-34.5 (破损赔付)」
+ * 的金额单元带括号尾注不匹配金额形态，位于首行时被表头启发式误吞致合计
+ * 虚增——含金额的行绝不当表头。剥出金额后尾注文本并回名目列，退款语义
+ *（signedRowAmount）不丢。 */
+function stripCellNotes(row: string[]): string[] {
+  if (row.length < 2) return row;
+  const out = [...row];
+  for (let i = 0; i < out.length; i++) {
+    const { core, note } = splitTrailingNote(out[i]);
+    if (!note || !LEDGER_MONEY_RE.test(core)) continue;
+    out[i] = core;
+    const j = i > 0 ? i - 1 : i + 1;
+    out[j] = [out[j], note].filter((s) => s.length > 0).join(" ");
+  }
+  return out;
+}
+
 /** 台账明细行的带方向金额：正数金额 + 退款语义名目 → 取负冲减。 */
 function signedRowAmount(row: string[], col: number): number {
   const v = moneyValue(row[col]);
@@ -764,25 +796,69 @@ function ledgerTableRows(
  * 含数句子，仅当解析出合计行或负数（退款）行时才认作台账；歧义不认。 */
 function inlineLedgerRows(line: string): { data: string[][]; col: number; totalIdx: number | null } | null {
   let segs = line
-    .split(/[，,；;、]/)
+    .split(/[，,；;、/／]/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-  if (segs.length < 3) return null;
+  if (segs.length === 0) return null;
   // 首段的「说明：」前缀拆成独立伪行（「周末出行开销：车费 46」→「周末出行开销」
   // +「车费 46」），交给既有的标题剥离逻辑；纯数字前缀（如时刻 8:30）不拆
   const m = segs[0].match(/^([^：:]*[^\d：:][^：:]*)[：:]\s*(.+)$/);
   if (m) segs = [m[1].trim(), m[2].trim(), ...segs.slice(1)];
-  const r = ledgerRowsFromLines(segs);
+  // 短句多笔展开（R210 P2-2，audit-r209）：「午饭 20 咖啡 -5(退款)」这类无分隔符
+  // 的多笔短句按「名目 金额」对切成伪行，与台账走同一结构识别口径
+  const segRows = segs.flatMap((s) => splitInlinePairs(s) ?? [s]);
+  if (segRows.length < 2) return null;
+  const r = ledgerRowsFromLines(segRows);
   if (r === null || r === "ambiguous") return null;
-  if (r.totalIdx === null && !r.data.some((row) => signedRowAmount(row, r.col) < 0)) return null;
+  if (segRows.length >= 3) {
+    if (r.totalIdx === null && !r.data.some((row) => signedRowAmount(row, r.col) < 0)) return null;
+    return r;
+  }
+  // 两行短句门槛更严（R210 P2-2）：必须正负混合且负数行是退款/退货语义才认
+  // 台账，否则维持 R198 口径不误伤（「纪念品退款 -30，合计 224」两段句仍 null）
+  if (r.totalIdx !== null) return null;
+  const signed = r.data.map((row) => signedRowAmount(row, r.col));
+  const negRefund = r.data.every(
+    (row, i) => signed[i] > 0 || row.some((f, c) => c !== r.col && LEDGER_REFUND_LABEL_RE.test(f))
+  );
+  if (!(signed.some((v) => v < 0) && signed.some((v) => v > 0) && negRefund)) return null;
   return r;
+}
+
+// 裸整数后跟量词开头的 token 时该整数是数量而非金额（「2 杯咖啡」）
+const QUANTITY_UNIT_LEAD_RE =
+  /^(?:个|杯|张|次|件|瓶|斤|只|本|盒|包|条|双|份|箱|台|部|把|趟|顿|回|场|节|支|卷|片|粒|颗|对|套|罐|听|袋|桶|碗|人|位|名|小时|分钟|点|号|月|日|天|周|年|公里|千米|米|克|千克|公斤|升|毫升)/;
+
+/** 无分隔符短句的「名目 金额」多笔对切（R210 P2-2）：「午饭 20 咖啡 -5(退款)」
+ * → ["午饭 20", "咖啡 -5(退款)"]。切不出 ≥2 笔、金额前无名目或句尾有游离
+ * 名目时返回 null（歧义不猜，整段交回原口径）。 */
+function splitInlinePairs(seg: string): string[] | null {
+  const toks = seg.split(/\s+/).filter((t) => t.length > 0);
+  if (toks.length < 4) return null;
+  const rows: string[] = [];
+  let label: string[] = [];
+  for (let i = 0; i < toks.length; i++) {
+    const core = splitTrailingNote(toks[i]).core;
+    const money = LEDGER_MONEY_RE.test(core) && Number.isFinite(moneyValue(core)) && moneyValue(core) !== 0;
+    const next = toks[i + 1];
+    if (money && !(/^\d+$/.test(core) && next !== undefined && QUANTITY_UNIT_LEAD_RE.test(next))) {
+      if (label.length === 0) return null;
+      rows.push(`${label.join("")} ${toks[i]}`);
+      label = [];
+      if (next !== undefined && BARE_CURRENCY_RE.test(next)) i++;
+    } else {
+      label.push(toks[i]);
+    }
+  }
+  if (label.length > 0 || rows.length < 2) return null;
+  return rows;
 }
 
 function ledgerRowsFromLines(
   lines: string[]
 ): { data: string[][]; col: number; totalIdx: number | null } | "ambiguous" | null {
   const isMoney = (s: string) => LEDGER_MONEY_RE.test(s) && Number.isFinite(moneyValue(s)) && moneyValue(s) !== 0;
-  const allRows = lines.map(splitCsvFields);
+  const allRows = lines.map((l) => stripCellNotes(splitCsvFields(l)));
   // 标题/落款行（R183 P1-1）：真实用户常在表格前后写单字段的说明行
   //（「购物清单」）；不含金额的单字段行从两端剥掉，表格主体照常解析
   let start = 0;
@@ -887,6 +963,29 @@ export function fixLedgerAmount(content: string, triage: TriageResult): TriageRe
   return { ...triage, amount: ledger.amount, currency: triage.currency ?? "CNY" };
 }
 
+// 台账净额方向仲裁（R210 P2-2，audit-r209）：混合正负台账/短句的净额符号与
+// 模型方向矛盾、且词面无该方向的独立证据时，按净额符号仲裁方向，金额取净额
+// 绝对值。「退款/退了/返现」是行级冲减语义（signedRowAmount），不算整表收入
+// 向证据；有合计行的台账以合计为口径不仲裁；词面有方向证据时模型仍主判。
+const LEDGER_NET_INCOME_EVIDENCE_RE =
+  /到账|入账|进账|收到|收了|收款|收入|回款|货款|卖了|卖出|发了工资|发工资|工资|赚了|挣了|中了|收租/;
+
+export function fixLedgerNetDirection(content: string, triage: TriageResult): TriageResult {
+  if (triage.category !== "expense" && triage.category !== "income") return triage;
+  const t = ledgerTableRows(content);
+  if (t === null || t === "ambiguous" || t.totalIdx !== null) return triage;
+  const signed = t.data.map((r) => signedRowAmount(r, t.col));
+  if (!(signed.some((v) => v < 0) && signed.some((v) => v > 0))) return triage;
+  const net = Math.round(signed.reduce((s, v) => s + v, 0) * 100) / 100;
+  if (net > 0 && triage.category === "income" && !LEDGER_NET_INCOME_EVIDENCE_RE.test(content)) {
+    return { ...triage, category: "expense", amount: net, currency: triage.currency ?? "CNY" };
+  }
+  if (net < 0 && !EXPENSE_DIRECTION_RE.test(content) && !LEDGER_EXPENSE_HINT_RE.test(content)) {
+    return { ...triage, category: "income", amount: Math.abs(net), currency: triage.currency ?? "CNY" };
+  }
+  return triage;
+}
+
 export async function triageNote(
   content: string,
   env: Parameters<typeof chatComplete>[0],
@@ -908,7 +1007,7 @@ export async function triageNote(
   let result = (text && parseTriageJson(text, tzOffsetString(now, tz))) || null;
   if (result) result = stripMarkerNoise(content, result);
   if (result) result = demoteEventLog(content, fixTransferMisfile(content, fixFinanceDirection(content, result)));
-  if (result) result = fixReceiptDoubleCount(content, fixLedgerAmount(content, fixLedgerCategory(content, result)));
+  if (result) result = fixLedgerNetDirection(content, fixReceiptDoubleCount(content, fixLedgerAmount(content, fixLedgerCategory(content, result))));
   if (result) result = fixWeekdayDue(content, result, now, tz);
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {
