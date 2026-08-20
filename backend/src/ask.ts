@@ -750,6 +750,18 @@ const QUANTIFIER_TAIL_RE =
 
 /** 主题词剥离流水线（financeTopicTerms / financeShortTopicTerms 共用）。 */
 function subsetTopicExtract(question: string): string[] | null {
+  // 复合主题连接词会被 STRIP_RES 剥成粘连词（「耳机和键盘」→「耳机键盘」
+  // 整串 LIKE 零命中，R210 P3-2，audit-r209）：先按连接词切段、逐段走同一
+  // 剥离流水线再合并（等价于「逐词匹配再求和」，子集 SQL 本就是 OR 语义）
+  const parts = question
+    .split(/和|与|跟|以及|、/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (parts.length > 1) {
+    const out: string[] = [];
+    for (const p of parts) for (const t of subsetTopicExtract(p) ?? []) if (!out.includes(t)) out.push(t);
+    return out.length > 0 && out.length <= 3 ? out : null;
+  }
   // 金额 token 不是主题词（R200，audit-r199 P2-1）：改写产物/追问里混入的
   // 「399元」这类金额残片不得注入 LIKE
   let residual = question.replace(AMOUNT_TOKEN_RE, "");
