@@ -464,7 +464,7 @@ fun NoteCard(
                     val transfer = note.category == "transfer"
                     // transfer 是资金平移：无正负号（对齐 Web 的 ⇄ 前缀），中性色
                     val amountText = note.amount?.let {
-                        (if (income) "+" else if (transfer) "⇄" else "-") + formatAmount(it, note.currency ?: "CNY")
+                        (if (income) "+" else if (transfer) "⇄" else "-") + formatAmount(Math.abs(it), note.currency ?: "CNY")
                     } ?: (if (transfer) "资金往来" else "金额待定")
                     Text(
                         amountText,

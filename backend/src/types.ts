@@ -96,6 +96,8 @@ export interface NoteMeta {
   media_status?: "ok" | "extract_failed";
   /** 转写低置信（R212 P2-1）：前端展示提示与纠错入口；用户编辑正文后清除。 */
   transcript_suspect?: boolean;
+  /** whisper 平均 logprob（R214 P1-2）：低置信阈值的运维观测与后续标定依据。 */
+  transcript_logprob?: number;
   /** 图片文字识别存疑（R212 P3-3）：前端提示核对原图；用户编辑正文后清除。 */
   ocr_suspect?: boolean;
   /** Full vision-model description (image notes). */
@@ -144,6 +146,8 @@ export interface NoteMeta {
   retriage_attempts?: number;
   /** Terminal state: retriage hit its attempt ceiling; cleared by a later successful triage or a manual category edit. */
   triage_failed?: boolean;
+  /** 失败归因（R214 P1-1）：模型有响应但输出解析不出合法 JSON（对抗/注入内容的典型形态）。 */
+  triage_parse_failed?: boolean;
   /** 分拣判定内容像在提问（无问号疑问句）；前端据此渲染「去问 AI」轻量入口。 */
   is_question?: boolean;
 }

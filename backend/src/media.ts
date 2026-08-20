@@ -155,23 +155,91 @@ export function isWhisperHallucination(text: string): boolean {
   return t.length <= 24 && WHISPER_HALLUCINATION_RE.test(t);
 }
 
+/**
+ * whisper-large-v3-turbo 输出自带的解码质量信号（R214 P1-2，audit-r213 §3.1）：
+ * segments[].avg_logprob / no_speech_prob / compression_ratio / temperature 与
+ * transcription_info.language_probability。字段缺失时置 null（fail-open 不判存疑）。
+ */
+export interface WhisperQuality {
+  avg_logprob: number | null;
+  no_speech_prob: number | null;
+  compression_ratio: number | null;
+  temperature: number | null;
+  language_probability: number | null;
+}
+
+interface WhisperSegment {
+  avg_logprob?: number;
+  no_speech_prob?: number;
+  compression_ratio?: number;
+  temperature?: number;
+}
+
+interface WhisperOutput {
+  text?: string;
+  segments?: WhisperSegment[];
+  transcription_info?: { language_probability?: number };
+}
+
+function whisperQuality(out: WhisperOutput): WhisperQuality {
+  const segs = Array.isArray(out.segments) ? out.segments : [];
+  const nums = (pick: (s: WhisperSegment) => number | undefined) =>
+    segs.map(pick).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  const mean = (vs: number[]) => (vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null);
+  const max = (vs: number[]) => (vs.length ? Math.max(...vs) : null);
+  const langProb = out.transcription_info?.language_probability;
+  return {
+    avg_logprob: mean(nums((s) => s.avg_logprob)),
+    no_speech_prob: max(nums((s) => s.no_speech_prob)),
+    compression_ratio: max(nums((s) => s.compression_ratio)),
+    temperature: max(nums((s) => s.temperature)),
+    language_probability: typeof langProb === "number" && Number.isFinite(langProb) ? langProb : null,
+  };
+}
+
+// R214 P1-2 阈值：用真实错误形态样本对 @cf/openai/whisper-large-v3-turbo 实测标定
+//（清晰/混响/快语速/电话带宽/轻噪 11 条正常样本 avg_logprob 全部 ≥ -0.23；
+// 词义跑偏 -0.48、流利但完全错意 -0.62、噪声幻听 -0.81、倒放 -0.83、纯噪声
+// -0.95——实质错误与正常之间有清晰间隔）。-0.35 取分离带中点，两侧都有余量。
+// 其余为 whisper 生态通行的解码失败信号：温度回退（贪心解码失败被迫采样）、
+// 压缩比过高（循环重复幻觉）、no_speech 高但仍有文本、语种判定不确定。
+export const WHISPER_LOGPROB_SUSPECT = -0.35;
+export const WHISPER_TEMPERATURE_SUSPECT = 0.5;
+export const WHISPER_COMPRESSION_SUSPECT = 2.4;
+export const WHISPER_NO_SPEECH_SUSPECT = 0.6;
+export const WHISPER_LANG_PROB_SUSPECT = 0.6;
+
+/** 转写模型自身的低置信判定（R214 P1-2）：任一信号命中即存疑；字段缺失不判。 */
+export function isWhisperLowConfidence(q: WhisperQuality | null | undefined): boolean {
+  if (!q) return false;
+  if (q.avg_logprob !== null && q.avg_logprob < WHISPER_LOGPROB_SUSPECT) return true;
+  if (q.temperature !== null && q.temperature >= WHISPER_TEMPERATURE_SUSPECT) return true;
+  if (q.compression_ratio !== null && q.compression_ratio > WHISPER_COMPRESSION_SUSPECT) return true;
+  if (q.no_speech_prob !== null && q.no_speech_prob > WHISPER_NO_SPEECH_SUSPECT) return true;
+  if (q.language_probability !== null && q.language_probability < WHISPER_LANG_PROB_SUSPECT) return true;
+  return false;
+}
+
 /** Whisper transcription via Workers AI; returns null on any failure. */
-export async function transcribeAudio(env: Pick<Env, "AI">, bytes: Uint8Array): Promise<string | null> {
+export async function transcribeAudio(
+  env: Pick<Env, "AI">,
+  bytes: Uint8Array
+): Promise<{ text: string; quality: WhisperQuality } | null> {
   if (!env.AI) return null;
   try {
     const out = (await withTimeout(
       env.AI.run(WHISPER_MODEL as Parameters<Ai["run"]>[0], {
         audio: bytesToBase64(bytes),
-      }) as Promise<{ text?: string }>,
+      }) as Promise<WhisperOutput>,
       AI_RUN_TIMEOUT_MS,
       "whisper"
-    )) as { text?: string };
+    )) as WhisperOutput;
     const text = (out.text ?? "").trim();
     if (isWhisperHallucination(text)) {
       console.warn("transcribeAudio: hallucinated boilerplate on silent audio, dropping", text);
       return null;
     }
-    return text || null;
+    return text ? { text, quality: whisperQuality(out) } : null;
   } catch (err) {
     console.error("transcribeAudio: failed", err);
     return null;
@@ -287,6 +355,8 @@ export interface TranscriptionResult {
   raw: string;
   /** 低置信：前端据此展示提示与纠错入口，不影响入库。 */
   suspect: boolean;
+  /** whisper 平均 logprob（存 meta.transcript_logprob，供运维/后续标定观测）。 */
+  logprob: number | null;
 }
 
 /**
@@ -298,11 +368,16 @@ export async function transcribeAndCorrect(
   env: Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL">,
   bytes: Uint8Array
 ): Promise<TranscriptionResult | null> {
-  const raw = await transcribeAudio(env, bytes);
-  if (raw === null) return null;
+  const t = await transcribeAudio(env, bytes);
+  if (t === null) return null;
+  const raw = t.text;
   const { text, suspect: llmSuspect } = await correctTranscript(env, raw);
-  const suspect = llmSuspect || isTranscriptSuspectHeuristic(raw, text, bytes.length);
-  return { content: text, raw, suspect };
+  // 三路取并集（R214 P1-2）：转写模型自身置信（抓「流利但错意」——字符级
+  // 启发式与纠错自评在 audit-r213 实测 4/4 漏判的形态）∪ 字符级启发式 ∪
+  // 纠错模型语义自评。任一命中只打存疑标记，绝不拦截入库。
+  const suspect =
+    isWhisperLowConfidence(t.quality) || llmSuspect || isTranscriptSuspectHeuristic(raw, text, bytes.length);
+  return { content: text, raw, suspect, logprob: t.quality.avg_logprob };
 }
 
 // R188 P1-1/P2-1：文字段要求逐字完整转录（含密码/密钥等凭证值——这是用户

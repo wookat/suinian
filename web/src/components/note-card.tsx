@@ -184,7 +184,7 @@ export function AmountChip({ note }: { note: Note }) {
   const merchant = note.meta?.finance_merchant
   const label =
     note.amount != null
-      ? `${note.category === "income" ? "+" : note.category === "transfer" ? "⇄" : "-"}${formatAmount(note.amount, note.currency || "CNY")}`
+      ? `${note.category === "income" ? "+" : note.category === "transfer" ? "⇄" : "-"}${formatAmount(Math.abs(note.amount), note.currency || "CNY")}`
       : "金额待定"
   return (
     <span

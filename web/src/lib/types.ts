@@ -29,6 +29,10 @@ export interface NoteMeta {
   imported_at?: string
   /** 分拣重试达上限的终态失败：已按兜底分类保存，手动改分类即清除 */
   triage_failed?: boolean
+  /** 分拣失败归因（R214 P1-1）：模型有响应但输出解析不出合法 JSON */
+  triage_parse_failed?: boolean
+  /** whisper 平均 logprob（R214 P1-2）：低置信阈值的观测依据 */
+  transcript_logprob?: number
   /** 分拣判定内容像在提问（无问号疑问句）：卡片渲染「去问 AI」轻量入口 */
   is_question?: boolean
 }
