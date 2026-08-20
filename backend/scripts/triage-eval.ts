@@ -290,12 +290,25 @@ async function main() {
   await api("/api/preferences", { method: "PATCH", body: JSON.stringify({ tz: "Asia/Shanghai" }) });
   const created: string[] = [];
   try {
+    // 写接口限流 60/min：逐条限速创建，429 时退避重试
     for (const c of CASES) {
-      const { note } = await api<{ note: NoteJson }>("/api/notes", {
-        method: "POST",
-        body: JSON.stringify({ source: "api", raw_type: "text", content: c.content }),
-      });
-      created.push(note.id);
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const { note } = await api<{ note: NoteJson }>("/api/notes", {
+            method: "POST",
+            body: JSON.stringify({ source: "api", raw_type: "text", content: c.content }),
+          });
+          created.push(note.id);
+          break;
+        } catch (e) {
+          if (attempt < 3 && String(e).includes(" 429 ")) {
+            await sleep(15_000);
+            continue;
+          }
+          throw e;
+        }
+      }
+      await sleep(1100);
     }
     console.log(`created ${created.length} notes, waiting for triage...`);
 
