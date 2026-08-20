@@ -51,6 +51,8 @@ data class NotesUiState(
     val cursor: String? = null,
     val loadingMore: Boolean = false,
     val retryingLinkIds: Set<String> = emptySet(),
+    /** 敏感标记 PATCH 在途的笔记：菜单项禁用防连发（R206 P2-2） */
+    val sensitivePendingIds: Set<String> = emptySet(),
     val reviewItems: List<DailyReviewItem> = emptyList(),
     val selectionMode: Boolean = false,
     val selectedIds: Set<String> = emptySet(),
@@ -291,23 +293,34 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 手动标记/取消敏感：乐观更新，失败回滚 */
+    /** 手动标记/取消敏感：乐观更新，在途去重（pending 期间忽略重复点击），失败回滚 */
     fun toggleSensitive(note: Note) {
+        if (note.id in _ui.value.sensitivePendingIds) return
         val target = !note.isSensitive
         val optimistic = _ui.value.notes.map { if (it.id == note.id) it.copy(isSensitive = target) else it }
-        _ui.value = _ui.value.copy(notes = optimistic)
+        _ui.value = _ui.value.copy(
+            notes = optimistic,
+            sensitivePendingIds = _ui.value.sensitivePendingIds + note.id,
+        )
         viewModelScope.launch {
             try {
                 val updated = repo.setSensitive(note.id, target)
-                if (updated != null) {
-                    _ui.value = _ui.value.copy(
-                        notes = _ui.value.notes.map { if (it.id == note.id) updated else it },
-                        toast = if (target) "已标记敏感" else "已取消敏感",
-                    )
-                }
+                _ui.value = _ui.value.copy(
+                    notes = if (updated != null) {
+                        _ui.value.notes.map { if (it.id == note.id) updated else it }
+                    } else _ui.value.notes,
+                    sensitivePendingIds = _ui.value.sensitivePendingIds - note.id,
+                    toast = if (updated != null) {
+                        if (target) "已标记敏感" else "已取消敏感"
+                    } else _ui.value.toast,
+                )
             } catch (e: Exception) {
                 val rolledBack = _ui.value.notes.map { if (it.id == note.id) note else it }
-                _ui.value = _ui.value.copy(notes = rolledBack, toast = e.message ?: "操作失败")
+                _ui.value = _ui.value.copy(
+                    notes = rolledBack,
+                    sensitivePendingIds = _ui.value.sensitivePendingIds - note.id,
+                    toast = e.message ?: "操作失败",
+                )
             }
         }
     }

@@ -31,6 +31,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -208,6 +209,8 @@ fun NoteCard(
     onToggleTodo: ((Note) -> Unit)? = null,
     onDelete: ((Note) -> Unit)? = null,
     onToggleSensitive: ((Note) -> Unit)? = null,
+    /** 敏感标记 PATCH 在途：菜单项禁用防连发（R206 P2-2） */
+    sensitivePending: Boolean = false,
     onRetryLink: ((Note) -> Unit)? = null,
     retryingLink: Boolean = false,
     onDownloadFile: ((Note) -> Unit)? = null,
@@ -320,12 +323,17 @@ fun NoteCard(
                                 )
                             }
                             DropdownMenuItem(
-                                text = { Text(if (note.isSensitive) "取消敏感" else "标记敏感") },
+                                text = { Text(if (sensitivePending) "更新中…" else if (note.isSensitive) "取消敏感" else "标记敏感") },
+                                enabled = !sensitivePending,
                                 leadingIcon = {
-                                    Icon(
-                                        if (note.isSensitive) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
-                                        contentDescription = null,
-                                    )
+                                    if (sensitivePending) {
+                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        Icon(
+                                            if (note.isSensitive) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
+                                            contentDescription = null,
+                                        )
+                                    }
                                 },
                                 onClick = {
                                     menuOpen = false

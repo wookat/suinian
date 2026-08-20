@@ -854,6 +854,7 @@ fun HomeScreen(
                                 onToggleTodo = { vm.toggleTodo(it) },
                                 onDelete = { vm.deleteNote(it) },
                                 onToggleSensitive = { vm.toggleSensitive(it) },
+                                sensitivePending = note.id in ui.sensitivePendingIds,
                                 onRetryLink = { vm.retryLink(it) },
                                 retryingLink = note.id in ui.retryingLinkIds,
                                 onDownloadFile = { vm.downloadFile(it) },
