@@ -109,10 +109,14 @@ export function buildTriagePrompt(
   const tomorrow = zonedDate(now, tz, 1);
   const nextMon = nextMondayIn(now, tz);
   const off = tzOffsetString(now, tz);
+  // 未来 7 天周历对照表：把「周X」的星期算术从模型推理变成查表（R208 P2-2）
+  const weekTable = Array.from({ length: 7 }, (_, d) => zonedDate(now, tz, d))
+    .map((w) => `${w.weekday}=${w.iso}`)
+    .join("、");
   const tagHint = existingTags.length
     ? `\n用户已有标签（仅当内容确实属于该标签主题时才复用；不相关时宁可新造贴切标签，绝不要硬套已有标签）：${existingTags.slice(0, 50).join("、")}`
     : "";
-  return `你是「碎念」笔记分拣助手。今天是 ${iso}（${weekday}），用户时区 ${tz}（UTC${off}）。相对日期一律基于今天换算，例如：「明天」= ${tomorrow.iso}（${tomorrow.weekday}）；「下周一」= ${nextMon.iso}（下一个周一，注意不是周二）。用户会丢来一条碎片信息，你输出严格 JSON（不要 markdown 代码块），字段：
+  return `你是「碎念」笔记分拣助手。今天是 ${iso}（${weekday}），用户时区 ${tz}（UTC${off}）。相对日期一律基于今天换算，例如：「明天」= ${tomorrow.iso}（${tomorrow.weekday}）；「下周一」= ${nextMon.iso}（下一个周一，注意不是周二）。未来 7 天周历对照（内容写「周X」「本周X」时直接查此表取日期，不要自行推算星期）：${weekTable}。用户会丢来一条碎片信息，你输出严格 JSON（不要 markdown 代码块），字段：
 - category，七选一：
   - "idea"：自己的想法/思考/灵感/感受，既不需要去做，也不是外部资源
   - "todo"：需要用户去做的事，通常有动作（买/交/回/约/换/提醒我）；没写时间也可以是待办
@@ -412,6 +416,39 @@ export function demoteEventLog(content: string, triage: TriageResult): TriageRes
 
 const TODO_DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::\d{2})?\s*(Z|[+-]\d{2}:?\d{2})?)?/;
 
+// ---- 裸「周X」相对日期确定性后校验（R208 P2-2，audit-r207 §3）----
+// LLM 对裸「周X」（无「下/上」修饰）的星期算术会系统性 +1 天（R207 实测
+// 3/3 错）：模型仍是主判，规则只在内容里唯一提到一个裸周X、且 due 的星期
+// 与之不符时，按「从今天（用户时区）起最近的该星期」纯日期算术纠正日期，
+// 时刻与偏移保持不变。内容含显式日期/其它相对日词或多个周X时不动（歧义不猜）。
+const BARE_WEEKDAY_RE = /(?<![下上])(?:本|这)?周([一二三四五六日天])/g;
+const WEEKDAY_NUM: Record<string, number> = { 日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6 };
+const OTHER_DATE_HINT_RE = /\d{1,2}\s*月|\d{1,3}\s*[号日]|今天|今晚|今早|明天|明晚|后天|大后天|月底|月初|年底|周末/;
+
+export function fixWeekdayDue(
+  content: string,
+  triage: TriageResult,
+  now: Date = new Date(),
+  tz: string = DEFAULT_TZ
+): TriageResult {
+  if (triage.category !== "todo" || !triage.todo_due) return triage;
+  if (OTHER_DATE_HINT_RE.test(content)) return triage;
+  const targets = new Set<number>();
+  for (const m of content.matchAll(BARE_WEEKDAY_RE)) targets.add(WEEKDAY_NUM[m[1]]);
+  if (targets.size !== 1) return triage;
+  const target = [...targets][0];
+  const m = triage.todo_due.match(TODO_DUE_RE);
+  if (!m) return triage;
+  const dueDow = new Date(`${m[1]}T00:00:00Z`).getUTCDay();
+  if (dueDow === target) return triage;
+  const todayDow = new Date(now.getTime() + tzOffsetMs(now, tz)).getUTCDay();
+  const expected = zonedDate(now, tz, (target - todayDow + 7) % 7).iso;
+  const due = m[2]
+    ? `${expected}T${m[2]}:00${normalizeOffset(m[3], tzOffsetString(now, tz))}`
+    : expected;
+  return { ...triage, todo_due: due };
+}
+
 function normalizeOffset(raw: string | undefined, defaultOffset: string): string {
   if (!raw) return defaultOffset;
   if (raw === "Z") return "+00:00";
@@ -598,6 +635,20 @@ export async function loadCategoryCorrections(db: D1Database, userId: string): P
 // 符号前或后（-¥34.5 / ¥-34.5），一行退款绝不让整表不成台账（R194 P1）
 const LEDGER_MONEY_RE = /^(?:[-−][¥￥]?|[¥￥][-−]?)?\d+(?:\.\d{1,2})?元?$/;
 
+// 金额段括号尾注（R208 P2-1，audit-r207 §2.1 #27）：「咖啡 -12 (商家退款)」这类
+// 行的尾注破坏「名称 金额」两段式，整行退化成单字段后被落款剥离逻辑静默
+// 丢行致金额虚增。剥掉紧跟在段尾的括号注释后再识别金额，注释文本并入
+// 名目列，退款语义（signedRowAmount）不丢。
+const TRAILING_NOTE_RE = /\s*[（(][^()（）\n]{0,24}[)）]\s*$/;
+const BARE_CURRENCY_RE = /^(?:元|块|块钱|[¥￥])$/;
+
+/** 拆「金额+括号尾注」段：{ core: 去注释后的金额段, note: 尾注文本 }。 */
+function splitTrailingNote(s: string): { core: string; note: string } {
+  const m = s.match(TRAILING_NOTE_RE);
+  if (!m || m.index === undefined) return { core: s, note: "" };
+  return { core: s.slice(0, m.index).trim(), note: m[0].trim() };
+}
+
 // 退款/退货名目行（R206 P2-1，audit-r205 case A）：明细行金额写成正数但名目
 // 是退款语义时，方向与其它行相反——合计时按负值冲减，否则「供应商退款 454」
 // 会被当作支出并入合计（120+260+300+454=1134，实应净额 226）。已显式写负号
@@ -645,10 +696,27 @@ export function splitCsvFields(line: string): string[] {
   if (fields.length === 1 && !sawQuote) {
     // 空白退化只认「……<空白>金额」形态的数据行，切成 [名目, 金额] 两列：
     // 名目本身可含空格（说明前缀/多词品名），非数据行（说明/表头，末段不是
-    // 金额）保持单字段，仍走两端剥离与表头跳过逻辑，不会被当成假数据行
+    // 金额）保持单字段，仍走两端剥离与表头跳过逻辑，不会被当成假数据行。
+    // 金额段后还可跟括号尾注（「咖啡 -12 (商家退款)」，R208 P2-1）：末段是
+    // 金额时优先取末段（与既有口径一致），否则唯一金额段当金额列、其余
+    // 段（含尾注）并入名目；多个金额段歧义不猜，保持单字段。
     const ws = fields[0].split(/\s+/).filter((f) => f.length > 0);
-    if (ws.length > 1 && LEDGER_MONEY_RE.test(ws[ws.length - 1])) {
-      return [ws.slice(0, -1).join(" "), ws[ws.length - 1]];
+    if (ws.length > 1) {
+      const parts = ws.map(splitTrailingNote);
+      const moneyIdxs = parts.map((p, i) => i).filter((i) => LEDGER_MONEY_RE.test(parts[i].core));
+      const pick =
+        moneyIdxs.includes(ws.length - 1) && !parts[ws.length - 1].note
+          ? ws.length - 1
+          : moneyIdxs.length === 1 && moneyIdxs[0] > 0
+            ? moneyIdxs[0]
+            : -1;
+      if (pick >= 0) {
+        const label = parts
+          .map((p, i) => (i === pick ? p.note : [p.core, p.note].filter(Boolean).join(" ")))
+          .filter((s) => s.length > 0 && !BARE_CURRENCY_RE.test(s))
+          .join(" ");
+        return [label, parts[pick].core];
+      }
     }
   }
   return fields;
@@ -841,6 +909,7 @@ export async function triageNote(
   if (result) result = stripMarkerNoise(content, result);
   if (result) result = demoteEventLog(content, fixTransferMisfile(content, fixFinanceDirection(content, result)));
   if (result) result = fixReceiptDoubleCount(content, fixLedgerAmount(content, fixLedgerCategory(content, result)));
+  if (result) result = fixWeekdayDue(content, result, now, tz);
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {
     result = result

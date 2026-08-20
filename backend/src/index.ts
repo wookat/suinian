@@ -3295,23 +3295,10 @@ app.post("/api/ask", async (c) => {
     // 而零命中；此时用户问的是前轮那个具体事物，绝不能兜底复读全账合计——
     // 回落普通召回直答（R186 生产实测）
     if (!pronounFollowUp) {
-      // 关键词零命中：fail-closed 说明 + 全局精确合计兜底，绝不心算估数
-      const fbConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
-      const fbBinds: unknown[] = [userId];
-      if (sRange?.start) {
-        fbConds.push("created_at >= ?");
-        fbBinds.push(sRange.start);
-      }
-      if (sRange?.end) {
-        fbConds.push("created_at < ?");
-        fbBinds.push(sRange.end);
-      }
-      const fbr = await c.env.DB.prepare(`SELECT * FROM notes WHERE ${fbConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`)
-        .bind(...fbBinds)
-        .all<NoteRow>();
-      const answer =
-        `按关键词「${(degraded ?? subsetTerms).join("、")}」精确匹配（标题/正文/标签）没有找到记账记录；为避免估算出错，我不做心算合计。如果你的记录用了别的说法（比如具体商品/商家名），换个关键词再问试试。\n\n` +
-        buildFinanceAggAnswer(financeStats(fbr.results ?? []), sRange?.phrase ?? null);
+      // 关键词零命中：fail-closed 如实说明，绝不心算估数。不再附无关的
+      // 全账合计（R208 P3-1，audit-r207 §5.1）：用户问的是具体主题，
+      // 全局收支答非所问且暗示「查过了确实没有」，误导大于帮助
+      const answer = `按关键词「${(degraded ?? subsetTerms).join("、")}」精确匹配（标题/正文/标签）没有找到记账记录；为避免估算出错，我不做心算合计。如果你的记录用了别的说法（比如具体商品/商家名），换个关键词再问试试。`;
       return c.json({ answer, references: [], notes: [], finance_subset: true, finance_fail_closed: true });
     }
   }

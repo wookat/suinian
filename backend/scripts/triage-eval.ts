@@ -39,9 +39,9 @@ function nextMondayIso(): string {
   return shanghaiIso((8 - dow) % 7 || 7);
 }
 
-function nearestFridayIso(): string {
+function nearestWeekdayIso(target: number): string {
   const dow = new Date(Date.now() + 8 * 3600_000).getUTCDay();
-  return shanghaiIso((5 - dow + 7) % 7);
+  return shanghaiIso((target - dow + 7) % 7);
 }
 
 interface EvalCase {
@@ -62,7 +62,11 @@ interface EvalCase {
 const CASES: EvalCase[] = [
   { content: `${PREFIX} 下周一晚上8点提醒我给客户回邮件`, category: "todo", due: nextMondayIso() },
   { content: `${PREFIX} 明天上午10点半和设计师对 UI 稿`, category: "todo", due: shanghaiIso(1) },
-  { content: `${PREFIX} 周五下午3点交季度报告给老板`, category: "todo", due: nearestFridayIso() },
+  { content: `${PREFIX} 周五下午3点交季度报告给老板`, category: "todo", due: nearestWeekdayIso(5) },
+  // R208 P2-2（audit-r207 生产 3/3 复现：裸「周X」被 LLM 星期算术 +1 天）
+  { content: `${PREFIX} 周六上午10点去看牙医`, category: "todo", due: nearestWeekdayIso(6) },
+  { content: `${PREFIX} 本周四之前把 PPT 发给市场部`, category: "todo", due: nearestWeekdayIso(4) },
+  { content: `${PREFIX} 周日晚上给爸妈打电话`, category: "todo", due: nearestWeekdayIso(0) },
   { content: `${PREFIX} 回头把冰箱滤芯换了`, category: "todo", due: null },
   { content: `${PREFIX} 公司报销流程：先在 OA 提单，再贴发票给财务`, category: "data" },
   // 制度/流程变更但含个人动作（找行政领新版）→ todo（R12 判例）
@@ -209,6 +213,20 @@ const CASES: EvalCase[] = [
     amount: 3500.5,
     currency: "CNY",
   },
+  // R208 P2-1（audit-r207 §2.1 #27 生产原文）：负数行带括号尾注不得丢行，净额 47.5
+  {
+    content: `${PREFIX} 今日消费\n早餐 12.5\n打车 35\n奶茶 12\n咖啡 -12 (商家退款)`,
+    category: "expense",
+    amount: 47.5,
+    currency: "CNY",
+  },
+  // 全角括号尾注变体
+  {
+    content: `${PREFIX} 周末出行\n车费 46\n门票 120\n退款 -30（部分退）`,
+    category: "expense",
+    amount: 136,
+    currency: "CNY",
+  },
   // R204 P3-1：英文/中英混合财务笔记不得因语言漏判（audit-r203：coffee beans 128 CNY → collect 且 amount=null）
   { content: `${PREFIX} coffee beans 128 CNY`, category: "expense", amount: 128, currency: "CNY" },
   { content: `${PREFIX} bought a mechanical keyboard for $45`, category: "expense", amount: 45, currency: "USD" },
@@ -254,7 +272,7 @@ async function main() {
     for (let i = 0; i < 30; i++) {
       await sleep(3000);
       // no q= filter: sensitive notes are stored encrypted, so content LIKE would miss them
-      // limit 必须 ≥ 用例数（当前 53），否则最旧的几条永远取不回被误判失败
+      // limit 必须 ≥ 用例数（当前 74），否则最旧的几条永远取不回被误判失败
       const res = await api<{ notes: NoteJson[] }>(`/api/notes?limit=100`);
       notes = res.notes.filter((n) => created.includes(n.id));
       if (notes.length === created.length && notes.every((n) => n.category)) break;
