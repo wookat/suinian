@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.isSpecified
 import com.zalize.suinian.data.SettingsRepository
@@ -232,14 +233,29 @@ fun OnboardingScreen(
 
         when (mode) {
             OnboardingMode.Token -> {
+                var tokenVisible by rememberSaveable { mutableStateOf(false) }
                 OutlinedTextField(
                     value = token,
                     onValueChange = { token = it },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("API Token") },
                     singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation = if (tokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        TextButton(onClick = { tokenVisible = !tokenVisible }) {
+                            Text(if (tokenVisible) "隐藏" else "显示")
+                        }
+                    },
                 )
+                if (!tokenVisible && token.length >= 4) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "已输入 ${token.length} 位，末 4 位：${token.takeLast(4)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
             }
             else -> {
                 OutlinedTextField(
