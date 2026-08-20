@@ -810,6 +810,9 @@ export function NoteCard({
             <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border bg-secondary px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
               <Eye className="size-3" /> 敏感内容，点击查看
             </span>
+            <span className="w-full text-xs leading-relaxed text-muted-foreground/80">
+              检测到密码/凭据类信息，已自动加密保护，不进入问答与搜索；若属误判，可在右上角菜单「取消敏感标记」
+            </span>
           </button>
         ) : isLink ? (
           <div className="min-w-0 flex-1 space-y-2">

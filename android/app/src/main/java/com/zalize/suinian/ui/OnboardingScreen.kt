@@ -18,7 +18,9 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.LocalTextStyle
+import android.widget.Toast
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -27,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -58,6 +61,18 @@ fun OnboardingScreen(
     var recoveryInput by rememberSaveable { mutableStateOf("") }
     var busy by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
+    // 错误提示的单调计数：页内错误文案在小屏/键盘挡住时可能不在视口内，
+    // 用 Toast 兼做一道全局可见的失败反馈（同一文案重复触发也能提示）
+    var errorTick by rememberSaveable { mutableStateOf(0) }
+    val context = LocalContext.current
+    LaunchedEffect(errorTick) {
+        if (errorTick > 0) error?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+    }
+
+    fun fail(msg: String) {
+        error = msg
+        errorTick++
+    }
     // 注册/恢复成功后一次性展示的恢复码（确认保存后才进入主界面）
     var pendingCode by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingToken by rememberSaveable { mutableStateOf<String?>(null) }
@@ -81,7 +96,7 @@ fun OnboardingScreen(
         when (mode) {
             OnboardingMode.Token -> {
                 if (token.isBlank()) {
-                    error = "请填写 API Token"
+                    fail("请填写 API Token")
                     return
                 }
                 busy = true
@@ -91,21 +106,21 @@ fun OnboardingScreen(
                         ApiClient(baseUrl.trim().trimEnd('/'), token.trim()).getPreferences()
                         finish(token.trim(), null)
                     } catch (e: ApiException) {
-                        error = e.message
+                        fail(e.message ?: "操作失败，请稍后重试")
                         busy = false
                     } catch (e: Exception) {
-                        error = "无法连接服务器，请检查 API 地址和网络"
+                        fail("无法连接服务器，请检查 API 地址和网络")
                         busy = false
                     }
                 }
             }
             OnboardingMode.Register, OnboardingMode.Login, OnboardingMode.Recover -> {
                 if (name.isBlank() || password.isBlank()) {
-                    error = if (mode == OnboardingMode.Recover) "请填写用户名和新密码" else "请填写用户名和密码"
+                    fail(if (mode == OnboardingMode.Recover) "请填写用户名和新密码" else "请填写用户名和密码")
                     return
                 }
                 if (mode == OnboardingMode.Recover && recoveryInput.isBlank()) {
-                    error = "请填写恢复码"
+                    fail("请填写恢复码")
                     return
                 }
                 busy = true
@@ -134,9 +149,9 @@ fun OnboardingScreen(
                             finish(res.apiToken, res.user.name, showTour = mode == OnboardingMode.Register)
                         }
                     } catch (e: ApiException) {
-                        error = e.message
+                        fail(e.message ?: "操作失败，请稍后重试")
                     } catch (e: Exception) {
-                        error = "操作失败，请稍后重试"
+                        fail("操作失败，请稍后重试")
                     } finally {
                         busy = false
                     }
