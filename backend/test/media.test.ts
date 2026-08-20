@@ -128,19 +128,32 @@ describe("mediaTooLargeMessage", () => {
 
 describe("correctTranscript", () => {
   it("returns the corrected text from the LLM", async () => {
+    const env = aiEnv("可信\n明天去牙医那里复诊");
+    expect(await correctTranscript(env, "明天去牙医那里复枕")).toEqual({ text: "明天去牙医那里复诊", suspect: false });
+  });
+
+  it("parses the 存疑 self-assessment flag (R212 P2-1)", async () => {
+    const env = aiEnv("存疑\n提醒我带伞，天气预报说有大雨");
+    expect(await correctTranscript(env, "提醒我们天气预报说有五十点的降雨量被李总打电话")).toEqual({
+      text: "提醒我带伞，天气预报说有大雨",
+      suspect: true,
+    });
+  });
+
+  it("fail-open：模型不按两行格式输出时按可信处理", async () => {
     const env = aiEnv("明天去牙医那里复诊");
-    expect(await correctTranscript(env, "明天去牙医那里复枕")).toBe("明天去牙医那里复诊");
+    expect(await correctTranscript(env, "明天去牙医那里复枕")).toEqual({ text: "明天去牙医那里复诊", suspect: false });
   });
 
   it("falls back to the raw transcript when the LLM fails", async () => {
     const env = aiEnv(async () => {
       throw new Error("provider down");
     });
-    expect(await correctTranscript(env, "原始转写")).toBe("原始转写");
+    expect(await correctTranscript(env, "原始转写")).toEqual({ text: "原始转写", suspect: false });
   });
 
   it("falls back to the raw transcript when the LLM returns empty", async () => {
-    expect(await correctTranscript(aiEnv(""), "原始转写")).toBe("原始转写");
+    expect(await correctTranscript(aiEnv(""), "原始转写")).toEqual({ text: "原始转写", suspect: false });
   });
 });
 

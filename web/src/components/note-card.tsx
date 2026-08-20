@@ -401,6 +401,11 @@ export function NoteCard({
     }
   }
 
+  // 转写/识别存疑（R212 P2-1/P3-3）：只加提示与编辑入口，不影响内容展示；编辑保存后后端清除标记
+  const mediaSuspect =
+    (note.raw_type === "voice" && note.meta?.transcript_suspect) ||
+    (note.raw_type === "image" && note.meta?.ocr_suspect)
+
   const mediaFailed =
     (note.raw_type === "voice" && (note.meta?.media_status === "extract_failed" || note.content.startsWith("【语音】转写失败"))) ||
     (note.raw_type === "image" && (note.meta?.media_status === "extract_failed" || note.content.startsWith("【图片】文字提取失败"))) ||
@@ -973,6 +978,28 @@ export function NoteCard({
                   {retryingMedia ? "重试中…" : "原地重试"}
                 </button>
                 {retryMediaError && <span className="w-full text-destructive">{retryMediaError}</span>}
+              </div>
+            )}
+            {!mediaFailed && mediaSuspect && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-600 dark:text-amber-500">
+                <CircleAlert className="size-3.5 shrink-0" />
+                <span>{note.raw_type === "voice" ? "转写可能不准，建议核对" : "文字识别可能不准，建议核对原图"}</span>
+                {onEdit && (
+                  <button
+                    onClick={() => {
+                      setEditValue(note.content)
+                      setEditCategory(note.category ?? "")
+                      setEditTags(note.tags)
+                      setEditTagInput("")
+                      setEditDue(dueToInput(note.todo_due))
+                      setConflictNote(null)
+                      setEditing(true)
+                    }}
+                    className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                  >
+                    <Pencil className="size-3" /> 纠错
+                  </button>
+                )}
               </div>
             )}
             {fileMeta && (

@@ -94,6 +94,10 @@ export interface NoteMeta {
   raw_transcript?: string;
   /** Result of the last transcription/extraction attempt (voice/image notes). */
   media_status?: "ok" | "extract_failed";
+  /** 转写低置信（R212 P2-1）：前端展示提示与纠错入口；用户编辑正文后清除。 */
+  transcript_suspect?: boolean;
+  /** 图片文字识别存疑（R212 P3-3）：前端提示核对原图；用户编辑正文后清除。 */
+  ocr_suspect?: boolean;
   /** Full vision-model description (image notes). */
   image_description?: string;
   /** 视觉模型判定图片含机密值（image notes）：文本分拣看不到像素，复判不得据「正文无秘密值」解除敏感位。 */

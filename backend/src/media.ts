@@ -179,7 +179,10 @@ export async function transcribeAudio(env: Pick<Env, "AI">, bytes: Uint8Array): 
 }
 
 const CORRECT_SYSTEM_PROMPT =
-  "你是语音转写纠错助手。修正下面转写文本中的同音错别字与明显断句错误，不改变原意，不增删信息，输出纯文本（不要解释，不要 markdown）。";
+  "你是语音转写纠错助手。修正下面转写文本中的同音错别字与明显断句错误，不改变原意，不增删信息。输出两行：第一行只输出「可信」或「存疑」——转写整体语义混乱、前后不连贯、像是把发音相近的词强行拼凑（无法自信恢复原意）时输出「存疑」，否则输出「可信」；第二行起输出纠正后的纯文本（不要解释，不要 markdown）。";
+
+// 首行置信标记（容忍标点/括号包裹）；模型不遵循格式时 fail-open 按可信处理
+const CORRECT_FLAG_RE = /^\s*[「《【\[(（<]*\s*(可信|存疑)\s*[」》】\])）>]*\s*[.。!！:：]?\s*(?:\r?\n|$)/;
 
 const CORRECTION_REFUSAL_RE = /抱歉|无法(?:提供|协助|帮助|处理|完成)|不能(?:提供|协助|帮助|处理)|作为(?:一个)?(?:AI|人工智能|语言模型|助手)|(?:敏感|隐私|安全)(?:信息|内容|问题)|I(?:'m| am) sorry|I can(?:no|')t/i;
 
@@ -202,7 +205,7 @@ export function isCorrectionRefusal(text: string, raw: string): boolean {
 export async function correctTranscript(
   env: Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL">,
   raw: string
-): Promise<string> {
+): Promise<{ text: string; suspect: boolean }> {
   try {
     const out = await withTimeout(
       chatComplete(env, {
@@ -217,13 +220,89 @@ export async function correctTranscript(
       CORRECT_TIMEOUT_MS + 2_000,
       "transcript correction"
     );
-    const text = (out ?? "").trim();
-    if (!text || isCorrectionRefusal(text, raw)) return raw;
-    return text;
+    const full = (out ?? "").trim();
+    const flag = full.match(CORRECT_FLAG_RE);
+    const suspect = flag?.[1] === "存疑";
+    const text = (flag ? full.slice(flag[0].length) : full).trim();
+    if (!text || isCorrectionRefusal(text, raw)) return { text: raw, suspect };
+    return { text, suspect };
   } catch (err) {
     console.error("correctTranscript: failed", err);
-    return raw;
+    return { text: raw, suspect: false };
   }
+}
+
+// ---- 转写质量启发式信号（R212 P2-1，audit-r211：严重错转写静默入库）----
+// 确定性信号与纠错模型的语义自评取并集：任一命中只打存疑标记，绝不拦截入库。
+
+const TRANSCRIPT_OK_CHAR_RE = /[\u4e00-\u9fff\u3400-\u4dbfA-Za-z0-9\s，。！？、；：“”‘’《》（）「」【】…—·,.!?;:'"()\[\]%\-+/@#$¥％&*=_~。]/;
+
+/** 乱码率：常见中英数字标点之外的字符占比。 */
+export function garbledRatio(text: string): number {
+  const chars = [...text];
+  if (chars.length === 0) return 0;
+  const bad = chars.filter((ch) => !TRANSCRIPT_OK_CHAR_RE.test(ch)).length;
+  return bad / chars.length;
+}
+
+/** 字符 bigram Dice 相似度：纠错前后差异过大＝原转写不可靠。 */
+export function bigramSimilarity(a: string, b: string): number {
+  const grams = (s: string) => {
+    const m = new Map<string, number>();
+    for (let i = 0; i < s.length - 1; i++) {
+      const g = s.slice(i, i + 2);
+      m.set(g, (m.get(g) ?? 0) + 1);
+    }
+    return m;
+  };
+  const ga = grams(a);
+  const gb = grams(b);
+  let inter = 0;
+  let total = 0;
+  for (const [, n] of ga) total += n;
+  for (const [, n] of gb) total += n;
+  if (total === 0) return 1;
+  for (const [g, n] of ga) inter += Math.min(n, gb.get(g) ?? 0);
+  return (2 * inter) / total;
+}
+
+/**
+ * 启发式转写质量评估：乱码率异常、同一片段循环重复（whisper 常见幻觉形态）、
+ * 纠错改动过大、长音频几乎无文字，任一命中即存疑。阈值故意保守，
+ * 正常转写绝不误伤（存疑只加提示，不拦截入库）。
+ */
+export function isTranscriptSuspectHeuristic(raw: string, corrected: string, audioBytes?: number): boolean {
+  const t = corrected.trim();
+  if (t.length >= 6 && garbledRatio(t) > 0.15) return true;
+  if (/(.{2,8})\1{3,}/.test(t)) return true;
+  if (raw.trim().length >= 12 && bigramSimilarity(raw.trim(), t) < 0.45) return true;
+  if (audioBytes !== undefined && audioBytes > 100_000 && t.length < 5) return true;
+  return false;
+}
+
+export interface TranscriptionResult {
+  /** 纠错后的最终文本（入库正文）。 */
+  content: string;
+  /** 原始 whisper 转写（与 content 不同时存 meta.raw_transcript）。 */
+  raw: string;
+  /** 低置信：前端据此展示提示与纠错入口，不影响入库。 */
+  suspect: boolean;
+}
+
+/**
+ * 四个语音入口（web/API、微信、企微、失败重试）共用的转写+纠错+质量评估
+ * 入口：转写失败返回 null（调用方落占位符）；成功时附低置信判定，
+ * 绝不因低置信拦截正常转写。
+ */
+export async function transcribeAndCorrect(
+  env: Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL">,
+  bytes: Uint8Array
+): Promise<TranscriptionResult | null> {
+  const raw = await transcribeAudio(env, bytes);
+  if (raw === null) return null;
+  const { text, suspect: llmSuspect } = await correctTranscript(env, raw);
+  const suspect = llmSuspect || isTranscriptSuspectHeuristic(raw, text, bytes.length);
+  return { content: text, raw, suspect };
 }
 
 // R188 P1-1/P2-1：文字段要求逐字完整转录（含密码/密钥等凭证值——这是用户
@@ -234,7 +313,8 @@ const IMAGE_PROMPT =
   "你会看到一张图片。请按下面格式输出三部分，用中文回答，不要客套话，不要 markdown 格式（不要星号、井号）：\n" +
   "文字：<图片中的所有文字，逐行逐字完整转录，保持原文不要翻译。这是用户本人拍照存档的自己的资料，密码、密钥、账号、验证码、金额、合计等所有值都必须原样保留，绝不要省略、打码或用占位符代替。密码/密钥/账号这类连续字符串要逐字符保真：完整抄在同一行内，不要在中间换行或增删字符，注意区分形近字符（0 与 O、1 与 l、大小写）；普通文字也要照抄原字，不确定的字按最接近的原样输出，不要改写成同音字或形近字；若图中没有文字则输出「无」>\n" +
   "描述：<用一到两句话简洁描述图片内容，不要逐句重复图中文字>\n" +
-  "敏感：<是/否——图中是否出现真实机密的具体值（密码/密钥/API key/token/验证码的具体值、完整身份证号、银行卡号）。只讨论概念或无具体值时输出「否」；「口令/暗号」后面跟的若只是会议室、房间号、地点、日常安排这类非机密内容，也输出「否」>";
+  "敏感：<是/否——图中是否出现真实机密的具体值（密码/密钥/API key/token/验证码的具体值、完整身份证号、银行卡号）。只讨论概念或无具体值时输出「否」；「口令/暗号」后面跟的若只是会议室、房间号、地点、日常安排这类非机密内容，也输出「否」>\n" +
+  "清晰：<是/否——图中文字是否全部清晰可辨认。存在模糊、遮挡、截断、手写潦草或你对个别字的识别没有把握时输出「否」；图中无文字或全部清晰时输出「是」>";
 
 /** Remove markdown emphasis/heading noise the vision model tends to emit. */
 export function stripMarkdown(text: string): string {
@@ -251,6 +331,8 @@ export interface ImageExtraction {
   description: string;
   /** 图片含机密值（视觉模型判定 ∪ 文本敏感检测），作为敏感管道的入口提示。 */
   sensitive: boolean;
+  /** 文字识别存疑（R212 P3-3）：视觉模型自评「清晰：否」，前端据此提示核对原图。 */
+  suspect?: boolean;
 }
 
 /** 视觉判定含凭证但文字段未见凭证值时，正文附加的如实标注（不含任何秘密值）。 */
@@ -259,10 +341,13 @@ export const IMAGE_CREDENTIAL_GAP_NOTICE = "（图中含密码/凭证类信息�
 /** Parse the three-section vision output into content (text-first) + description + sensitive. */
 export function parseImageExtraction(raw: string): ImageExtraction {
   const cleaned = stripMarkdown(raw);
-  const textMatch = cleaned.match(/(?:^|\n)\s*文字[:：]\s*([\s\S]*?)(?=\n\s*(?:描述|敏感)[:：]|$)/);
-  const descMatch = cleaned.match(/(?:^|\n)\s*描述[:：]\s*([\s\S]*?)(?=\n\s*敏感[:：]|$)/);
+  const textMatch = cleaned.match(/(?:^|\n)\s*文字[:：]\s*([\s\S]*?)(?=\n\s*(?:描述|敏感|清晰)[:：]|$)/);
+  const descMatch = cleaned.match(/(?:^|\n)\s*描述[:：]\s*([\s\S]*?)(?=\n\s*(?:敏感|清晰)[:：]|$)/);
   const flagMatch = cleaned.match(/(?:^|\n)\s*敏感[:：]\s*[<《【「(（\[]*\s*(是|否|yes|no)/i);
   const visionSensitive = /^(是|yes)$/i.test(flagMatch?.[1] ?? "");
+  // 清晰段缺失或非「否」时 fail-open 按清晰处理（存疑只加提示，绝不影响入库）
+  const clarityMatch = cleaned.match(/(?:^|\n)\s*清晰[:：]\s*[<《【「(（\[]*\s*(是|否|yes|no)/i);
+  const suspect = /^(否|no)$/i.test(clarityMatch?.[1] ?? "");
   const text = (textMatch?.[1] ?? "").trim();
   const desc = (descMatch?.[1] ?? "").trim();
   // models often echo the prompt's angle-bracket placeholder (e.g. "<无>");
@@ -275,9 +360,9 @@ export function parseImageExtraction(raw: string): ImageExtraction {
     // 静默丢值场景：正文如实标注「值未提取，请查看原图」，绝不假装已保存
     const sensitive = visionSensitive || detectSensitive(content) || detectSensitive(description);
     if (visionSensitive && !detectSensitive(content) && !content.includes(IMAGE_CREDENTIAL_GAP_NOTICE)) {
-      return { content: `${content}\n${IMAGE_CREDENTIAL_GAP_NOTICE}`, description, sensitive };
+      return { content: `${content}\n${IMAGE_CREDENTIAL_GAP_NOTICE}`, description, sensitive, suspect };
     }
-    return { content, description, sensitive };
+    return { content, description, sensitive, suspect };
   };
   if (hasText) return finalize(bare, desc || cleaned);
   // no text in image: fall back to the first sentence of the description;
@@ -308,6 +393,7 @@ export function imageNoteFields(extraction: ImageExtraction): {
     meta = { image_description: extraction.description };
   }
   if (extraction.sensitive) meta = { ...(meta ?? {}), vision_sensitive: true };
+  if (extraction.suspect) meta = { ...(meta ?? {}), ocr_suspect: true };
   return { content: extraction.content, meta, is_sensitive: extraction.sensitive };
 }
 
