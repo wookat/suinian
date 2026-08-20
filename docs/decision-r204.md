@@ -32,9 +32,11 @@ R203 受控复现（`wm size 400x860`）：点击「注册并开始使用」无�
 
 修复（`OnboardingScreen.kt`）：错误设置统一走 `fail()`（单调计数 `errorTick` + `LaunchedEffect`），在页内错误文案之外**兼发一条 Toast**——Toast 由系统绘制在窗口顶层，不受布局压缩/滚动位置影响，同一文案重复触发也能再次提示。不限于小屏场景（audit-r203 §9 建议原文），网络失败/服务端错误同样受益。按钮已有 `enabled=!busy` 禁用态，无需重复加。
 
-## 6. Android 底部导航 Tab 疑似伪象 → 复核定论（见 PR 汇报）
+## 6. Android 底部导航 Tab 疑似伪象 → 定论：伪象，不修
 
-用 adb tap 坐标注入与 UiAutomator/espresso 语义点击分别复核底部导航切换；结论以实测为准记录于 PR 与本节（复核后回填）。
+复核方式（API 34 模拟器、生产 API、[QA-R204]-and 账号）：(a) uiautomator dump 取各 Tab bounds 中心坐标后 `adb input tap`；(b) 每次点击前实时 dump 语义节点再取中心注入。两种注入方式下 5 个 Tab（碎念/待办/问答/线索/报告）全部真实切换（顶栏标题 + 内容截图证据，见 PR #227 评论）。
+
+定论：audit-r203 所见「Tab 点不动」为**伪象**，疑似当时 `wm size` 受控压缩残留或模拟器 ANR 干扰所致，非应用缺陷，不修。
 
 ## 7. R202/R203 遗留项口径
 
