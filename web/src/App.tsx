@@ -7,6 +7,7 @@ import {
   BarChart3,
   Settings as SettingsIcon,
   Info,
+  WifiOff,
   X,
 } from "lucide-react"
 import { TimelinePage } from "@/pages/timeline"
@@ -119,6 +120,23 @@ function useIsDesktop(): boolean {
   return desktop
 }
 
+// 全局离线状态（R220 P3-1，audit-r219：PWA 离线刷新只有送笔记时才知道断网）：
+// 断网时顶部常驻提示可继续记录、历史页面可能是缓存，不等用户操作才发现
+function useOnline(): boolean {
+  const [online, setOnline] = useState(() => navigator.onLine)
+  useEffect(() => {
+    const onUp = () => setOnline(true)
+    const onDown = () => setOnline(false)
+    window.addEventListener("online", onUp)
+    window.addEventListener("offline", onDown)
+    return () => {
+      window.removeEventListener("online", onUp)
+      window.removeEventListener("offline", onDown)
+    }
+  }, [])
+  return online
+}
+
 // off-nav route: 最近删除 recycle bin (linked from settings)
 const TRASH_ROUTE = {
   path: "trash",
@@ -165,6 +183,7 @@ export default function App() {
   const isMock = useMockMode()
   const onboarded = useOnboarded()
   const isDesktop = useIsDesktop()
+  const online = useOnline()
 
   // 浏览器时区同步到服务端偏好：首次加载 + 注册/登录（settings 变更）后
   useEffect(() => {
@@ -188,6 +207,15 @@ export default function App() {
         跳过导航，直达主要内容
       </a>
       {!onboarded && <Onboarding />}
+      {!online && (
+        <div
+          role="status"
+          className="flex items-center justify-center gap-2 border-b border-slate-500/30 bg-slate-500/15 px-4 py-2 text-sm text-slate-700 backdrop-blur dark:text-slate-300 md:pl-52 print:hidden"
+        >
+          <WifiOff className="size-4 shrink-0" />
+          <span>当前离线：可继续记录（会暂存本机、联网后自动补发），页面内容可能是缓存</span>
+        </div>
+      )}
       {isMock && (
         <div className="flex items-center justify-center gap-2 border-b border-amber-500/30 bg-amber-500/15 px-4 py-2 text-sm text-amber-800 backdrop-blur dark:text-amber-300 md:pl-52">
           <Info className="size-4 shrink-0" />

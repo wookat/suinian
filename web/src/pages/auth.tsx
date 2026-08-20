@@ -224,11 +224,16 @@ export function AuthPage() {
         useMock: false,
         onboarded: true,
         // fresh registrations get the one-time feature tour on first timeline entry
-        tourSeen: mode !== "register",
+        //（幂等重试命中已有账号时本质是登录，不重放引导）
+        tourSeen: mode !== "register" || res.existing === true,
       })
       if (res.recovery_code) {
         // 注册/找回成功：先展示一次性恢复码，用户确认保存后再进入应用
         setRecoveryCode(res.recovery_code)
+      } else if (mode === "register" && res.existing) {
+        // 同名同密码命中已有账号的幂等重试：本质是登录，恢复码早在首次
+        // 注册时发过，不得误报「恢复码未能生成」
+        continueAfterAuth()
       } else if (mode !== "login") {
         // 服务端恢复码生成失败会降级返回 null：必须明确告知，否则用户
         // 直到忘密码那天才发现自己没有任何找回途径

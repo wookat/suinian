@@ -1089,6 +1089,8 @@ export interface AuthResult {
   api_token: string
   /** 一次性恢复码：仅注册/找回成功时返回一次，服务端只存哈希 */
   recovery_code?: string | null
+  /** 同名同密码幂等重试命中已有账号：本次是登录而非新建，不会有恢复码 */
+  existing?: boolean
 }
 
 /** 登录/注册走 PBKDF2 + 冷启动，生产慢往返实测可超 30s（R189 P3-3）：

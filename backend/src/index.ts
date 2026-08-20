@@ -273,7 +273,9 @@ app.post("/api/auth/register", async (c) => {
       const retryToken = isLegacyPlaintextToken(existing.api_token)
         ? existing.api_token
         : await issueToken(c.env.DB, existing.id);
-      return c.json({ user: { id: existing.id, name: existing.name }, api_token: retryToken });
+      // existing 标记（R220 P3-2，audit-r219）：幂等重试故意不返回 recovery_code，
+      // 客户端据此区分「老账号直接登录」与「新注册但恢复码生成失败」
+      return c.json({ user: { id: existing.id, name: existing.name }, api_token: retryToken, existing: true });
     }
     return c.json({ error: "用户名已存在", code: "NAME_TAKEN" }, 409);
   }
@@ -307,7 +309,7 @@ app.post("/api/auth/register", async (c) => {
         const winnerToken = isLegacyPlaintextToken(winner.api_token)
           ? winner.api_token
           : await issueToken(c.env.DB, winner.id);
-        return c.json({ user: { id: winner.id, name: winner.name }, api_token: winnerToken });
+        return c.json({ user: { id: winner.id, name: winner.name }, api_token: winnerToken, existing: true });
       }
       return c.json({ error: "用户名已存在", code: "NAME_TAKEN" }, 409);
     }
