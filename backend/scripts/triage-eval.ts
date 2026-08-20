@@ -46,7 +46,9 @@ function nearestWeekdayIso(target: number): string {
 
 interface EvalCase {
   content: string;
-  category: "idea" | "todo" | "collect" | "data" | "expense" | "income";
+  category: "idea" | "todo" | "collect" | "data" | "expense" | "income" | "transfer";
+  /** 额外可接受的分类（如 idea/data 两可的记录型内容） */
+  altCategory?: string[];
   /** expected amount (null = amount must be null); undefined = don't check */
   amount?: number | null;
   /** expected currency; only checked when amount is checked */
@@ -271,6 +273,41 @@ const CASES: EvalCase[] = [
   { content: `${PREFIX} 今天跑步 7 公里，早上出门凉快多了`, category: "idea" },
   { content: `${PREFIX} 读完《纳瓦尔宝典》第四章，杠杆的三种形式很有启发`, category: "idea" },
   { content: `${PREFIX} 季度报告交了，比截止日提前两天，老板回复说写得不错`, category: "idea" },
+  // ---- R212 P2-2（audit-r211 生产错例 + 完成式/纯记录形态系统性收口）----
+  // audit-r211 生产原文：作息流水记录
+  { content: `${PREFIX} 早上 7 点起床，先跑了 3 公里`, category: "data", altCategory: ["idea"], due: null },
+  // audit-r211 生产原文：已定结论被建成 todo 08-26
+  { content: `${PREFIX} 评审会结论：接口方案通过，下周三前出正式文档`, category: "data", due: null },
+  // audit-r211 生产原文：状态记录不是用户待办
+  { content: `${PREFIX} 娃的暑假作业还剩两篇作文`, category: "data", altCategory: ["idea"], due: null },
+  // audit-r211 生产原文：审批结果记录，日期是信息不是截止
+  { content: `${PREFIX} 拿到年假审批，9 月 10 号到 14 号`, category: "data", altCategory: ["idea"], due: null },
+  // 「已+动词」完成式
+  { content: `${PREFIX} 物业费已交，下半年的一起缴了`, category: "expense", altCategory: ["idea", "data"], due: null },
+  { content: `${PREFIX} 回乘高铁票已买好，中午的车`, category: "data", altCategory: ["idea", "expense"], due: null },
+  { content: `${PREFIX} 体检已预约好了`, category: "data", altCategory: ["idea"], due: null },
+  // 完成句 + 真实未来动作：不得因前半句完成式而降级
+  { content: `${PREFIX} 报告写完了，提醒我明天发给老板`, category: "todo", due: shanghaiIso(1) },
+  { content: `${PREFIX} 方案通过了，我负责下周三前出正式文档`, category: "todo" },
+  // 量化/状态记录
+  { content: `${PREFIX} 今天步数 12800，比昨天多 3000`, category: "data", altCategory: ["idea"], due: null },
+  { content: `${PREFIX} 同事推荐的降噪耳机型号 WH-1000XM5`, category: "data", altCategory: ["collect"], due: null },
+  // ---- R212 P3-1（audit-r211：负数明细行含「到账」不阻断净额方向仲裁）----
+  {
+    content: `${PREFIX} 部门团购\n零食,300\n饮料,150\n报销到账,-200`,
+    category: "expense",
+    amount: 250,
+    currency: "CNY",
+  },
+  // ---- R212 P3-2（audit-r211：两段式退款+合计短句方向）----
+  {
+    content: `${PREFIX} 纪念品退款 -30，合计 224`,
+    category: "expense",
+    amount: 224,
+    currency: "CNY",
+  },
+  // ---- R212（audit-r211：AA 收回被判 transfer 致收入漏计）----
+  { content: `${PREFIX} 公司团建 AA 收回 240`, category: "income", amount: 240, currency: "CNY" },
 ];
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -335,7 +372,7 @@ async function main() {
     for (const c of CASES) {
       const n = notes.find((x) => x.content === c.content);
       const cat = n?.category ?? "(unsorted)";
-      const catPass = cat === c.category;
+      const catPass = cat === c.category || (c.altCategory ?? []).includes(cat ?? "");
       if (catPass) catOk++;
       let line = `${catPass ? "✅" : "❌"} [${cat}${catPass ? "" : ` ≠ ${c.category}`}] ${c.content.slice(0, 40)}`;
       if (c.due !== undefined) {

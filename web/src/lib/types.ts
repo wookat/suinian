@@ -16,6 +16,10 @@ export interface NoteMeta {
   file_excerpt?: string
   file_status?: "ok" | "extract_failed"
   media_status?: "ok" | "extract_failed"
+  /** 语音转写低置信（R212 P2-1）：卡片提示核对并给纠错入口，编辑正文后清除 */
+  transcript_suspect?: boolean
+  /** 图片文字识别存疑（R212 P3-3）：卡片提示核对原图，编辑正文后清除 */
+  ocr_suspect?: boolean
   finance_merchant?: string
   manual_override?: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean }
   /** 问答写回：由「存为笔记」保存的问答结论 */

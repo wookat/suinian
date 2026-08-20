@@ -141,7 +141,7 @@ export function buildTriagePrompt(
   - 「上次借小王的 1000 今天还给他了」→ transfer（归还借款，不是新消费）
   - 「还了信用卡 3000」→ transfer（刷卡消费当时已记 expense，还款是清偿负债的平移，再记 expense 会重复）
   - 「花呗上月账单自动扣了 2680」→ transfer（同上，负债还款）
-  注意区分：商家退货退款（「退款 99 到账」）仍是 income 冲抵消费；只有借还/押金/负债还款这类「拿回或归还本就属于某方的钱」才是 transfer
+  注意区分：商家退货退款（「退款 99 到账」）仍是 income 冲抵消费；只有借还/押金/负债还款这类「拿回或归还本就属于某方的钱」才是 transfer；AA/垫付后把钱收回来是收入回补，不是 transfer——「公司团建 AA 收回 240」→ income，amount=240
   用量/份量/使用次数绝不改变支付金额：amount 是这笔交易实际支付的钱数，绝不要按用量、份量、耐用时长换算出「单次成本」。判例：
   - 「咖啡机除垢剂 25 元，一次用半瓶」→ expense，amount=25（绝不是 12.5——「一次用半瓶」是用量描述，付的钱仍是 25）
   - 「洗发水 60 块，大概能用三个月」→ expense，amount=60（绝不按月摊成 20）
@@ -174,6 +174,16 @@ export function buildTriagePrompt(
   - 「闲鱼挂出了显示器，350 出」→ idea（已完成的动作记录，不是待办）
   - 「季度报告初稿写完了」→ idea（完成宣告）
   - 「公众号选题定了：只写三篇论文精读」→ idea（已做出的决定记录，不是待办）
+  - 「物业费已交」「已买好车票」「已完成部署」→ idea 或对应记账（「已+动词」是完成式记录，绝不是待办）
+  注意：会议/评审的结论、审批通过、拿到批复这类「已经定下来的结果」是记录不是待办——即使句中带日期或后续安排，日期只是信息不是 todo_due；只有明确需要用户本人去做的动作（提醒我/我要/我负责/记得）才是 todo。判例：
+  - 「评审会结论：接口方案通过，下周三前出正式文档」→ data（已完成的结论记录，后续安排是团队信息，不是用户待办）
+  - 「拿到年假审批，9 月 10 号到 14 号」→ data（审批结果记录，日期是信息不是截止）
+  - 「方案通过了，我负责下周三前出正式文档」→ todo（明确是用户本人的动作）
+  注意：客观量化/状态记录（步数、体重、睡眠数据、进度状态、别人推荐的型号/清单）是备查资料归 data，不是想法也不是待办。判例：
+  - 「今天步数 12800，比昨天多 3000」→ data（量化记录）
+  - 「早上 7 点起床，先跑了 3 公里」→ data（日常作息流水记录，无感想）
+  - 「娃的暑假作业还剩两篇作文」→ data（状态记录，不是用户自己的待办）
+  - 「同事推荐的降噪耳机型号 WH-1000XM5」→ data（备查资料，不是收藏链接也不是待办）
   注意：意愿/心愿式表达（想尝试/想试试/有机会想…）是想法不是待办——没有明确的执行动作安排或时间承诺时归 idea。判例：
   - 「想尝试一周不喝奶茶挑战」→ idea（心愿式想法，没有具体执行安排）
   - 「有机会想去趟敦煌」→ idea（心愿，不是已安排的待办）
@@ -395,16 +405,30 @@ export function fixFinanceDirection(content: string, triage: TriageResult): Tria
 // （定档/上映/发售）无用户动作时也不是待办。只在模型判了 todo 且词面
 // 证据明确时降级，其它情况不动。
 const COMPLETED_LOG_RE =
-  /写完了|做完了|完成了|搞定了|读完|看完了|交了|发布了|上线了|挂出了?|发出了|提交了|搬完了|修好了|定了[：:，,]|敲定了?|定下来了/;
+  /写完了|做完了|完成了|搞定了|读完|看完了|交了|发布了|上线了|挂出了?|发出了|提交了|搬完了|修好了|定了[：:，,]|敲定了?|定下来了|已(?:完成|买好?|交|付|办好?|订好?|搞定|解决|提交|下单|预约|寄出?|发货|还清?)|买好了|办好了|办完了|交完了|付完了|还完了/;
 const ANNOUNCEMENT_RE = /定档|上映|首映|开播|发售|开售|开票|发布会|官宣/;
 const FUTURE_ACTION_RE =
   /记得|提醒|要去|得去|别忘|预约|安排|回头|稍后|之前去|去买|去交|去还|去取|去看|买票|抢票|再润色|再改|跟进|待办/;
+
+// 结论/审批类已闭环记录（R212 P2-2，audit-r211：「评审会结论：接口方案通过，
+// 下周三前出正式文档」被建成 todo 08-26——把已完成的事变成假任务）：句首/句中
+// 出现「结论：」「审批通过」「拿到批复」这类已定结果的句式且无用户本人动作
+// 标记（提醒/我要/我负责/记得）时，即使模型给了 todo_due 也降为 data——
+// 日期是信息不是截止。触发词面收窄，普通含日期待办不受影响。
+const CONCLUDED_RECORD_RE =
+  /(?:结论|决议|评审结果|复盘结果)[：:]|(?:审批|申请|方案|提案|合同|报告)[^，。\n]{0,4}(?:已?通过|获批|批准|批下来)|拿到[^，。\n]{0,8}(?:审批|批复|批准)/;
+const SELF_ACTION_RE = /提醒我|记得|别忘|我要|我来|我负责|我得|待办/;
 
 /** Deterministic backstop: demote completed-action logs / external
  * announcements the model misfiled as todo. Logs become idea; announcements
  * become data (their date is information, not a due). */
 export function demoteEventLog(content: string, triage: TriageResult): TriageResult {
-  if (triage.category !== "todo" || FUTURE_ACTION_RE.test(content)) return triage;
+  if (triage.category !== "todo") return triage;
+  if (CONCLUDED_RECORD_RE.test(content) && !SELF_ACTION_RE.test(content)) {
+    return { ...triage, category: "data", todo_due: null };
+  }
+  // 「已预约/已安排」是完成式，剔除后再测未来动作词（预约/安排本身在未来词表里）
+  if (FUTURE_ACTION_RE.test(content.replace(/已(?:预约|安排)/g, ""))) return triage;
   if (!triage.todo_due && COMPLETED_LOG_RE.test(content)) {
     return { ...triage, category: "idea", todo_due: null };
   }
@@ -977,13 +1001,52 @@ export function fixLedgerNetDirection(content: string, triage: TriageResult): Tr
   const signed = t.data.map((r) => signedRowAmount(r, t.col));
   if (!(signed.some((v) => v < 0) && signed.some((v) => v > 0))) return triage;
   const net = Math.round(signed.reduce((s, v) => s + v, 0) * 100) / 100;
-  if (net > 0 && triage.category === "income" && !LEDGER_NET_INCOME_EVIDENCE_RE.test(content)) {
+  // 收入证据词只在非负数明细行之外生效（R212 P3-1，audit-r211：「报销到账,-200」
+  // 负数行的「到账」不是整表收入向证据——该行是冲减，词面证据取自标题/尾注
+  // 与正向行；把负数行的名目文本剔除后再测证据词）
+  let evidenceSrc = content;
+  t.data.forEach((row, i) => {
+    if (signed[i] < 0) row.forEach((f, c) => {
+      if (c !== t.col) evidenceSrc = evidenceSrc.replace(f, "");
+    });
+  });
+  if (net > 0 && triage.category === "income" && !LEDGER_NET_INCOME_EVIDENCE_RE.test(evidenceSrc)) {
     return { ...triage, category: "expense", amount: net, currency: triage.currency ?? "CNY" };
   }
   if (net < 0 && !EXPENSE_DIRECTION_RE.test(content) && !LEDGER_EXPENSE_HINT_RE.test(content)) {
     return { ...triage, category: "income", amount: Math.abs(net), currency: triage.currency ?? "CNY" };
   }
   return triage;
+}
+
+// 两段式「退款负数 + 合计」短句方向收口（R212 P3-2，audit-r211：「纪念品退款
+// -30，合计 224」判 income 224）：这类短句被 inlineLedgerRows 有意排除（两段式
+// 不当行内台账，R196/R210 口径），金额由模型按合计给出但「退款」词面把方向
+// 带成 income。合计为正数说明净方向是支出（负数退款行只是冲减）；仅当整句
+// 除退款/退货外没有任何收入证据词、也无支出动词（模型主判不被推翻）时才纠。
+export function fixProseTotalDirection(content: string, triage: TriageResult): TriageResult {
+  if (triage.category !== "income" || content.includes("\n")) return triage;
+  if (parseLedgerCore(content) !== null) return triage;
+  const m = content.match(PROSE_TOTAL_RE);
+  if (!m) return triage;
+  const total = parseFloat(m[1]);
+  if (!(total > 0)) return triage;
+  // 必须存在负数金额且其名目是退款/退货语义
+  const neg = content.match(/([^\s，,、；;]{1,12})\s*[-−]\s?\d+(?:\.\d{1,2})?/);
+  if (!neg || !LEDGER_REFUND_LABEL_RE.test(neg[1])) return triage;
+  if (LEDGER_NET_INCOME_EVIDENCE_RE.test(content) || EXPENSE_DIRECTION_RE.test(content)) return triage;
+  return { ...triage, category: "expense", amount: total, currency: triage.currency ?? "CNY" };
+}
+
+// AA/垫付收回是收入回补不是资金平移（R212 P2-2，audit-r211：「公司团建 AA
+// 收回 240」判 transfer 导致收入统计漏计）。词面同时命中 AA/平摊/垫付 与
+// 收回/收到 才收口，普通借还往来不受影响。
+const AA_REIMBURSE_RE = /(?:AA|平摊|均摊|人均|垫付)[^。\n]{0,10}(?:收回|收到|回来了|到账)/i;
+
+export function fixAaReimburse(content: string, triage: TriageResult): TriageResult {
+  if (triage.category !== "transfer") return triage;
+  if (!AA_REIMBURSE_RE.test(content)) return triage;
+  return { ...triage, category: "income" };
 }
 
 export async function triageNote(
@@ -1008,6 +1071,7 @@ export async function triageNote(
   if (result) result = stripMarkerNoise(content, result);
   if (result) result = demoteEventLog(content, fixTransferMisfile(content, fixFinanceDirection(content, result)));
   if (result) result = fixLedgerNetDirection(content, fixReceiptDoubleCount(content, fixLedgerAmount(content, fixLedgerCategory(content, result))));
+  if (result) result = fixAaReimburse(content, fixProseTotalDirection(content, result));
   if (result) result = fixWeekdayDue(content, result, now, tz);
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {
