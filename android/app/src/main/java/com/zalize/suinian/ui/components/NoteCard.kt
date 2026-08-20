@@ -397,6 +397,12 @@ fun NoteCard(
                         color = MaterialTheme.colorScheme.secondary,
                     )
                 }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "检测到密码/凭据类信息，已自动加密保护，不进入问答与搜索；若属误判，可在菜单中取消敏感标记",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                )
             } else if (note.category == "todo" && onToggleTodo != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(

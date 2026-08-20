@@ -180,6 +180,12 @@ const CASES: EvalCase[] = [
     amount: 8000,
     currency: "CNY",
   },
+  // R204 P3-1：英文/中英混合财务笔记不得因语言漏判（audit-r203：coffee beans 128 CNY → collect 且 amount=null）
+  { content: `${PREFIX} coffee beans 128 CNY`, category: "expense", amount: 128, currency: "CNY" },
+  { content: `${PREFIX} bought a mechanical keyboard for $45`, category: "expense", amount: 45, currency: "USD" },
+  { content: `${PREFIX} freelance payment 3000 CNY received`, category: "income", amount: 3000, currency: "CNY" },
+  // R204 P3-3：意愿/心愿式表达是想法不是待办
+  { content: `${PREFIX} 想尝试一周不喝奶茶挑战`, category: "idea" },
   // R120 P2：已敲定的决定是记录不是待办
   { content: `${PREFIX} 公众号选题定了：只写三篇论文精读`, category: "idea" },
   // R108：完成式日志不是待办（R107 P2-3：误标 todo 污染悬而未决）
