@@ -141,7 +141,8 @@ export function buildTriagePrompt(
   - 「上次借小王的 1000 今天还给他了」→ transfer（归还借款，不是新消费）
   - 「还了信用卡 3000」→ transfer（刷卡消费当时已记 expense，还款是清偿负债的平移，再记 expense 会重复）
   - 「花呗上月账单自动扣了 2680」→ transfer（同上，负债还款）
-  注意区分：商家退货退款（「退款 99 到账」）仍是 income 冲抵消费；只有借还/押金/负债还款这类「拿回或归还本就属于某方的钱」才是 transfer；AA/垫付后把钱收回来是收入回补，不是 transfer——「公司团建 AA 收回 240」→ income，amount=240
+  注意区分：商家退货退款（「退款 99 到账」）仍是 income 冲抵消费；只有借还/押金/负债还款这类「拿回或归还本就属于某方的钱」才是 transfer；AA/垫付后把钱收回来是收入回补，不是 transfer——「公司团建 AA 收回 240」→ income，amount=240；跨时间也一样：之前/昨天垫付的钱现在收回仍是 income，绝不因「还我/转我」判成 transfer——「昨天垫付的地铁卡 200，今天他还我 200」→ income，amount=200；「朋友把上次帮他垫的 300 元还我了」→ income，amount=300（垫付回款是收入回补，区别于「表弟把上次借的 1500 还给我了」的借还 transfer）
+  注意：陈述自己账户间转账的句子即使是「把 X 转到 Y」祈使句式、没写「了」，也是记录已发生的资金平移，不是待办——「把余额宝的 10000 转到活期」→ transfer，amount=10000（绝不是 todo，金额绝不能丢）；只有带「记得/提醒我/明天」等未来标记时才是 todo
   用量/份量/使用次数绝不改变支付金额：amount 是这笔交易实际支付的钱数，绝不要按用量、份量、耐用时长换算出「单次成本」。判例：
   - 「咖啡机除垢剂 25 元，一次用半瓶」→ expense，amount=25（绝不是 12.5——「一次用半瓶」是用量描述，付的钱仍是 25）
   - 「洗发水 60 块，大概能用三个月」→ expense，amount=60（绝不按月摊成 20）
@@ -376,10 +377,27 @@ const DEPOSIT_REFUND_RE = /押金[^，。;；\n]{0,8}(?:退|返)|退(?:了|还|�
 const DEBT_REPAY_RE =
   /(?:信用卡|花呗|白条|借呗|分期)[^，。;；\n]{0,6}(?:还款|还清|还上|扣款|扣了|还了)|还(?:了|款|清|上|掉)?[^，。;；\n]{0,4}(?:信用卡|花呗|白条|借呗)(?:账单|欠款|的钱)?/;
 
+// 内转句被判 todo（R220 P3-4，audit-r219：「把余额宝的 10000 转到活期」判
+// todo 且金额丢失）：无提醒/未来时间词的自有账户内转陈述按已发生的资金平移
+// 处理。金额只在句中数字唯一时补录（歧义不猜）。
+const TRANSFER_INTENT_RE = /提醒|记得|别忘|待会|回头|一会|晚点|待办|今晚|明天|后天|下周|周[一二三四五六日天]|月底|月初|之前|之后|打算|准备|计划|要不要|再说/;
+
 /** Deterministic backstop: reclassify obvious money-movement notes
  * (withdrawals / own-account transfers / borrowing / loan repayment in either
  * direction / deposit refunds / debt repayment) as transfer. */
 export function fixTransferMisfile(content: string, triage: TriageResult): TriageResult {
+  if (triage.category === "todo" && triage.todo_due === null) {
+    if (!INTERNAL_TRANSFER_RE.test(content) || TRANSFER_INTENT_RE.test(content)) return triage;
+    const nums = content.match(/\d+(?:\.\d{1,2})?/g);
+    const amount = triage.amount ?? (nums?.length === 1 ? parseFloat(nums[0]) : null);
+    return {
+      ...triage,
+      category: "transfer",
+      todo_due: null,
+      amount,
+      currency: amount !== null ? (triage.currency ?? "CNY") : triage.currency,
+    };
+  }
   if (triage.category !== "expense" && triage.category !== "income") return triage;
   if (INTERNAL_TRANSFER_RE.test(content) || BORROW_IN_RE.test(content)) {
     return { ...triage, category: "transfer" };
@@ -1077,11 +1095,22 @@ export function fixProseTotalDirection(content: string, triage: TriageResult): T
 // 收回/收到/转我/回我 等回款动词才收口，普通借还往来不受影响
 //（回款动词扩展见 R218 P2-1，audit-r217 §1.2：追记既往垫付的「转我」回款句）。
 const AA_REIMBURSE_RE = /(?:AA|平摊|均摊|人均|垫付)[^。\n]{0,10}(?:收回|收到|回来了|到账|转(?:给)?我|打给我|回我|还我)/i;
+// 跨时间垫付×回款（R220 P2-1 残余，audit-r219 §1）：「昨天垫付的地铁卡 200，
+// 今天他还我 200」——金额/名词把垫付词与回款动词隔开超过 AA_REIMBURSE_RE 的
+// 10 字窗口，或「帮他垫的」这类无「垫付」全词形态。既往垫付语境（时间词＋垫）
+// 与回款到我动词同现即为收入回补；「还没还我」等未回款句不收口。
+const PAST_ADVANCE_RE = /(?:上次|上回|之前|先前|早前|昨天|前天|上周|上个?月)[^。\n]{0,8}(?:垫付|先付|垫)/;
+const PAST_ADVANCE_REPAY_RE = /收回|收到|回来了|到账|转(?:给)?我|打给我|回我|还(?:给)?我/;
+const REPAY_PENDING_RE = /还没|没还|未还|欠着|记得|别忘|提醒/;
 
 export function fixAaReimburse(content: string, triage: TriageResult): TriageResult {
   if (triage.category !== "transfer") return triage;
-  if (!AA_REIMBURSE_RE.test(content)) return triage;
-  return { ...triage, category: "income" };
+  if (REPAY_PENDING_RE.test(content)) return triage;
+  if (AA_REIMBURSE_RE.test(content)) return { ...triage, category: "income" };
+  if (PAST_ADVANCE_RE.test(content) && PAST_ADVANCE_REPAY_RE.test(content)) {
+    return { ...triage, category: "income" };
+  }
+  return triage;
 }
 
 // ---- 垫付×回款同句净额化收口（R218 P2-1，audit-r217 §1.2）----
@@ -1095,7 +1124,6 @@ const ADVANCE_PAY_RE =
   /(?:先付了?|先垫付?了?|垫付了?|先掏了?|我先出了?|[帮替给][^。\n，,]{0,6}垫付?了?)[^0-9\n]{0,8}(\d+(?:\.\d{1,2})?)/;
 const REPAY_BACK_RE =
   /(?:回我|还我|转我|转给我|打给我|退我|发我|收回(?:给我)?)[^0-9\n]{0,6}(\d+(?:\.\d{1,2})?)|(?:[转还打退]了?)\s*(\d+(?:\.\d{1,2})?)\s*(?:元|块钱?|块)?\s*给我/;
-const PAST_ADVANCE_RE = /(?:上次|上回|之前|先前|早前|昨天|前天)[^。\n]{0,8}(?:垫付|先付|垫)/;
 
 export function fixAdvanceRepayAmount(content: string, triage: TriageResult): TriageResult {
   const isFinance = triage.category === "expense" || triage.category === "income" || triage.category === "transfer";
