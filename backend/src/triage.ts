@@ -167,7 +167,7 @@ export function buildTriagePrompt(
   - 「freelance payment 3000 CNY received」→ income，amount=3000，currency="CNY"
   多金额句式口径（总额/人均/份额并存时，amount＝记录者本人实际支付出去的钱，且必须是文本中出现的数字）：
   - 本人付了总额（请客/买单/垫付/我先付了/我付的/我掏的）→ amount=总额，即使句中同时给出人均/每人——「聚餐一共 900，我买单，人均 150」→ expense，amount=900（绝不是 150）；「团建 640 我垫付的，人均 160」→ expense，amount=640（垫付出去的钱是本人实际支付，之后收回时再另记一笔收入）
-  - 先付/垫付 X 与别人回款 Y 同句出现 → expense，amount=X（本人实付的总额），绝不要把 X−Y 净额化、也绝不因「回我/转我」把方向记成 income 或 transfer——「我先付了聚餐 480 元，其他人回我 360 元」→ expense，amount=480（绝不是 120）；「聚餐 AA，我先垫付 480 元，其他人收回给我 360 元」→ expense，amount=480（垫付是支出，收回的 360 之后另记一笔收入）；「帮同事垫付门票 300 元，他微信转我 300 元」→ expense，amount=300（不是 transfer）
+  - 先付/垫付 X 与别人回款 Y 同句出现（本次垫付＋本次回款、句中有实付金额 X）→ expense，amount=X（本人实付的总额），绝不要把 X−Y 净额化、也绝不因「回我/转我」把方向记成 income 或 transfer；注意：此条只适用于「本次刚垫付」的句子——「上次/之前帮…垫的 X 他转我了」这类只在追记既往垫付的回款、垫付本身发生在过去的句子不适用本条，是 income（见上方判例「上次帮小刘垫的 90 他微信转我了」→ income）——「我先付了聚餐 480 元，其他人回我 360 元」→ expense，amount=480（绝不是 120）；「聚餐 AA，我先垫付 480 元，其他人收回给我 360 元」→ expense，amount=480（垫付是支出，收回的 360 之后另记一笔收入）；「帮同事垫付门票 300 元，他微信转我 300 元」→ expense，amount=300（不是 transfer）
   - 明确只付自己那份 → amount=自己的份额——「四人聚餐共 520，我只付了自己那份 130」→ expense，amount=130；明确 AA/平摊且本人没有垫付总额时记自己份额（「晚饭 AA 一共 480，四个人平摊，各付各的」→ amount=120，480÷4），份额与人数都不明时 amount=null，绝不猜
   - 「总额 X 人均 Y」没说谁付的钱 → 固定取总额 X——「聚餐 480 元人均 80」→ expense，amount=480（保守取总额，绝不取人均，同样的句式绝不摇摆）
   - 绝不要用 人均×人数 等算式推算出文本中不存在的金额——「聚餐 480 元人均 80，八个人」→ amount=480（绝不是 80×8=640：640 在原文任何位置都不存在）
@@ -1155,7 +1155,10 @@ export function fixAaReimburse(content: string, triage: TriageResult): TriageRes
   if (triage.category !== "transfer" && triage.category !== "expense") return triage;
   if (REPAY_PENDING_RE.test(content)) return triage;
   if (AA_REIMBURSE_RE.test(content)) return { ...triage, category: "income" };
-  if (triage.category === "expense") return triage;
+  // 既往垫付回款收口对 expense 同样生效（R230 P2-1，audit-r229 §1.1：「上次帮
+  // 小刘垫的 90 他微信转我了」——fixFinanceDirection 的「帮…垫」词面把 income
+  // 翻成 expense，而本收口原先只救 transfer）。「上次/之前…垫」的既往语境
+  // 排除本次垫付句，本次垫付＋回款句仍按实付总额记 expense（见 R218 净额化）。
   if (PAST_ADVANCE_RE.test(content) && PAST_ADVANCE_REPAY_RE.test(content)) {
     return { ...triage, category: "income" };
   }
