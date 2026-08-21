@@ -850,12 +850,33 @@ export function financeShortTopicTerms(question: string): string[] | null {
 const SUBSET_TERM_LEAD_RE = /^(?:台账|账本|流水|账单|明细|记账|记录|笔记)(?:[里中上]的?|的)/;
 const SUBSET_TERM_TAIL_RE = /(?:是|的)?(?:什么|啥|哪个|哪家)?(?:牌子|品牌|型号|颜色|款式|口味|尺寸)$|(?:是)?(?:什么|啥)$|买的$/;
 
+// 亲属称谓同义映射（R224，audit-r223 P3-1）：问法「妹妹」与笔记原文「我妹」
+// 字面不同导致 LIKE 零命中。降级重试时双向补上口语变体，仍是精确匹配口径。
+const KINSHIP_ALIASES: [string, string][] = [
+  ["妹妹", "我妹"],
+  ["弟弟", "我弟"],
+  ["哥哥", "我哥"],
+  ["姐姐", "我姐"],
+  ["爸爸", "我爸"],
+  ["妈妈", "我妈"],
+];
+
+function kinshipAlias(term: string): string | null {
+  for (const [long, short] of KINSHIP_ALIASES) {
+    if (term === long) return short;
+    if (term === short) return long;
+  }
+  return null;
+}
+
 /** 生成财务子集关键词的降级重试词集；无可降级时返回 null。 */
 export function degradeFinanceSubsetTerms(terms: string[]): string[] | null {
   const out: string[] = [];
   const push = (s: string) => {
     const t = s.trim();
     if (t.length >= 2 && t.length <= 8 && !TOPIC_ENUM_GENERIC_RE.test(t) && !out.includes(t)) out.push(t);
+    const alias = kinshipAlias(s.trim());
+    if (alias && !out.includes(alias)) out.push(alias);
   };
   for (const t of terms) {
     const stripped = t.replace(SUBSET_TERM_LEAD_RE, "").replace(SUBSET_TERM_TAIL_RE, "");
@@ -867,7 +888,7 @@ export function degradeFinanceSubsetTerms(terms: string[]): string[] | null {
       push(t);
     }
   }
-  if (out.length === 0 || out.length > 3) return null;
+  if (out.length === 0 || out.length > 4) return null;
   if (out.length === terms.length && out.every((t, i) => t === terms[i])) return null;
   return out;
 }
