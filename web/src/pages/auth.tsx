@@ -35,11 +35,11 @@ export function RecoveryCodeCard({
   return (
     <Card className="space-y-4 p-4">
       <h2 className="flex items-center gap-2 text-base font-semibold">
-        <KeyRound className="size-4" /> 请保存你的恢复码
+        <KeyRound className="size-4" /> {tokensRotated ? "请保存你的新恢复码" : "账号已就绪，最后一步：存好恢复码"}
       </h2>
       <p className="text-sm text-muted-foreground">
-        忘记密码时，这个恢复码是找回账号的唯一方式（产品不收集邮箱/手机号，无人工申诉渠道）。
-        它只显示这一次，服务端不保存明文；若密码和恢复码同时丢失，账号将永久无法找回——请抄下来或存进密码管理器。
+        碎念不收集邮箱/手机号，隐私更安心——代价是忘记密码时，这个恢复码是找回账号的唯一方式。
+        它只显示这一次（服务端不存明文），点一下复制存进密码管理器或备忘录，十秒就好；密码和恢复码都丢失时账号将无法找回。
       </p>
       {tokensRotated && (
         <p className="text-sm text-amber-700 dark:text-amber-400">
@@ -73,14 +73,14 @@ export function RecoveryCodeCard({
           <Input
             value={verifyInput}
             onChange={(e) => setVerifyInput(e.target.value)}
-            placeholder={`输入恢复码末 4 位（或点上方复制）确认已保存`}
+            placeholder={`点上方复制，或输入恢复码末 4 位确认已保存`}
             aria-label="输入恢复码末 4 位确认已保存"
             maxLength={8}
           />
         </div>
       )}
       <Button onClick={onDone} disabled={!verified} className="w-full">
-        我已安全保存，继续
+        已存好，开始记录
       </Button>
     </Card>
   )
@@ -485,7 +485,7 @@ export function AuthPage() {
 
         <p className="text-xs leading-relaxed text-muted-foreground">
           {mode === "register"
-            ? "注册成功后会获得一次性恢复码（忘记密码时的唯一找回方式，请务必保存），并自动获得 API token 写入本机配置，可在设置页查看/复制/轮换。"
+            ? "无需邮箱/手机号，注册完即可开始记录。成功后会发一个一次性恢复码（忘记密码时用它找回账号），API token 自动写入本机配置，可在设置页查看/复制/轮换。"
             : mode === "recover"
               ? "验证通过后会重置密码并直接登录；旧 token 同时作废，其他设备需重新登录。"
               : "登录成功后会取回你的 API token 并写入本机配置。老账号如未设置过密码，请在设置页直接填 token。"}

@@ -179,6 +179,13 @@ const CASES: EvalCase[] = [
   { content: `${PREFIX} 朋友把上次帮他垫的 300 元还我了`, category: "income", amount: 300, currency: "CNY" },
   { content: `${PREFIX} 上周帮部门垫付的 560 打车费，今天转我了`, category: "income", amount: 560, currency: "CNY" },
   { content: `${PREFIX} 前天团建 AA 我垫付的钱，今天收回 300`, category: "income", amount: 300, currency: "CNY" },
+  // R230 P2-1（audit-r229 §3 生产两次复现：判 expense 方向反了）：既往垫付
+  // 现在收到回款＝钱进来；近义句 transfer 口径可接受，故 altCategory
+  { content: `${PREFIX} 上次帮小刘垫的 90 他微信转我了`, category: "income", altCategory: ["transfer"], amount: 90, currency: "CNY" },
+  { content: `${PREFIX} 帮同事垫的 90 块他今天微信还我了`, category: "income", altCategory: ["transfer"], amount: 90, currency: "CNY" },
+  // R230 P3-1（audit-r229 §3）：句中说明金额已是抵扣后的净价，红包/券不得再减
+  { content: `${PREFIX} 外卖凑单花了 66.6，红包抵了 3 块是抵完后的价`, category: "expense", amount: 66.6, currency: "CNY" },
+  { content: `${PREFIX} 买水果 28.8，用了 5 元券后的价`, category: "expense", amount: 28.8, currency: "CNY" },
   //（借还往来反例见上方 R122 组：「表弟把上次借的 1500 还给我了」仍 transfer）
   // R220 P3-4（audit-r219）：内转陈述句即使无「了」也是已发生的资金平移，
   // 金额不能丢
