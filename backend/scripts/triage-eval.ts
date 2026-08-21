@@ -399,14 +399,24 @@ async function main() {
     }
     console.log(`created ${created.length} notes, waiting for triage...`);
 
-    // poll until every note has a category (max ~90s)
+    // poll until every note has a category（最长 ~12 分钟：创建高峰触发 provider
+    // 限流时，失败的分拣会落 needs_retriage 由 10 分钟 cron 兜底补分拣，轮询
+    // 窗口必须覆盖一次 cron，否则这批笔记会被误判为分类失败）
     let notes: NoteJson[] = [];
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 240; i++) {
       await sleep(3000);
       // no q= filter: sensitive notes are stored encrypted, so content LIKE would miss them
-      // limit 必须 ≥ 用例数（当前 74），否则最旧的几条永远取不回被误判失败
-      const res = await api<{ notes: NoteJson[] }>(`/api/notes?limit=100`);
-      notes = res.notes.filter((n) => created.includes(n.id));
+      // 服务端 limit 上限 100 < 用例数，必须 cursor 翻页取全，否则最旧的几条永远取不回被误判失败
+      const all: NoteJson[] = [];
+      let cursor: string | null = null;
+      do {
+        const res: { notes: NoteJson[]; next_cursor: string | null } = await api(
+          `/api/notes?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`
+        );
+        all.push(...res.notes);
+        cursor = res.next_cursor;
+      } while (cursor);
+      notes = all.filter((n) => created.includes(n.id));
       if (notes.length === created.length && notes.every((n) => n.category)) break;
     }
 
