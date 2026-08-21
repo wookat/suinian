@@ -56,7 +56,10 @@ describe("R226 pending-repayment guard covers 没给/没结", () => {
 // ---- P1（audit-r225 §3c）：R2 级联删除失败不再静默 ----
 type Row = { r2_key: string; attempts: number; last_error: string | null };
 
-function fakeEnv(deleteImpl: (keys: string[]) => Promise<void>) {
+function fakeEnv(
+  deleteImpl: (keys: string[]) => Promise<void>,
+  headImpl: (key: string) => Promise<object | null> = async () => null
+) {
   const rows = new Map<string, Row>();
   const db = {
     prepare(sql: string) {
@@ -113,7 +116,7 @@ function fakeEnv(deleteImpl: (keys: string[]) => Promise<void>) {
     }
     throw new Error(`unexpected sql: ${sql}`);
   }
-  const media = { delete: vi.fn(deleteImpl) };
+  const media = { delete: vi.fn(deleteImpl), head: vi.fn(headImpl) };
   return { env: { MEDIA: media, DB: db } as unknown as Pick<Env, "MEDIA" | "DB">, rows, media };
 }
 
@@ -144,6 +147,18 @@ describe("R226 P1 deleteMediaObjects retry + failure recording", () => {
     expect(rows.get("k1")?.last_error).toContain("r2 down hard");
   });
 
+  // R228 P1：delete 不抛错不等于删净——逐 key head 复核，幸存对象记入 failures 表
+  it("silent delete failure (no throw, object survives) is recorded via head verify", async () => {
+    const { env, rows, media } = fakeEnv(
+      async () => {},
+      async (key) => (key === "stuck.png" ? {} : null)
+    );
+    await deleteMediaObjects(env, ["stuck.png", "gone.txt"]);
+    expect(media.head).toHaveBeenCalledTimes(2);
+    expect(rows.size).toBe(1);
+    expect(rows.get("stuck.png")?.last_error).toContain("still present");
+  });
+
   it("no MEDIA binding or empty keys is a no-op", async () => {
     const { env, media } = fakeEnv(async () => {});
     await deleteMediaObjects(env, []);
@@ -167,6 +182,26 @@ describe("R226 P1 flushMediaDeleteFailures cron retry", () => {
 
     // recovered: row cleared
     (env.MEDIA as unknown as { delete: ReturnType<typeof vi.fn> }).delete.mockImplementation(async () => {});
+    expect(await flushMediaDeleteFailures(env)).toBe(1);
+    expect(rows.size).toBe(0);
+  });
+
+  // R228 P1：cron flush 同样只清除 head 复核确认删净的行
+  it("flush keeps rows whose objects silently survive delete", async () => {
+    let stuck = true;
+    const { env, rows } = fakeEnv(
+      async () => {},
+      async (key) => (key === "stuck.png" && stuck ? {} : null)
+    );
+    await deleteMediaObjects(env, ["stuck.png"]);
+    expect(rows.size).toBe(1);
+
+    // delete 成功返回但对象仍在：行保留，attempts 递增
+    expect(await flushMediaDeleteFailures(env)).toBe(0);
+    expect(rows.get("stuck.png")?.attempts).toBe(2);
+
+    // 对象真正消失后：行清除
+    stuck = false;
     expect(await flushMediaDeleteFailures(env)).toBe(1);
     expect(rows.size).toBe(0);
   });

@@ -69,7 +69,10 @@ function loadMessages(): AskChatMessage[] {
     const raw = localStorage.getItem(storageKey())
     if (!raw) return []
     const parsed = JSON.parse(raw) as unknown
-    return Array.isArray(parsed) ? (parsed as AskChatMessage[]) : []
+    if (!Array.isArray(parsed)) return []
+    // 网络错误卡只属于当次会话（R228 P3-5）：面板重开时不再残留过期的
+    // 「服务不可用」卡片，其对应的问题可从输入框重问
+    return (parsed as AskChatMessage[]).filter((m) => !m.error)
   } catch {
     return []
   }

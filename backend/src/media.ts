@@ -517,6 +517,7 @@ export async function deleteMediaObjects(env: Pick<Env, "MEDIA" | "DB">, keys: s
   if (!env.MEDIA || keys.length === 0) return;
   try {
     await env.MEDIA.delete(keys);
+    await verifyMediaDeleted(env, keys);
     return;
   } catch (e) {
     console.error("deleteMediaObjects: R2 delete failed, retrying once", e);
@@ -524,6 +525,7 @@ export async function deleteMediaObjects(env: Pick<Env, "MEDIA" | "DB">, keys: s
   await new Promise((r) => setTimeout(r, 500));
   try {
     await env.MEDIA.delete(keys);
+    await verifyMediaDeleted(env, keys);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`deleteMediaObjects: retry failed, recording ${keys.length} key(s) for cron retry`, e);
@@ -539,6 +541,37 @@ export async function deleteMediaObjects(env: Pick<Env, "MEDIA" | "DB">, keys: s
         )
       );
     }
+  }
+}
+
+/** 逐 key head 复核删除闭环（R228 P1，audit-r227 §1.1）：R2 批量 delete 理论上
+ * 可能对个别 key 静默不生效（不抛错）——delete 返回成功不作为清理成功的证据，
+ * 只有逐 key head 为 null 才算删净；仍存在的 key 记入 media_delete_failures
+ * 交 cron 重试。verify 自身的瞬时错误只记日志不冒泡，绝不把复核失败误报成
+ * 删除失败而触发整批重删。 */
+async function verifyMediaDeleted(env: Pick<Env, "MEDIA" | "DB">, keys: string[]): Promise<void> {
+  if (!env.MEDIA) return;
+  const survivors: string[] = [];
+  for (const k of keys) {
+    try {
+      if ((await env.MEDIA.head(k)) !== null) survivors.push(k);
+    } catch (e) {
+      console.error("verifyMediaDeleted: head failed (skipping verify for key)", k, e);
+    }
+  }
+  if (survivors.length === 0) return;
+  console.error(`verifyMediaDeleted: ${survivors.length} object(s) still present after delete, recording for cron retry`, survivors);
+  for (let i = 0; i < survivors.length; i += 40) {
+    const chunk = survivors.slice(i, i + 40);
+    await env.DB.batch(
+      chunk.map((k) =>
+        env.DB
+          .prepare(
+            "INSERT INTO media_delete_failures (r2_key, last_error) VALUES (?, ?) ON CONFLICT(r2_key) DO UPDATE SET attempts = attempts + 1, last_error = excluded.last_error"
+          )
+          .bind(k, "object still present after delete (silent failure)")
+      )
+    );
   }
 }
 
@@ -563,10 +596,31 @@ export async function flushMediaDeleteFailures(env: Pick<Env, "MEDIA" | "DB">): 
       .run();
     return 0;
   }
-  const ph = keys.map(() => "?").join(",");
-  await env.DB.prepare(`DELETE FROM media_delete_failures WHERE r2_key IN (${ph})`).bind(...keys).run();
-  console.warn(`flushMediaDeleteFailures: cleared ${keys.length} previously-failed R2 delete(s)`);
-  return keys.length;
+  // 只清除逐 key head 复核确认已删净的行（R228 P1）：delete 不抛错不等于删净，
+  // 复核不过/head 出错的行留在表里等下轮 cron
+  const cleared: string[] = [];
+  for (const k of keys) {
+    try {
+      if ((await env.MEDIA.head(k)) === null) cleared.push(k);
+    } catch (e) {
+      console.error("flushMediaDeleteFailures: head verify failed, keeping row", k, e);
+    }
+  }
+  if (cleared.length > 0) {
+    const ph = cleared.map(() => "?").join(",");
+    await env.DB.prepare(`DELETE FROM media_delete_failures WHERE r2_key IN (${ph})`).bind(...cleared).run();
+    console.warn(`flushMediaDeleteFailures: cleared ${cleared.length} previously-failed R2 delete(s)`);
+  }
+  const survivors = keys.filter((k) => !cleared.includes(k));
+  if (survivors.length > 0) {
+    const ph = survivors.map(() => "?").join(",");
+    await env.DB.prepare(
+      `UPDATE media_delete_failures SET attempts = attempts + 1, last_error = ? WHERE r2_key IN (${ph})`
+    )
+      .bind("object still present after delete (silent failure)", ...survivors)
+      .run();
+  }
+  return cleared.length;
 }
 
 /** Objects newer than this are never treated as orphans (in-flight uploads: R2 put lands before the attachments row). */
