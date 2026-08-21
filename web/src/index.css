@@ -62,7 +62,9 @@
   --muted-foreground: oklch(0.74 0.01 260);
   --accent: oklch(0.3 0.03 155);
   --accent-foreground: oklch(0.85 0.08 155);
-  --destructive: oklch(0.65 0.18 25);
+  /* 暗色 destructive 文字要在 destructive/10 错误卡底色上过 WCAG AA（≥4.5:1）
+   * ——R228 P3-1（axe color-contrast serious）；实底按钮已单独压深 red-700 */
+  --destructive: oklch(0.7 0.17 25);
   --destructive-foreground: oklch(0.99 0 0);
   --border: oklch(0.3 0.008 260);
   --input: oklch(0.3 0.008 260);

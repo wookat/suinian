@@ -1081,7 +1081,15 @@ export function TimelinePage() {
       )}
 
       {askMode && (
-        <Suspense fallback={null}>
+        <Suspense
+          // 问答面板是懒加载分包：慢网/请求在途时 fallback 为空会让点击「问答」
+          // 毫无反馈（R228 P3-5），先给一个可见的加载占位
+          fallback={
+            <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground" role="status">
+              问答面板加载中…
+            </div>
+          }
+        >
           <AskChat
             onTagClick={setTag}
             initialQuestion={askPrefill}

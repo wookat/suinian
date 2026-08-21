@@ -1,7 +1,7 @@
 import type { Env, NoteRow } from "./types";
 import { formatAmount, type FinanceStats } from "./reports";
 import { chatComplete } from "./ai";
-import { parseLedgerTable, ledgerRowsMatching } from "./triage";
+import { parseLedgerTable, ledgerPositiveRows, ledgerRowsMatching } from "./triage";
 
 /**
  * Helpers for /api/ask retrieval quality (R54): deterministic time-range
@@ -499,6 +499,9 @@ export function financeExtremeIntent(question: string): FinanceExtremeQuery | nu
 // 财务词/时间短语/购买动词/量词填充后，残留的干净词即主题限定词。
 const EXTREME_STRIP_RES: RegExp[] = [
   STRIP_RES[0], // 时间短语，与财务聚合同一口径
+  // 裸「最近/近期」是无窗口的时间副词不是主题（R228，audit-r227 P3-2：
+  // 「最近第二贵的支出」的「最近」残留进 WHERE LIKE 致零命中自我否证）
+  /最近|近来|近期|这段时间|这阵子/g,
   /最贵|最便宜|金额最[大高小低]|最[高低]|最大的?一?[笔项个]|最小的?一?[笔项个]|花得?最[多少]|花钱最[狠多猛]|最狠的?一[笔次]|数额最[大小]|(?:倒数)?排(?:名|行)?(?:倒数)?第[ \t]*(?:[0-9]+|[一二两三四五六七八九十]{1,2})[ \t]*(?:贵|便宜|高|低|大|小|多|少|狠)?|倒数第[ \t]*(?:[0-9]+|[一二两三四五六七八九十]{1,2})[ \t]*(?:贵|便宜|高|低|大|小|多|少|狠)?|第[ \t]*(?:[0-9]+|[一二两三四五六七八九十]{1,2})[ \t]*(?:贵|便宜|高|低|大|小|多|少|狠|名)/g,
   // 「单笔最贵」的「单笔」是计量口径词、「按金额排」的「按…排」是排序指令词，
   // 都不是主题限定（R190 P1-1：残渣注入 WHERE 让确定性路线自己否证自己）
@@ -541,11 +544,13 @@ export function financeExtremeTopicTerms(question: string): string[] | null {
 /** 台账聚合笔记判定（R180 P2-1）：多行台账笔记的金额是 fixLedgerAmount 锁定的
  * 列合计（R178），不是一笔消费——极值比较把它当单笔会冒充「最便宜的一把」。
  * 复用 parseLedgerTable 同一确定性解析器：内容解析出多行台账且笔记金额等于
- * 该合计时判为聚合笔记（用户手改过金额则金额已非合计，照常参与比较）。 */
+ * 该合计时判为聚合笔记（用户手改过金额则金额已非合计，照常参与比较）。
+ * 例外（R228）：只有 1 行正数明细的「付款+退款」净额句（「付款 34.5 其中
+ * 退款 9」）是同一笔交易的价款冲减，净额就是单笔实付，照常参与比较。 */
 export function isLedgerAggregateNote(n: Pick<NoteRow, "content" | "amount">): boolean {
   if (typeof n.amount !== "number" || !Number.isFinite(n.amount)) return false;
   const ledger = parseLedgerTable(n.content);
-  return ledger !== null && Math.abs(n.amount - ledger.amount) < 0.005;
+  return ledger !== null && Math.abs(n.amount - ledger.amount) < 0.005 && ledgerPositiveRows(n.content) >= 2;
 }
 
 const FINANCE_DIRECTION_LABELS: Record<"expense" | "income", string> = { expense: "支出", income: "收入" };

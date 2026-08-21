@@ -75,6 +75,10 @@ const CASES: EvalCase[] = [
   { content: `${PREFIX} 上月借给同事 800 还没还我`, category: "transfer", amount: 800, currency: "CNY" },
   { content: `${PREFIX} 我还欠小陈 200 没还他`, category: "transfer", amount: 200, currency: "CNY" },
   { content: `${PREFIX} 帮部门垫付的 450 材料费到现在没结`, category: "transfer", amount: 450, currency: "CNY" },
+  // R228 P2（audit-r227 §2：R217 原句回归——混合付款+平台退款判 transfer 34.5，应净支出 25.5）
+  { content: `${PREFIX} 外卖我付32室友付28平台退34.5`, category: "expense", amount: 25.5, currency: "CNY" },
+  { content: `${PREFIX} 昨晚打车付款 34.5 其中退款 9`, category: "expense", amount: 25.5, currency: "CNY" },
+  { content: `${PREFIX} 超市买菜付了 86，有一盒坏了商家退了 12`, category: "expense", amount: 74, currency: "CNY" },
   { content: `${PREFIX} 下周一晚上8点提醒我给客户回邮件`, category: "todo", due: nextMondayIso() },
   { content: `${PREFIX} 明天上午10点半和设计师对 UI 稿`, category: "todo", due: shanghaiIso(1) },
   { content: `${PREFIX} 周五下午3点交季度报告给老板`, category: "todo", due: nearestWeekdayIso(5) },
