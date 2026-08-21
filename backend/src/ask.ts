@@ -1014,6 +1014,18 @@ export function buildFinanceSubsetAnswer(
       });
     md += `\n（另有 ${tagOnly.length} 笔仅标签命中「${kw}」、标题/正文不含该词的记账未计入合计${tagItems.length > 0 ? `：${tagItems.join("、")}` : ""}；如需把它们算进去，可按标签在时间流筛选后自行确认。）`;
   }
+  // 资金往来（transfer）不计收支合计，但直接命中时单列展示（R234 P3-3，
+  // audit-r233：「信用卡还了多少钱」命中的还款笔记是 transfer，隐掉会答成
+  // 「0 笔支出」答非所问）。
+  const transfers = rows.filter((n) => n.category === "transfer" && !n.is_sensitive && subsetDirectHit(n, terms)).slice(0, 5);
+  if (transfers.length > 0) {
+    const tItems = transfers.map((n) => {
+      const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
+      const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+      return `${text}（${amount}，${formatShanghai(n.created_at).slice(0, 10)}）`;
+    });
+    md += `\n（另有 ${transfers.length} 笔资金往来/还款类记录（transfer，不计收支合计）：${tItems.join("、")}。）`;
+  }
   md += `\n\n以上为数据库精确统计（关键词匹配口径，金额口径与周报/月报一致，不含已删除笔记${phrase ? "；时间范围按笔记记录时间划定，不按正文里写的时间" : ""}）。如果你的记录用了别的说法，换个关键词再问试试。`;
   return md;
 }

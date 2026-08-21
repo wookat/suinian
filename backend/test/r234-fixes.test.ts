@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildTriagePrompt, parseLedgerTable, fixLedgerAmount, fixLedgerNetDirection } from "../src/triage";
-import { scrubUnsourcedAmounts, financeTopicTerms, financeAggIntent, isFinanceAggQuestion } from "../src/ask";
+import { scrubUnsourcedAmounts, financeTopicTerms, financeAggIntent, isFinanceAggQuestion, buildFinanceSubsetAnswer } from "../src/ask";
 import { ASK_KEYWORDS_SYSTEM } from "../src/index";
 import type { Category, TriageResult } from "../src/types";
 
@@ -137,6 +137,24 @@ describe("R234 P3-3 deterministic finance-term extraction fixes", () => {
   it("keeps existing aggregate/subset routing (不回归)", () => {
     expect(isFinanceAggQuestion("这个月一共花了多少钱")).toBe(true);
     expect(financeTopicTerms("咖啡一共花了多少")).toEqual(["咖啡"]);
+  });
+});
+
+// ---- P3-3 子集答案透出直接命中的 transfer（「信用卡还了多少钱」不再答成
+// 「0 笔支出」）----
+describe("R234 P3-3 subset answer surfaces direct-hit transfers", () => {
+  const row = (over: Record<string, unknown>) => ({
+    id: "n1", title: null, tags: "[]", created_at: "2026-08-21T06:00:00Z",
+    is_sensitive: 0, amount: 4200, currency: "CNY", ...over,
+  });
+  it("lists the transfer repayment note outside the expense/income totals", () => {
+    const md = buildFinanceSubsetAnswer(
+      ["信用卡"],
+      [row({ content: "信用卡账单还了 4200", category: "transfer" }) as never],
+      null
+    );
+    expect(md).toContain("资金往来/还款类记录");
+    expect(md).toContain("信用卡账单还了 4200");
   });
 });
 
