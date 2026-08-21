@@ -87,6 +87,15 @@ describe("R238 P2 normalized Chinese equivalents hit the deterministic intents",
 
 // ---- P3-3（audit-r237 P3-3）：关键词抽取过拟合致召回未命中——LIKE 零命中时
 // 剥残片降级重试一次（仍是精确匹配口径，不做宽泛分词） ----
+describe("R238 P2 在…上 介词框架剥离", () => {
+  it("在咖啡豆上花了多少钱 → 主题词为 咖啡豆（不带尾部 上）", () => {
+    expect(financeTopicTerms("我在咖啡豆上一共花了多少钱")).toEqual(["咖啡豆"]);
+  });
+  it("网上购物 等以上结尾的正常主题不受影响", () => {
+    expect(financeTopicTerms("网购一共花了多少钱")).toEqual(["网购"]);
+  });
+});
+
 describe("R238 P3-3 degradeAskTerms", () => {
   it("strips the audit-observed verb-echo fragment 打羽毛球打", () => {
     expect(degradeAskTerms(["打羽毛球打"])).toEqual(["打羽毛球"]);

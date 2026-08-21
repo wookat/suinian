@@ -917,6 +917,9 @@ function subsetTopicExtract(question: string): string[] | null {
   // 本身就是主题的词剥空
   const stripped = residual.replace(/^[买在喝吃点逛去为给用出]{1,2}/, "").replace(/^(?:你|您|咱)+/, "");
   if (stripped.length >= 2) residual = stripped;
+  // 「在 X 上花了多少钱」的介词框架：尾部「上」是框架残留不是主题
+  // （「咖啡豆上」LIKE 零命中），仅在原问句确为「在…上」形态时剥掉
+  if (/在[^\s，。？?]{1,8}上/.test(question) && residual.length >= 3) residual = residual.replace(/上$/, "");
   const terms = residual
     .split(/和|跟|以及|、/)
     .map((s) => s.trim().replace(QUANTIFIER_TAIL_RE, ""))

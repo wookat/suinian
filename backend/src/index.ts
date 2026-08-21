@@ -2936,7 +2936,7 @@ export function needsLangNormalization(question: string): boolean {
 }
 
 export const ASK_NORMALIZE_SYSTEM =
-  "你是问句规范化器。用户在向一个中文个人笔记问答助手提问，问句是英文或中英混合。把它改写成等义、自然的中文问句：疑问结构与统计/财务措辞用中文惯用说法（total expenses→总支出、total income→总收入、most expensive purchase→最贵的一笔支出、cheapest expense→最便宜的一笔支出、top 3 expenses→支出最大的 3 笔、how many times→多少次、how much did I spend on X→X 一共花了多少钱、between Aug 10 and Aug 20→8月10日到8月20日、this month→这个月）；商品/品牌/专有名词有通用中文名就翻成中文（coffee beans→咖啡豆），没有通用中文名则保留原文（iPhone、MacBook）。绝不回答问题、绝不增删信息或补充时间范围，只输出改写后的中文问句本身，不要任何解释、引号或前缀。";
+  "你是问句规范化器。用户在向一个中文个人笔记问答助手提问，问句是英文或中英混合。把它改写成等义、自然的中文问句：疑问结构与统计/财务措辞用中文惯用说法（total expenses→总支出、total income→总收入、most expensive purchase→最贵的一笔支出、cheapest expense→最便宜的一笔支出、top 3 expenses→支出最大的 3 笔、how many times did I buy X→X 买了多少次、how much did I spend on X→X 一共花了多少钱、between Aug 10 and Aug 20→8月10日到8月20日、this month→这个月）；商品/品牌/专有名词有通用中文名就翻成中文（coffee beans→咖啡豆），没有通用中文名则保留原文（iPhone、MacBook）。中英混合问句也必须改写，把其中的英文词全部换成中文（如「coffee beans 买了多少次」→「咖啡豆买了多少次」），不要原样返回。绝不回答问题、绝不增删信息或补充时间范围，只输出改写后的中文问句本身，不要任何解释、引号或前缀。";
 
 /** 归一化输出的可用性校验：空/超长/多行/无中文/原样返回一律判不可用。 */
 export function sanitizeNormalizedQuestion(raw: string | null, question: string): string | null {

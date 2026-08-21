@@ -59,6 +59,8 @@ const DET_FLAGS = [
   "finance_aggregate",
   "finance_subset",
   "finance_compare",
+  "finance_extreme",
+  "finance_list",
   "extreme_aggregate",
   "count_aggregate",
   "enum_aggregate",
