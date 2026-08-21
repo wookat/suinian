@@ -263,7 +263,17 @@ function shortLink(url: string): string {
 
 const LINK_STATUS_TEXT: Record<string, string> = {
   fetch_failed: "未能抓取正文，已保存链接",
-  no_content: "未能抓取正文，已保存链接",
+  no_content: "页面没有可提取的正文，已保存链接",
+}
+
+/** 抓取失败归因文案（R221 P2-1）：区分死链/反爬/超时/非网页，避免统一含糊提示 */
+const LINK_FAIL_REASON_TEXT: Record<string, string> = {
+  http_404: "页面不存在（404），链接本身已保存",
+  http_403: "网站拒绝了抓取（403），链接本身已保存",
+  http_error: "网站返回错误，未能抓取正文，链接本身已保存",
+  timeout: "抓取超时，可点「重试抓取」再试一次，链接本身已保存",
+  not_html: "链接不是网页（可能是文件/图片），链接本身已保存",
+  network: "网络错误，未能抓取正文，链接本身已保存",
 }
 
 /** 本地/内网地址服务端天然抓不到正文，属预期而非失败，文案要区分 */
@@ -283,8 +293,9 @@ function isPrivateHost(url: string): boolean {
   }
 }
 
-function linkStatusText(status: string, url: string): string {
+function linkStatusText(status: string, url: string, failReason?: string | null): string {
   if (isPrivateHost(url)) return "本地/内网链接无法抓取正文，链接本身已保存"
+  if (failReason && LINK_FAIL_REASON_TEXT[failReason]) return LINK_FAIL_REASON_TEXT[failReason]
   return LINK_STATUS_TEXT[status] ?? "未能抓取正文，已保存链接"
 }
 
@@ -881,7 +892,7 @@ export function NoteCard({
                 {i === 0 && note.meta?.link_status && note.meta.link_status !== "ok" && (
                   <div className="flex items-center gap-2 px-3 pb-2 text-xs text-muted-foreground">
                     <CircleAlert className="size-3.5 shrink-0" />
-                    <span>{linkStatusText(note.meta.link_status, card.url)}</span>
+                    <span>{linkStatusText(note.meta.link_status, card.url, note.meta.link_fail_reason)}</span>
                     <button
                       onClick={(e) => {
                         e.preventDefault()

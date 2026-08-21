@@ -711,6 +711,51 @@ export function topicCountIntent(question: string): string | null {
   return null;
 }
 
+// ---- 主题归纳问答（R221 P3-4 Q24）----
+// 「最近一个月最关注的三个主题」这类归纳问题此前语义召回找不到「主题」字面
+// 而径直答「没找到」。改为确定性标签频次统计（SQL 全集口径，不经 LLM），
+// 并提示叙述性的主题回顾在周报/月报。
+const TOPIC_SUMMARY_RE =
+  /(?:最|主要|比较)关注的?[^？?。]{0,8}(?:主题|话题|方向|事情?)|(?:主题|话题)(?:是什么|有哪些)|主要在(?:想|忙|关注)些?(?:什么|啥)/;
+
+export function topicSummaryIntent(question: string): boolean {
+  return TOPIC_SUMMARY_RE.test(question);
+}
+
+/** 「三个主题」「前5个话题」里的 N；无数字默认 3，上限 10。 */
+export function topicSummaryTopN(question: string): number {
+  const m = question.match(/([一两二三四五六七八九十\d]{1,2})\s*[个大]?\s*(?:主题|话题|方向)/);
+  if (!m) return 3;
+  const CN: Record<string, number> = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+  const n = /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : (CN[m[1]] ?? 3);
+  return Math.min(Math.max(n, 1), 10);
+}
+
+export function buildTopicSummaryAnswer(
+  rows: { tags: string; is_sensitive: number }[],
+  phrase: string | null,
+  topN = 3
+): string {
+  const scope = phrase ?? "全部笔记里";
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    if (r.is_sensitive) continue; // 敏感笔记的标签不进入归纳展示
+    try {
+      for (const t of JSON.parse(r.tags || "[]") as string[]) {
+        if (typeof t === "string" && t) counts.set(t, (counts.get(t) ?? 0) + 1);
+      }
+    } catch {
+      /* ignore bad rows */
+    }
+  }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh")).slice(0, topN);
+  if (top.length === 0) {
+    return `${scope}还没有足够的标签可以归纳主题。想看叙述性的主题回顾，可以到「报告」页生成周报/月报。`;
+  }
+  const lines = top.map(([t, n], i) => `${i + 1}. ${t}（${n} 条相关笔记）`);
+  return `按标签出现频次统计，${scope}你最关注的主题：\n${lines.join("\n")}\n\n以上为按笔记标签的精确计数；想看叙述性的主题回顾，可到「报告」页生成周报/月报。`;
+}
+
 /** 主题关键词计数的精确答案（如实标注按关键词匹配口径）。 */
 export function buildTopicCountAnswer(topic: string, cnt: number, sensitiveCnt: number, phrase: string | null): string {
   const scope = phrase ?? "到目前为止";

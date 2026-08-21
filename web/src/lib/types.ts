@@ -8,6 +8,8 @@ export interface NoteMeta {
   link_site?: string
   link_excerpt?: string
   link_status?: "ok" | "no_content" | "fetch_failed"
+  /** 抓取失败归因（R221 P2-1），服务端写入 */
+  link_fail_reason?: "http_404" | "http_403" | "http_error" | "timeout" | "not_html" | "network" | null
   link_fetched_at?: string
   file_name?: string
   file_mime?: string
