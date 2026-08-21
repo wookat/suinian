@@ -122,6 +122,9 @@ fun SuinianNavHost(focusQuickNoteSignal: Int, navigateRouteSignal: Pair<String, 
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         vm.refresh()
+        // 系统分享（ShareActivity）入库后回到应用：列表里可能有待分拣的新笔记，
+        // 与应用内发笔记一样轮询到分拣结论出来自动刷新（R230 P3-4）
+        vm.pollTriage()
     }
 
     LaunchedEffect(ui.toast) {

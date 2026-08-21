@@ -150,6 +150,7 @@ function useSwStatus(): SwStatus | null {
 function SwStatusCard() {
   const status = useSwStatus()
   const [retrying, setRetrying] = useState(false)
+  const [retryError, setRetryError] = useState<string | null>(null)
   if (!status) return null
   const ok = status.active && status.offlineReady
   // 安装失败终态（R178 P1-1）：已注册但既无 active 也无 installing —— 新 SW
@@ -164,14 +165,27 @@ function SwStatusCard() {
         : status.registered
           ? "离线缓存正在安装中，稍后刷新可生效"
           : "离线缓存未注册，刷新页面重试"
+  // 注销卡死的 registration 可能永远不返回（SW 组件 wedge），10s 超时给出
+  // 失败原因与用户可自救的路径，而不是无限「重试中…」
   const retry = async () => {
     setRetrying(true)
+    setRetryError(null)
     try {
-      const reg = await navigator.serviceWorker.getRegistration()
-      if (reg && !reg.active) await reg.unregister()
+      await Promise.race([
+        (async () => {
+          const reg = await navigator.serviceWorker.getRegistration()
+          if (reg && !reg.active) await reg.unregister()
+        })(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10_000)),
+      ])
       window.location.reload()
-    } catch {
+    } catch (e) {
       setRetrying(false)
+      setRetryError(
+        e instanceof Error && e.message === "timeout"
+          ? "重试超时：浏览器的 Service Worker 组件可能已卡住。请先关闭本站所有标签页后重新打开；若仍失败，在浏览器「站点设置 → 清除数据」里仅清除本站数据后刷新（笔记都在云端，不会丢失）"
+          : "重试失败：浏览器拒绝了操作。请关闭本站所有标签页后重开，或在浏览器站点设置里清除本站数据后刷新（笔记都在云端，不会丢失）",
+      )
     }
   }
   return (
@@ -187,9 +201,12 @@ function SwStatusCard() {
         {text}
       </p>
       {failed && (
-        <Button size="sm" variant="outline" className="mt-2" disabled={retrying} onClick={() => void retry()}>
-          {retrying ? "重试中…" : "重试安装离线缓存"}
-        </Button>
+        <>
+          <Button size="sm" variant="outline" className="mt-2" disabled={retrying} onClick={() => void retry()}>
+            {retrying ? "重试中…" : "重试安装离线缓存"}
+          </Button>
+          {retryError && <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">{retryError}</p>}
+        </>
       )}
       <p className="mt-1 text-xs text-muted-foreground">
         有新版本时页面会弹出「点击刷新」提示；离线时可浏览已缓存的笔记/线索/周报

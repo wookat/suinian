@@ -73,9 +73,21 @@ export function Onboarding() {
         </div>
         {/* R182 P2-3：首屏收敛为一句话主张，移动端不再被长段落撑出可视区 */}
         <p className="mb-1 text-sm font-medium">什么都能丢，AI 帮你想起来。</p>
-        <p className="mb-4 text-xs text-muted-foreground">
+        <p className="mb-2 text-xs text-muted-foreground">
           想法、链接、语音、账目随手丢进来，自动分拣打标签、串成思考线索，随时问随时找回。
         </p>
+        {/* R230 P3-5：场景化示例让陌生用户 5 秒内建立「这是什么、对我有什么用」认知 */}
+        <div className="mb-4 space-y-1 rounded-lg bg-secondary/50 p-2.5 text-xs">
+          <p className="text-muted-foreground">
+            「打车 34.5 其中退款 9」<span className="mx-0.5 text-foreground">→</span> 自动记账 25.5 元
+          </p>
+          <p className="text-muted-foreground">
+            「周五前交房租」<span className="mx-0.5 text-foreground">→</span> 变成带期限的待办
+          </p>
+          <p className="text-muted-foreground">
+            「上周存的那篇文章呢」<span className="mx-0.5 text-foreground">→</span> 问一句，AI 带引用找回
+          </p>
+        </div>
         <div className="space-y-2">
           {CHOICES.map((c) => {
             const Icon = c.icon

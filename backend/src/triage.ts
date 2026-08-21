@@ -148,11 +148,14 @@ export function buildTriagePrompt(
   - 「小李还欠我 500 一直没还」→ transfer，amount=500（借出未收回的欠款挂账）
   - 「上月借给同事 800 还没还我」→ transfer，amount=800（借出未还）
   - 「我还欠小陈 200 没还他」→ transfer，amount=200（自己欠别人的同样记欠款往来）
-  注意区分：商家退货退款（「退款 99 到账」）仍是 income 冲抵消费；只有借还/押金/负债还款这类「拿回或归还本就属于某方的钱」才是 transfer；AA/垫付后把钱收回来是收入回补，不是 transfer——「公司团建 AA 收回 240」→ income，amount=240；跨时间也一样：之前/昨天垫付的钱现在收回仍是 income，绝不因「还我/转我」判成 transfer——「昨天垫付的地铁卡 200，今天他还我 200」→ income，amount=200；「朋友把上次帮他垫的 300 元还我了」→ income，amount=300（垫付回款是收入回补，区别于「表弟把上次借的 1500 还给我了」的借还 transfer）
+  注意区分：商家退货退款（「退款 99 到账」）仍是 income 冲抵消费；只有借还/押金/负债还款这类「拿回或归还本就属于某方的钱」才是 transfer；AA/垫付后把钱收回来是收入回补，不是 transfer——「公司团建 AA 收回 240」→ income，amount=240；跨时间也一样：之前/昨天垫付的钱现在收回仍是 income，绝不因「还我/转我」判成 transfer——「昨天垫付的地铁卡 200，今天他还我 200」→ income，amount=200；「朋友把上次帮他垫的 300 元还我了」→ income，amount=300（垫付回款是收入回补，区别于「表弟把上次借的 1500 还给我了」的借还 transfer）；「上次帮小刘垫的 90 他微信转我了」→ income，amount=90（既往垫付现在收到回款＝钱进来，绝不是 expense——「帮…垫的」是背景，本次记录的是「转我」的进账）；「帮同事垫的 90 块他今天微信还我了」→ income，amount=90（同上，垫付回款进账）
   同一笔付款里的商家/平台退款（「付款 X 其中退款 Y」「我付 A 别人付 B 平台退 C」）是同一笔消费的价款冲减——整句是一条净支出记账：category=expense，amount=付款合计−退款，绝不因句中出现「退」字判成 transfer，也绝不把退款金额当成主金额；这与「别人回款/垫付收回」不同（那是另一笔 income，见上，本人实付不净额化），只有钱退回同一笔交易本身时才做净额。判例：
   - 「外卖我付32室友付28平台退34.5」→ expense，amount=25.5（32+28−34.5 的净支出，绝不是 transfer 34.5，也绝不是 60）
   - 「昨晚打车付款 34.5 其中退款 9」→ expense，amount=25.5（34.5−9，退款是同笔交易冲减）
   - 「超市买菜付了 86，有一盒坏了商家退了 12」→ expense，amount=74（86−12）
+  但句中明确说金额「是抵完/抵扣后的价」「已经是减完的」时，该金额本身已是净额，红包/券/抵扣绝不能再减一次：
+  - 「外卖凑单花了 66.6，红包抵了 3 块是抵完后的价」→ expense，amount=66.6（66.6 已是抵完红包后的实付价，绝不是 63.6）
+  - 「买水果 28.8，用了 5 元券后的价」→ expense，amount=28.8（「后的价」＝已扣完，绝不再减 5）
   注意：陈述自己账户间转账的句子即使是「把 X 转到 Y」祈使句式、没写「了」，也是记录已发生的资金平移，不是待办——「把余额宝的 10000 转到活期」→ transfer，amount=10000（绝不是 todo，金额绝不能丢）；只有带「记得/提醒我/明天」等未来标记时才是 todo
   用量/份量/使用次数绝不改变支付金额：amount 是这笔交易实际支付的钱数，绝不要按用量、份量、耐用时长换算出「单次成本」。判例：
   - 「咖啡机除垢剂 25 元，一次用半瓶」→ expense，amount=25（绝不是 12.5——「一次用半瓶」是用量描述，付的钱仍是 25）
@@ -164,7 +167,7 @@ export function buildTriagePrompt(
   - 「freelance payment 3000 CNY received」→ income，amount=3000，currency="CNY"
   多金额句式口径（总额/人均/份额并存时，amount＝记录者本人实际支付出去的钱，且必须是文本中出现的数字）：
   - 本人付了总额（请客/买单/垫付/我先付了/我付的/我掏的）→ amount=总额，即使句中同时给出人均/每人——「聚餐一共 900，我买单，人均 150」→ expense，amount=900（绝不是 150）；「团建 640 我垫付的，人均 160」→ expense，amount=640（垫付出去的钱是本人实际支付，之后收回时再另记一笔收入）
-  - 先付/垫付 X 与别人回款 Y 同句出现 → expense，amount=X（本人实付的总额），绝不要把 X−Y 净额化、也绝不因「回我/转我」把方向记成 income 或 transfer——「我先付了聚餐 480 元，其他人回我 360 元」→ expense，amount=480（绝不是 120）；「聚餐 AA，我先垫付 480 元，其他人收回给我 360 元」→ expense，amount=480（垫付是支出，收回的 360 之后另记一笔收入）；「帮同事垫付门票 300 元，他微信转我 300 元」→ expense，amount=300（不是 transfer）
+  - 先付/垫付 X 与别人回款 Y 同句出现（本次垫付＋本次回款、句中有实付金额 X）→ expense，amount=X（本人实付的总额），绝不要把 X−Y 净额化、也绝不因「回我/转我」把方向记成 income 或 transfer；注意：此条只适用于「本次刚垫付」的句子——「上次/之前帮…垫的 X 他转我了」这类只在追记既往垫付的回款、垫付本身发生在过去的句子不适用本条，是 income（见上方判例「上次帮小刘垫的 90 他微信转我了」→ income）——「我先付了聚餐 480 元，其他人回我 360 元」→ expense，amount=480（绝不是 120）；「聚餐 AA，我先垫付 480 元，其他人收回给我 360 元」→ expense，amount=480（垫付是支出，收回的 360 之后另记一笔收入）；「帮同事垫付门票 300 元，他微信转我 300 元」→ expense，amount=300（不是 transfer）
   - 明确只付自己那份 → amount=自己的份额——「四人聚餐共 520，我只付了自己那份 130」→ expense，amount=130；明确 AA/平摊且本人没有垫付总额时记自己份额（「晚饭 AA 一共 480，四个人平摊，各付各的」→ amount=120，480÷4），份额与人数都不明时 amount=null，绝不猜
   - 「总额 X 人均 Y」没说谁付的钱 → 固定取总额 X——「聚餐 480 元人均 80」→ expense，amount=480（保守取总额，绝不取人均，同样的句式绝不摇摆）
   - 绝不要用 人均×人数 等算式推算出文本中不存在的金额——「聚餐 480 元人均 80，八个人」→ amount=480（绝不是 80×8=640：640 在原文任何位置都不存在）
@@ -1152,7 +1155,10 @@ export function fixAaReimburse(content: string, triage: TriageResult): TriageRes
   if (triage.category !== "transfer" && triage.category !== "expense") return triage;
   if (REPAY_PENDING_RE.test(content)) return triage;
   if (AA_REIMBURSE_RE.test(content)) return { ...triage, category: "income" };
-  if (triage.category === "expense") return triage;
+  // 既往垫付回款收口对 expense 同样生效（R230 P2-1，audit-r229 §1.1：「上次帮
+  // 小刘垫的 90 他微信转我了」——fixFinanceDirection 的「帮…垫」词面把 income
+  // 翻成 expense，而本收口原先只救 transfer）。「上次/之前…垫」的既往语境
+  // 排除本次垫付句，本次垫付＋回款句仍按实付总额记 expense（见 R218 净额化）。
   if (PAST_ADVANCE_RE.test(content) && PAST_ADVANCE_REPAY_RE.test(content)) {
     return { ...triage, category: "income" };
   }
