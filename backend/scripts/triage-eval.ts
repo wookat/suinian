@@ -68,6 +68,13 @@ const CASES: EvalCase[] = [
   // R224 P2-1/P2-2（audit-r223 §2.1 生产误判两例：他人付款主语、垫付回款超正则窗口）
   { content: `${PREFIX} 房客交了下季度房租 9000`, category: "income", amount: 9000, currency: "CNY" },
   { content: `${PREFIX} 垫付快递费 23，同事微信还我了`, category: "income", altCategory: ["expense"], amount: 23, currency: "CNY" },
+  // R226 P2（audit-r225 §2：「垫付的 300 块房费小王一直没给我」62.5% 判 todo 丢金额）
+  // 欠款/未收回/待还全句式挂账 → transfer 带金额，绝不是 todo
+  { content: `${PREFIX} 垫付的 300 块房费小王一直没给我`, category: "transfer", amount: 300, currency: "CNY" },
+  { content: `${PREFIX} 小李还欠我 500 一直没还`, category: "transfer", amount: 500, currency: "CNY" },
+  { content: `${PREFIX} 上月借给同事 800 还没还我`, category: "transfer", amount: 800, currency: "CNY" },
+  { content: `${PREFIX} 我还欠小陈 200 没还他`, category: "transfer", amount: 200, currency: "CNY" },
+  { content: `${PREFIX} 帮部门垫付的 450 材料费到现在没结`, category: "transfer", amount: 450, currency: "CNY" },
   { content: `${PREFIX} 下周一晚上8点提醒我给客户回邮件`, category: "todo", due: nextMondayIso() },
   { content: `${PREFIX} 明天上午10点半和设计师对 UI 稿`, category: "todo", due: shanghaiIso(1) },
   { content: `${PREFIX} 周五下午3点交季度报告给老板`, category: "todo", due: nearestWeekdayIso(5) },
@@ -392,14 +399,24 @@ async function main() {
     }
     console.log(`created ${created.length} notes, waiting for triage...`);
 
-    // poll until every note has a category (max ~90s)
+    // poll until every note has a category（最长 ~12 分钟：创建高峰触发 provider
+    // 限流时，失败的分拣会落 needs_retriage 由 10 分钟 cron 兜底补分拣，轮询
+    // 窗口必须覆盖一次 cron，否则这批笔记会被误判为分类失败）
     let notes: NoteJson[] = [];
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 240; i++) {
       await sleep(3000);
       // no q= filter: sensitive notes are stored encrypted, so content LIKE would miss them
-      // limit 必须 ≥ 用例数（当前 74），否则最旧的几条永远取不回被误判失败
-      const res = await api<{ notes: NoteJson[] }>(`/api/notes?limit=100`);
-      notes = res.notes.filter((n) => created.includes(n.id));
+      // 服务端 limit 上限 100 < 用例数，必须 cursor 翻页取全，否则最旧的几条永远取不回被误判失败
+      const all: NoteJson[] = [];
+      let cursor: string | null = null;
+      do {
+        const res: { notes: NoteJson[]; next_cursor: string | null } = await api(
+          `/api/notes?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`
+        );
+        all.push(...res.notes);
+        cursor = res.next_cursor;
+      } while (cursor);
+      notes = all.filter((n) => created.includes(n.id));
       if (notes.length === created.length && notes.every((n) => n.category)) break;
     }
 

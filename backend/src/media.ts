@@ -507,6 +507,68 @@ export async function describeImage(env: Pick<Env, "AI">, bytes: Uint8Array): Pr
   }
 }
 
+/**
+ * Delete R2 objects with one retry; final failures are recorded in
+ * media_delete_failures for the cron to retry (R226 P1: the cascade paths used
+ * to fire-and-forget with catch(console.error), silently leaking private
+ * originals when a batch delete failed).
+ */
+export async function deleteMediaObjects(env: Pick<Env, "MEDIA" | "DB">, keys: string[]): Promise<void> {
+  if (!env.MEDIA || keys.length === 0) return;
+  try {
+    await env.MEDIA.delete(keys);
+    return;
+  } catch (e) {
+    console.error("deleteMediaObjects: R2 delete failed, retrying once", e);
+  }
+  await new Promise((r) => setTimeout(r, 500));
+  try {
+    await env.MEDIA.delete(keys);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`deleteMediaObjects: retry failed, recording ${keys.length} key(s) for cron retry`, e);
+    for (let i = 0; i < keys.length; i += 40) {
+      const chunk = keys.slice(i, i + 40);
+      await env.DB.batch(
+        chunk.map((k) =>
+          env.DB
+            .prepare(
+              "INSERT INTO media_delete_failures (r2_key, last_error) VALUES (?, ?) ON CONFLICT(r2_key) DO UPDATE SET attempts = attempts + 1, last_error = excluded.last_error"
+            )
+            .bind(k, msg.slice(0, 500))
+        )
+      );
+    }
+  }
+}
+
+/** Cron retry for recorded R2 delete failures; rows clear only on confirmed success. */
+export async function flushMediaDeleteFailures(env: Pick<Env, "MEDIA" | "DB">): Promise<number> {
+  if (!env.MEDIA) return 0;
+  const { results } = await env.DB.prepare(
+    "SELECT r2_key FROM media_delete_failures ORDER BY enqueued_at ASC LIMIT 200"
+  ).all<{ r2_key: string }>();
+  const keys = (results ?? []).map((r) => r.r2_key);
+  if (keys.length === 0) return 0;
+  try {
+    await env.MEDIA.delete(keys);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`flushMediaDeleteFailures: retry of ${keys.length} key(s) failed`, e);
+    const ph = keys.map(() => "?").join(",");
+    await env.DB.prepare(
+      `UPDATE media_delete_failures SET attempts = attempts + 1, last_error = ? WHERE r2_key IN (${ph})`
+    )
+      .bind(msg.slice(0, 500), ...keys)
+      .run();
+    return 0;
+  }
+  const ph = keys.map(() => "?").join(",");
+  await env.DB.prepare(`DELETE FROM media_delete_failures WHERE r2_key IN (${ph})`).bind(...keys).run();
+  console.warn(`flushMediaDeleteFailures: cleared ${keys.length} previously-failed R2 delete(s)`);
+  return keys.length;
+}
+
 /** Objects newer than this are never treated as orphans (in-flight uploads: R2 put lands before the attachments row). */
 export const RECONCILE_GRACE_MS = 48 * 3600_000;
 /** Per-run object budget — keeps the daily sweep well inside cron limits. */
