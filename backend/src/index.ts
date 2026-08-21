@@ -63,6 +63,8 @@ import {
   storeOriginal,
   buildMediaReply,
   reconcileMediaOrphans,
+  deleteMediaObjects,
+  flushMediaDeleteFailures,
   loadOriginal,
   sweepUnencryptedSensitiveAttachments,
   AUDIO_FAILED_PLACEHOLDER,
@@ -1067,9 +1069,7 @@ app.delete("/api/auth/me", async (c) => {
     .bind(userId)
     .all<{ r2_key: string }>();
   if (c.env.MEDIA && (atts.results ?? []).length > 0) {
-    c.executionCtx.waitUntil(
-      c.env.MEDIA.delete((atts.results ?? []).map((a) => a.r2_key)).catch((e) => console.error("r2 delete failed", e))
-    );
+    c.executionCtx.waitUntil(deleteMediaObjects(c.env, (atts.results ?? []).map((a) => a.r2_key)));
   }
   if (c.env.VECTORIZE) {
     const ids = await c.env.DB.prepare("SELECT id FROM notes WHERE user_id = ?").bind(userId).all<{ id: string }>();
@@ -1848,11 +1848,7 @@ async function deleteNoteRecord(
     .all<{ r2_key: string }>();
   await env.DB.prepare("DELETE FROM attachments WHERE note_id = ?").bind(id).run();
   if (env.MEDIA && atts.results.length > 0) {
-    waitUntil(
-      env.MEDIA.delete(atts.results.map((a) => a.r2_key)).catch((e) =>
-        console.error("r2 delete failed", e)
-      )
-    );
+    waitUntil(deleteMediaObjects(env, atts.results.map((a) => a.r2_key)));
   }
   await deleteNoteEmbedding(env, id);
   await deleteNoteGraph(env, id);
@@ -1897,11 +1893,7 @@ async function purgeNotesChunk(
     if ((atts.results ?? []).length > 0) {
       await env.DB.prepare(`DELETE FROM attachments WHERE note_id IN (${ph})`).bind(...chunk).run();
       if (env.MEDIA) {
-        waitUntil(
-          env.MEDIA.delete(atts.results.map((a) => a.r2_key)).catch((e) =>
-            console.error("r2 delete failed", e)
-          )
-        );
+        waitUntil(deleteMediaObjects(env, atts.results.map((a) => a.r2_key)));
       }
     }
     await deleteNoteEmbeddings(env, chunk);
@@ -4871,6 +4863,8 @@ export default {
       ctx.waitUntil(sweepDailyReviewPush(env));
       // drop auth rate-limit rows whose fixed window closed over a day ago
       ctx.waitUntil(sweepAuthRateLimits(env.DB));
+      // retry R2 deletes that failed during note/account cascades (rows clear on success)
+      ctx.waitUntil(flushMediaDeleteFailures(env));
     } else {
       // daily thread title/summary refresh + daily review generation
       ctx.waitUntil(refreshThreads(env));

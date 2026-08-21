@@ -68,6 +68,13 @@ const CASES: EvalCase[] = [
   // R224 P2-1/P2-2（audit-r223 §2.1 生产误判两例：他人付款主语、垫付回款超正则窗口）
   { content: `${PREFIX} 房客交了下季度房租 9000`, category: "income", amount: 9000, currency: "CNY" },
   { content: `${PREFIX} 垫付快递费 23，同事微信还我了`, category: "income", altCategory: ["expense"], amount: 23, currency: "CNY" },
+  // R226 P2（audit-r225 §2：「垫付的 300 块房费小王一直没给我」62.5% 判 todo 丢金额）
+  // 欠款/未收回/待还全句式挂账 → transfer 带金额，绝不是 todo
+  { content: `${PREFIX} 垫付的 300 块房费小王一直没给我`, category: "transfer", amount: 300, currency: "CNY" },
+  { content: `${PREFIX} 小李还欠我 500 一直没还`, category: "transfer", amount: 500, currency: "CNY" },
+  { content: `${PREFIX} 上月借给同事 800 还没还我`, category: "transfer", amount: 800, currency: "CNY" },
+  { content: `${PREFIX} 我还欠小陈 200 没还他`, category: "transfer", amount: 200, currency: "CNY" },
+  { content: `${PREFIX} 帮部门垫付的 450 材料费到现在没结`, category: "transfer", amount: 450, currency: "CNY" },
   { content: `${PREFIX} 下周一晚上8点提醒我给客户回邮件`, category: "todo", due: nextMondayIso() },
   { content: `${PREFIX} 明天上午10点半和设计师对 UI 稿`, category: "todo", due: shanghaiIso(1) },
   { content: `${PREFIX} 周五下午3点交季度报告给老板`, category: "todo", due: nearestWeekdayIso(5) },
