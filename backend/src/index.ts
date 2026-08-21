@@ -75,7 +75,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -2936,7 +2936,7 @@ export function needsLangNormalization(question: string): boolean {
 }
 
 export const ASK_NORMALIZE_SYSTEM =
-  "你是问句规范化器。用户在向一个中文个人笔记问答助手提问，问句是英文或中英混合。把它改写成等义、自然的中文问句：疑问结构与统计/财务措辞用中文惯用说法（total expenses→总支出、total income→总收入、most expensive purchase→最贵的一笔支出、cheapest expense→最便宜的一笔支出、top 3 expenses→支出最大的 3 笔、how many times did I buy X→X 买了多少次、how much did I spend on X→X 一共花了多少钱、between Aug 10 and Aug 20→8月10日到8月20日、this month→这个月）；商品/品牌/专有名词有通用中文名就翻成中文（coffee beans→咖啡豆），没有通用中文名则保留原文（iPhone、MacBook）。中英混合问句也必须改写，把其中的英文词全部换成中文（如「coffee beans 买了多少次」→「咖啡豆买了多少次」），不要原样返回。绝不回答问题、绝不增删信息或补充时间范围，只输出改写后的中文问句本身，不要任何解释、引号或前缀。";
+  "你是问句规范化器。用户在向一个中文个人笔记问答助手提问，问句是英文或中英混合。把它改写成等义、自然的中文问句：疑问结构与统计/财务措辞用中文惯用说法（total expenses→总支出、total income→总收入、most expensive purchase→最贵的一笔支出、cheapest expense→最便宜的一笔支出、top 3 expenses→支出最大的 3 笔、how much money did I receive this month→这个月收到多少钱、expenses over 80 yuan→超过 80 元的支出、how many times did I buy X→X 买了多少次、how much did I spend on X→X 一共花了多少钱、between Aug 10 and Aug 20→8月10日到8月20日、this month→这个月）；商品/品牌/专有名词有通用中文名就翻成中文（coffee beans→咖啡豆），没有通用中文名则保留原文（iPhone、MacBook）。中英混合问句也必须改写，把其中的英文词全部换成中文（如「coffee beans 买了多少次」→「咖啡豆买了多少次」），不要原样返回。绝不回答问题、绝不增删信息或补充时间范围，只输出改写后的中文问句本身，不要任何解释、引号或前缀。";
 
 /** 归一化输出的可用性校验：空/超长/多行/无中文/原样返回一律判不可用。 */
 export function sanitizeNormalizedQuestion(raw: string | null, question: string): string | null {
@@ -3298,6 +3298,62 @@ app.post("/api/ask", async (c) => {
   // 时间窗财务列举（R170 P1-1）：「最近一周花了哪些钱」按 category 走 SQL
   // 精确列举（待办/未发生金额绝不计入）；窗内无记录 fail-closed，绝不让
   // top-k 召回漏项或把待办幻觉成已发生支出（R169 实测 12/12 全败）。
+  // 金额阈值筛选（R240 P2-3）：「列出超过 80 元的支出」是 WHERE amount > ?
+  // 的确定性查询，绝不交 LLM 对截断召回筛选（漏项/心算错）。
+  const origThresholdQ = !metaQuestion && financeThresholdIntent(intentQuestion) ? intentQuestion : null;
+  const thresholdQ = origThresholdQ ?? (!metaQuestion && financeThresholdIntent(recallQuestion) ? recallQuestion : null);
+  const finThreshold = thresholdQ ? financeThresholdIntent(thresholdQ) : null;
+  const finThresholdTerms = thresholdQ ? financeThresholdTopicTerms(thresholdQ) : null;
+  if (finThreshold && !(finThresholdTerms?.includes("\u0000"))) {
+    const thRange = (origThresholdQ ? parseTimeRange(intentQuestion) : null) ?? timeRange;
+    const thConds = ["user_id = ?", "deleted_at IS NULL", "category = ?"];
+    const thBinds: unknown[] = [userId, finThreshold.direction];
+    if (thRange?.start) {
+      thConds.push("created_at >= ?");
+      thBinds.push(thRange.start);
+    }
+    if (thRange?.end) {
+      thConds.push("created_at < ?");
+      thBinds.push(thRange.end);
+    }
+    if (finThresholdTerms) {
+      thConds.push(`(${finThresholdTerms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ")})`);
+      for (const t of finThresholdTerms) thBinds.push(...(Array(3).fill(likeContains(t)) as string[]));
+    }
+    const thBase = thConds.join(" AND ");
+    const opSql = { gt: ">", gte: ">=", lt: "<", lte: "<=" }[finThreshold.op];
+    const order = finThreshold.op === "lt" || finThreshold.op === "lte" ? "amount ASC" : "amount DESC";
+    const [thRows, thUnknown, thOtherCur] = await Promise.all([
+      c.env.DB.prepare(
+        `SELECT * FROM notes WHERE ${thBase} AND amount IS NOT NULL AND COALESCE(currency,'CNY') = ? AND amount ${opSql} ? ORDER BY ${order}, created_at DESC LIMIT 200`
+      )
+        .bind(...thBinds, finThreshold.currency, finThreshold.amount)
+        .all<NoteRow>(),
+      c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM notes WHERE ${thBase} AND amount IS NULL`)
+        .bind(...thBinds)
+        .first<{ cnt: number }>(),
+      c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM notes WHERE ${thBase} AND amount IS NOT NULL AND COALESCE(currency,'CNY') != ?`)
+        .bind(...thBinds, finThreshold.currency)
+        .first<{ cnt: number }>(),
+    ]);
+    const thAll = thRows.results ?? [];
+    // 台账合计笔记的金额是列合计非单笔，不参与单笔阈值比较（口径同极值）
+    const thKept = thAll.filter((n) => !isLedgerAggregateNote(n));
+    const answer = buildFinanceThresholdAnswer(
+      finThreshold,
+      thKept,
+      { unknownAmount: thUnknown?.cnt ?? 0, otherCurrency: thOtherCur?.cnt ?? 0, ledgerExcluded: thAll.length - thKept.length },
+      thRange?.phrase ?? null,
+      finThresholdTerms
+    );
+    const thRefRows = thKept.filter((n) => !n.is_sensitive).slice(0, 20);
+    return c.json({
+      answer,
+      references: thRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
+      notes: thRefRows.map((n) => noteToJson(n)),
+      finance_threshold: true,
+    });
+  }
   const finList = financeListIntent(intentQuestion) ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeListIntent(recallQuestion));
   if (finList) {
     const lRange = (financeListIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
@@ -3668,10 +3724,23 @@ app.post("/api/ask", async (c) => {
         .bind(...tBinds)
         .all<NoteRow>(),
     ]);
-    const tTotal = tTotalRow?.cnt ?? 0;
+    let tTotal = tTotalRow?.cnt ?? 0;
+    let tRows = tListRows.results ?? [];
+    let tSens = tTotalRow?.sens ?? 0;
+    // 单字主题（「书」）LIKE 会把「书房」这类无关复合词也命中（R240 P3-2）：
+    // 按邻字上下文过滤出独立成词的命中；只在拿到全量命中（未截断）时过滤以
+    // 保证总数口径精确，过滤后全空则回落原始命中（绝不把有命中变成零命中）
+    if (!enumCategory && /^[\u4e00-\u9fa5]$/.test(enumTopic) && tRows.length === tTotal) {
+      const filtered = tRows.filter((n) =>
+        hitsSingleCharTopic(`${n.title ?? ""}\n${n.is_sensitive ? "" : n.content}\n${n.tags ?? ""}\n${n.url_title ?? ""}`, enumTopic)
+      );
+      if (filtered.length > 0) {
+        tRows = filtered;
+        tTotal = filtered.length;
+        tSens = filtered.reduce((s, n) => s + (n.is_sensitive ? 1 : 0), 0);
+      }
+    }
     if (tTotal > 0) {
-      const tSens = tTotalRow?.sens ?? 0;
-      const tRows = tListRows.results ?? [];
       const tLines = enumNoteLines(tRows, true);
       let answer = enumCategory
         ? `${timeRange?.phrase ?? ""}分类为「${enumTopic}」的记录共 ${tTotal} 条`
@@ -4673,8 +4742,13 @@ async function sensitiveExportDenied(
   } catch {
     /* 非法转义序列按原文校验 */
   }
-  if (!pw || !(await verifyPassword(pw, user.password_hash))) {
-    return c.json({ error: "导出敏感明文需要验证账号密码：请输入密码后重试", password_required: true }, 403);
+  // 未提交密码与密码错误分开提示（R240 P3-3，audit-r239 §8：密码错时仍提示
+  // 「请输入密码」误导用户以为没填）；两种情况都不透露账号是否存在之外的信息
+  if (!pw) {
+    return c.json({ error: "导出敏感内容明文需要验证账号密码：请输入密码后重试", password_required: true }, 403);
+  }
+  if (!(await verifyPassword(pw, user.password_hash))) {
+    return c.json({ error: "密码不正确，请重新输入", password_required: true, password_incorrect: true }, 403);
   }
   return null;
 }

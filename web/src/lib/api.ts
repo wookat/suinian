@@ -692,6 +692,21 @@ export async function askStream(
   return { ...final, notes: (final.notes ?? []).map((n) => normalizeNote(n as unknown as Record<string, unknown>)) }
 }
 
+/** 导出/备份失败时把后端 JSON 错误体解析成可读文案，绝不把原始 JSON 直接给用户看 */
+async function blobFetchError(res: Response): Promise<ApiError> {
+  const text = await res.text().catch(() => "")
+  let message = ""
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (parsed && typeof parsed === "object" && typeof (parsed as { error?: unknown }).error === "string") {
+      message = (parsed as { error: string }).error
+    }
+  } catch {
+    message = text
+  }
+  return new ApiError(res.status, message || `导出失败（HTTP ${res.status}），请稍后重试`)
+}
+
 export async function exportData(
   format: "json" | "markdown",
   includeSensitive: boolean,
@@ -714,10 +729,7 @@ export async function exportData(
   } catch {
     throw new NetworkError("网络连接失败，请检查网络或 API 地址")
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => "")
-    throw new ApiError(res.status, text || res.statusText)
-  }
+  if (!res.ok) throw await blobFetchError(res)
   const blob = await res.blob()
   const date = new Date().toISOString().slice(0, 10)
   return { blob, filename: `suinian-export-${date}.${format === "markdown" ? "md" : "json"}` }
@@ -739,10 +751,7 @@ export async function downloadBackup(includeSensitive: boolean, password?: strin
   } catch {
     throw new NetworkError("网络连接失败，请检查网络或 API 地址")
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => "")
-    throw new ApiError(res.status, text || res.statusText)
-  }
+  if (!res.ok) throw await blobFetchError(res)
   const blob = await res.blob()
   const date = new Date().toISOString().slice(0, 10)
   return { blob, filename: `suinian-backup-${date}${includeSensitive ? "-full" : ""}.zip` }
