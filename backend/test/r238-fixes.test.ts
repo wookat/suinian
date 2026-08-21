@@ -6,6 +6,7 @@ import {
 } from "../src/index";
 import {
   degradeAskTerms,
+  degradeFinanceSubsetTerms,
   financeAggIntent,
   financeExtremeIntent,
   financeTopicTerms,
@@ -93,6 +94,15 @@ describe("R238 P2 在…上 介词框架剥离", () => {
   });
   it("网上购物 等以上结尾的正常主题不受影响", () => {
     expect(financeTopicTerms("网购一共花了多少钱")).toEqual(["网购"]);
+  });
+});
+
+describe("R238 P3-3 财务子集降级剥尾部指示残片", () => {
+  it("青岛这趟 → 青岛（QA 实测：青岛这趟一共花了多少 fail-closed）", () => {
+    expect(degradeFinanceSubsetTerms(["青岛这趟"])).toEqual(["青岛"]);
+  });
+  it("无残片时不盲目重试", () => {
+    expect(degradeFinanceSubsetTerms(["青岛"])).toBe(null);
   });
 });
 
