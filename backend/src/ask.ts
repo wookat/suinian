@@ -1,7 +1,7 @@
 import type { Env, NoteRow } from "./types";
 import { formatAmount, type FinanceStats } from "./reports";
 import { chatComplete } from "./ai";
-import { parseLedgerTable, ledgerRowsMatching } from "./triage";
+import { parseLedgerTable, ledgerPositiveRows, ledgerRowsMatching } from "./triage";
 
 /**
  * Helpers for /api/ask retrieval quality (R54): deterministic time-range
@@ -544,11 +544,13 @@ export function financeExtremeTopicTerms(question: string): string[] | null {
 /** 台账聚合笔记判定（R180 P2-1）：多行台账笔记的金额是 fixLedgerAmount 锁定的
  * 列合计（R178），不是一笔消费——极值比较把它当单笔会冒充「最便宜的一把」。
  * 复用 parseLedgerTable 同一确定性解析器：内容解析出多行台账且笔记金额等于
- * 该合计时判为聚合笔记（用户手改过金额则金额已非合计，照常参与比较）。 */
+ * 该合计时判为聚合笔记（用户手改过金额则金额已非合计，照常参与比较）。
+ * 例外（R228）：只有 1 行正数明细的「付款+退款」净额句（「付款 34.5 其中
+ * 退款 9」）是同一笔交易的价款冲减，净额就是单笔实付，照常参与比较。 */
 export function isLedgerAggregateNote(n: Pick<NoteRow, "content" | "amount">): boolean {
   if (typeof n.amount !== "number" || !Number.isFinite(n.amount)) return false;
   const ledger = parseLedgerTable(n.content);
-  return ledger !== null && Math.abs(n.amount - ledger.amount) < 0.005;
+  return ledger !== null && Math.abs(n.amount - ledger.amount) < 0.005 && ledgerPositiveRows(n.content) >= 2;
 }
 
 const FINANCE_DIRECTION_LABELS: Record<"expense" | "income", string> = { expense: "支出", income: "收入" };

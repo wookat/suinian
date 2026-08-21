@@ -861,6 +861,16 @@ export function parseLedgerTable(content: string): { amount: number; rows: numbe
   return parsed === "ambiguous" ? null : parsed;
 }
 
+/** 台账正数明细行数（合计行不算）：混合付款+退款净额句（「付款 34.5 其中
+ * 退款 9」）只有 1 行正数明细，是同一笔交易的价款冲减而非多笔台账——
+ * 极值比较的聚合剔除口径据此区分（R228，audit-r227 P3-2 延伸）。 */
+export function ledgerPositiveRows(content: string): number {
+  const t = ledgerTableRows(content);
+  if (t === null || t === "ambiguous") return 0;
+  const { data, col, totalIdx } = t;
+  return data.filter((r, i) => i !== totalIdx && signedRowAmount(r, col) > 0).length;
+}
+
 /** 同 parseLedgerTable，但区分「非表格」（null）与「是表格但金额列歧义」
  *（"ambiguous"）：歧义表格不允许模型自行猜总和（R183 P2-2）。 */
 export function parseLedgerCore(content: string): { amount: number; rows: number } | "ambiguous" | null {
