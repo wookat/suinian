@@ -47,6 +47,11 @@ type AiEnv = Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MOD
  */
 function mockChatResponse(opts: ChatOptions): string {
   const system = opts.messages.find((m) => m.role === "system")?.content ?? "";
+  // 问句规范化器（R238 P2）在 mock 模式下原样返回问句：调用方的可用性校验
+  // 会判「原样返回」不可用并回落原问句，本地链路行为与无 AI 时一致
+  if (system.includes("问句规范化器")) {
+    return [...opts.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  }
   if (system.includes("严格 JSON") || system.includes("strict JSON")) {
     return JSON.stringify({
       category: "idea",

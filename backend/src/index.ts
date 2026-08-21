@@ -75,7 +75,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -2924,6 +2924,52 @@ export async function extractAskKeywords(
   return kw;
 }
 
+// R238 P2（audit-r237 §3.1）：英文/中英混合财务问法进不了确定性管道（中文
+// 8/8 精确 vs 英文/混合 2/10 可用）。收口原则：LLM 主判（把外语问句归一成
+// 等义中文问句，让既有中文确定性意图判定直接生效）+ 规则兜底（归一失败/超时
+// /输出不可用时回落原问句走原有管道），绝不堆英文正则族。
+const LATIN_WORD_RE = /[A-Za-z]{2,}/;
+
+/** 问句含英文词（≥2 连续字母）才需要归一化：纯中文问句零额外 LLM 调用。 */
+export function needsLangNormalization(question: string): boolean {
+  return LATIN_WORD_RE.test(question) && question.length <= 300;
+}
+
+export const ASK_NORMALIZE_SYSTEM =
+  "你是问句规范化器。用户在向一个中文个人笔记问答助手提问，问句是英文或中英混合。把它改写成等义、自然的中文问句：疑问结构与统计/财务措辞用中文惯用说法（total expenses→总支出、total income→总收入、most expensive purchase→最贵的一笔支出、cheapest expense→最便宜的一笔支出、top 3 expenses→支出最大的 3 笔、how many times→多少次、how much did I spend on X→X 一共花了多少钱、between Aug 10 and Aug 20→8月10日到8月20日、this month→这个月）；商品/品牌/专有名词有通用中文名就翻成中文（coffee beans→咖啡豆），没有通用中文名则保留原文（iPhone、MacBook）。绝不回答问题、绝不增删信息或补充时间范围，只输出改写后的中文问句本身，不要任何解释、引号或前缀。";
+
+/** 归一化输出的可用性校验：空/超长/多行/无中文/原样返回一律判不可用。 */
+export function sanitizeNormalizedQuestion(raw: string | null, question: string): string | null {
+  // 引号用 unicode 转义：write-path guard 按朴素引号配对提取字面量，正则里的
+  // 裸引号会把后续字面量边界整体错位
+  const out = (raw ?? "").trim().replace(/^[\u0022\u201c\u201d\u0027\u300c\u300e]+|[\u0022\u201c\u201d\u0027\u300d\u300f]+$/g, "").trim();
+  if (!out || out === question || out.length > 200 || out.includes("\n")) return null;
+  if (!CJK_RE.test(out)) return null;
+  return out;
+}
+
+/**
+ * Normalize an English / mixed-language question into an equivalent Chinese
+ * question so the existing deterministic finance/count intent detectors (all
+ * Chinese-worded) apply unchanged. Returns null when the AI is unavailable,
+ * over budget, or the output is unusable — callers keep the original question.
+ */
+export async function normalizeAskQuestion(
+  env: Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL">,
+  question: string
+): Promise<string | null> {
+  const out = await chatComplete(env, {
+    temperature: 0,
+    max_tokens: 120,
+    timeout_ms: 6_000,
+    messages: [
+      { role: "system", content: ASK_NORMALIZE_SYSTEM },
+      { role: "user", content: question },
+    ],
+  });
+  return sanitizeNormalizedQuestion(out, question);
+}
+
 const ASK_REWRITE_SYSTEM =
   "你是检索查询改写器。把用户在多轮对话中的最后一个问题改写为不依赖上下文、可独立理解的完整问题：把代词（它/这个/那个/他们）和序数词（第一个/第二个/最后一个）替换为前文对应的具体事物，补全省略的主语和话题。只输出改写后的问题本身，不要任何解释或前缀。若最后一个问题不含代词、序数词且无省略、本身已可独立理解，必须逐字原样输出，绝不把前文的话题、金额或措辞混入问题。";
 
@@ -3018,26 +3064,35 @@ app.post("/api/ask", async (c) => {
   // 元问题本身自足（无代词/序数要解析），召回也直接用原问题，不做历史改写——
   // 否则改写注入的财务措辞会把语义召回带偏到财务笔记上（R184）。
   const metaQuestion = ASK_META_QUESTION_RE.test(question);
+  // 语言归一（R238 P2）：英文/混合问句先归一成等义中文问句作为意图/召回的
+  // 基准（LLM 主判），失败回落原问句（规则兜底）；纯中文问句零额外调用。
+  let normQuestion: string | null = null;
+  if (!metaQuestion && needsLangNormalization(question)) {
+    const tNorm = Date.now();
+    normQuestion = await normalizeAskQuestion(c.env, question);
+    askMarks.push(["norm", Date.now() - tNorm]);
+  }
+  const intentBase = normQuestion ?? question;
   // query rewrite: resolve pronouns/ordinals against history, then keyword recall
   const tRewrite = Date.now();
-  const recallQuestion = metaQuestion ? question : await rewriteAskQuestion(c.env, question, history);
+  const recallQuestion = metaQuestion ? question : await rewriteAskQuestion(c.env, intentBase, history);
   askMarks.push(["rewrite", Date.now() - tRewrite]);
   // explicit time scope ("上个月/最近一周/去年…") narrows recall to that window
   const timeRange = parseTimeRange(recallQuestion);
   // 指代追问（R186 P1）：原问题含代词/指示词（「它/那条/这笔…」）时不自足，
   // R113「意图以原始问题为准」的前提不成立——意图判定与召回统一改用改写产物。
   // 无历史时改写器原样返回，intentQuestion 等于原问题，不影响单轮行为。
-  const pronounFollowUp = !metaQuestion && history.length > 0 && ASK_PRONOUN_REF_RE.test(question);
-  const intentQuestion = pronounFollowUp ? recallQuestion : question;
+  const pronounFollowUp = !metaQuestion && history.length > 0 && ASK_PRONOUN_REF_RE.test(intentBase);
+  const intentQuestion = pronounFollowUp ? recallQuestion : intentBase;
   // 财务/统计合计类问题走精确聚合（与周报/月报同一 financeStats 口径），
   // 绝不让 LLM 对被 LIMIT 截断的召回结果心算合计（R107 P1-2）。
   // 财务口径澄清追问（R130 P2-1）：上一轮是精确合计时，「包括报销的差旅费
   // 吗」应直答是/否+口径解释（按 category 判定计入与否），绝不复读合计（R129 R14）。
   const lastAssistant = [...history].reverse().find((m) => m.role === "assistant")?.content ?? null;
-  const clarifyTerms = financeClarifyTerms(question, lastAssistant);
+  const clarifyTerms = financeClarifyTerms(intentBase, lastAssistant);
   if (clarifyTerms) {
     // 时间范围优先取本轮问题，否则沿用上一轮合计答案里的时间短语（口径一致）
-    const clRange = parseTimeRange(question) ?? timeRange ?? parseTimeRange(lastAssistant ?? "");
+    const clRange = parseTimeRange(intentBase) ?? timeRange ?? parseTimeRange(lastAssistant ?? "");
     const ors = clarifyTerms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ");
     const clConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')", `(${ors})`];
     const clBinds: unknown[] = [userId];
@@ -3712,52 +3767,66 @@ app.post("/api/ask", async (c) => {
   }
   // 带历史时改写器可能丢掉原问题里能命中目标笔记的关键词（R115 P2 召回
   // 抖动）：原始问题的关键词并入召回词集，改写只能增补、不能搞丢。
-  if (history.length > 0 && recallQuestion !== question) {
+  // 归一化后同样并入原问句关键词：用户笔记若本就用英文记录，原文词才 LIKE 得中
+  if ((history.length > 0 || normQuestion) && recallQuestion !== question) {
     for (const t of extractAskTerms(question, [])) {
       if (!terms.includes(t) && terms.length < 10) terms.push(t);
     }
   }
   // sensitive (encrypted) notes never enter the ask context — not even their titles
-  const conds: string[] = ["user_id = ?", "is_sensitive = 0"];
-  const binds: unknown[] = [userId];
-  // 多词召回按命中词数排序（命中多的先进 20 条窗口）：高频词（「学习」）
-  // 的海量命中会把稀有词（「日本語」）的唯一命中挤出 created_at 窗口
-  let orderBy = "created_at DESC";
-  if (terms.length > 0) {
-    const ors = terms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE} OR url_title LIKE ? ${LIKE_ESCAPE})`);
-    conds.push(`(${ors.join(" OR ")})`);
-    for (const t of terms) {
-      const like = likeContains(t);
-      binds.push(like, like, like, like);
+  const keywordRecall = async (qTerms: string[]): Promise<NoteRow[]> => {
+    const conds: string[] = ["user_id = ?", "is_sensitive = 0"];
+    const binds: unknown[] = [userId];
+    // 多词召回按命中词数排序（命中多的先进 20 条窗口）：高频词（「学习」）
+    // 的海量命中会把稀有词（「日本語」）的唯一命中挤出 created_at 窗口
+    let orderBy = "created_at DESC";
+    if (qTerms.length > 0) {
+      const ors = qTerms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE} OR url_title LIKE ? ${LIKE_ESCAPE})`);
+      conds.push(`(${ors.join(" OR ")})`);
+      for (const t of qTerms) {
+        const like = likeContains(t);
+        binds.push(like, like, like, like);
+      }
     }
-  }
-  if (timeRange?.start) {
-    conds.push("created_at >= ?");
-    binds.push(timeRange.start);
-  }
-  if (timeRange?.end) {
-    conds.push("created_at < ?");
-    binds.push(timeRange.end);
-  }
-  // ORDER BY 的占位符位于 WHERE 之后，其绑定值也必须排在最后
-  if (terms.length > 1) {
-    const score = terms
-      .map(() => `(CASE WHEN content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE} OR url_title LIKE ? ${LIKE_ESCAPE} THEN 1 ELSE 0 END)`)
-      .join(" + ");
-    orderBy = `(${score}) DESC, created_at DESC`;
-    for (const t of terms) {
-      const like = likeContains(t);
-      binds.push(like, like, like, like);
+    if (timeRange?.start) {
+      conds.push("created_at >= ?");
+      binds.push(timeRange.start);
     }
-  }
+    if (timeRange?.end) {
+      conds.push("created_at < ?");
+      binds.push(timeRange.end);
+    }
+    // ORDER BY 的占位符位于 WHERE 之后，其绑定值也必须排在最后
+    if (qTerms.length > 1) {
+      const score = qTerms
+        .map(() => `(CASE WHEN content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE} OR url_title LIKE ? ${LIKE_ESCAPE} THEN 1 ELSE 0 END)`)
+        .join(" + ");
+      orderBy = `(${score}) DESC, created_at DESC`;
+      for (const t of qTerms) {
+        const like = likeContains(t);
+        binds.push(like, like, like, like);
+      }
+    }
+    const { results } = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE ${conds.join(" AND ")} AND deleted_at IS NULL ORDER BY ${orderBy} LIMIT 20`
+    )
+      .bind(...binds)
+      .all<NoteRow>();
+    return results ?? [];
+  };
   const tKwSql = Date.now();
-  const { results } = await c.env.DB.prepare(
-    `SELECT * FROM notes WHERE ${conds.join(" AND ")} AND deleted_at IS NULL ORDER BY ${orderBy} LIMIT 20`
-  )
-    .bind(...binds)
-    .all<NoteRow>();
+  let notes = await keywordRecall(terms);
+  // 关键词降级重试（R238 P3-3，audit-r237 §4）：LLM 抽取偶发过拟合出
+  // 「打羽毛球打」「青岛这趟」类残片词，整串 LIKE 零命中时剥残片重试一次，
+  // 仍是精确匹配口径；剥不出新词集就不重试（语义召回照常并入）
+  if (notes.length === 0 && terms.length > 0) {
+    const dTerms = degradeAskTerms(terms);
+    if (dTerms) {
+      notes = await keywordRecall(dTerms);
+      if (notes.length > 0) terms = dTerms;
+    }
+  }
   askMarks.push(["kwsql", Date.now() - tKwSql]);
-  let notes = results ?? [];
 
   // 元属性召回（R134 D-3，P2-1）：问题按输入形态提问（语音/图片/文件）时，
   // 把该 raw_type 的最近笔记并入候选——形态词不在转写正文里，关键词与语义都够不着

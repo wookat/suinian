@@ -995,6 +995,31 @@ export function degradeFinanceSubsetTerms(terms: string[]): string[] | null {
   return out;
 }
 
+// 普通召回关键词降级重试（R238 P3-3，audit-r237 §4）：LLM 关键词抽取偶发
+// 过拟合出「打羽毛球打」（动宾回声残片）、「青岛这趟」（指量词残片）这类
+// 无效词，整串 LIKE 零命中后直接放弃。只做两条有一手证据的最小剥离，
+// 剥不出新词集则返回 null（不重试，不做宽泛分词）。
+const ASK_TERM_TAIL_RE = /(?:[这那][趟次回个]|一趟|这边|那边)$/;
+const CJK_TERM_RE = /^[\u4e00-\u9fff]+$/;
+
+/** 生成普通召回关键词的降级重试词集；无可降级时返回 null。 */
+export function degradeAskTerms(terms: string[]): string[] | null {
+  const out: string[] = [];
+  const push = (s: string) => {
+    const t = s.trim();
+    if (t.length >= 2 && !TOPIC_ENUM_GENERIC_RE.test(t) && !out.includes(t)) out.push(t);
+  };
+  for (const t of terms) {
+    let s = t.replace(ASK_TERM_TAIL_RE, "");
+    // 动宾回声残片：首尾同一个字（「打羽毛球打」）时剥掉尾字
+    if (s.length >= 4 && CJK_TERM_RE.test(s) && s[0] === s[s.length - 1]) s = s.slice(0, -1);
+    push(s);
+  }
+  if (out.length === 0) return null;
+  if (out.length === terms.length && out.every((t, i) => t === terms[i])) return null;
+  return out;
+}
+
 /** 命中层级：标题/正文直接命中，还是仅靠分拣标签命中（R151 P2-1）。
  * 敏感笔记正文加密、无法核验，按原口径视作直接命中计入合计。 */
 export function subsetDirectHit(
