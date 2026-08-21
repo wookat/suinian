@@ -93,12 +93,26 @@ export function extractArticle(html: string, url: string): ArticleExtract {
   return { title, site, excerpt, description: meta.description };
 }
 
+/** 抓取失败归因（R221 P2-1）：存进 meta.link_fail_reason，卡片文案据此区分
+ * 「页面不存在/被拒/超时/非网页」，不再统一说「未能抓取正文」。 */
+export type LinkFailReason = "http_404" | "http_403" | "http_error" | "timeout" | "not_html" | "network";
+
+export interface FetchArticleResult {
+  extract: ArticleExtract | null;
+  failReason: LinkFailReason | null;
+}
+
 /**
  * Fetch a URL (2MB / 10s caps, SSRF-guarded) and extract the article,
  * retrying UA/Referer profiles for SSR anti-bot sites; never throws.
  */
 export async function fetchArticle(url: string): Promise<ArticleExtract | null> {
+  return (await fetchArticleDetailed(url)).extract;
+}
+
+export async function fetchArticleDetailed(url: string): Promise<FetchArticleResult> {
   let best: ArticleExtract | null = null;
+  let failReason: LinkFailReason | null = null;
   for (const profile of FETCH_PROFILES) {
     try {
       const res = await ssrfSafeFetch(url, {
@@ -109,19 +123,27 @@ export async function fetchArticle(url: string): Promise<ArticleExtract | null> 
         },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
-      if (!res) return best; // blocked by SSRF guard: retrying won't help
+      if (!res) return { extract: best, failReason }; // blocked by SSRF guard: retrying won't help
       const ct = res.headers.get("content-type") || "";
-      if (!res.ok || !ct.includes("html")) continue;
+      if (!res.ok) {
+        failReason = res.status === 404 ? "http_404" : res.status === 403 ? "http_403" : "http_error";
+        continue;
+      }
+      if (!ct.includes("html")) {
+        failReason = "not_html";
+        continue;
+      }
       const html = await readBodyCapped(res, MAX_HTML_BYTES);
       if (!html) continue;
       const extract = extractArticle(html, url);
-      if (extract.excerpt && extract.title) return extract;
+      if (extract.excerpt && extract.title) return { extract, failReason: null };
       if (!best || (extract.title && !best.title) || (extract.excerpt && !best.excerpt)) best = extract;
-    } catch {
+    } catch (err) {
       /* try next profile */
+      failReason = err instanceof DOMException && err.name === "TimeoutError" ? "timeout" : (failReason ?? "network");
     }
   }
-  return best;
+  return { extract: best, failReason: best ? null : failReason };
 }
 
 export interface LinkSummary {
@@ -196,7 +218,7 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
   if (!note?.url) return;
   // 敏感笔记不做链接富化：link_excerpt / url_summary 都是派生明文（R126 P1-1）
   if (note.is_sensitive) return;
-  const extract = await fetchArticle(note.url);
+  const { extract, failReason } = await fetchArticleDetailed(note.url);
   // 富化只 json_patch 自己的 link_* 派生键：整包写回会把慢网络/AI 期间的
   // 用户 meta 编辑静默回滚（与分拣写后写竞态同类）
   const meta: Partial<NoteMeta> = { link_fetched_at: new Date().toISOString() };
@@ -206,6 +228,7 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
     // when no title could be fetched at all, fall back to domain + readable path
     // so the card never shows just a bare URL
     meta.link_status = extract ? "no_content" : "fetch_failed";
+    if (failReason) meta.link_fail_reason = failReason;
     meta.link_site = extract?.site ?? hostnameOf(note.url) ?? undefined;
     const title = extract?.title ?? null;
     const fallback = note.url_title ? null : (title ?? fallbackTitleFromUrl(note.url));
@@ -218,6 +241,7 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
   }
 
   meta.link_status = "ok";
+  meta.link_fail_reason = null; // json_patch: null 清除上次失败归因
   meta.link_site = extract.site ?? undefined;
   meta.link_excerpt = extract.excerpt;
 

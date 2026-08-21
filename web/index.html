@@ -17,6 +17,35 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>碎念 Suinian</title>
+    <style>
+      /* 首屏内联骨架（R221 P3-1）：JS 包下载/解析期间不再纯白，React 挂载后整体替换 */
+      #root:empty { display: block; min-height: 100vh; background: #fafafa; }
+      @media (prefers-color-scheme: dark) { #root:empty { background: #18181b; } }
+      #root:empty::before {
+        content: "";
+        display: block;
+        margin: 24px auto 0;
+        max-width: 640px;
+        height: 264px;
+        border-radius: 12px;
+        background:
+          linear-gradient(#e4e4e7 0 0) 16px 16px / calc(100% - 32px) 56px,
+          linear-gradient(#e4e4e7 0 0) 16px 96px / calc(100% - 32px) 56px,
+          linear-gradient(#e4e4e7 0 0) 16px 176px / calc(100% - 32px) 56px;
+        background-repeat: no-repeat;
+        animation: sn-pulse 1.4s ease-in-out infinite;
+      }
+      @media (prefers-color-scheme: dark) {
+        #root:empty::before {
+          background:
+            linear-gradient(#27272a 0 0) 16px 16px / calc(100% - 32px) 56px,
+            linear-gradient(#27272a 0 0) 16px 96px / calc(100% - 32px) 56px,
+            linear-gradient(#27272a 0 0) 16px 176px / calc(100% - 32px) 56px;
+          background-repeat: no-repeat;
+        }
+      }
+      @keyframes sn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+    </style>
   </head>
   <body>
     <div id="root"></div>

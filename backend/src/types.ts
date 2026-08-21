@@ -110,6 +110,8 @@ export interface NoteMeta {
   link_excerpt?: string;
   /** Result of the last article-extraction attempt (link notes). */
   link_status?: "ok" | "no_content" | "fetch_failed";
+  /** 抓取失败归因（R221 P2-1）；null 用于 json_patch 清除旧值 */
+  link_fail_reason?: "http_404" | "http_403" | "http_error" | "timeout" | "not_html" | "network" | null;
   /** ISO timestamp of the last article-extraction attempt (link notes). */
   link_fetched_at?: string;
   /** Original file name (file notes). */

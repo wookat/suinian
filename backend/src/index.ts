@@ -73,7 +73,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -3541,6 +3541,26 @@ app.post("/api/ask", async (c) => {
         : buildCountFailClosedAnswer(total, byCat, sens, cRange?.phrase ?? null);
     return c.json({ answer, references: [], notes: [], count_aggregate: countQuery.intent === "exact", ...(countQuery.intent === "fail_closed" ? { count_fail_closed: true } : {}) });
   }
+  // 主题归纳（R221 P3-4 Q24）：「最关注的三个主题」按标签频次确定性归纳，
+  // 不再径直答「没找到」
+  if (topicSummaryIntent(intentQuestion)) {
+    const tsRange = parseTimeRange(intentQuestion) ?? timeRange;
+    const tsConds = ["user_id = ?", "deleted_at IS NULL"];
+    const tsBinds: unknown[] = [userId];
+    if (tsRange?.start) {
+      tsConds.push("created_at >= ?");
+      tsBinds.push(tsRange.start);
+    }
+    if (tsRange?.end) {
+      tsConds.push("created_at < ?");
+      tsBinds.push(tsRange.end);
+    }
+    const tsr = await c.env.DB.prepare(`SELECT tags, is_sensitive FROM notes WHERE ${tsConds.join(" AND ")}`)
+      .bind(...tsBinds)
+      .all<{ tags: string; is_sensitive: number }>();
+    const answer = buildTopicSummaryAnswer(tsr.results ?? [], tsRange?.phrase ?? null, topicSummaryTopN(intentQuestion));
+    return c.json({ answer, references: [], notes: [], topic_summary: true });
+  }
   // 主题枚举（R130 P1-1）：「我看过什么书/存过哪些菜谱」先走关键词/标签
   // LIKE 全量筛选（与计数/财务同一精确查询家族），语义 top-k 只在零命中时
   // 兜底（R129 R8：宽泛主题词的语义召回被高频主题压过，答非所问）。
@@ -4693,8 +4713,10 @@ registerMcpRoute(app);
 
 export { app };
 
-/** Concurrent LLM triage calls per retriage round (IO-bound, well under provider limits). */
-const RETRIAGE_CONCURRENCY = 5;
+/** Concurrent LLM triage calls per retriage round (IO-bound, well under provider limits).
+ * R221 P2-4：150 条积压 ~29 分钟才收敛（跨 3 个 cron 周期），并发 5→10 让单个
+ * 10 分钟周期内可清完一次重度突发导入，新用户不再长时间看到大量「整理中」。 */
+const RETRIAGE_CONCURRENCY = 10;
 /**
  * Retriage attempts after which a note stops being retried (R132, from
  * audit-r131 §3.1: 9 corpus notes cycled 「分拣延迟，将自动重试」 forever). The

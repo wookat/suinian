@@ -62,6 +62,9 @@ interface EvalCase {
 }
 
 const CASES: EvalCase[] = [
+  // R222 P2-3（audit-r221 生产复现：「充话费 100」判 todo 丢金额、「给我爸买按摩仪 599」判 income）
+  { content: `${PREFIX} 充话费 100`, category: "expense", amount: 100, currency: "CNY" },
+  { content: `${PREFIX} 给我爸买按摩仪 599`, category: "expense", amount: 599, currency: "CNY" },
   { content: `${PREFIX} 下周一晚上8点提醒我给客户回邮件`, category: "todo", due: nextMondayIso() },
   { content: `${PREFIX} 明天上午10点半和设计师对 UI 稿`, category: "todo", due: shanghaiIso(1) },
   { content: `${PREFIX} 周五下午3点交季度报告给老板`, category: "todo", due: nearestWeekdayIso(5) },

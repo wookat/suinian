@@ -41,11 +41,33 @@ import type {
  * NetworkError，而不是让页面 skeleton 永远转下去。问答链路服务端上限 40s，
  * 这里取 60s 只兜真正的悬挂。 */
 const REQUEST_TIMEOUT_MS = 60_000
+/** 交互 GET 收紧到 20s（R221 P1-1）：服务端读路径 P99 远低于 1s，挂满 20s 的
+ * 只会是连接级悬挂，早断早重试优于白等。 */
+const GET_TIMEOUT_MS = 20_000
 
 async function realFetch<T>(
   path: string,
   init?: RequestInit,
-  timeoutMs: number = REQUEST_TIMEOUT_MS,
+  timeoutMs?: number,
+): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase()
+  const budget = timeoutMs ?? (method === "GET" ? GET_TIMEOUT_MS : REQUEST_TIMEOUT_MS)
+  try {
+    return await realFetchOnce<T>(path, init, budget)
+  } catch (e) {
+    // 幂等 GET 超时自动重试一次：连接级悬挂换一条连接即刻恢复（R221 复现均为
+    // 重试即恢复）；写请求不自动重试（避免重复写，离线兜底走 outbox）
+    if (method === "GET" && e instanceof NetworkError && e.timeout && !init?.signal?.aborted) {
+      return realFetchOnce<T>(path, init, budget)
+    }
+    throw e
+  }
+}
+
+async function realFetchOnce<T>(
+  path: string,
+  init: RequestInit | undefined,
+  timeoutMs: number,
 ): Promise<T> {
   const { apiBaseUrl, apiToken } = loadSettings()
   if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")

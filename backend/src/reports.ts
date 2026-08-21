@@ -156,8 +156,8 @@ export async function todoStatsForWeek(
   };
 }
 
-export function todoSection(stats: TodoStats): string {
-  let md = `\n## 待办盘点\n本周新增待办 ${stats.created} 条，共完成 ${stats.doneInWeek} 条。\n`;
+export function todoSection(stats: TodoStats, unit: string = "本周"): string {
+  let md = `\n## 待办盘点\n${unit}新增待办 ${stats.created} 条，共完成 ${stats.doneInWeek} 条。\n`;
   if (stats.doneTitles.length > 0) {
     md += `\n已完成：\n`;
     for (const t of stats.doneTitles) md += `- [x] ${t}\n`;
@@ -226,7 +226,7 @@ export function financeSection(stats: FinanceStats): string {
  * 生成「值得回顾的收藏」小节——无条件索要该节会让模型硬凑编造（忠实性原则）。 */
 export function collectSectionPrompt(visibleCollects: number): string {
   return visibleCollects > 0
-    ? "；5.「值得回顾的收藏」——挑出值得再看的收藏并说一句为什么值得"
+    ? "；4.「## 值得回顾的收藏」——挑出值得再看的收藏并说一句为什么值得"
     : "。本期没有收藏类记录，不要写「值得回顾的收藏」小节，也不要编造任何收藏内容";
 }
 
@@ -270,6 +270,54 @@ export function fallbackMarkdown(
     if (hidden > 0) md += `- （另有 ${hidden} 条敏感记录，内容不展示）\n`;
   }
   return md;
+}
+
+/** 周报/月报统计数字的权威口径（SQL 聚合），供程序拼接与 LLM 叙述后校验共用。 */
+export interface ReportNumbers {
+  total: number;
+  counts: Map<string, number>;
+  sensitive: number;
+  todoCreated: number;
+  todoDone: number;
+}
+
+/** 概览统计句：程序拼接、不经 LLM（R221 P1-2）。 */
+export function overviewStatLine(unit: string, nums: ReportNumbers): string {
+  const countsLine = [...nums.counts.entries()]
+    .map(([cat, n]) => `${CATEGORY_LABEL[cat] ?? cat} ${n} 条`)
+    .join("、");
+  return `${unit}共记录 ${nums.total} 条（${countsLine}${nums.sensitive > 0 ? `；含 ${nums.sensitive} 条敏感记录，仅计数不展示内容` : ""}）。`;
+}
+
+/** 裸 URL 在 marked 自动链接下会把紧随的中文标点/文字吸进锚文本（R221 P2-2）：
+ * URL 只含可打印 ASCII，截到第一个非 ASCII 字符、剥掉尾部标点后用 <> 包裹。
+ * 已有 markdown 链接（前一字符是 ( 或 <）不动。 */
+export function sanitizeBareUrls(md: string): string {
+  return md.replace(/(^|[^(<])(https?:\/\/[!-~]+)/g, (_m, pre: string, url: string) => {
+    const trimmed = url.replace(/[)\]}>.,;:!?'"]+$/, "");
+    const rest = url.slice(trimmed.length);
+    return `${pre}<${trimmed}>${rest}`;
+  });
+}
+
+/** LLM 叙述净化（R221 P1-2）：剥掉重复标题、删掉程序拼接负责的「待办盘点/收支合计」
+ * 小节，并把叙述里与 SQL 源值冲突的计数改写为源值——模型抄错数字也到不了用户面前。 */
+export function sanitizeNarrative(text: string, unit: string, nums: ReportNumbers): string {
+  let t = text.trim();
+  t = t.replace(/^#\s+[^\n]*\n+/, "");
+  t = t.replace(/^##\s*[^\n]*概览[^\n]*\n+/, "");
+  t = t
+    .split(/\n(?=##\s)/)
+    .filter((s) => !/^##\s*(待办盘点|收支合计)/.test(s))
+    .join("\n");
+  t = t.replace(/共记录\s*(\d+)\s*条/g, `共记录 ${nums.total} 条`);
+  for (const [cat, n] of nums.counts) {
+    const label = CATEGORY_LABEL[cat] ?? cat;
+    t = t.replace(new RegExp(`${label}\\s*(\\d+)\\s*条`, "g"), `${label} ${n} 条`);
+  }
+  t = t.replace(/新增待办\s*(\d+)\s*条/g, `新增待办 ${nums.todoCreated} 条`);
+  t = t.replace(/共完成\s*(\d+)\s*条/g, `共完成 ${nums.todoDone} 条`);
+  return sanitizeBareUrls(t.trim());
 }
 
 /**
@@ -325,7 +373,9 @@ export async function generatePeriodReport(
   }
   const finance = aggRows.length > 0 ? financeStatsFromAgg(aggRows) : financeStats(notes);
   const finMd = financeSection(finance);
-  let md = fallbackMarkdown(weekStart, weekEnd, notes, period, agg) + todoSection(stats) + finMd;
+  const label0 = period === "month" ? "月报" : "周报";
+  const unit0 = period === "month" ? "本月" : "本周";
+  let md = fallbackMarkdown(weekStart, weekEnd, notes, period, agg) + todoSection(stats, unit0) + finMd;
   {
     try {
       const digest = notes
@@ -345,20 +395,14 @@ export async function generatePeriodReport(
           return `${i + 1}. [${cat}]${amt} (${day}) ${(n.title || n.content).slice(0, 200)}`;
         })
         .join("\n");
-      const label = period === "month" ? "月报" : "周报";
-      const unit = period === "month" ? "本月" : "本周";
+      const label = label0;
+      const unit = unit0;
       const prev = period === "month" ? "上个月" : "上周";
-      const financeHint =
-        finance.expenseCount + finance.incomeCount > 0
-          ? `、收支合计（直接使用这份统计，不要自己重算：${finMd.replace(/\n/g, " ").trim()}）`
-          : "";
-      // 口径统一：把权威计数（含敏感，SQL 聚合口径）交给 AI，避免它从摘要里自行数出对不上的总数
+      // R221 P1-2：统计数字（总数/分类计数/待办计数/收支合计）全部程序拼接注入，
+      // LLM 只写叙述；LLM 输出再经 sanitizeNarrative 后校验，抄错的数字改写回 SQL 源值
       const { counts, sensitive } = agg ?? categoryCounts(notes);
       const total = agg?.total ?? notes.length;
-      const countsLine = [...counts.entries()]
-        .map(([cat, n]) => `${CATEGORY_LABEL[cat] ?? cat} ${n} 条`)
-        .join("、");
-      const countsHint = `${unit}共记录 ${total} 条（${countsLine}${sensitive > 0 ? `；其中 ${sensitive} 条为敏感记录，已计入以上计数但未提供内容，正文不得提及其内容` : ""}）。总数与分类计数直接使用这份统计，不要自己重算。`;
+      const nums: ReportNumbers = { total, counts, sensitive, todoCreated: stats.created, todoDone: stats.doneInWeek };
       // 收藏小节只在期段内确有可展示的收藏时才要求（R180 P2-2）：无条件索要
       // 会让模型硬凑编造；以摘要可见（非敏感）的收藏数为准，敏感收藏无正文可挑
       const visibleCollects = notes.filter((n) => !n.is_sensitive && n.category === "collect").length;
@@ -371,13 +415,19 @@ export async function generatePeriodReport(
           messages: [
             {
               role: "system",
-              content: `你是「碎念」${label}助手，像一位了解用户的朋友帮 TA 复盘，绝不写成逐条罗列的流水账。根据用户${prev}（${weekStart} ~ ${weekEnd}）记录的碎片，写一份 markdown ${label}，一级标题为「碎念${label}（${weekStart} ~ ${weekEnd}）」，包含：1.「${unit}概览」——${countsHint}再用一两句话点出${unit}的主线（用户最花心思、反复出现的那件事）；2.「主要在想什么」——归纳 2-4 个主题，每个主题不是罗列条目，而是讲出想法之间的关联与演进（哪个想法从哪条碎片发展而来、哪些碎片互为支撑或彼此矛盾、和主线是什么关系）；3.「悬而未决」——1-3 个${unit}提出但还没有结论的问题或犹豫（引用用户自己的原话更好），温和地提醒之后回头看看；已经有结论或已完成的事（「评审通过」「方案定了」「已解决/已买/已交」这类）是已闭环事项，绝不要放进本节；若确实没有可以省略此节；4.「待办盘点」——完成/未完成（${unit}新增待办 ${stats.created} 条、共完成 ${stats.doneInWeek} 条）${financeHint}${collectHint}。语气亲切、简洁，用中文；全文以第二人称「你」直接对用户说话，不要出现「用户」「TA」这类第三人称称呼。财务点评要与金额规模相称：小额收支不要套用「开支不少/注意财务平衡」这类模板评语，没有值得说的就只报数字。只依据提供的碎片，不要编造笔记中没有的内容。`,
+              content: `你是「碎念」${label}助手，像一位了解用户的朋友帮 TA 复盘，绝不写成逐条罗列的流水账。根据用户${prev}（${weekStart} ~ ${weekEnd}）记录的碎片，写 markdown ${label}的叙述部分。重要：报告的一级标题、「${unit}概览」的统计句（总数与分类计数）、「待办盘点」小节、「收支合计」小节都由系统程序生成并注入，你绝对不要输出这些内容，也不要在叙述里写任何总数、分类计数、待办完成数或收支合计数字（你写的数字会被系统覆盖）。你只写：1. 开头一两段（不带标题）点出${unit}的主线（用户最花心思、反复出现的那件事）；2.「## 主要在想什么」——归纳 2-4 个主题，每个主题不是罗列条目，而是讲出想法之间的关联与演进（哪个想法从哪条碎片发展而来、哪些碎片互为支撑或彼此矛盾、和主线是什么关系）；3.「## 悬而未决」——1-3 个${unit}提出但还没有结论的问题或犹豫（引用用户自己的原话更好），温和地提醒之后回头看看；已经有结论或已完成的事（「评审通过」「方案定了」「已解决/已买/已交」这类）是已闭环事项，绝不要放进本节；若确实没有可以省略此节${collectHint}。语气亲切、简洁，用中文；全文以第二人称「你」直接对用户说话，不要出现「用户」「TA」这类第三人称称呼。财务点评要与金额规模相称：小额收支不要套用「开支不少/注意财务平衡」这类模板评语，没有值得说的就不点评。只依据提供的碎片，不要编造笔记中没有的内容。`,
             },
             { role: "user", content: digest || `（${unit}没有记录）` },
           ],
         })
       )?.trim();
-      if (text) md = text;
+      if (text) {
+        const narrative = sanitizeNarrative(text, unit, nums);
+        md =
+          `# 碎念${label}（${weekStart} ~ ${weekEnd}）\n\n## ${unit}概览\n${overviewStatLine(unit, nums)}\n\n${narrative}\n` +
+          todoSection(stats, unit) +
+          finMd;
+      }
     } catch {
       /* fall back to the plain summary */
     }
