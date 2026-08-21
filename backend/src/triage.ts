@@ -150,6 +150,7 @@ export function buildTriagePrompt(
   - 「上次借小王的 1000 今天还给他了」→ transfer（归还借款，不是新消费）
   - 「还了信用卡 3000」→ transfer（刷卡消费当时已记 expense，还款是清偿负债的平移，再记 expense 会重复）
   - 「花呗上月账单自动扣了 2680」→ transfer（同上，负债还款）
+  - 「公积金补缴 3000」→ transfer，amount=3000（社保/公积金缴存、补缴是把钱存进自己的社保/公积金账户，资金平移不是当期消费，绝不是 expense；同理「社保补缴 1200」也是 transfer。但交给税务的「个税汇算补缴」是钱交出去不回来，仍是 expense）
   欠款/未收回/待还句式（还欠我 X / 借出去还没还 / 垫付的 X 一直没给我 / 待还 X）是已发生的资金往来挂账记录 → transfer 且 amount=句中金额：钱已经垫出去/借出去了，只是还没收回，绝不因「没给我/还没还」误判成 todo，金额绝不能丢。判例：
   - 「垫付的 300 块房费小王一直没给我」→ transfer，amount=300（垫付未收回=对方欠我的钱，是记账不是待办，300 绝不能丢）
   - 「小李还欠我 500 一直没还」→ transfer，amount=500（借出未收回的欠款挂账）
@@ -1281,6 +1282,81 @@ export function neutralizeDelimiterSpoof(content: string): string {
     .replace(DELIM_SPOOF_RE, "〔笔记正文中出现的仿冒定界标记，按普通文本处理〕");
 }
 
+// 中文数字金额兜底（R238 P3-2，audit-r235 P3-3 / audit-r237 P3-2 遗留）：语音
+// 转写常把金额写成中文数字（「花了三十八块五」，繁体转写还会写成「三十八塊
+// 錢」），模型两轮提示词增强后仍时常漏提取。确定性兜底：模型判成记账类但
+// amount=null、且正文里恰好出现一处中文数字金额时，规则解析补上——只在唯一
+// 匹配时生效（多处金额语义有歧义，绝不猜），模型给出的金额永不覆盖。
+const CN_TRAD_MAP: Record<string, string> = { 兩: "两", 塊: "块", 錢: "钱", 點: "点", 圓: "元", 萬: "万" };
+const CN_DIGIT: Record<string, number> = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+const CN_UNIT: Record<string, number> = { 十: 10, 百: 100, 千: 1000, 万: 10000 };
+
+/** 中文数字串（可含「点」小数）→ number；解析不了返回 null。 */
+export function cnNumeralToNumber(s: string): number | null {
+  const [intPart, decPart] = s.split("点");
+  if (!intPart) return null;
+  let total = 0;
+  let section = 0; // 万以下小节
+  let cur = 0;
+  let lastUnit = 0;
+  for (const ch of intPart) {
+    if (ch === "零") {
+      // 「两千零五」的零显式占位：其后的裸数字是个位，不做口语单位推断
+      cur = 0;
+      lastUnit = 0;
+      continue;
+    }
+    if (ch in CN_DIGIT) {
+      cur = CN_DIGIT[ch];
+      continue;
+    }
+    const u = CN_UNIT[ch];
+    if (!u) return null;
+    if (u === 10000) {
+      total = (total + section + (cur || 0)) * 10000;
+      section = 0;
+      cur = 0;
+      lastUnit = 0;
+      continue;
+    }
+    section += (cur || 1) * u;
+    cur = 0;
+    lastUnit = u;
+  }
+  // 口语省略低位单位（「一百二」= 120）：末尾裸数字按上一单位的 1/10 计
+  if (cur > 0) section += lastUnit >= 100 ? cur * (lastUnit / 10) : cur;
+  let n = total + section;
+  if (decPart !== undefined) {
+    if (!decPart || [...decPart].some((c) => !(c in CN_DIGIT))) return null;
+    n += Number(`0.${[...decPart].map((c) => CN_DIGIT[c]).join("")}`);
+  }
+  return n > 0 ? n : null;
+}
+
+// 「三十八块五」「一百二十元」「五块半」；防误报：单字「一」必须带角/分位
+//（「一块去公园」不命中，「一块五」「一块钱」命中）
+const CN_AMOUNT_RE = /([零一二两三四五六七八九十百千万]+(?:点[零一二两三四五六七八九]+)?)[块元](?:([一二两三四五六七八九])|(半))?[毛角]?钱?/g;
+
+export function fixCnNumeralAmount(content: string, result: TriageResult): TriageResult {
+  if (result.amount != null) return result;
+  if (result.category !== "expense" && result.category !== "income" && result.category !== "transfer") return result;
+  const text = content.replace(/[兩塊錢點圓萬]/g, (c) => CN_TRAD_MAP[c] ?? c);
+  const matches = [...text.matchAll(CN_AMOUNT_RE)].filter((m) => {
+    // 「几十块」「第一块」「每一块」是约数/序数/量词，不是金额
+    if (m.index > 0 && /[几好数第每]/.test(text[m.index - 1])) return false;
+    if (m[1] === "一" && !m[2] && !m[3] && !/^一块[毛角钱]/.test(m[0]) && !text.slice(m.index).startsWith("一元")) return false;
+    return true;
+  });
+  if (matches.length !== 1) return result;
+  const m = matches[0];
+  const whole = cnNumeralToNumber(m[1]);
+  if (whole == null) return result;
+  const dec = m[3] ? 0.5 : m[2] ? CN_DIGIT[m[2]] / 10 : 0;
+  // 「点」小数与角位不同时出现（「三点五块五」不成立），有小数点时忽略角位
+  const amount = m[1].includes("点") ? whole : whole + dec;
+  return { ...result, amount, currency: result.currency ?? "CNY" };
+}
+
 // 分拣失败归因（R214 P1-1，audit-r213 §4）："unavailable" = 提供方全链失败
 //（超时/欠费/宕机），重试有意义；"unparseable" = 模型有响应但输出解析不出
 // 合法 JSON（注入/对抗内容让模型跑偏的典型形态），同样内容重试大概率同样
@@ -1294,6 +1370,7 @@ export function applyTriageFixes(content: string, result: TriageResult, now: Dat
   result = demoteEventLog(content, fixTransferMisfile(content, fixFinanceDirection(content, result)));
   result = fixLedgerNetDirection(content, fixReceiptDoubleCount(content, fixLedgerAmount(content, fixLedgerCategory(content, result))));
   result = fixAdvanceRepayAmount(content, fixSplitBillAmount(content, fixAaReimburse(content, fixProseTotalDirection(content, result))));
+  result = fixCnNumeralAmount(content, result);
   return fixWeekdayDue(content, result, now, tz);
 }
 

@@ -917,6 +917,9 @@ function subsetTopicExtract(question: string): string[] | null {
   // 本身就是主题的词剥空
   const stripped = residual.replace(/^[买在喝吃点逛去为给用出]{1,2}/, "").replace(/^(?:你|您|咱)+/, "");
   if (stripped.length >= 2) residual = stripped;
+  // 「在 X 上花了多少钱」的介词框架：尾部「上」是框架残留不是主题
+  // （「咖啡豆上」LIKE 零命中），仅在原问句确为「在…上」形态时剥掉
+  if (/在[^\s，。？?]{1,8}上/.test(question) && residual.length >= 3) residual = residual.replace(/上$/, "");
   const terms = residual
     .split(/和|跟|以及|、/)
     .map((s) => s.trim().replace(QUANTIFIER_TAIL_RE, ""))
@@ -947,7 +950,7 @@ export function financeShortTopicTerms(question: string): string[] | null {
 // miss 即 fail-closed——先剥掉台账/账本等容器残片与「什么牌子」类疑问残片，
 // 剥不动的长词再按「的」拆开，产出一组降级关键词重试一次。
 const SUBSET_TERM_LEAD_RE = /^(?:台账|账本|流水|账单|明细|记账|记录|笔记)(?:[里中上]的?|的)/;
-const SUBSET_TERM_TAIL_RE = /(?:是|的)?(?:什么|啥|哪个|哪家)?(?:牌子|品牌|型号|颜色|款式|口味|尺寸)$|(?:是)?(?:什么|啥)$|买的$/;
+const SUBSET_TERM_TAIL_RE = /(?:是|的)?(?:什么|啥|哪个|哪家)?(?:牌子|品牌|型号|颜色|款式|口味|尺寸)$|(?:是)?(?:什么|啥)$|买的$|(?:[这那][趟次回]|一趟|这边|那边)$/;
 
 // 亲属称谓同义映射（R224，audit-r223 P3-1）：问法「妹妹」与笔记原文「我妹」
 // 字面不同导致 LIKE 零命中。降级重试时双向补上口语变体，仍是精确匹配口径。
@@ -991,6 +994,31 @@ export function degradeFinanceSubsetTerms(terms: string[]): string[] | null {
     }
   }
   if (out.length === 0 || out.length > 4) return null;
+  if (out.length === terms.length && out.every((t, i) => t === terms[i])) return null;
+  return out;
+}
+
+// 普通召回关键词降级重试（R238 P3-3，audit-r237 §4）：LLM 关键词抽取偶发
+// 过拟合出「打羽毛球打」（动宾回声残片）、「青岛这趟」（指量词残片）这类
+// 无效词，整串 LIKE 零命中后直接放弃。只做两条有一手证据的最小剥离，
+// 剥不出新词集则返回 null（不重试，不做宽泛分词）。
+const ASK_TERM_TAIL_RE = /(?:[这那][趟次回个]|一趟|这边|那边)$/;
+const CJK_TERM_RE = /^[\u4e00-\u9fff]+$/;
+
+/** 生成普通召回关键词的降级重试词集；无可降级时返回 null。 */
+export function degradeAskTerms(terms: string[]): string[] | null {
+  const out: string[] = [];
+  const push = (s: string) => {
+    const t = s.trim();
+    if (t.length >= 2 && !TOPIC_ENUM_GENERIC_RE.test(t) && !out.includes(t)) out.push(t);
+  };
+  for (const t of terms) {
+    let s = t.replace(ASK_TERM_TAIL_RE, "");
+    // 动宾回声残片：首尾同一个字（「打羽毛球打」）时剥掉尾字
+    if (s.length >= 4 && CJK_TERM_RE.test(s) && s[0] === s[s.length - 1]) s = s.slice(0, -1);
+    push(s);
+  }
+  if (out.length === 0) return null;
   if (out.length === terms.length && out.every((t, i) => t === terms[i])) return null;
   return out;
 }
