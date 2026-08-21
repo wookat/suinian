@@ -610,7 +610,7 @@ const EXTREME_STRIP_RES: RegExp[] = [
   /最[多少]|前\s*(?:[0-9]{1,2}|[两二三四五六七八九十]{1,2})\s*[笔项条名大个]|(?:[0-9]{1,2}|[两二三四五六七八九十]{1,2})\s*[笔项条]|top\s*[0-9]{1,2}/gi,
   /单笔|每笔|逐笔|单[次项]|按(?:金额|价格|价钱|数额)?(?:从?[高低大小]到[高低大小])?排(?:序|名|行|列)?/g,
   /金额|数额/g, // 「金额倒数第二」的「金额」是排名量纲词不是主题限定
-  /(?:是)?哪一?[笔项个把只台件本条张部次辆双瓶副架块支款]?|什么|多少钱|多少/g,
+  /(?:是)?哪一?[笔项个把只台件本条张部次辆双瓶副架块支款]?|什么|多少钱|多少|分别|各自/g,
   /[一两][笔项次个把只台件本条张部辆双瓶副架块支款]/g,
   /买[过了的]{0,2}|购入|入手|里面?|之中|当中|其中|这些|那些|所有|全部|历史上|有史以来|记录里|笔记里/g,
   STRIP_RES[2], // 财务动词/名词
@@ -1021,6 +1021,13 @@ export function degradeFinanceSubsetTerms(terms: string[]): string[] | null {
     if (lead !== t && lead.length >= 2) push(lead);
     const tail = t.replace(/[了过吗呢啊呀哦嘛吧的]+$/, "");
     if (tail !== t && tail.length >= 2) push(tail);
+    // 结尾单个停用字只剥一层（「成都都」→「成都」而非「成」；「猫的钱」→「猫的」）
+    const solo = t.replace(/[都是在有和与钱]$/, "");
+    if (solo !== t && solo.length >= 2) {
+      push(solo);
+      const solo2 = solo.replace(/[了过吗呢啊呀哦嘛吧的]+$/, "");
+      if (solo2 !== solo && solo2.length >= 2) push(solo2);
+    }
     const stripped = t.replace(SUBSET_TERM_LEAD_RE, "").replace(SUBSET_TERM_TAIL_RE, "");
     if (stripped !== t && stripped.length >= 2) {
       push(stripped);
