@@ -157,16 +157,30 @@ const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|�
 const STRIP_RES: RegExp[] = [
   /今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?/g,
   /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
-  /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|[缴交用]了?|钱/g,
+  /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|还了|还款|[缴交用]了?|钱/g,
   /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|了|吗|呢|啊|呀|哦|是|都|在|有|和|与|？|\?|，|,|。|、|\s/g,
 ];
+
+// 复合名词保护（R234 P3-3，audit-r233 §P3-3：「信用卡还了多少钱」被逐字
+// 剥成「信卡还」注入 LIKE 必零命中）：含财务动词字的常见复合名词先占位
+// 保护、剥离后还原，避免词中字被当作动词剥掉。
+const PROTECTED_COMPOUND_RE = /信用卡|花呗|日用品|公交|交通|住宿/g;
+
+/** 剥离财务/聚合/时间措辞（STRIP_RES），复合名词占位保护后再剥。 */
+function stripFinanceWording(text: string): string {
+  const kept: string[] = [];
+  let out = text.replace(PROTECTED_COMPOUND_RE, (m) => {
+    kept.push(m);
+    return String.fromCharCode(0xe000 + kept.length - 1);
+  });
+  for (const re of STRIP_RES) out = out.replace(re, "");
+  return out.replace(/[\ue000-\ue0ff]/g, (ch) => kept[ch.charCodeAt(0) - 0xe000] ?? "");
+}
 
 /** True when the question asks for an overall finance aggregate (not a specific item's price). */
 export function isFinanceAggQuestion(question: string): boolean {
   if (!FINANCE_WORD_RE.test(question) || !AGG_WORD_RE.test(question)) return false;
-  let residual = question;
-  for (const re of STRIP_RES) residual = residual.replace(re, "");
-  return residual.length < 2;
+  return stripFinanceWording(question).length < 2;
 }
 
 /**
@@ -182,7 +196,7 @@ export function isFinanceAggQuestion(question: string): boolean {
 // which ones, when), not a books-level sum. Compound questions like「买的两本
 // 书叫什么，一共花了多少钱」must reach normal recall so the notes themselves
 // answer both parts — fail-closing them hides the answer (R117 P2-1).
-const FACT_QUERY_RE = /叫什么|是什么|什么名|名字|哪几?[本个件家部条]|哪些|分别|各是|什么时候|在哪|为什么|依据/;
+const FACT_QUERY_RE = /叫什么|是什么|什么名|名字|哪几?[本个件家部条]|哪些|哪里|哪儿|分别|各是|什么时候|在哪|为什么|依据/;
 
 export function financeAggIntent(question: string): "exact" | "fail_closed" | null {
   // 「它花了多少钱」问的是某个具体事物的价格，不是全账聚合：代词剥词后残留
@@ -814,8 +828,7 @@ function subsetTopicExtract(question: string): string[] | null {
   }
   // 金额 token 不是主题词（R200，audit-r199 P2-1）：改写产物/追问里混入的
   // 「399元」这类金额残片不得注入 LIKE
-  let residual = question.replace(AMOUNT_TOKEN_RE, "");
-  for (const re of STRIP_RES) residual = residual.replace(re, "");
+  let residual = stripFinanceWording(question.replace(AMOUNT_TOKEN_RE, ""));
   // 时间限定词不属于主题（「2026年7月咖啡」→「咖啡」）：时间过滤由
   // parseTimeRange 负责，残留的年月日 token 一律剥掉
   residual = residual.replace(/\d{2,4}\s*年|\d{1,2}\s*月(?:份)?|\d{1,2}\s*[日号]|上+个?[月周]|这个?[月周]|本[月周]|最近|今年|去年|前年/g, "");

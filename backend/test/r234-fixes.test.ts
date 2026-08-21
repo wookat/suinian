@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildTriagePrompt, parseLedgerTable, fixLedgerAmount, fixLedgerNetDirection } from "../src/triage";
-import { scrubUnsourcedAmounts } from "../src/ask";
+import { scrubUnsourcedAmounts, financeTopicTerms, financeAggIntent, isFinanceAggQuestion } from "../src/ask";
 import { ASK_KEYWORDS_SYSTEM } from "../src/index";
 import type { Category, TriageResult } from "../src/types";
 
@@ -94,8 +94,53 @@ describe("R234 P2-2 unsourced arithmetic-equation scrub (全算式形态)", () =
   });
 });
 
-// ---- P3-3（audit-r233 §P3-3）：关键词切分「信用卡还了多少钱→信卡还」拆错
-// 复合名词、「杭州住宿」缺同义扩展——抽取器提示词收口 ----
+// ---- P2-1 确定性兜底词形对称（生产复跑实测：「快递 10 赔付 -35(丢件)」
+// 漂移成 expense 25——换货/赔付缺席冲减词形，两行短句门槛拒收致兜底不生效）----
+describe("R234 P2-1 deterministic reversal-word symmetry", () => {
+  const t = (category: Category): TriageResult => finance(category, 25);
+  it("arbitrates 换货/赔付 net-negative short sentences to income", () => {
+    expect(fixLedgerNetDirection("文具 12 换货 -40(尺寸不对)", finance("expense", 28))).toMatchObject({
+      category: "income",
+      amount: 28,
+    });
+    expect(fixLedgerNetDirection("快递 10 赔付 -35(丢件)", t("expense"))).toMatchObject({
+      category: "income",
+      amount: 25,
+    });
+  });
+  it("locks the net amount for all four reversal word forms", () => {
+    expect(parseLedgerTable("咖啡 19 退款 -25(洒了)")).toMatchObject({ amount: -6 });
+    expect(parseLedgerTable("咖啡 19 退货 -25(洒了)")).toMatchObject({ amount: -6 });
+    expect(parseLedgerTable("文具 12 换货 -40(尺寸不对)")).toMatchObject({ amount: -28 });
+    expect(parseLedgerTable("快递 10 赔付 -35(丢件)")).toMatchObject({ amount: -25 });
+  });
+  it("does not double-flip explicit negative 赔付 note rows (R210 不回归)", () => {
+    expect(parseLedgerTable("快递费,-34.5 (破损赔付)")).toBeNull();
+  });
+});
+
+// ---- P3-3（audit-r233 §P3-3 生产实测）：「信用卡还了多少钱」被财务剥词
+// 流水线逐字剥成「信卡还」、「杭州住宿订的哪里」整串注入 LIKE——复合名词
+// 占位保护 + 「订的哪里」类事实问法路由普通召回 ----
+describe("R234 P3-3 deterministic finance-term extraction fixes", () => {
+  it("keeps 信用卡 intact instead of mangling to 信卡还", () => {
+    expect(financeTopicTerms("信用卡还了多少钱")).toEqual(["信用卡"]);
+  });
+  it("protects other finance-verb-containing compounds", () => {
+    expect(financeTopicTerms("交通花了多少钱")).toEqual(["交通"]);
+    expect(financeTopicTerms("日用品一共花了多少钱")).toEqual(["日用品"]);
+  });
+  it("routes 哪里-style fact+amount compound questions to normal recall", () => {
+    expect(financeAggIntent("杭州住宿订的哪里，花了多少钱")).toBeNull();
+    expect(financeTopicTerms("杭州住宿订的哪里，花了多少钱")).toBeNull();
+  });
+  it("keeps existing aggregate/subset routing (不回归)", () => {
+    expect(isFinanceAggQuestion("这个月一共花了多少钱")).toBe(true);
+    expect(financeTopicTerms("咖啡一共花了多少")).toEqual(["咖啡"]);
+  });
+});
+
+// ---- P3-3 抽取器提示词收口：复合名词不拆字 + 同义扩展 ----
 describe("R234 P3-3 keyword-extraction prompt guards compound nouns and synonyms", () => {
   it("forbids splitting compound nouns like 信用卡", () => {
     expect(ASK_KEYWORDS_SYSTEM).toContain("信用卡」绝不能拆成「信卡");
