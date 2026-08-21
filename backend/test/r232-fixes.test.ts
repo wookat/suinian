@@ -75,6 +75,10 @@ describe("R232 P3-1 unsourced balance-claim scrub", () => {
     expect(scrubUnsourcedAmounts("卡里还剩 555。", SOURCE)).toBe("");
     expect(scrubUnsourcedAmounts("余额为555。", SOURCE)).toBe("");
   });
+  it("scrubs equation-form computed balances (R232 生产复测形态)", () => {
+    expect(scrubUnsourcedAmounts("剪头发的卡充了 500，剪头发用了 45，所以还剩 500 - 45 = 455。", SOURCE)).toBe("");
+    expect(scrubUnsourcedAmounts("还剩 500 + 100 - 45 = 555。", SOURCE)).toBe("");
+  });
   it("keeps balance statements whose number is sourced", () => {
     const src = `${SOURCE}\n会员卡还剩 320`;
     expect(scrubUnsourcedAmounts("卡里还剩 320。", src)).toBe("卡里还剩 320。");
