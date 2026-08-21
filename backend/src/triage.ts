@@ -1162,6 +1162,13 @@ export function fixAdvanceRepayAmount(content: string, triage: TriageResult): Tr
   if (!back) return triage;
   const paid = parseFloat(adv[1]);
   const repaid = parseFloat(back[1] ?? back[2]);
+  // X 与 Y 必须是句中两个不同的金额位置（R224b：「聚餐我先付的，AA 收回 240」
+  // 单金额句被垫付/回款正则够到同一个 240，净额化误收口会覆盖 fixAaReimburse
+  // 的 income 改判——单金额回款句不是净额化场景）。
+  const advNumStart = (adv.index ?? 0) + adv[0].lastIndexOf(adv[1]);
+  const backNumStr = back[1] ?? back[2];
+  const backNumStart = (back.index ?? 0) + back[0].lastIndexOf(backNumStr);
+  if (advNumStart === backNumStart) return triage;
   if (!(paid > 0) || !(repaid > 0) || repaid > paid) return triage;
   if (triage.category === "expense" && triage.amount === paid) return triage;
   return { ...triage, category: "expense", amount: paid, currency: triage.currency ?? "CNY" };

@@ -110,6 +110,20 @@ describe("fix* pipeline conflict matrix (R224)", () => {
     expect(r.amount).toBe(400);
   });
 
+  it("单金额 AA 回款句不被净额化覆盖：expense 起步全链落 income（R224b 根因）", () => {
+    const r = fixed("公司团建聚餐我先付的，AA 收回 240", t("expense", { amount: 240 }));
+    expect(r.category).toBe("income");
+    expect(r.amount).toBe(240);
+    // 模型直接给 income 也不被 fixAdvanceRepayAmount 翻回 expense
+    expect(fixed("公司团建聚餐我先付的，AA 收回 240", t("income", { amount: 240 })).category).toBe("income");
+  });
+
+  it("双金额垫付×回款净额化不受影响（X、Y 两个金额位置）", () => {
+    const r = fixed("聚餐我先付 480，其他人回我 360", t("transfer", { amount: 120 }));
+    expect(r.category).toBe("expense");
+    expect(r.amount).toBe(480);
+  });
+
   it("第三方付款句从模型 income 起步全链保持 income", () => {
     const r = fixed("房客交了下季度房租 9000", t("income", { amount: 9000 }));
     expect(r.category).toBe("income");
