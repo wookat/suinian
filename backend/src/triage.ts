@@ -132,6 +132,8 @@ export function buildTriagePrompt(
   - 「闲鱼卖了旧显示器 350 元」→ income（卖出收钱）
   - 「上月报销的差旅费 800 到账了」→ income
   - 「学生给我交了补课费 300」→ income（别人交钱给我）
+  - 「房客交了下季度房租 9000」→ income（房客把房租交给用户＝收租进账，他人「交了」不是用户花钱）
+  - 「聚餐我先付的，AA 收回 240」→ income，amount=240（垫付的钱已收回＝钱进来；「我先付的」是背景不是本次方向）
   资金平移判例（transfer，不是 expense/income）：
   - 「微信零钱提现 2000 到银行卡」→ transfer，amount=2000（自己账户间平移）
   - 「转了 5000 到余额宝」→ transfer（不是支出）
@@ -363,6 +365,13 @@ const EXPENSE_DIRECTION_RE =
   /交了|缴了|付了|花了|买了|充了|续了|还了|交费|缴费|付款|付掉|花掉|续费|充值|还款|请客|打赏了|损失|(?:给|帮)[^，。;；\n]{0,6}(?:买|送|订|充|垫)/;
 const INCOME_DIRECTION_RE =
   /到账|入账|进账|收到|收了|收款|卖了|卖出|退款|退了|返现|返了|发了工资|发工资|工资发|赚了|挣了|中了|收租|给我(?:转|发|打|交|付|结|报销)/;
+// 他人付款主语（R224，audit-r223 P2-1）：「房客交了下季度房租 9000」——付款
+// 动词的主语是他人（房客/学生/客户…）时，钱的方向由语义决定（交给我=income，
+// 我代他交=expense），词面不再是无歧义的支出证据；此时不翻转，交回模型主判
+//（主语类误判的修复走提示词判例回流，方向正则不再续补）。
+// 裸「他/她」必须在句读边界后才算主语（「吉他课交了学费」的「他」是词内字）。
+const THIRD_PARTY_PAYER_RE =
+  /(?:房客|租客|学生|家长|客户|顾客|买家|甲方|对方|同事|朋友|邻居|徒弟)[^，。;；\n]{0,4}(?:交|缴|付)(?:了|清|齐)|(?:^|[，。;；、！？\s])[他她][^，。;；\n]{0,4}(?:交|缴|付)(?:了|清|齐)/;
 
 // 资金平移兑底（R120 P1-3）：模型把提现/内转/借入判成 expense/income 会把
 // 平移的钱直接污染收支合计。词面证据明确指向自己账户间平移或借入时，
@@ -385,7 +394,12 @@ const DEBT_REPAY_RE =
 // 内转句被判 todo（R220 P3-4，audit-r219：「把余额宝的 10000 转到活期」判
 // todo 且金额丢失）：无提醒/未来时间词的自有账户内转陈述按已发生的资金平移
 // 处理。金额只在句中数字唯一时补录（歧义不猜）。
-const TRANSFER_INTENT_RE = /提醒|记得|别忘|待会|回头|一会|晚点|待办|今晚|明天|后天|下周|周[一二三四五六日天]|月底|月初|之前|之后|打算|准备|计划|要不要|再说/;
+// 提醒/待办提示词共享词源（R224，audit-r223 §2 建议 2：三套提醒词表同义不同表，
+// 改一处易漏两处）：各规则在共享核心上只补自己领域的词，不再各自维护全表。
+const REMINDER_CUE_SRC = "提醒|记得|别忘|待办";
+const TRANSFER_INTENT_RE = new RegExp(
+  `${REMINDER_CUE_SRC}|待会|回头|一会|晚点|今晚|明天|后天|下周|周[一二三四五六日天]|月底|月初|之前|之后|打算|准备|计划|要不要|再说`
+);
 
 /** Deterministic backstop: reclassify obvious money-movement notes
  * (withdrawals / own-account transfers / borrowing / loan repayment in either
@@ -424,7 +438,7 @@ export function fixTransferMisfile(content: string, triage: TriageResult): Triag
 export function fixFinanceDirection(content: string, triage: TriageResult): TriageResult {
   if (triage.category !== "expense" && triage.category !== "income") return triage;
   if (parseLedgerCore(content) !== null) return triage;
-  const out = EXPENSE_DIRECTION_RE.test(content);
+  const out = EXPENSE_DIRECTION_RE.test(content) && !THIRD_PARTY_PAYER_RE.test(content);
   const inn = INCOME_DIRECTION_RE.test(content);
   if (triage.category === "income" && out && !inn) return { ...triage, category: "expense" };
   if (triage.category === "expense" && inn && !out) return { ...triage, category: "income" };
@@ -448,7 +462,7 @@ const FUTURE_ACTION_RE =
 // 日期是信息不是截止。触发词面收窄，普通含日期待办不受影响。
 const CONCLUDED_RECORD_RE =
   /(?:结论|决议|评审结果|复盘结果)[：:]|(?:审批|申请|方案|提案|合同|报告)[^，。\n]{0,4}(?:已?通过|获批|批准|批下来)|拿到[^，。\n]{0,8}(?:审批|批复|批准)/;
-const SELF_ACTION_RE = /提醒我|记得|别忘|我要|我来|我负责|我得|待办/;
+const SELF_ACTION_RE = new RegExp(`${REMINDER_CUE_SRC}|我要|我来|我负责|我得`);
 // 预约/挂号类完成式（R214 P3-1，audit-r213：「已预约周六上午的洗牙」判 todo——
 // 预约已办完，事件时间被模型当成 todo_due 建成假任务）：预约完成且无本人后续
 // 动作词时降 idea，事件时间是信息不是截止。「已预约洗牙，提醒我周六去」这类
@@ -1099,19 +1113,26 @@ export function fixProseTotalDirection(content: string, triage: TriageResult): T
 // 收回 240」判 transfer 导致收入统计漏计）。词面同时命中 AA/平摊/垫付 与
 // 收回/收到/转我/回我 等回款动词才收口，普通借还往来不受影响
 //（回款动词扩展见 R218 P2-1，audit-r217 §1.2：追记既往垫付的「转我」回款句）。
-const AA_REIMBURSE_RE = /(?:AA|平摊|均摊|人均|垫付)[^。\n]{0,10}(?:收回|收到|回来了|到账|转(?:给)?我|打给我|回我|还我)/i;
+// 回款动词窗口放宽到整句（R224，audit-r223 P2-2：「垫付快递费 23，同事微信
+// 还我了」名词+金额把间距撑过原 ≤10 字窗口，第二段翻转不触发；未回款句
+// 仍由 REPAY_PENDING_RE 先行拦截）。
+const AA_REIMBURSE_RE = /(?:AA|平摊|均摊|人均|垫付)[^。\n]*(?:收回|收到|回来了|到账|转(?:给)?我|打给我|回我|还我)/i;
 // 跨时间垫付×回款（R220 P2-1 残余，audit-r219 §1）：「昨天垫付的地铁卡 200，
 // 今天他还我 200」——金额/名词把垫付词与回款动词隔开超过 AA_REIMBURSE_RE 的
 // 10 字窗口，或「帮他垫的」这类无「垫付」全词形态。既往垫付语境（时间词＋垫）
 // 与回款到我动词同现即为收入回补；「还没还我」等未回款句不收口。
 const PAST_ADVANCE_RE = /(?:上次|上回|之前|先前|早前|昨天|前天|上周|上个?月)[^。\n]{0,8}(?:垫付|先付|垫)/;
 const PAST_ADVANCE_REPAY_RE = /收回|收到|回来了|到账|转(?:给)?我|打给我|回我|还(?:给)?我/;
-const REPAY_PENDING_RE = /还没|没还|未还|欠着|记得|别忘|提醒/;
+const REPAY_PENDING_RE = new RegExp(`还没|没还|未还|欠着|${REMINDER_CUE_SRC}`);
 
+// AA/垫付回款句也可能被模型判成 expense（R224 生产回归：「聚餐我先付的，
+// AA 收回 240」——「我先付的」是背景叙述，本次记录的是收回的钱），词面
+// AA/垫付＋回款动词同现时同样收口为 income。
 export function fixAaReimburse(content: string, triage: TriageResult): TriageResult {
-  if (triage.category !== "transfer") return triage;
+  if (triage.category !== "transfer" && triage.category !== "expense") return triage;
   if (REPAY_PENDING_RE.test(content)) return triage;
   if (AA_REIMBURSE_RE.test(content)) return { ...triage, category: "income" };
+  if (triage.category === "expense") return triage;
   if (PAST_ADVANCE_RE.test(content) && PAST_ADVANCE_REPAY_RE.test(content)) {
     return { ...triage, category: "income" };
   }
@@ -1141,6 +1162,13 @@ export function fixAdvanceRepayAmount(content: string, triage: TriageResult): Tr
   if (!back) return triage;
   const paid = parseFloat(adv[1]);
   const repaid = parseFloat(back[1] ?? back[2]);
+  // X 与 Y 必须是句中两个不同的金额位置（R224b：「聚餐我先付的，AA 收回 240」
+  // 单金额句被垫付/回款正则够到同一个 240，净额化误收口会覆盖 fixAaReimburse
+  // 的 income 改判——单金额回款句不是净额化场景）。
+  const advNumStart = (adv.index ?? 0) + adv[0].lastIndexOf(adv[1]);
+  const backNumStr = back[1] ?? back[2];
+  const backNumStart = (back.index ?? 0) + back[0].lastIndexOf(backNumStr);
+  if (advNumStart === backNumStart) return triage;
   if (!(paid > 0) || !(repaid > 0) || repaid > paid) return triage;
   if (triage.category === "expense" && triage.amount === paid) return triage;
   return { ...triage, category: "expense", amount: paid, currency: triage.currency ?? "CNY" };
@@ -1200,6 +1228,16 @@ export function neutralizeDelimiterSpoof(content: string): string {
 // 失败，调用方应立即走兜底而不是让笔记悬置。
 export type TriageFailure = "unavailable" | "unparseable";
 
+/** fix* 兜底规则管线的唯一定义（R224，audit-r223 §2 建议 4）：分拣与
+ * conflict 矩阵测试共用同一顺序，管线顺序语义由 r224-fixes 测试锁定。 */
+export function applyTriageFixes(content: string, result: TriageResult, now: Date, tz: string): TriageResult {
+  result = stripMarkerNoise(content, result);
+  result = demoteEventLog(content, fixTransferMisfile(content, fixFinanceDirection(content, result)));
+  result = fixLedgerNetDirection(content, fixReceiptDoubleCount(content, fixLedgerAmount(content, fixLedgerCategory(content, result))));
+  result = fixAdvanceRepayAmount(content, fixSplitBillAmount(content, fixAaReimburse(content, fixProseTotalDirection(content, result))));
+  return fixWeekdayDue(content, result, now, tz);
+}
+
 export async function triageNoteDetailed(
   content: string,
   env: Parameters<typeof chatComplete>[0],
@@ -1222,11 +1260,7 @@ export async function triageNoteDetailed(
     ],
   });
   let result = (text && parseTriageJson(text, tzOffsetString(now, tz))) || null;
-  if (result) result = stripMarkerNoise(content, result);
-  if (result) result = demoteEventLog(content, fixTransferMisfile(content, fixFinanceDirection(content, result)));
-  if (result) result = fixLedgerNetDirection(content, fixReceiptDoubleCount(content, fixLedgerAmount(content, fixLedgerCategory(content, result))));
-  if (result) result = fixAdvanceRepayAmount(content, fixSplitBillAmount(content, fixAaReimburse(content, fixProseTotalDirection(content, result))));
-  if (result) result = fixWeekdayDue(content, result, now, tz);
+  if (result) result = applyTriageFixes(content, result, now, tz);
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {
     result = result

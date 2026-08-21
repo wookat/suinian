@@ -467,6 +467,26 @@ export function NoteCard({
     setConfirmDeleteOpen(true)
   }
 
+  function openEdit() {
+    setEditValue(note.content)
+    setEditCategory(note.category ?? "")
+    setEditTags(note.tags)
+    setEditTagInput("")
+    setEditDue(dueToInput(note.todo_due))
+    setConflictNote(null)
+    setEditing(true)
+  }
+
+  // 卡片正文/标题点击直达编辑（R224，audit-r223 P3-2：详情/编辑入口只有
+  // 「更多操作 → 编辑」，移动端可发现性弱）；正在选择文本时不触发
+  const bodyClickEdit =
+    onEdit && !selectable && !editing
+      ? () => {
+          if (window.getSelection()?.toString()) return
+          openEdit()
+        }
+      : undefined
+
   const extraTags = note.tags.length - MAX_TAGS
   const longContent = note.content.length > CLAMP_THRESHOLD
   // 标题与正文相同（含仅差末尾标点）时只展示一次，避免卡片重复（R182 P2-2）
@@ -583,13 +603,7 @@ export function NoteCard({
                   {onEdit && (
                     <button
                       onClick={() => {
-                        setEditValue(note.content)
-                        setEditCategory(note.category ?? "")
-                        setEditTags(note.tags)
-                        setEditTagInput("")
-                        setEditDue(dueToInput(note.todo_due))
-                        setConflictNote(null)
-                        setEditing(true)
+                        openEdit()
                         setMenuOpen(false)
                       }}
                       className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent"
@@ -643,7 +657,10 @@ export function NoteCard({
           className={cn(
             "mt-2 text-[15px] font-medium leading-snug",
             done && "text-muted-foreground line-through",
+            bodyClickEdit && "cursor-pointer",
           )}
+          title={bodyClickEdit ? "点击编辑" : undefined}
+          onClick={bodyClickEdit}
         >
           {note.title}
         </p>
@@ -961,7 +978,10 @@ export function NoteCard({
                   "whitespace-pre-wrap text-sm leading-relaxed",
                   done && "text-muted-foreground line-through",
                   longContent && !expanded && "line-clamp-6",
+                  bodyClickEdit && "cursor-pointer",
                 )}
+                title={bodyClickEdit ? "点击编辑" : undefined}
+                onClick={bodyClickEdit}
               >
                 {note.content}
               </p>
@@ -997,15 +1017,7 @@ export function NoteCard({
                 <span>{note.raw_type === "voice" ? "转写可能不准，建议核对" : "文字识别可能不准，建议核对原图"}</span>
                 {onEdit && (
                   <button
-                    onClick={() => {
-                      setEditValue(note.content)
-                      setEditCategory(note.category ?? "")
-                      setEditTags(note.tags)
-                      setEditTagInput("")
-                      setEditDue(dueToInput(note.todo_due))
-                      setConflictNote(null)
-                      setEditing(true)
-                    }}
+                    onClick={openEdit}
                     className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
                   >
                     <Pencil className="size-3" /> 纠错
