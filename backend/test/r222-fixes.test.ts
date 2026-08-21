@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer } from "../src/ask";
+import { fixFinanceDirection } from "../src/triage";
+import type { TriageResult } from "../src/types";
 import {
   overviewStatLine,
   sanitizeNarrative,
@@ -142,5 +144,37 @@ describe("R222 P3-4 topic summary questions (audit-r221 Q24)", () => {
   it("falls back to a reports-page hint when no tags exist", () => {
     const a = buildTopicSummaryAnswer([], null, 3);
     expect(a).toContain("报告");
+  });
+});
+
+describe("R222 P2-3 方向兑底与格短语修正 (audit-r221 生产复现)", () => {
+  const t = (category: TriageResult["category"], extra: Partial<TriageResult> = {}): TriageResult => ({
+    category,
+    title: null,
+    tags: [],
+    todo_due: null,
+    is_sensitive: false,
+    amount: null,
+    currency: null,
+    ...extra,
+  });
+
+  it("「给我爸买按摩仪 599」：模型判 expense 不被兑底翻成 income", () => {
+    const fixed = fixFinanceDirection("给我爸买按摩仪 599", t("expense", { amount: 599, currency: "CNY" }));
+    expect(fixed.category).toBe("expense");
+  });
+
+  it("「给我爸买按摩仪 599」：模型误判 income 被兑底纠回 expense", () => {
+    const fixed = fixFinanceDirection("给我爸买按摩仪 599", t("income", { amount: 599, currency: "CNY" }));
+    expect(fixed.category).toBe("expense");
+  });
+
+  it("「给我转/交」类钱进用户手里的语境仍是 income 侧，不误纠", () => {
+    expect(fixFinanceDirection("学生给我交了补课费 300", t("income", { amount: 300 })).category).toBe("income");
+    expect(fixFinanceDirection("朋友给我转了 200", t("income", { amount: 200 })).category).toBe("income");
+  });
+
+  it("「充话费 100」：方向兑底不干扰 expense 判定", () => {
+    expect(fixFinanceDirection("充话费 100", t("expense", { amount: 100 })).category).toBe("expense");
   });
 });
