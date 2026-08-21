@@ -176,7 +176,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
 // 「X 时间一共花了多少钱」类合计问题必须走 SQL 精确聚合（与周报/月报同一
 // financeStats 口径），绝不能靠 LLM 对被 LIMIT 截断的召回片段心算。
 
-export const FINANCE_WORD_RE = /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|缴费|交费|[缴交用]了?(?=[^？?。]{0,10}(?:多少|几))/;
+export const FINANCE_WORD_RE = /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|缴费|交费|收款|[收拿][到了](?=[^？?。]{0,6}[钱款])|到手(?=[^？?。]{0,6}[钱款])|[缴交用]了?(?=[^？?。]{0,10}(?:多少|几))/;
 const AGG_WORD_RE = /一共|总共|合计|总计|共计|加起来|多少钱|多少笔|几笔|平均每|总额|结余|收支|余额|多少|怎么样|怎样|如何|情况/;
 // sum-style wording that only makes sense as a books-level aggregate: when it
 // appears with a finance word but the question can't be routed to the exact
@@ -188,9 +188,31 @@ const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|�
 const STRIP_RES: RegExp[] = [
   /(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?(?:之间|期间|以内|之内|前后|左右)?|今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?/g,
   /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
-  /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|还了|还款|[缴交用]了?|钱/g,
-  /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|了|吗|呢|啊|呀|哦|是|都|在|有|和|与|？|\?|，|,|。|、|\s/g,
+  /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|还了|还款|收款|[收拿][到了]|到手|[缴交用]了?/g,
+  /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|？|\?|，|,|。|、|\s/g,
 ];
+
+// 单字语气/停用字（R240 P2-1，audit-r239 §4.2 根因）：「了/吗/都/在/有…」
+// 这类单字绝不能全局删除——它们大量出现在实词内部（成都/了解/有道/在行/
+// 和平），全局剥离会把「成都出差」剥成「成出差」，LIKE 注入零命中后
+// fail-closed 拒答。安全口径：先把可整词剥离的措辞替换成边界标记，单字
+// 语气字只在「独立成段」（两侧都是边界/已剥离标记）时才删除，嵌在实词
+// 内（任一侧贴着保留文字）一律保留。
+const FILLER_CHAR_CLASS = "了过吗呢啊呀哦嘛吧是都在有和与记写存发条篇个样件事钱";
+const STRIP_MARKER = "\u0001";
+// 连接词切分只在「夹在两个实词字中间」时生效（R240 P2-1：「和平精英」开头
+// 的「和」不是连接词，无条件切会切成「平精英」）
+const TOPIC_CONNECTIVE_SPLIT_RE = /(?<=[\u4e00-\u9fa5A-Za-z0-9])(?:和|与|跟|以及|、)(?=[\u4e00-\u9fa5A-Za-z0-9])/;
+const TOPIC_CONNECTIVE_SPLIT_EX_RE = /(?<=[\u4e00-\u9fa5A-Za-z0-9])(?:和|与|跟|以及|、|的)(?=[\u4e00-\u9fa5A-Za-z0-9])/;
+const FILLER_SOLO_RE = new RegExp(`(?<=^|${STRIP_MARKER})[${FILLER_CHAR_CLASS}]+(?=$|${STRIP_MARKER})`, "g");
+
+/** 逐条剥离（整词措辞→边界标记），再删仅独立成段的单字语气字，最后清标记。 */
+function applyStrips(text: string, res: RegExp[]): string {
+  let out = text;
+  for (const re of res) out = out.replace(re, STRIP_MARKER);
+  out = out.replace(FILLER_SOLO_RE, "");
+  return out.replace(new RegExp(`${STRIP_MARKER}+`, "g"), "");
+}
 
 // 复合名词保护（R234 P3-3，audit-r233 §P3-3：「信用卡还了多少钱」被逐字
 // 剥成「信卡还」注入 LIKE 必零命中）：含财务动词字的常见复合名词先占位
@@ -204,7 +226,7 @@ function stripFinanceWording(text: string): string {
     kept.push(m);
     return String.fromCharCode(0xe000 + kept.length - 1);
   });
-  for (const re of STRIP_RES) out = out.replace(re, "");
+  out = applyStrips(out, STRIP_RES);
   return out.replace(/[\ue000-\ue0ff]/g, (ch) => kept[ch.charCodeAt(0) - 0xe000] ?? "");
 }
 
@@ -362,9 +384,12 @@ const COUNT_Q_RE = /(?:多少|几)\s*[条篇](?:笔记|记录)?|(?:记|写|存|�
 const COUNT_STRIP_RES: RegExp[] = [
   STRIP_RES[0], // 时间短语，与财务聚合同一口径
   /到目前为止|截止到?现在|截至现在|至今|目前|现在|为止|开始记录以来|一共|总共|合计|总计|共计|加起来|到底|大概|大约|多少|几/g,
-  /笔记|记录|条|篇|个|样|件|东西|内容|事情|事/g,
-  /记|写|存|收藏|保存|发/g,
-  /请问|一下|来着|帮我数|数数|统计|我的?|了|过|吗|呢|啊|呀|哦|是|都|在|有|？|\?|，|,|。|、|\s/g,
+  // 单字量词/动词（条/篇/个/件/事、记/写/存/发）同属词内易伤字（日记/文件/
+  // 同事），交 applyStrips 独立成段判定；多字词照常整词剥（R240 P2-1）
+  /笔记|记录|东西|内容|事情/g,
+  /收藏|保存/g,
+  // 单字语气字（了/过/吗/都/在/有…）交 applyStrips 的独立成段判定，不在此全局剥（R240 P2-1）
+  /请问|一下|来着|帮我数|数数|统计|我的?|？|\?|，|,|。|、|\s/g,
 ];
 
 // 分类限定词 → category 列值（R126：分类计数是一条 WHERE category=? 就能精确
@@ -409,9 +434,7 @@ export function countQueryIntent(question: string): CountQuery | null {
   const category = COUNT_CATEGORY_WORDS.find(([re]) => re.test(question))?.[1] ?? null;
   const sensitiveOnly = !category && /加密|敏感/.test(question);
   const avgPerDay = /平均每天|每天平均/.test(question);
-  let residual = question;
-  for (const re of COUNT_STRIP_RES) residual = residual.replace(re, "");
-  for (const re of COUNT_QUALIFIER_STRIP_RES) residual = residual.replace(re, "");
+  const residual = applyStrips(question, [...COUNT_STRIP_RES, ...COUNT_QUALIFIER_STRIP_RES]);
   const intent = residual.length < 2 ? "exact" : "fail_closed";
   return { intent, category: intent === "exact" ? category : null, sensitiveOnly: intent === "exact" && sensitiveOnly, avgPerDay: intent === "exact" && avgPerDay };
 }
@@ -550,8 +573,12 @@ export function financeExtremeIntent(question: string): FinanceExtremeQuery | nu
   // Top-N（R236 P2-3）：「支出最多的三笔」「最贵的前 5 笔」与单极值同一
   // 确定性管道，从第 1 名起连取 N 条；必须在序数判定之前（「前三笔」无
   // 「第」字不会被序数误收，但顺序上优先收 Top-N 更稳健）
+  // Top-N 收口不要求 priceInherent（R240 P2-2，audit-r239 §4.3 根因）：「top 2
+  // 的支出分别是多少」无「最X」措辞，priceInherent 闸门把它拦在确定性管道外
+  // 落 LLM 对截断召回猜排序；配上财务词（支出/消费…）的 top N 已是明确的
+  // 金额排序问法，与「支出最大的 N 笔」同一 ORDER BY amount 管道。
   const topN = financeTopN(question);
-  if (topN !== null && priceInherent) {
+  if (topN !== null && (priceInherent || FINANCE_WORD_RE.test(question))) {
     const kind: "max" | "min" =
       /最便宜|最[小低少]|花得?最少|(?:支出|消费|开销|花销|花费|开支|收入|进账|入账)最[少小低]/.test(question) || (sortM?.[1] && /[低小]/.test(sortM[1]) && !/最[贵大多高狠]/.test(question))
         ? "min"
@@ -583,7 +610,7 @@ const EXTREME_STRIP_RES: RegExp[] = [
   /最[多少]|前\s*(?:[0-9]{1,2}|[两二三四五六七八九十]{1,2})\s*[笔项条名大个]|(?:[0-9]{1,2}|[两二三四五六七八九十]{1,2})\s*[笔项条]|top\s*[0-9]{1,2}/gi,
   /单笔|每笔|逐笔|单[次项]|按(?:金额|价格|价钱|数额)?(?:从?[高低大小]到[高低大小])?排(?:序|名|行|列)?/g,
   /金额|数额/g, // 「金额倒数第二」的「金额」是排名量纲词不是主题限定
-  /(?:是)?哪一?[笔项个把只台件本条张部次辆双瓶副架块支款]?|什么|多少钱|多少/g,
+  /(?:是)?哪一?[笔项个把只台件本条张部次辆双瓶副架块支款]?|什么|多少钱|多少|分别|各自/g,
   /[一两][笔项次个把只台件本条张部辆双瓶副架块支款]/g,
   /买[过了的]{0,2}|购入|入手|里面?|之中|当中|其中|这些|那些|所有|全部|历史上|有史以来|记录里|笔记里/g,
   STRIP_RES[2], // 财务动词/名词
@@ -607,11 +634,14 @@ const PURE_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 /** 从财务极值问法中提取主题限定词（「键盘里最贵的」→「键盘」）；无限定返回 null。 */
 export function financeExtremeTopicTerms(question: string): string[] | null {
   if (!financeExtremeIntent(question)) return null;
-  let residual = question.replace(AMOUNT_TOKEN_RE, "");
-  for (const re of EXTREME_STRIP_RES) residual = residual.replace(re, "");
-  residual = residual.replace(/^的+|的+$/g, "");
+  let residual = applyStrips(question.replace(AMOUNT_TOKEN_RE, ""), EXTREME_STRIP_RES);
+  // 首尾的「的」与尾部判断词/助词（「东西是」的「是」）是剥词残渣不是主题
+  residual = residual.replace(/^的+|[的是了吗呢啊呀哦嘛吧]+$/g, "");
+  // 开头的介词/购买动词（「在成都…」→「成都」）与财务子集同口径
+  const exStripped = residual.replace(/^[买在去为给]{1,2}/, "");
+  if (exStripped.length >= 2) residual = exStripped;
   const terms = residual
-    .split(/和|跟|以及|、|的/)
+    .split(TOPIC_CONNECTIVE_SPLIT_EX_RE)
     .map((s) => s.trim().replace(/[里中]$/, ""))
     .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s) && !EXTREME_FUNCTIONAL_RESIDUE_RE.test(s) && !PURE_NUMBER_RE.test(s));
   return terms.length > 0 && terms.length <= 3 ? terms : null;
@@ -899,7 +929,7 @@ function subsetTopicExtract(question: string): string[] | null {
   // 整串 LIKE 零命中，R210 P3-2，audit-r209）：先按连接词切段、逐段走同一
   // 剥离流水线再合并（等价于「逐词匹配再求和」，子集 SQL 本就是 OR 语义）
   const parts = question
-    .split(/和|与|跟|以及|、/)
+    .split(TOPIC_CONNECTIVE_SPLIT_RE)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
   if (parts.length > 1) {
@@ -921,7 +951,7 @@ function subsetTopicExtract(question: string): string[] | null {
   // （「咖啡豆上」LIKE 零命中），仅在原问句确为「在…上」形态时剥掉
   if (/在[^\s，。？?]{1,8}上/.test(question) && residual.length >= 3) residual = residual.replace(/上$/, "");
   const terms = residual
-    .split(/和|跟|以及|、/)
+    .split(TOPIC_CONNECTIVE_SPLIT_RE)
     .map((s) => s.trim().replace(QUANTIFIER_TAIL_RE, ""))
     .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s) && !PURE_NUMBER_RE.test(s));
   return terms.length > 0 && terms.length <= 3 ? terms : null;
@@ -984,6 +1014,20 @@ export function degradeFinanceSubsetTerms(terms: string[]): string[] | null {
     if (alias && alias.length >= 2 && alias.length <= 8 && !out.includes(alias)) out.push(alias);
   };
   for (const t of terms) {
+    // 边缘语气/介词残片（R240 P2-1 配套）：独立成段保护会让「在成都」这类
+    // 介词粘连词保留下来，零命中降级时剥掉开头介词/副词字、结尾助词字各试
+    // 一次（分开剥：一起剥会把「在成都」剥成「成」）
+    const lead = t.replace(/^[了过是都在有和与]+/, "");
+    if (lead !== t && lead.length >= 2) push(lead);
+    const tail = t.replace(/[了过吗呢啊呀哦嘛吧的]+$/, "");
+    if (tail !== t && tail.length >= 2) push(tail);
+    // 结尾单个停用字只剥一层（「成都都」→「成都」而非「成」；「猫的钱」→「猫的」）
+    const solo = t.replace(/[都是在有和与钱]$/, "");
+    if (solo !== t && solo.length >= 2) {
+      push(solo);
+      const solo2 = solo.replace(/[了过吗呢啊呀哦嘛吧的]+$/, "");
+      if (solo2 !== solo && solo2.length >= 2) push(solo2);
+    }
     const stripped = t.replace(SUBSET_TERM_LEAD_RE, "").replace(SUBSET_TERM_TAIL_RE, "");
     if (stripped !== t && stripped.length >= 2) {
       push(stripped);
@@ -1169,9 +1213,10 @@ export function financeListIntent(question: string): FinanceListDirection | null
   if (!direction) return null;
   // 残留主题词（「买了哪些书花了哪些钱」）说明不是纯财务列举：留给主题
   // 子集/普通召回，与 isFinanceAggQuestion 同一剥离口径
-  let residual = question;
-  for (const re of STRIP_RES) residual = residual.replace(re, "");
-  residual = residual.replace(/最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|明细|记录|清单|情况|列出|列举|列一下|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的/g, "");
+  const residual = applyStrips(question, [
+    ...STRIP_RES,
+    /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|明细|记录|清单|情况|列出|列举|列一下|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的/g,
+  ]);
   return residual.length < 2 ? direction : null;
 }
 
@@ -1233,6 +1278,134 @@ export function buildFinanceListAnswer(
   if (sensitiveCnt > 0) md += `\n（含 ${sensitiveCnt} 笔加密的敏感记录，金额已计入合计，内容不在问答中展示。）`;
   if (unknown > 0) md += `\n（另有 ${unknown} 笔未识别出金额，未计入合计。）`;
   md += `\n\n${caliber}`;
+  return md;
+}
+
+// ---- 财务金额阈值筛选（R240 P2-3，audit-r239 §4.4）----
+// 「列出超过 80 元的支出」是一条 WHERE amount > ? 就能精确回答的问题，
+// 此前无确定性管道，落 LLM 对截断召回筛选（漏项/心算错）。与极值/列举
+// 同一家族：按币种限定比较（不同币种金额不可直接比阈值），台账合计笔记
+// 不当单笔参与（口径同极值）。
+
+export interface FinanceThresholdQuery {
+  direction: "expense" | "income";
+  op: "gt" | "gte" | "lt" | "lte";
+  amount: number;
+  /** 比较币种（问句未写币种词时默认 CNY） */
+  currency: string;
+}
+
+const THRESHOLD_CURRENCY: Record<string, string> = PREMISE_CURRENCY;
+const THRESHOLD_PRE_RE =
+  /(超过|超出|大于|高于|多于|不低于|不少于|至少|低于|少于|小于|不到|不足|不超过|不高于|至多)\s*(\d+(?:\.\d+)?|[一二两三四五六七八九十]{1,3})\s*(元|块钱?|人民币|rmb|cny|美元|美金|usd|日元|jpy|欧元|eur|英镑|gbp|港[币元]|hkd|韩元|krw)?/i;
+const THRESHOLD_POST_RE =
+  /(\d+(?:\.\d+)?|[一二两三四五六七八九十]{1,3})\s*(元|块钱?|人民币|rmb|cny|美元|美金|usd|日元|jpy|欧元|eur|英镑|gbp|港[币元]|hkd|韩元|krw)\s*(以上|以内|以下)/i;
+const THRESHOLD_OPS: Record<string, FinanceThresholdQuery["op"]> = {
+  超过: "gt", 超出: "gt", 大于: "gt", 高于: "gt", 多于: "gt",
+  不低于: "gte", 不少于: "gte", 至少: "gte", 以上: "gte",
+  低于: "lt", 少于: "lt", 小于: "lt", 不到: "lt", 不足: "lt",
+  不超过: "lte", 不高于: "lte", 至多: "lte", 以内: "lte", 以下: "lte",
+};
+
+function parseThresholdAmount(s: string): number | null {
+  if (/^\d+(?:\.\d+)?$/.test(s)) {
+    const n = Number(s);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  return parseNum(s);
+}
+
+/** 识别金额阈值筛选问法（「列出超过 80 元的支出」）；非此类返回 null。 */
+export function financeThresholdIntent(question: string): FinanceThresholdQuery | null {
+  if (ASK_PRONOUN_REF_RE.test(question)) return null;
+  // 必须是支出/收入类财务名词限定的筛选（「打卡超过3次」不是）
+  if (!/支出|开支|开销|花销|花费|消费|收入|进账|入账|账单|记账/.test(question)) return null;
+  // 极值/序数/Top-N 问法交既有极值管道（「超过80元里最贵的」）
+  if (financeExtremeIntent(question)?.count || /最贵|最便宜|最[大小高低多少]/.test(question)) return null;
+  let m = question.match(THRESHOLD_PRE_RE);
+  let opWord: string | undefined;
+  let numStr: string | undefined;
+  let curWord: string | undefined;
+  if (m) {
+    [, opWord, numStr, curWord] = m;
+    // 「超过100笔/次/天」是数量阈值不是金额：无币种词且数字后紧跟量词时不收口
+    const after = question.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 1);
+    if (!curWord && /[笔次条个天回趟顿]/.test(after)) return null;
+  } else {
+    m = question.match(THRESHOLD_POST_RE);
+    if (!m) return null;
+    [, numStr, curWord, opWord] = m;
+  }
+  const amount = numStr ? parseThresholdAmount(numStr) : null;
+  const op = opWord ? THRESHOLD_OPS[opWord.toLowerCase()] : undefined;
+  if (amount === null || !op) return null;
+  const direction: "expense" | "income" = /收入|进账|入账/.test(question) ? "income" : "expense";
+  const currency = curWord ? (THRESHOLD_CURRENCY[curWord.toLowerCase()] ?? "CNY") : "CNY";
+  return { direction, op, amount, currency };
+}
+
+/** 阈值问法的主题限定词（「超过80元的餐饮支出」→「餐饮」）；无限定返回 null。
+ * 剥不干净（残留无法成词）返回 ["\u0000"] 哨兵由调用方放弃收口，绝不答超范围列表。 */
+export function financeThresholdTopicTerms(question: string): string[] | null {
+  const cleaned = question
+    .replace(THRESHOLD_PRE_RE, "")
+    .replace(THRESHOLD_POST_RE, "")
+    .replace(AMOUNT_TOKEN_RE, "");
+  const residual = applyStrips(cleaned, [
+    ...STRIP_RES,
+    /有哪些|哪些|都有什么|些什么|什么|列出|列举|列一下|罗列|盘点|清单|列表|明细|记录|笔记|各|分别|每笔|逐笔|单笔|几笔|一共|总共|超过|超出|大于|高于|多于|不低于|不少于|至少|低于|少于|小于|不到|不足|不超过|不高于|至多|以上|以内|以下|列|笔|的/g,
+  ]).trim();
+  if (residual.length < 2) return null;
+  const terms = residual
+    .split(TOPIC_CONNECTIVE_SPLIT_RE)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  const clean = terms.filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s) && !PURE_NUMBER_RE.test(s));
+  if (clean.length === terms.length && clean.length >= 1 && clean.length <= 3) return clean;
+  return ["\u0000"]; // 剥离残渣不成词：放弃确定性收口（fail-safe）
+}
+
+const THRESHOLD_OP_LABELS: Record<FinanceThresholdQuery["op"], string> = {
+  gt: "超过",
+  gte: "不低于",
+  lt: "低于",
+  lte: "不超过",
+};
+
+/** 金额阈值筛选的确定性答案：逐笔列举 + 精确总数；台账合计/未识别金额如实说明。 */
+export function buildFinanceThresholdAnswer(
+  query: FinanceThresholdQuery,
+  rows: Pick<NoteRow, "id" | "title" | "content" | "created_at" | "is_sensitive" | "amount" | "currency">[],
+  extra: { unknownAmount: number; otherCurrency: number; ledgerExcluded: number },
+  phrase: string | null,
+  topicTerms: string[] | null
+): string {
+  const scope = phrase ?? "到目前为止";
+  const dirLabel = FINANCE_DIRECTION_LABELS[query.direction];
+  const topicLabel = topicTerms ? `「${topicTerms.join("/")}」相关的` : "";
+  const cond = `${THRESHOLD_OP_LABELS[query.op]} ${formatAmount(query.amount, query.currency)}`;
+  const notes: string[] = [];
+  if (extra.ledgerExcluded > 0) notes.push(`另有 ${extra.ledgerExcluded} 笔台账多笔合计笔记（金额是列合计非单笔），未参与单笔比较`);
+  if (extra.unknownAmount > 0) notes.push(`另有 ${extra.unknownAmount} 笔未识别出金额，无法参与比较`);
+  if (extra.otherCurrency > 0) notes.push(`另有 ${extra.otherCurrency} 笔其他币种记录（不同币种金额不可直接比较阈值），未列入`);
+  const noteLine = notes.length > 0 ? `\n（${notes.join("；")}。）` : "";
+  const caliber = `\n\n以上为按金额的数据库精确筛选（口径与周报/月报一致，不含已删除笔记${topicTerms ? "；主题按关键词匹配" : ""}）。`;
+  if (rows.length === 0) {
+    return `${scope}没有找到${topicLabel}金额${cond}的${dirLabel}记录。${noteLine}${caliber}`;
+  }
+  const visible = rows.filter((n) => !n.is_sensitive).slice(0, 20);
+  const itemLines = visible.map((n, i) => {
+    const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
+    const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+    return `- ${text}（${amount}，${formatShanghai(n.created_at).slice(0, 10)}）[${i + 1}]`;
+  });
+  const sensitiveCnt = rows.filter((n) => n.is_sensitive).length;
+  const total = rows.reduce((s, n) => (typeof n.amount === "number" && Number.isFinite(n.amount) ? s + n.amount : s), 0);
+  let md = `${scope}${topicLabel}金额${cond}的${dirLabel}共 ${rows.length} 笔，合计 ${formatAmount(total, query.currency)}`;
+  if (itemLines.length > 0) md += `：\n${itemLines.join("\n")}`;
+  if (rows.length > visible.length && sensitiveCnt === 0) md += `\n（共 ${rows.length} 笔，仅展示前 ${visible.length} 笔。）`;
+  if (sensitiveCnt > 0) md += `\n（含 ${sensitiveCnt} 笔加密的敏感记录，计入总数，内容不在问答中展示。）`;
+  md += noteLine + caliber;
   return md;
 }
 
@@ -1616,6 +1789,31 @@ export function askTopicTerms(terms: string[]): string[] {
     if (r.length >= 2 && !out.includes(r)) out.push(r);
   }
   return out;
+}
+
+// ---- 单字主题枚举命中校验（R240 P3-2，audit-r239 §5 r08）----
+// 「我买了什么书」的主题词是单字「书」，LIKE '%书%' 会把「放在书房柜子里」
+// 的路由器资料也列成「和书相关」。无分词能力下按邻字上下文判定该字是否
+// 独立成词：任一处出现满足「前邻是边界/量词/动词/助词（本书/买书/的书）
+// 且后邻是边界/助词（书。/书的/书吗）」即命中。代价是「书单/书评」这类
+// 相关复合词命中会被过滤（准确优先；答案已注明按关键词筛选、可换说法再问），
+// 调用方在过滤后全空时回落原始命中，绝不因此把有命中变成零命中。
+const SINGLE_TOPIC_PREV_RE = /[本些的了买看读借还送写记听唱学做煮炒烧一两三几每部套张首道口条只株盆杯瓶箱袋]/;
+const SINGLE_TOPIC_NEXT_RE = /[的了是吗么呢啊呀哦嘛吧也都还很]/;
+const CJK_CHAR_RE = /[\u4e00-\u9fa5]/;
+
+/** 单字主题在文本中是否有「独立成词」的出现（邻字上下文判定）。 */
+export function hitsSingleCharTopic(hay: string, ch: string): boolean {
+  let idx = hay.indexOf(ch);
+  while (idx !== -1) {
+    const prev = idx > 0 ? hay[idx - 1]! : "";
+    const next = idx + 1 < hay.length ? hay[idx + 1]! : "";
+    const prevOk = prev === "" || !CJK_CHAR_RE.test(prev) || SINGLE_TOPIC_PREV_RE.test(prev);
+    const nextOk = next === "" || !CJK_CHAR_RE.test(next) || SINGLE_TOPIC_NEXT_RE.test(next);
+    if (prevOk && nextOk) return true;
+    idx = hay.indexOf(ch, idx + 1);
+  }
+  return false;
 }
 
 /** Whether a note textually contains any of the topic terms (title/content/tags). */

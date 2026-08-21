@@ -55,6 +55,12 @@ export const NOTES: EvalNote[] = [
   N("todo2", 15, "todo", "预约牙医洗牙", "该预约牙医洗牙了，上次洗牙已经是一年前", ["健康"]),
   // —— 记账 ——
   N("exp1", 8, "expense", "买机械键盘", "入手了一把机械键盘，茶轴，399 元", ["购物"]),
+  // —— 地名嵌入语气字（R240 P2-1：「成都」的「都」绝不能被剥成「成」）。
+  // 用台账形式（合计 365）：不参与单笔极值/序数排名，不动既有
+  // 排名题（q105/q106/q115/q116/q119/q120/q136 等）的真值。——
+  // daysAgo 放到 40 天前：避免落进「上周/最近一周」窗口污染 q22（无答案：
+  // 上周旅行）与周窗财务列举题的真值
+  N("cd1", 40, "expense", "成都出差台账", "打车,45\n住宿,320", ["出差"]),
   N("exp2", 5, "expense", "猫打疫苗", "带猫去打了三联疫苗，花了 260 块", ["宠物"]),
   // —— 多行台账全部变体（R184：audit-r183 P1-1 锁定）——金额是列合计，
   // 绝不能作为单笔参与极值/序数排名。三条合计分别落在单笔区间的
@@ -1030,5 +1036,55 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAnswerContains: ["549", "399", "数据库精确查询"],
     forbidAnswerContains: ["260"],
     holdout: true,
+  },
+
+  // —— R240 P2-1（audit-r239 §4.2）：地名嵌入语气字。「成都出差」的「都」
+  // 绝不能被剥成「成出差」导致 LIKE 零命中 fail-closed 拒答；子集合计
+  // 45+320=365（台账标题命中，整表合计计入）。——
+  {
+    id: "q150",
+    category: "财务子集",
+    question: "成都出差一共花了多少钱",
+    expectAll: ["cd1"],
+    expectAnswerContains: ["365"],
+  },
+  {
+    id: "q151",
+    category: "财务子集",
+    question: "在成都都花了多少钱？",
+    expectAny: ["cd1"],
+    expectAnswerContains: ["365"],
+    holdout: true,
+  },
+
+  // —— R240 P2-2（audit-r239 §4.3）：top N + 财务词进确定性排序管道。
+  // 单笔支出榜不变：549 > 399 > 260（成都台账合计 365 不参与）。——
+  {
+    id: "q152",
+    category: "财务极值",
+    question: "top 2 的支出分别是多少",
+    expectAll: ["nz20", "exp1"],
+    expectAnswerContains: ["549", "399", "数据库精确查询"],
+    forbidAnswerContains: ["365", "260"],
+  },
+
+  // —— R240 P2-3（audit-r239 §4.4）：金额阈值筛选确定性管道。单笔
+  // 超过 500 元的只有跑鞋 549；台账合计（如 1200）不参与单笔比较。——
+  {
+    id: "q153",
+    category: "财务列举",
+    question: "超过500元的支出有哪些",
+    expectAny: ["nz20"],
+    expectAnswerContains: ["549"],
+    forbidAnswerContains: ["1200", "399"],
+  },
+
+  // —— R240 P3-1（audit-r239 §7）：「收到多少钱」进精确聚合管道（无收入
+  // 记录，必须精确答 0 而非 LLM 自由发挥）。——
+  {
+    id: "q154",
+    category: "财务聚合",
+    question: "这个月收到多少钱",
+    expectAnswerContains: ["口径与周报/月报一致"],
   },
 ];
