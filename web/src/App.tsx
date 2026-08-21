@@ -15,6 +15,7 @@ import { Onboarding } from "@/components/onboarding"
 import { ReloadPrompt } from "@/components/reload-prompt"
 import { PageHeader } from "@/components/page-header"
 import { RightRail } from "@/components/right-rail"
+import { Skeleton } from "@/components/ui/skeleton"
 import { loadSettings, saveSettings, SETTINGS_CHANGED_EVENT } from "@/lib/settings"
 import { syncTimezone } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -292,7 +293,18 @@ export default function App() {
             className="min-w-0 flex-1 space-y-5 outline-none animate-in fade-in duration-300 xl:max-w-3xl"
           >
             <PageHeader title={active.title} description={active.description} />
-            <Suspense fallback={null}>
+            {/* 懒加载页面分包下载期间给出骨架占位：fallback=null 会让
+                首次进入的页面（如 #/auth 表单）空白数秒（R232 P3-4，
+                audit-r231 §9） */}
+            <Suspense
+              fallback={
+                <div aria-busy="true" aria-label="页面加载中" className="space-y-3 pt-1">
+                  <Skeleton className="h-9 w-full max-w-sm" />
+                  <Skeleton className="h-9 w-full max-w-sm" />
+                  <Skeleton className="h-24 w-full" />
+                </div>
+              }
+            >
               <Page />
             </Suspense>
           </main>

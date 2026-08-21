@@ -181,8 +181,9 @@ const CASES: EvalCase[] = [
   { content: `${PREFIX} 前天团建 AA 我垫付的钱，今天收回 300`, category: "income", amount: 300, currency: "CNY" },
   // R230 P2-1（audit-r229 §3 生产两次复现：判 expense 方向反了）：既往垫付
   // 现在收到回款＝钱进来；近义句 transfer 口径可接受，故 altCategory
-  { content: `${PREFIX} 上次帮小刘垫的 90 他微信转我了`, category: "income", altCategory: ["transfer"], amount: 90, currency: "CNY" },
-  { content: `${PREFIX} 帮同事垫的 90 块他今天微信还我了`, category: "income", altCategory: ["transfer"], amount: 90, currency: "CNY" },
+  { content: `${PREFIX} 上次帮小刘垫的 90 他微信转我了`, category: "income", amount: 90, currency: "CNY" },
+  // R232 P3-3（audit-r231 §1）：「帮…垫的」定语式回款收口后不再容忍 transfer
+  { content: `${PREFIX} 帮同事垫的 90 块他今天微信还我了`, category: "income", amount: 90, currency: "CNY" },
   // R230 P3-1（audit-r229 §3）：句中说明金额已是抵扣后的净价，红包/券不得再减
   { content: `${PREFIX} 外卖凑单花了 66.6，红包抵了 3 块是抵完后的价`, category: "expense", amount: 66.6, currency: "CNY" },
   { content: `${PREFIX} 买水果 28.8，用了 5 元券后的价`, category: "expense", amount: 28.8, currency: "CNY" },
@@ -268,6 +269,43 @@ const CASES: EvalCase[] = [
   },
   {
     content: `${PREFIX} 零食 8 退货 -30(质量差)`,
+    category: "income",
+    amount: 22,
+    currency: "CNY",
+  },
+  // R232 P2-1（audit-r231 §2：上句 10/10 降级 idea 丢金额，定位为「金额×负数简写×
+  // 括号备注」组合触发的系统性缺口）——few-shot 回流后按全组合锁定：
+  // 金额+负数简写（无括号备注）
+  {
+    content: `${PREFIX} 零食 8 退货 -30`,
+    category: "income",
+    amount: 22,
+    currency: "CNY",
+  },
+  // 全组合无空格连写（audit-r231 §2 变体：曾判 expense 且金额丢失）
+  {
+    content: `${PREFIX} 零食8退货-30(质量差)`,
+    category: "income",
+    amount: 22,
+    currency: "CNY",
+  },
+  // 负数简写+括号备注（无正数金额行）
+  {
+    content: `${PREFIX} 退货 -30(质量差)`,
+    category: "income",
+    amount: 30,
+    currency: "CNY",
+  },
+  // 金额+括号备注（无负数简写）：正常支出不受备注影响
+  {
+    content: `${PREFIX} 零食 8(小卖部)`,
+    category: "expense",
+    amount: 8,
+    currency: "CNY",
+  },
+  // 自然语言写法对照（audit-r231 §2：本就正确，锁住不回归）
+  {
+    content: `${PREFIX} 买零食 8 元，退货退回 30 元`,
     category: "income",
     amount: 22,
     currency: "CNY",

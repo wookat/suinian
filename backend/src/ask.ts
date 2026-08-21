@@ -1655,8 +1655,11 @@ const NEGATION_GENERIC_RE =
 // 问句与召回片段中都不存在，整句剥除（宁可少说、不可编造）；全被剥空则由
 // 调用方回落诚实拒答通道。数字比对带边界（20 不匹配 2026/820），千分位与
 // 尾零归一（8,000≒8000、82.50≒82.5）。
+// 结余句式（还剩/剩余/余额/结余＋裸数字）同样是金额断言（R232 P3-1，
+// audit-r231 §4：库内无余额事实，模型用 500+100−45 推算出「还剩 555」
+// 当事实输出，无币种单位时逃过本剥除）。
 const ANSWER_AMOUNT_RE =
-  /[¥￥$€£]\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:元|块钱?|人民币|美元|美金|日元|欧元|英镑|港[币元]|韩元|rmb|cny|usd|jpy|eur|gbp|hkd|krw)/gi;
+  /[¥￥$€£]\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:元|块钱?|人民币|美元|美金|日元|欧元|英镑|港[币元]|韩元|rmb|cny|usd|jpy|eur|gbp|hkd|krw)|(?:还剩下?|剩余|余额|结余)[约为是有应该大概：:\s]*(\d[\d,]*(?:\.\d+)?)/gi;
 
 export function scrubUnsourcedAmounts(answer: string, source: string): string {
   const src = source.replace(/,/g, "");
@@ -1674,7 +1677,7 @@ export function scrubUnsourcedAmounts(answer: string, source: string): string {
     .split(/(?<=[。！？!?\n])/)
     .filter((sentence) => {
       for (const m of sentence.matchAll(ANSWER_AMOUNT_RE)) {
-        const num = m[1] ?? m[2];
+        const num = m[1] ?? m[2] ?? m[3];
         if (num && !sourced(num)) return false;
       }
       return true;
