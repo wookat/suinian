@@ -310,6 +310,45 @@ const CASES: EvalCase[] = [
     amount: 22,
     currency: "CNY",
   },
+  // R234 P2-1（audit-r233 §P2-1 生产原句：退款 3/5、退货判 idea 丢金额）——
+  // 退款×退货×换货×赔付冲减词形 few-shot 回流后全词形锁定
+  {
+    content: `${PREFIX} 咖啡 19 退款 -25(洒了)`,
+    category: "income",
+    amount: 6,
+    currency: "CNY",
+  },
+  {
+    content: `${PREFIX} 咖啡 19 退货 -25(洒了)`,
+    category: "income",
+    amount: 6,
+    currency: "CNY",
+  },
+  {
+    content: `${PREFIX} 文具 12 换货 -40(尺寸不对)`,
+    category: "income",
+    amount: 28,
+    currency: "CNY",
+  },
+  {
+    content: `${PREFIX} 快递 10 赔付 -35(丢件)`,
+    category: "income",
+    amount: 25,
+    currency: "CNY",
+  },
+  // 词形对照：audit-r233 复跑本就正确的同结构其它品类，锁住不回归
+  {
+    content: `${PREFIX} 奶茶 16 退款 -20(做错了)`,
+    category: "income",
+    amount: 4,
+    currency: "CNY",
+  },
+  {
+    content: `${PREFIX} 水果 33 退货 -50(坏了)`,
+    category: "income",
+    amount: 17,
+    currency: "CNY",
+  },
   // 方向对照：到账语义的回款台账仍是 income
   {
     content: `${PREFIX} 五月回款台账\n项目A尾款到账，5000\n项目B预付款到账，3000`,

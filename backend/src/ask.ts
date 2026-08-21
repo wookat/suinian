@@ -157,16 +157,30 @@ const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|�
 const STRIP_RES: RegExp[] = [
   /今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?/g,
   /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
-  /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|[缴交用]了?|钱/g,
+  /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|还了|还款|[缴交用]了?|钱/g,
   /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|了|吗|呢|啊|呀|哦|是|都|在|有|和|与|？|\?|，|,|。|、|\s/g,
 ];
+
+// 复合名词保护（R234 P3-3，audit-r233 §P3-3：「信用卡还了多少钱」被逐字
+// 剥成「信卡还」注入 LIKE 必零命中）：含财务动词字的常见复合名词先占位
+// 保护、剥离后还原，避免词中字被当作动词剥掉。
+const PROTECTED_COMPOUND_RE = /信用卡|花呗|日用品|公交|交通|住宿/g;
+
+/** 剥离财务/聚合/时间措辞（STRIP_RES），复合名词占位保护后再剥。 */
+function stripFinanceWording(text: string): string {
+  const kept: string[] = [];
+  let out = text.replace(PROTECTED_COMPOUND_RE, (m) => {
+    kept.push(m);
+    return String.fromCharCode(0xe000 + kept.length - 1);
+  });
+  for (const re of STRIP_RES) out = out.replace(re, "");
+  return out.replace(/[\ue000-\ue0ff]/g, (ch) => kept[ch.charCodeAt(0) - 0xe000] ?? "");
+}
 
 /** True when the question asks for an overall finance aggregate (not a specific item's price). */
 export function isFinanceAggQuestion(question: string): boolean {
   if (!FINANCE_WORD_RE.test(question) || !AGG_WORD_RE.test(question)) return false;
-  let residual = question;
-  for (const re of STRIP_RES) residual = residual.replace(re, "");
-  return residual.length < 2;
+  return stripFinanceWording(question).length < 2;
 }
 
 /**
@@ -182,7 +196,7 @@ export function isFinanceAggQuestion(question: string): boolean {
 // which ones, when), not a books-level sum. Compound questions like「买的两本
 // 书叫什么，一共花了多少钱」must reach normal recall so the notes themselves
 // answer both parts — fail-closing them hides the answer (R117 P2-1).
-const FACT_QUERY_RE = /叫什么|是什么|什么名|名字|哪几?[本个件家部条]|哪些|分别|各是|什么时候|在哪|为什么|依据/;
+const FACT_QUERY_RE = /叫什么|是什么|什么名|名字|哪几?[本个件家部条]|哪些|哪里|哪儿|分别|各是|什么时候|在哪|为什么|依据/;
 
 export function financeAggIntent(question: string): "exact" | "fail_closed" | null {
   // 「它花了多少钱」问的是某个具体事物的价格，不是全账聚合：代词剥词后残留
@@ -814,8 +828,7 @@ function subsetTopicExtract(question: string): string[] | null {
   }
   // 金额 token 不是主题词（R200，audit-r199 P2-1）：改写产物/追问里混入的
   // 「399元」这类金额残片不得注入 LIKE
-  let residual = question.replace(AMOUNT_TOKEN_RE, "");
-  for (const re of STRIP_RES) residual = residual.replace(re, "");
+  let residual = stripFinanceWording(question.replace(AMOUNT_TOKEN_RE, ""));
   // 时间限定词不属于主题（「2026年7月咖啡」→「咖啡」）：时间过滤由
   // parseTimeRange 负责，残留的年月日 token 一律剥掉
   residual = residual.replace(/\d{2,4}\s*年|\d{1,2}\s*月(?:份)?|\d{1,2}\s*[日号]|上+个?[月周]|这个?[月周]|本[月周]|最近|今年|去年|前年/g, "");
@@ -1000,6 +1013,18 @@ export function buildFinanceSubsetAnswer(
         return `${text}（${amount}）`;
       });
     md += `\n（另有 ${tagOnly.length} 笔仅标签命中「${kw}」、标题/正文不含该词的记账未计入合计${tagItems.length > 0 ? `：${tagItems.join("、")}` : ""}；如需把它们算进去，可按标签在时间流筛选后自行确认。）`;
+  }
+  // 资金往来（transfer）不计收支合计，但直接命中时单列展示（R234 P3-3，
+  // audit-r233：「信用卡还了多少钱」命中的还款笔记是 transfer，隐掉会答成
+  // 「0 笔支出」答非所问）。
+  const transfers = rows.filter((n) => n.category === "transfer" && !n.is_sensitive && subsetDirectHit(n, terms)).slice(0, 5);
+  if (transfers.length > 0) {
+    const tItems = transfers.map((n) => {
+      const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
+      const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+      return `${text}（${amount}，${formatShanghai(n.created_at).slice(0, 10)}）`;
+    });
+    md += `\n（另有 ${transfers.length} 笔资金往来/还款类记录（transfer，不计收支合计）：${tItems.join("、")}。）`;
   }
   md += `\n\n以上为数据库精确统计（关键词匹配口径，金额口径与周报/月报一致，不含已删除笔记${phrase ? "；时间范围按笔记记录时间划定，不按正文里写的时间" : ""}）。如果你的记录用了别的说法，换个关键词再问试试。`;
   return md;
@@ -1660,8 +1685,12 @@ const NEGATION_GENERIC_RE =
 // 当事实输出，无币种单位时逃过本剥除）；算式形态（「还剩 500 - 45 = 455」，
 // R232 生产复测：结余词与结果数字间隔着算式，不命中裸数字分支）取
 // 等号后的结果数校验。
+// 通用算式形态（R234 P2-2，audit-r233 §P2-2：「所以花费了 60 * 2 = 120」——
+// 无结余词、无币种单位，逃过上述全部分支）：答案里凡出现「数字 运算符 数字
+// … = 数字」的加减乘除算式，等号后的结果数即模型自行心算的产物，一律取
+// 结果数做无来源校验，与结余算式共用同一剥除管道。
 const ANSWER_AMOUNT_RE =
-  /[¥￥$€£]\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:元|块钱?|人民币|美元|美金|日元|欧元|英镑|港[币元]|韩元|rmb|cny|usd|jpy|eur|gbp|hkd|krw)|(?:还剩下?|剩余|余额|结余)[^。！？!?\n]{0,40}?[=＝]\s*(\d[\d,]*(?:\.\d+)?)|(?:还剩下?|剩余|余额|结余)[约为是有应该大概：:\s]*(\d[\d,]*(?:\.\d+)?)/gi;
+  /[¥￥$€£]\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:元|块钱?|人民币|美元|美金|日元|欧元|英镑|港[币元]|韩元|rmb|cny|usd|jpy|eur|gbp|hkd|krw)|(?:还剩下?|剩余|余额|结余)[^。！？!?\n]{0,40}?[=＝]\s*(\d[\d,]*(?:\.\d+)?)|(?:还剩下?|剩余|余额|结余)[约为是有应该大概：:\s]*(\d[\d,]*(?:\.\d+)?)|\d[\d,]*(?:\.\d+)?(?:\s*[+＋\-−–*×✕/÷]\s*\d[\d,]*(?:\.\d+)?)+\s*[=＝]\s*(\d[\d,]*(?:\.\d+)?)/gi;
 
 export function scrubUnsourcedAmounts(answer: string, source: string): string {
   const src = source.replace(/,/g, "");
@@ -1679,7 +1708,7 @@ export function scrubUnsourcedAmounts(answer: string, source: string): string {
     .split(/(?<=[。！？!?\n])/)
     .filter((sentence) => {
       for (const m of sentence.matchAll(ANSWER_AMOUNT_RE)) {
-        const num = m[1] ?? m[2] ?? m[3] ?? m[4];
+        const num = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5];
         if (num && !sourced(num)) return false;
       }
       return true;
