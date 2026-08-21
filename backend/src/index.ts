@@ -1308,6 +1308,9 @@ async function createNote(
       await degradeTriageFailure(c.env, id, TRIAGE_PARSE_MAX_ATTEMPTS, true);
     }
     // still null = AI unavailable: keep category NULL so the sweeps retry later
+    // （R234 P3-5 可观测性：异步重试耗尽落 NULL 时留下归因日志——超时/提供方
+    // 失败与解析失败在 wrangler tail 里可直接区分，不再"归因未验证"）
+    if (!triage) console.error(`triage incomplete note=${id} failure=${failure ?? "unknown"} retried=${retry}; awaiting cron/kick resweep`);
     if (triage) await applyTriage(c.env, id, triage, content);
     return triage;
   };
@@ -2886,8 +2889,8 @@ export function needsBilingualKeywordExtraction(question: string): boolean {
   return !CJK_RE.test(question) && /[a-zA-Z]/.test(question);
 }
 
-const ASK_KEYWORDS_SYSTEM =
-  "你是检索关键词抽取器。从问题中抽取 2-6 个最能定位相关笔记的关键词（具体的名词、动词或专有名词，每个 2-6 个字），用空格分隔输出，不要任何标点、解释或前缀。问题里的具体数字/金额/价格/型号/电话等细节词（如「8.5元」「iPhone 15」）也是关键词，要保留其核心词（如「报价」「8.5」）。忽略疑问词（什么/哪个/哪条/怎么/是啥/what/which/how）、时间词（今天/最近几天/上个月/去年/recently/last week）、代词、语气助词，以及「笔记/记录/记的/存的」这类指代载体词（它们几乎出现在每条笔记里，不能定位）。若问题含英文词，除英文关键词外还要同时输出其中文对应词（因为笔记多为中文）。关键词有常见同义词、别称或另一种语言写法时，要一并输出（笔记原文可能用的是别的说法）：如「苹果电脑」也输出「MacBook」、「日语」也输出「日本語」、「书摘」也输出「摘录 书名」。例如「最近几天收藏的那个咖啡视频讲什么」输出「咖啡 视频 收藏」；「What did I note about the coffee shop idea」输出「coffee shop 咖啡馆 点子」。";
+export const ASK_KEYWORDS_SYSTEM =
+  "你是检索关键词抽取器。从问题中抽取 2-6 个最能定位相关笔记的关键词（具体的名词、动词或专有名词，每个 2-6 个字），用空格分隔输出，不要任何标点、解释或前缀。问题里的具体数字/金额/价格/型号/电话等细节词（如「8.5元」「iPhone 15」）也是关键词，要保留其核心词（如「报价」「8.5」）。忽略疑问词（什么/哪个/哪条/怎么/是啥/what/which/how）、时间词（今天/最近几天/上个月/去年/recently/last week）、代词、语气助词，以及「笔记/记录/记的/存的」这类指代载体词（它们几乎出现在每条笔记里，不能定位）。若问题含英文词，除英文关键词外还要同时输出其中文对应词（因为笔记多为中文）。复合名词必须完整保留、绝不能拆字或缩写（「信用卡」绝不能拆成「信卡」、「火车票」绝不能拆成「火票」）。关键词有常见同义词、别称或另一种语言写法时，要一并输出（笔记原文可能用的是别的说法）：如「苹果电脑」也输出「MacBook」、「日语」也输出「日本語」、「书摘」也输出「摘录 书名」、「住宿」也输出「民宿 酒店」、「信用卡还了多少钱」输出「信用卡 还款 账单」。例如「最近几天收藏的那个咖啡视频讲什么」输出「咖啡 视频 收藏」；「What did I note about the coffee shop idea」输出「coffee shop 咖啡馆 点子」。";
 
 /**
  * LLM keyword extraction for unsegmented CJK questions (query-rewrite stage):

@@ -1660,8 +1660,12 @@ const NEGATION_GENERIC_RE =
 // 当事实输出，无币种单位时逃过本剥除）；算式形态（「还剩 500 - 45 = 455」，
 // R232 生产复测：结余词与结果数字间隔着算式，不命中裸数字分支）取
 // 等号后的结果数校验。
+// 通用算式形态（R234 P2-2，audit-r233 §P2-2：「所以花费了 60 * 2 = 120」——
+// 无结余词、无币种单位，逃过上述全部分支）：答案里凡出现「数字 运算符 数字
+// … = 数字」的加减乘除算式，等号后的结果数即模型自行心算的产物，一律取
+// 结果数做无来源校验，与结余算式共用同一剥除管道。
 const ANSWER_AMOUNT_RE =
-  /[¥￥$€£]\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:元|块钱?|人民币|美元|美金|日元|欧元|英镑|港[币元]|韩元|rmb|cny|usd|jpy|eur|gbp|hkd|krw)|(?:还剩下?|剩余|余额|结余)[^。！？!?\n]{0,40}?[=＝]\s*(\d[\d,]*(?:\.\d+)?)|(?:还剩下?|剩余|余额|结余)[约为是有应该大概：:\s]*(\d[\d,]*(?:\.\d+)?)/gi;
+  /[¥￥$€£]\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:元|块钱?|人民币|美元|美金|日元|欧元|英镑|港[币元]|韩元|rmb|cny|usd|jpy|eur|gbp|hkd|krw)|(?:还剩下?|剩余|余额|结余)[^。！？!?\n]{0,40}?[=＝]\s*(\d[\d,]*(?:\.\d+)?)|(?:还剩下?|剩余|余额|结余)[约为是有应该大概：:\s]*(\d[\d,]*(?:\.\d+)?)|\d[\d,]*(?:\.\d+)?(?:\s*[+＋\-−–*×✕/÷]\s*\d[\d,]*(?:\.\d+)?)+\s*[=＝]\s*(\d[\d,]*(?:\.\d+)?)/gi;
 
 export function scrubUnsourcedAmounts(answer: string, source: string): string {
   const src = source.replace(/,/g, "");
@@ -1679,7 +1683,7 @@ export function scrubUnsourcedAmounts(answer: string, source: string): string {
     .split(/(?<=[。！？!?\n])/)
     .filter((sentence) => {
       for (const m of sentence.matchAll(ANSWER_AMOUNT_RE)) {
-        const num = m[1] ?? m[2] ?? m[3] ?? m[4];
+        const num = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5];
         if (num && !sourced(num)) return false;
       }
       return true;
