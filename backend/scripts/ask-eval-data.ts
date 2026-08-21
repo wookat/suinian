@@ -1011,4 +1011,24 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAnswerContains: ["门票", "120"],
     forbidAnswerContains: ["224"],
   },
+
+  // —— R236 P2-3（audit-r235 §5：Top-3 支出排序完全错误）：Top-N 并入与
+  // 单极值/序数同一 ORDER BY amount 确定性管道，按名次列出，绝不交 LLM
+  // 对截断召回猜排序。单笔支出榜：549 > 399 > 260（台账合计行不参与）。
+  {
+    id: "q148",
+    category: "财务极值",
+    question: "支出最多的三笔是什么",
+    expectAll: ["nz20", "exp1", "exp2"],
+    expectAnswerContains: ["549", "399", "260", "数据库精确查询"],
+  },
+  {
+    id: "q149",
+    category: "财务极值",
+    question: "最贵的前两笔支出是哪两笔",
+    expectAll: ["nz20", "exp1"],
+    expectAnswerContains: ["549", "399", "数据库精确查询"],
+    forbidAnswerContains: ["260"],
+    holdout: true,
+  },
 ];

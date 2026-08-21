@@ -1078,7 +1078,11 @@ app.delete("/api/auth/me", async (c) => {
       vec.deleteByIds((ids.results ?? []).map((r) => r.id)).catch((e) => console.error("vectorize delete failed", e))
     );
   }
+  // 级联删除耗时打点（R236 P2-2，audit-r235 §5：注销偶发 ~60s 超时）：
+  // 服务端真实耗时进日志，后续再报超时可直接区分是 D1 级联慢还是网络层慢
+  const t0 = Date.now();
   await deleteUserData(c.env, userId);
+  console.log(`account delete cascade: user=${userId} ${Date.now() - t0}ms`);
   return c.json({ ok: true });
 });
 
@@ -3129,6 +3133,9 @@ app.post("/api/ask", async (c) => {
     // 每币种按序取第 rank 名（R182 P1-2：「第二贵/排名第二/倒数第二」与极值
     // 同一确定性架构，rank=1 即原极值行为）；某币种不足 rank 笔时如实说明
     const xRank = finExtreme.rank ?? 1;
+    // Top-N（R236 P2-3）：与单极值/序数同一 ORDER BY 管道，每币种从第 rank 名
+    // 起连取 count 条；不足 count 条时列实有条数并如实说明
+    const xCount = finExtreme.count ?? 1;
     const byCurrency = new Map<string, NoteRow[]>();
     for (const n of xSingles) {
       const cur = n.currency || "CNY";
@@ -3139,8 +3146,14 @@ app.post("/api/ask", async (c) => {
     const xRows: NoteRow[] = [];
     const shortCurrencies: { currency: string; count: number }[] = [];
     for (const [cur, list] of byCurrency) {
-      if (list.length >= xRank) xRows.push(list[xRank - 1]);
-      else shortCurrencies.push({ currency: cur, count: list.length });
+      if (xCount > 1) {
+        xRows.push(...list.slice(xRank - 1, xRank - 1 + xCount));
+        if (list.length < xRank - 1 + xCount) shortCurrencies.push({ currency: cur, count: list.length });
+      } else if (list.length >= xRank) {
+        xRows.push(list[xRank - 1]);
+      } else {
+        shortCurrencies.push({ currency: cur, count: list.length });
+      }
     }
     // 台账行级极值（R198，audit-r197 §3 第 5 点）：主题词命中的只有台账
     // 聚合笔记、无单笔可比（「餐饮台账里最贵的一项」）时，用台账明细行
@@ -4023,7 +4036,11 @@ app.post("/api/ask", async (c) => {
   }
   // 无来源金额后校验（R200 生产 QA 实测）：肯定句编造金额整句剥除；全被
   // 剥空则按拒答处理，走下方诚实拒答通道给建议，绝不把编造金额递给用户
-  const askScrubSource = `${question}\n${recallQuestion}\n${context}\n${graphTriples.join("\n")}`;
+  // 副文本只取标题/正文，不含 context 的 [n]/id/时间戳元数据头（R236 P3-6，
+  // audit-r235 §1.2：「还剩 10 - 3 = 7 节」的结果数 7 撞上引文角标/时间戳里的
+  // 偶发数字被误判为有源，逃过禁推算剥除）
+  const scrubBodies = notes.map((n) => `${n.title ?? ""}\n${n.content}`).join("\n");
+  const askScrubSource = `${question}\n${recallQuestion}\n${scrubBodies}\n${graphTriples.join("\n")}`;
   if (answer2) {
     const amtScrubbed = scrubUnsourcedAmounts(answer2, askScrubSource);
     if (amtScrubbed !== answer2) console.log("ask: unsourced amount sentence scrubbed");
