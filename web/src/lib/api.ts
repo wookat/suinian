@@ -1193,8 +1193,18 @@ export async function rotateToken(): Promise<string> {
   return res.api_token
 }
 
+/** 注销是幂等删除（服务端级联实测百毫秒级），挂满 60s 的只会是连接级悬挂：
+ * 与幂等 GET 同口径收紧到 20s 并允许超时重试一次（R236 P2-2）。 */
 export async function deleteAccount(): Promise<void> {
-  await realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" })
+  try {
+    await realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" }, GET_TIMEOUT_MS)
+  } catch (e) {
+    if (e instanceof NetworkError && e.timeout) {
+      await realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" }, GET_TIMEOUT_MS)
+      return
+    }
+    throw e
+  }
 }
 
 /** 探测账号是否已被删除（token 失效 = 已删）；探测本身失败时保守返回 false。 */
