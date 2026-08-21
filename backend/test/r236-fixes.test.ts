@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildTriagePrompt } from "../src/triage";
+import { buildTriagePrompt, fixFinanceDirection } from "../src/triage";
 import {
   parseTimeRange,
   financeExtremeIntent,
@@ -31,6 +31,23 @@ describe("R236 P2-1 compensation direction few-shot in triage prompt", () => {
   });
   it("keeps the R234 ledger-reduction 赔付 judgement (不回归)", () => {
     expect(prompt).toContain("快递 10 赔付 -35(丢件)」→ income，amount=25");
+  });
+});
+
+// 真实根因：fixFinanceDirection 词面兜底把「赔付了」误当「付了」支出证据，
+// 将模型正确的 income 确定性翻成 expense——「赔付」必须排除出支出词面
+describe("R236 P2-1 fixFinanceDirection must not flip 赔付 income", () => {
+  const base = { category: "income" as const, tags: [], title: null, is_sensitive: false, todo_due: null, amount: 15, currency: "CNY", merchant: null, is_question: false };
+  it("keeps model income for isolated 赔付了 (no flip to expense)", () => {
+    expect(fixFinanceDirection("商家超时赔付了 15 元", base).category).toBe("income");
+    expect(fixFinanceDirection("赔付了 15 元", base).category).toBe("income");
+  });
+  it("keeps model expense when user compensates someone", () => {
+    const exp = { ...base, category: "expense" as const, amount: 60 };
+    expect(fixFinanceDirection("打碎了店里的杯子，赔付了店家 60 元", exp).category).toBe("expense");
+  });
+  it("still flips genuine 付了 expense evidence (不回归)", () => {
+    expect(fixFinanceDirection("付了这个月房租 2600", { ...base, amount: 2600 }).category).toBe("expense");
   });
 });
 
