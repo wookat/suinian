@@ -53,6 +53,12 @@ describe("AA/advance reimburse whole-sentence window (R224 P2-2)", () => {
     expect(fixAaReimburse("垫付快递费 23，同事还没还我", t("transfer")).category).toBe("transfer");
   });
 
+  it("flips expense→income when model records the reimbursement sentence as expense (聚餐我先付的，AA 收回)", () => {
+    expect(fixAaReimburse("公司团建聚餐我先付的，AA 收回 240", t("expense", { amount: 240 })).category).toBe("income");
+    // 无回款动词的纯垫付支出不受影响
+    expect(fixAaReimburse("帮同事垫付午饭 30", t("expense", { amount: 30 })).category).toBe("expense");
+  });
+
   it("pending guard covers shared reminder cue (待办/记得)", () => {
     expect(fixAaReimburse("AA 餐费 300，记得让他还我", t("transfer")).category).toBe("transfer");
     expect(fixAaReimburse("垫付了 200，记在待办里让他还我", t("transfer")).category).toBe("transfer");
@@ -142,6 +148,11 @@ describe("kinship alias in finance subset degrade (R224 P3-1)", () => {
   it("expands 妹妹→我妹 (and reverse)", () => {
     expect(degradeFinanceSubsetTerms(["妹妹"])).toEqual(["妹妹", "我妹"]);
     expect(degradeFinanceSubsetTerms(["我妹"])).toEqual(["我妹", "妹妹"]);
+  });
+
+  it("expands kinship embedded in a longer topic phrase (审计原句路径)", () => {
+    expect(degradeFinanceSubsetTerms(["妹妹买生日礼物"])).toEqual(["妹妹买生日礼物", "我妹买生日礼物"]);
+    expect(degradeFinanceSubsetTerms(["我妹妹的礼物"])?.some((x) => x.includes("我妹"))).toBe(true);
   });
 
   it("keeps non-kinship terms unchanged (no degrade → null)", () => {

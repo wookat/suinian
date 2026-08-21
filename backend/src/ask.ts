@@ -861,10 +861,13 @@ const KINSHIP_ALIASES: [string, string][] = [
   ["妈妈", "我妈"],
 ];
 
+// 长 topic 短语内嵌称谓同样替换（R224 生产回归：关键词是「妹妹买生日礼物」
+// 而非单独「妹妹」，原文「我妹」仍不命中——只做等值映射对审计原句无效）。
 function kinshipAlias(term: string): string | null {
   for (const [long, short] of KINSHIP_ALIASES) {
-    if (term === long) return short;
-    if (term === short) return long;
+    if (term.includes("我" + long)) return term.replace("我" + long, short);
+    if (term.includes(long)) return term.replace(long, short);
+    if (term.includes(short)) return term.replace(short, long);
   }
   return null;
 }
@@ -876,7 +879,7 @@ export function degradeFinanceSubsetTerms(terms: string[]): string[] | null {
     const t = s.trim();
     if (t.length >= 2 && t.length <= 8 && !TOPIC_ENUM_GENERIC_RE.test(t) && !out.includes(t)) out.push(t);
     const alias = kinshipAlias(s.trim());
-    if (alias && !out.includes(alias)) out.push(alias);
+    if (alias && alias.length >= 2 && alias.length <= 8 && !out.includes(alias)) out.push(alias);
   };
   for (const t of terms) {
     const stripped = t.replace(SUBSET_TERM_LEAD_RE, "").replace(SUBSET_TERM_TAIL_RE, "");

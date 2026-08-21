@@ -133,6 +133,7 @@ export function buildTriagePrompt(
   - 「上月报销的差旅费 800 到账了」→ income
   - 「学生给我交了补课费 300」→ income（别人交钱给我）
   - 「房客交了下季度房租 9000」→ income（房客把房租交给用户＝收租进账，他人「交了」不是用户花钱）
+  - 「聚餐我先付的，AA 收回 240」→ income，amount=240（垫付的钱已收回＝钱进来；「我先付的」是背景不是本次方向）
   资金平移判例（transfer，不是 expense/income）：
   - 「微信零钱提现 2000 到银行卡」→ transfer，amount=2000（自己账户间平移）
   - 「转了 5000 到余额宝」→ transfer（不是支出）
@@ -1124,10 +1125,14 @@ const PAST_ADVANCE_RE = /(?:上次|上回|之前|先前|早前|昨天|前天|上
 const PAST_ADVANCE_REPAY_RE = /收回|收到|回来了|到账|转(?:给)?我|打给我|回我|还(?:给)?我/;
 const REPAY_PENDING_RE = new RegExp(`还没|没还|未还|欠着|${REMINDER_CUE_SRC}`);
 
+// AA/垫付回款句也可能被模型判成 expense（R224 生产回归：「聚餐我先付的，
+// AA 收回 240」——「我先付的」是背景叙述，本次记录的是收回的钱），词面
+// AA/垫付＋回款动词同现时同样收口为 income。
 export function fixAaReimburse(content: string, triage: TriageResult): TriageResult {
-  if (triage.category !== "transfer") return triage;
+  if (triage.category !== "transfer" && triage.category !== "expense") return triage;
   if (REPAY_PENDING_RE.test(content)) return triage;
   if (AA_REIMBURSE_RE.test(content)) return { ...triage, category: "income" };
+  if (triage.category === "expense") return triage;
   if (PAST_ADVANCE_RE.test(content) && PAST_ADVANCE_REPAY_RE.test(content)) {
     return { ...triage, category: "income" };
   }
