@@ -336,6 +336,41 @@ const CASES: EvalCase[] = [
     amount: 25,
     currency: "CNY",
   },
+  // R236 P2-1（audit-r235 §5 生产原句：孤立「赔付了 15 元」判 expense）——
+  // 赔付方向双语境：别人赔我=income / 我赔别人=expense
+  {
+    content: `${PREFIX} 商家超时赔付了 15 元`,
+    category: "income",
+    amount: 15,
+    currency: "CNY",
+  },
+  {
+    content: `${PREFIX} 打碎了店里的杯子，赔付了店家 60 元`,
+    category: "expense",
+    amount: 60,
+    currency: "CNY",
+  },
+  // R236 P3-1（audit-r235 §6：改签差价退回判 transfer）
+  {
+    content: `${PREFIX} 火车票改签差价退回 37.5`,
+    category: "income",
+    amount: 37.5,
+    currency: "CNY",
+  },
+  // R236 P3-3（audit-r235 §6：中文数字语音金额未提取）
+  {
+    content: `${PREFIX} 买菜花了三十八块五`,
+    category: "expense",
+    amount: 38.5,
+    currency: "CNY",
+  },
+  // R236 P3-2（audit-r235 §6：发票 OCR 文本判 data、amount=null）
+  {
+    content: `${PREFIX} 家电发票 洗衣机一台 金額：2199 元`,
+    category: "expense",
+    amount: 2199,
+    currency: "CNY",
+  },
   // 词形对照：audit-r233 复跑本就正确的同结构其它品类，锁住不回归
   {
     content: `${PREFIX} 奶茶 16 退款 -20(做错了)`,
