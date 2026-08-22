@@ -75,33 +75,54 @@ describe("分拣金额不按用量换算 (R202 P3-2)", () => {
   });
 });
 
-/** 最小 fake D1：只覆盖 checkRateLimit 的 auth_rate_limits UPSERT。 */
+/** 最小 fake D1：覆盖 checkRateLimit 的 auth_rate_limits UPSERT + R246 落库 batch。 */
 function rateLimitOnlyDb() {
   const counts = new Map<string, number>();
-  return {
-    prepare(sql: string) {
-      return {
-        bind(...args: unknown[]) {
-          return {
-            async first() {
-              if (!sql.includes("auth_rate_limits")) return null;
-              const key = String(args[0]);
-              const next = (counts.get(key) ?? 0) + 1;
-              counts.set(key, next);
-              return { count: next };
-            },
-            async run() {
-              return { meta: { changes: 0 } };
-            },
-            async all() {
-              return { results: [] };
-            },
-          };
-        },
-      };
+  const inserts: unknown[][] = [];
+  const stmt = (sql: string, args: unknown[]) => ({
+    sql,
+    args,
+    bind(...more: unknown[]) {
+      return stmt(sql, more);
     },
-  } as unknown as D1Database;
+    async first() {
+      if (!sql.includes("auth_rate_limits")) return null;
+      const key = String(args[0]);
+      const next = (counts.get(key) ?? 0) + 1;
+      counts.set(key, next);
+      return { count: next };
+    },
+    async run() {
+      return { meta: { changes: 0 } };
+    },
+    async all() {
+      return { results: [] };
+    },
+  });
+  const db = {
+    inserts,
+    prepare(sql: string) {
+      return stmt(sql, []);
+    },
+    async batch(stmts: { sql: string; args: unknown[] }[]) {
+      for (const s of stmts) if (s.sql.includes("INSERT INTO sw_error_reports")) inserts.push(s.args);
+      return stmts.map(() => ({ meta: { changes: 1 } }));
+    },
+  };
+  return db as unknown as D1Database & { inserts: unknown[][] };
 }
+
+const fakeExecCtx = () => {
+  const tasks: Promise<unknown>[] = [];
+  return {
+    tasks,
+    waitUntil(p: Promise<unknown>) {
+      tasks.push(p);
+    },
+    passThroughOnException() {},
+    props: {},
+  } as unknown as ExecutionContext & { tasks: Promise<unknown>[] };
+};
 
 describe("SW 注册失败上报 beacon (R202, audit-r201 §1)", () => {
   const env = { DB: rateLimitOnlyDb() };
@@ -113,13 +134,13 @@ describe("SW 注册失败上报 beacon (R202, audit-r201 §1)", () => {
     });
 
   it("无需认证即可上报，返回 ok", async () => {
-    const res = await app.request(post({ name: "TypeError", message: "Failed to fetch", retry: 0 }), undefined, env);
+    const res = await app.request(post({ name: "TypeError", message: "Failed to fetch", retry: 0 }), undefined, env, fakeExecCtx());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
   });
 
   it("畸形 body 也不报错（上报是 best-effort）", async () => {
-    const res = await app.request(post("not-an-object"), undefined, env);
+    const res = await app.request(post("not-an-object"), undefined, env, fakeExecCtx());
     expect(res.status).toBe(200);
   });
 
@@ -127,8 +148,33 @@ describe("SW 注册失败上报 beacon (R202, audit-r201 §1)", () => {
     const freshEnv = { DB: rateLimitOnlyDb() };
     let last = 0;
     for (let i = 0; i < 6; i++) {
-      last = (await app.request(post({ name: "e", message: "m" }), undefined, freshEnv)).status;
+      last = (await app.request(post({ name: "e", message: "m" }), undefined, freshEnv, fakeExecCtx())).status;
     }
     expect(last).toBe(429);
+  });
+
+  // R246 F-7（audit-r245）：同字段落 D1，供近 7 天程序化聚合
+  it("上报同时把清洗后的字段落入 sw_error_reports", async () => {
+    const db = rateLimitOnlyDb();
+    const ctx = fakeExecCtx();
+    const res = await app.request(post({ name: "TypeError", message: "Failed to fetch", retry: 2 }), undefined, { DB: db }, ctx);
+    expect(res.status).toBe(200);
+    await Promise.all(ctx.tasks);
+    expect(db.inserts).toEqual([["TypeError", "Failed to fetch", 2, ""]]);
+  });
+});
+
+describe("SW 错误 7 天聚合 admin 端点 (R246 F-7)", () => {
+  it("无 ADMIN_TOKEN 配置时 403，token 不对时 401", async () => {
+    const req = new Request("http://x/api/admin/sw-error-stats");
+    expect((await app.request(req, undefined, { DB: rateLimitOnlyDb() })).status).toBe(403);
+    const bad = new Request("http://x/api/admin/sw-error-stats", { headers: { authorization: "Bearer nope" } });
+    expect((await app.request(bad, undefined, { DB: rateLimitOnlyDb(), ADMIN_TOKEN: "t" })).status).toBe(401);
+  });
+  it("token 正确时返回 7 天分组聚合", async () => {
+    const req = new Request("http://x/api/admin/sw-error-stats", { headers: { authorization: "Bearer t" } });
+    const res = await app.request(req, undefined, { DB: rateLimitOnlyDb(), ADMIN_TOKEN: "t" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ window_days: 7, groups: [] });
   });
 });

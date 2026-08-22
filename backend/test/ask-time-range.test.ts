@@ -71,6 +71,88 @@ describe("parseTimeRange", () => {
     expect(r.phrase).toBe("上个月");
     expect(parseTimeRange("半年前的事", NOW)).toBeNull();
   });
+
+  // R246 F-5（audit-r245）：季度窗
+  it("parses relative quarters 上个季度 / 本季度 / 上一季度", () => {
+    // NOW is 2026-08-08 → Q3 2026; 上个季度 = Q2 2026
+    const prev = parseTimeRange("上个季度我看了什么电影", NOW)!;
+    expect(prev.start).toBe("2026-03-31 16:00:00"); // 2026-04-01 00:00 +08:00
+    expect(prev.end).toBe("2026-06-30 16:00:00"); // 2026-07-01 00:00 +08:00
+    expect(prev.phrase).toBe("上个季度");
+    const prev2 = parseTimeRange("上一季度的支出", NOW)!;
+    expect(prev2.start).toBe(prev.start);
+    const cur = parseTimeRange("本季度记了什么", NOW)!;
+    expect(cur.start).toBe("2026-06-30 16:00:00");
+    expect(cur.end).toBeNull();
+  });
+  it("parses 上个季度 across a year boundary", () => {
+    // 2026-02-10 is Q1 → 上个季度 = Q4 2025
+    const r = parseTimeRange("上个季度的账单", new Date("2026-02-10T07:00:00Z"))!;
+    expect(r.start).toBe("2025-09-30 16:00:00");
+    expect(r.end).toBe("2025-12-31 16:00:00");
+  });
+  it("parses absolute quarters 第三季度 / 一季度 / Q2, future quarter falls to last year", () => {
+    const q3 = parseTimeRange("第三季度花了多少", NOW)!;
+    expect(q3.start).toBe("2026-06-30 16:00:00");
+    expect(q3.end).toBe("2026-09-30 16:00:00");
+    const q1 = parseTimeRange("一季度的记录", NOW)!;
+    expect(q1.start).toBe("2025-12-31 16:00:00");
+    const q2en = parseTimeRange("Q2 花了多少钱", NOW)!;
+    expect(q2en.start).toBe("2026-03-31 16:00:00");
+    // Q4 尚未到 → 去年 Q4（与裸「X月」同口径）
+    const q4 = parseTimeRange("第四季度去哪玩了", NOW)!;
+    expect(q4.start).toBe("2025-09-30 16:00:00");
+    expect(q4.end).toBe("2025-12-31 16:00:00");
+    const lyq2 = parseTimeRange("去年第二季度的支出", NOW)!;
+    expect(lyq2.start).toBe("2025-03-31 16:00:00");
+    expect(lyq2.end).toBe("2025-06-30 16:00:00");
+  });
+  it("parses 上半年 / 下半年 / 去年下半年 calendar halves", () => {
+    const h1 = parseTimeRange("上半年一共花了多少", NOW)!;
+    expect(h1.start).toBe("2025-12-31 16:00:00");
+    expect(h1.end).toBe("2026-06-30 16:00:00");
+    const h2 = parseTimeRange("下半年的计划", NOW)!; // now is Aug → this year's H2
+    expect(h2.start).toBe("2026-06-30 16:00:00");
+    expect(h2.end).toBe("2026-12-31 16:00:00");
+    const lyH2 = parseTimeRange("去年下半年去了哪些城市", NOW)!;
+    expect(lyH2.start).toBe("2025-06-30 16:00:00");
+    expect(lyH2.end).toBe("2025-12-31 16:00:00");
+    // 上半年问「下半年」指去年下半年
+    const early = parseTimeRange("下半年的开销", new Date("2026-03-10T07:00:00Z"))!;
+    expect(early.start).toBe("2025-06-30 16:00:00");
+    expect(early.end).toBe("2025-12-31 16:00:00");
+  });
+
+  // R246 F-6（audit-r245）：「今年X月」不再被宽泛「今年」吞掉
+  it("parses 今年X月 / 去年X月 as that specific month", () => {
+    const feb = parseTimeRange("今年2月我去了哪里", NOW)!;
+    expect(feb.start).toBe("2026-01-31 16:00:00");
+    expect(feb.end).toBe("2026-02-28 16:00:00");
+    expect(feb.phrase).toContain("2月");
+    const june = parseTimeRange("今年六月公司团建去了哪里", NOW)!;
+    expect(june.start).toBe("2026-05-31 16:00:00");
+    expect(june.end).toBe("2026-06-30 16:00:00");
+    const lyNov = parseTimeRange("去年11月的支出", NOW)!;
+    expect(lyNov.start).toBe("2025-10-31 16:00:00");
+    expect(lyNov.end).toBe("2025-11-30 16:00:00");
+  });
+  it("does not let 一共/合计 after 今年X月 break the month window (R246 prod QA)", () => {
+    const r = parseTimeRange("今年8月一共花了多少钱", NOW)!;
+    expect(r.phrase).toBe("今年8月");
+    expect(r.start).toBe("2026-07-31 16:00:00");
+    expect(r.end).toBe("2026-08-31 16:00:00");
+    const cjk = parseTimeRange("今年八月一共花了多少", NOW)!;
+    expect(cjk.start).toBe("2026-07-31 16:00:00");
+  });
+  it("keeps 今年8月10号 (explicit day) out of the year-month branch", () => {
+    const r = parseTimeRange("今年8月10号买了什么", NOW)!;
+    // 不误窄化成整月窗：维持现状（整年窗或后续日期分支）
+    expect(r.phrase).not.toBe("今年8月");
+  });
+  it("still parses bare 今年 / 去年 as whole years", () => {
+    expect(parseTimeRange("今年记了多少条", NOW)!.phrase).toBe("今年");
+    expect(parseTimeRange("去年的总结", NOW)!.phrase).toBe("去年");
+  });
 });
 
 describe("inTimeRange", () => {

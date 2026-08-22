@@ -52,7 +52,8 @@ export interface TimeRange {
 
 /**
  * Parse an explicit time scope out of a (rewritten) question: 今天/昨天/前天、
- * 这几天、最近N天/周/个月、本周/上周、本月/上个月、N个月前、去年/今年、X月.
+ * 这几天、最近N天/周/个月、本周/上周、本月/上个月、N个月前、季度（上/本/下/
+ * 第N季度/QN）、上下半年、去年/今年、今年X月、X月.
  * Returns null when the question has no recognizable time phrase — recall is
  * then unrestricted. Dates use Asia/Shanghai day boundaries, output bounds are
  * the UTC strings D1 stores in created_at.
@@ -108,6 +109,71 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
         start: toUtcSql(shanghaiMidnight(now, -(center + 20))),
         end: toUtcSql(shanghaiMidnight(now, -(center - 20))),
         phrase: m[0],
+      };
+    }
+  }
+
+  // 季度窗（R246 F-5，audit-r245）：自然季度日历窗，与月/周/年同一管道。
+  // 相对问法（上/本/下季度）先于绝对问法（第N季度/QN），否则「上一季度」
+  // 会被「一季度」抢走；绝对季度缺省今年、未来季度取去年（与裸「X月」同口径）。
+  const quarterRange = (y: number, qi: number, phrase: string): TimeRange => ({
+    start: toUtcSql(new Date(Date.UTC(y, qi * 3, 1) - SH_OFFSET_MS)),
+    end: toUtcSql(new Date(Date.UTC(y, qi * 3 + 3, 1) - SH_OFFSET_MS)),
+    phrase,
+  });
+  if (/季度|[Qq][1-4]/.test(q)) {
+    const sh = new Date(now.getTime() + SH_OFFSET_MS);
+    const curY = sh.getUTCFullYear();
+    const curQ = Math.floor(sh.getUTCMonth() / 3);
+    const rel = (offset: number, phrase: string): TimeRange => {
+      const total = curQ + offset;
+      return quarterRange(curY + Math.floor(total / 4), ((total % 4) + 4) % 4, phrase);
+    };
+    if (/上上个?季度/.test(q)) return rel(-2, "上上个季度");
+    if (/上一?个?季度/.test(q)) return rel(-1, "上个季度");
+    if (/下一?个?季度/.test(q)) return rel(1, "下个季度");
+    if (/本季度|这个?季度|当前季度|这一?季度/.test(q)) {
+      return { start: quarterRange(curY, curQ, "本季度").start, end: null, phrase: "本季度" };
+    }
+    if ((m = q.match(/(今年|去年)?\s*(?:第\s*)?([一二三四1-4])\s*季度/)) || (m = q.match(/(今年|去年)?\s*[Qq]([1-4])/))) {
+      const n = parseNum(m[2]);
+      if (n !== null && n >= 1 && n <= 4) {
+        const qi = n - 1;
+        const y = m[1] === "去年" ? curY - 1 : m[1] === "今年" ? curY : qi > curQ ? curY - 1 : curY;
+        return quarterRange(y, qi, m[0].trim());
+      }
+    }
+  }
+
+  // 半年窗（R246 F-5）：上/下半年按日历半年；「半年前」不在此列（无上下前后
+  // 前缀，由「过去半年」滚动窗与 N月前模糊窗覆盖）。
+  if ((m = q.match(/(今年|去年)?\s*([上前下后])半年/))) {
+    const sh = new Date(now.getTime() + SH_OFFSET_MS);
+    const firstHalf = m[2] === "上" || m[2] === "前";
+    let y = m[1] === "去年" ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear();
+    // 裸「下半年」在上半年问出时指去年下半年（未来窗与裸「X月」同口径）
+    if (!m[1] && !firstHalf && sh.getUTCMonth() < 6) y -= 1;
+    const startMon = firstHalf ? 0 : 6;
+    return {
+      start: toUtcSql(new Date(Date.UTC(y, startMon, 1) - SH_OFFSET_MS)),
+      end: toUtcSql(new Date(Date.UTC(y, startMon + 6, 1) - SH_OFFSET_MS)),
+      phrase: m[0].trim(),
+    };
+  }
+
+  // 「今年X月/去年X月」（R246 F-6，audit-r245）：必须先于宽泛「今年/去年」
+  // 分支，否则被整年窗吞掉、不按具体月份窗执行。
+  // 「今年8月10号」带具体日，不在本分支收口（负向前瞻只拒「N号/日」
+  // 真正的日期后缀，「今年8月一共花了多少」的「一」不能误拒）。
+  if ((m = q.match(/(今年|去年)\s*(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?(?!\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])/))) {
+    const n = parseNum(m[2]);
+    if (n !== null && n >= 1 && n <= 12) {
+      const sh = new Date(now.getTime() + SH_OFFSET_MS);
+      const y = m[1] === "去年" ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear();
+      return {
+        start: toUtcSql(new Date(Date.UTC(y, n - 1, 1) - SH_OFFSET_MS)),
+        end: toUtcSql(new Date(Date.UTC(y, n, 1) - SH_OFFSET_MS)),
+        phrase: m[0].trim(),
       };
     }
   }
@@ -186,7 +252,7 @@ const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|�
 // meaningful text remains means the question is about a specific item
 // ("买咖啡花了多少钱"), not an overall aggregate — fall through to normal ask.
 const STRIP_RES: RegExp[] = [
-  /(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?(?:之间|期间|以内|之内|前后|左右)?|今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?/g,
+  /(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?(?:之间|期间|以内|之内|前后|左右)?|今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|(?:今年|去年)?\s*(?:上上个?|上一?个?|下一?个?|本|这一?个?|当前)季度|(?:今年|去年)?\s*第?\s*[一二三四1-4]\s*季度|[Qq][1-4]|(?:今年|去年)?\s*[上前下后]半年|(?:今年|去年)\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?/g,
   /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
   /总?(?:花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额)|花了?|记了?账|账单|赚了?|挣了?|用掉|还了|还款|收款|[收拿][到了]|到手|[缴交用]了?/g,
   /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|？|\?|，|,|。|、|\s/g,
@@ -1517,9 +1583,9 @@ export const ENUM_TOPIC_CATEGORIES: Record<string, string> = {
   资料: "data",
 };
 
-/** 「这段时间都记了什么/记了哪些」——时间窗枚举，走 SQL 全量列举而非 top-k 召回。 */
+/** 「这段时间都记了什么/记了哪些/有什么记录」——时间窗枚举，走 SQL 全量列举而非 top-k 召回。 */
 export function enumListIntent(question: string): boolean {
-  return /都记[了过]?(?:些|哪些)?什么|记[了过](?:些什么|哪些)|都写[了过]?(?:些|哪些)?什么|都有哪些笔记|记录[了过](?:些什么|哪些|什么)/.test(question);
+  return /都记[了过]?(?:些|哪些)?什么|记[了过](?:些什么|哪些)|都写[了过]?(?:些|哪些)?什么|都有哪些笔记|记录[了过](?:些什么|哪些|什么)|有(?:些|哪些|什么|啥)(?:记录|笔记)/.test(question);
 }
 
 // ---- 主题枚举问答（R130 P1-1/P1-2）----
