@@ -141,6 +141,7 @@ export function buildTriagePrompt(
   - 「打碎了店里的杯子，赔付了店家 60 元」→ expense，amount=60（「赔付＋给某人/店家/对方」是我赔别人＝钱出去）
   - 「剐蹭了别人的车，赔了对方 500」→ expense，amount=500
   - 「火车票改签差价退回 37.5」→ income，amount=37.5（商家/平台把多收的差价退回来是消费冲抵的进账，与退款同口径，不是借还/押金类 transfer）
+  - 「机票退票，退回 1130 手续费扣了 200」→ income，amount=930（退票退回款扣掉手续费后的净进账；金额是记录者实际发生的正数，绝不输出负数）
   资金平移判例（transfer，不是 expense/income）：
   - 「微信零钱提现 2000 到银行卡」→ transfer，amount=2000（自己账户间平移）
   - 「转了 5000 到余额宝」→ transfer（不是支出）
@@ -401,7 +402,7 @@ export function stripMarkerNoise(content: string, triage: TriageResult): TriageR
 // 「赔付了/赔付款」不算支出词面（R236，audit-r235 P2-1：孤立「赔付了 15 元」
 // 多为用户获赔，方向语义在「谁赔谁」，词面非无歧义证据，交回模型主判）。
 const EXPENSE_DIRECTION_RE =
-  /交了|缴了|(?<!赔)付了|花了|买了|充了|续了|还了|交费|缴费|(?<!赔)付款|付掉|花掉|续费|充值|还款|请客|打赏了|损失|(?:给|帮)[^，。;；\n]{0,6}(?:买|送|订|充|垫)/;
+  /交了|缴了|(?<!赔)付了|花了|买了|充了|续了|还了|交费|缴费|(?<!赔)付款|付掉|花掉|(?<!手)续费|充值|还款|请客|打赏了|损失|(?:给|帮)[^，。;；\n]{0,6}(?:买|送|订|充|垫)/;
 const INCOME_DIRECTION_RE =
   /到账|入账|进账|收到|收了|收款|卖了|卖出|退款|退了|返现|返了|发了工资|发工资|工资发|赚了|挣了|中了|收租|给我(?:转|发|打|交|付|结|报销)/;
 // 他人付款主语（R224，audit-r223 P2-1）：「房客交了下季度房租 9000」——付款
@@ -1160,6 +1161,24 @@ export function fixProseTotalDirection(content: string, triage: TriageResult): T
   return { ...triage, category: "expense", amount: total, currency: triage.currency ?? "CNY" };
 }
 
+// 负金额终态收口（R254 P2-1，audit-r253：「机票退票，退回 1130 手续费扣了
+// 200」落库 income -930 污染收入合计）：金额口径是记录者实际发生金额，
+// 恒为正数；台账净额的负号只表达方向（净流入）。管线任何环节产出负金额
+// 时按 fixLedgerNetDirection 同一证据门收口：无支出词面证据则按净流入记
+// income，否则保持模型类别，金额一律取绝对值。
+export function fixNegativeAmount(content: string, triage: TriageResult): TriageResult {
+  if (triage.amount == null || triage.amount >= 0) return triage;
+  const abs = Math.round(Math.abs(triage.amount) * 100) / 100;
+  if (
+    (triage.category === "expense" || triage.category === "income") &&
+    !EXPENSE_DIRECTION_RE.test(content) &&
+    !LEDGER_EXPENSE_HINT_RE.test(content)
+  ) {
+    return { ...triage, category: "income", amount: abs, currency: triage.currency ?? "CNY" };
+  }
+  return { ...triage, amount: abs };
+}
+
 // AA/垫付收回是收入回补不是资金平移（R212 P2-2，audit-r211：「公司团建 AA
 // 收回 240」判 transfer 导致收入统计漏计）。词面同时命中 AA/平摊/垫付 与
 // 收回/收到/转我/回我 等回款动词才收口，普通借还往来不受影响
@@ -1370,6 +1389,7 @@ export function applyTriageFixes(content: string, result: TriageResult, now: Dat
   result = demoteEventLog(content, fixTransferMisfile(content, fixFinanceDirection(content, result)));
   result = fixLedgerNetDirection(content, fixReceiptDoubleCount(content, fixLedgerAmount(content, fixLedgerCategory(content, result))));
   result = fixAdvanceRepayAmount(content, fixSplitBillAmount(content, fixAaReimburse(content, fixProseTotalDirection(content, result))));
+  result = fixNegativeAmount(content, result);
   result = fixCnNumeralAmount(content, result);
   return fixWeekdayDue(content, result, now, tz);
 }
