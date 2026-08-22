@@ -212,18 +212,19 @@ describe("buildFinanceSubsetAnswer", () => {
     expect(a).toContain("¥48");
   });
 
-  // R151 P2-1：宽粒度分拣标签（燃气费被打上「水电费」标签）不得计入子集合计
-  it("excludes tag-only hits from totals and lists them separately", () => {
+  // R256 P3-3（audit-r255，改写 R151 P2-1 口径）：仅标签命中默认计入合计并
+  // 如实标注来源，杜绝同一批记录在不同问法下结果不一致的误读
+  it("includes tag-only hits in totals with an explicit annotation", () => {
     const rows = [
       row({ id: "w1", amount: 300, content: "交水电费 300 元", tags: '["水电费"]' }),
       row({ id: "w2", amount: 300, content: "水电费 300 元", tags: '["水电费"]' }),
       row({ id: "g1", amount: 150, content: "交燃气费 150 元", tags: '["水电费"]' }),
     ];
     const a = buildFinanceSubsetAnswer(["水电费"], rows, null);
-    expect(a).toContain("2 笔支出");
-    expect(a).toContain("¥600");
-    expect(a).not.toContain("¥750");
+    expect(a).toContain("3 笔支出");
+    expect(a).toContain("¥750");
     expect(a).toContain("1 笔仅标签命中");
+    expect(a).toContain("已计入合计");
     expect(a).toContain("燃气费");
   });
 

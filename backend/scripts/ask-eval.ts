@@ -225,10 +225,15 @@ function report(results: QResult[], label: string): void {
   }
   for (const [cat, rs] of byCat) {
     const ok = rs.filter((r) => r.pass).length;
-    console.log(`  ${cat}: ${ok}/${rs.length}`);
+    const cite = rs.filter((r) => r.citeHit).length;
+    console.log(`  ${cat}: ${ok}/${rs.length}${cite < rs.length ? ` (cite ${cite}/${rs.length})` : ""}`);
   }
   const total = results.filter((r) => r.pass).length;
+  // 引用完整性独立指标（R256 P3-4，audit-r255：citeHit 此前算了但不进 pass
+  // 也不进报告，缺口在评测口径上结构性不可见）：先可见、暂不纳入 pass。
+  const citeTotal = results.filter((r) => r.citeHit).length;
   console.log(`  TOTAL: ${total}/${results.length} (${((100 * total) / Math.max(1, results.length)).toFixed(0)}%)`);
+  console.log(`  CITE (引用完整性，独立指标不计入 pass): ${citeTotal}/${results.length} (${((100 * citeTotal) / Math.max(1, results.length)).toFixed(0)}%)`);
 }
 
 async function cleanup(): Promise<void> {
@@ -278,6 +283,7 @@ async function main() {
         r.recallHit ? "recall✅" : "recall❌",
         q.expectAll ? (r.allHit ? "all✅" : "all❌") : "",
         r.refusalOk === null ? "" : r.refusalOk ? "refuse✅" : "refuse❌",
+        r.citeHit ? "cite✅" : "cite❌",
         r.forbidOk ? "" : "FORBIDDEN-LEAK❌",
       ]
         .filter(Boolean)

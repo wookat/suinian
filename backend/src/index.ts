@@ -75,7 +75,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, financeDualWindowIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -173,7 +173,10 @@ app.notFound((c) => c.json({ error: "not found" }, 404));
 
 const MAX_CONTENT_CHARS = 20_000;
 
-/** Per-user /api/ask requests per minute (each runs several LLM calls). */
+/** Per-user /api/ask requests per minute (each runs several LLM calls).
+ * 窗口语义（R256 P3-5，audit-r255 实测「约 15 次后 429」的口径确认）：
+ * checkRateLimit 按 ISO 分钟粒度整分翻窗（非滑动窗口），键 ask:<userId>，
+ * 第 16 次起 429，下一自然分钟重置；D1 故障时 fail-closed 拒绝。 */
 const ASK_RATE_LIMIT_MAX = 15;
 
 /** Per-user per-minute cap on manual media/link retries（refetch-link / retry-media）：
@@ -3296,6 +3299,37 @@ app.post("/api/ask", async (c) => {
       finance_compare: true,
     });
   }
+  // 财务双时间窗对比（R256 P2-2，audit-r255：「今年上半年和下半年到现在，哪段
+  // 花得多」落普通召回答出与事实相反的空答）：两窗各自 SQL 精确聚合后走
+  // 环比同一套确定性对比措辞。
+  const finDual = metaQuestion || listFollowUp
+    ? null
+    : (financeDualWindowIntent(intentQuestion) ?? (FINANCE_WORD_RE.test(intentQuestion) ? null : financeDualWindowIntent(recallQuestion)));
+  if (finDual) {
+    const starts = [finDual.a.start, finDual.b.start].filter((s): s is string => !!s).sort();
+    const dConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
+    const dBinds: unknown[] = [userId];
+    if (starts.length === 2) {
+      dConds.push("created_at >= ?");
+      dBinds.push(starts[0]);
+    }
+    const dr = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE ${dConds.join(" AND ")} ORDER BY created_at DESC LIMIT 4000`
+    )
+      .bind(...dBinds)
+      .all<NoteRow>();
+    const drows = dr.results ?? [];
+    const aRows = drows.filter((n) => inTimeRange(n.created_at, finDual.a));
+    const bRows = drows.filter((n) => inTimeRange(n.created_at, finDual.b));
+    const answer = buildFinanceMomAnswer(financeStats(aRows), financeStats(bRows), finDual.a.phrase, finDual.b.phrase);
+    const dRefRows = [...aRows, ...bRows].filter((n) => !n.is_sensitive).slice(0, 10);
+    return c.json({
+      answer,
+      references: dRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
+      notes: dRefRows.map((n) => noteToJson(n)),
+      finance_compare: true,
+    });
+  }
   const finCompare = financeCompareIntent(intentQuestion) || (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? false : financeCompareIntent(recallQuestion));
   if (finCompare) {
     const cmpRange = (financeCompareIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
@@ -3383,6 +3417,30 @@ app.post("/api/ask", async (c) => {
       finance_threshold: true,
     });
   }
+  // 支出品类归纳（R256 P3-2，audit-r255：R253 P3-2 挂账两轮）：「我的钱主要花在
+  // 哪些方面」按支出笔记标签频次+金额确定性归纳，不再落 LLM 兜底；须排在
+  // 财务列举之前（「钱都花在哪」的列举 cue 会误接「哪些方面」问法）。
+  if (!metaQuestion && !listFollowUp && (expenseFacetIntent(intentQuestion) || (!FINANCE_WORD_RE.test(intentQuestion) && expenseFacetIntent(recallQuestion)))) {
+    const eRange = (expenseFacetIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
+    const eConds = ["user_id = ?", "deleted_at IS NULL", "category = 'expense'"];
+    const eBinds: unknown[] = [userId];
+    if (eRange?.start) {
+      eConds.push("created_at >= ?");
+      eBinds.push(eRange.start);
+    }
+    if (eRange?.end) {
+      eConds.push("created_at < ?");
+      eBinds.push(eRange.end);
+    }
+    const er = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE ${eConds.join(" AND ")} ORDER BY created_at DESC LIMIT 4000`
+    )
+      .bind(...eBinds)
+      .all<NoteRow>();
+    const erows = er.results ?? [];
+    const answer = buildExpenseFacetAnswer(erows, eRange?.phrase ?? null);
+    return c.json({ answer, references: [], notes: [], expense_facet: true, ...(erows.length === 0 ? { finance_fail_closed: true } : {}) });
+  }
   const finList = listFollowUpDir ?? financeListIntent(intentQuestion) ?? (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? null : financeListIntent(recallQuestion));
   if (finList) {
     // 裸列举追问的时间窗继承：本轮原问题优先，否则沿用上一轮合计答案里的
@@ -3435,10 +3493,19 @@ app.post("/api/ask", async (c) => {
   const mixedSubQ = /什么牌子|哪个牌子|啥牌子|什么型号|哪个型号|啥型号|哪家店|哪个店|在哪买|哪里买/.test(intentQuestion);
   // 财务主题子集合计（R148 P1-2）：「咖啡一共花了多少」——主题词可干净提取时
   // 走 LIKE 圈定子集 + SQL 精确合计（此前一律 fail-closed：诚实但找回失败）
+  // 财务列举+主题限定（R256 P2-3）：「列一下买书的支出」复用主题子集管道
+  // （逐笔明细+合计同一答案架构），绝不丢限定回全量列举。
+  const listTopic =
+    metaQuestion || listFollowUp || mixedSubQ
+      ? null
+      : (financeListTopicTerms(intentQuestion) ?? (FINANCE_WORD_RE.test(intentQuestion) ? null : financeListTopicTerms(recallQuestion)));
   const subsetTerms =
     financeIntent === "exact" || mixedSubQ
       ? null
-      : (financeTopicTerms(intentQuestion) ?? (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? null : financeTopicTerms(recallQuestion)));
+      : (financeTopicTerms(intentQuestion) ??
+        (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? null : financeTopicTerms(recallQuestion)) ??
+        listTopic?.terms ??
+        null);
   if (subsetTerms) {
     const sRange = (financeTopicTerms(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     // 关键词降级重试（R192 P2-2）：整串零命中时剥残片/拆词再试一次，
@@ -3463,7 +3530,8 @@ app.post("/api/ask", async (c) => {
       )
         .bind(...sBinds)
         .all<NoteRow>();
-      srows = sr.results ?? [];
+      // 单字主题（R256 P3-1）：LIKE '%书%' 会连「书房」一起命中，按邻字上下文过滤
+      srows = filterSingleCharTopicRows(sr.results ?? [], terms);
       if (srows.length > 0) {
         usedTerms = terms;
         break;
@@ -3471,11 +3539,10 @@ app.post("/api/ask", async (c) => {
     }
     if (srows.length > 0) {
       const answer = buildFinanceSubsetAnswer(usedTerms, srows, sRange?.phrase ?? null);
-      // references 必须与答案里的逐笔明细同一个集合同一顺序（直接命中优先，
-      // 仅标签命中单列不进引用；R151 P2-1）
+      // references 必须与答案里的逐笔明细同一个集合同一顺序（R256 P3-3：
+      // 仅标签命中也计入合计/明细，引用同步改为全部收支命中）
       const sFinance = srows.filter((n) => n.category === "expense" || n.category === "income");
-      const sDirect = sFinance.filter((n) => subsetDirectHit(n, usedTerms));
-      const sRefRows = (sDirect.length > 0 ? sDirect : sFinance).filter((n) => !n.is_sensitive).slice(0, 10);
+      const sRefRows = sFinance.filter((n) => !n.is_sensitive).slice(0, 10);
       return c.json({
         answer,
         references: sRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
@@ -3542,8 +3609,7 @@ app.post("/api/ask", async (c) => {
     if (shGated) {
       const answer = buildFinanceSubsetAnswer(shortTerms, shRows, shRange?.phrase ?? null);
       const shFinance = shRows.filter((n) => n.category === "expense" || n.category === "income");
-      const shDirect = shFinance.filter((n) => subsetDirectHit(n, shortTerms));
-      const shRefRows = (shDirect.length > 0 ? shDirect : shFinance).filter((n) => !n.is_sensitive).slice(0, 10);
+      const shRefRows = shFinance.filter((n) => !n.is_sensitive).slice(0, 10);
       return c.json({
         answer,
         references: shRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
@@ -4145,6 +4211,24 @@ app.post("/api/ask", async (c) => {
   }
 
   notes = dedupeNotesByContent(notes);
+
+  // 关系限定词忠实性护栏（R256 P1-1，audit-r255）：问题里的人物关系限定词
+  // （女朋友/妈妈/同事…含同义变体）在全部召回文本中零出现时，片段不可能
+  // 支撑该关系事实，LLM 只会把相邻实体硬凑成关系（R255 实测带引用编造
+  // 「给女朋友买的礼物」）——生成前确定性短路到既有 not_in_notes 拒答通道
+  // （与 R244 时间窗短路同一架构）。
+  if (!metaQuestion) {
+    const relSource = notes.map((n) => `${n.title ?? ""}\n${n.content}\n${n.tags ?? ""}`).join("\n");
+    const missingRel = ungroundedRelationTerm(`${intentQuestion}\n${recallQuestion}`, relSource);
+    if (missingRel) {
+      const relSuggestions = notes.filter((n) => !n.is_sensitive).slice(0, 3);
+      const { answer, references } = buildNoAnswerResponse(relSuggestions, "not_in_notes", missingRel);
+      const relHint = await sensitiveNoRecallHint(c.env, userId, terms, question);
+      const relById = new Map(relSuggestions.map((n) => [n.id, n]));
+      const refNotes = await Promise.all(references.map((r) => noteToJsonDecrypted(c.env, relById.get(r.note_id)!)));
+      return c.json({ answer: answer + relHint, references, notes: refNotes, no_answer: true, relation_guard: true });
+    }
+  }
 
   const noteIds = notes.map((n) => n.id);
   const context = notes

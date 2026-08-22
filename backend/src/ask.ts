@@ -366,10 +366,17 @@ export function isFinanceAggQuestion(question: string): boolean {
 // answer both parts — fail-closing them hides the answer (R117 P2-1).
 const FACT_QUERY_RE = /叫什么|是什么|什么名|名字|哪几?[本个件家部条]|哪些|哪里|哪儿|分别|各是|什么时候|在哪|为什么|依据/;
 
+// 并列疑问框架（R256 P2-1，audit-r255：「本月支出和收入分别多少」被 FACT_QUERY
+// 的「分别」拦下落普通召回，答成与事实相反的空答）：紧跟合计措辞的「分别/
+// 各自」是疑问框架不是事实检索，聚合意图判定前先归一化掉——与
+// financeTopicTerms 同一口径（R250 P2-3）。
+const PARALLEL_AGG_FRAME_RE = /(?:各自|分别|各)(?=各?(?:花|用|要|是?多少|一共|总共|合计))/g;
+
 export function financeAggIntent(question: string): "exact" | "fail_closed" | null {
   // 「它花了多少钱」问的是某个具体事物的价格，不是全账聚合：代词剥词后残留
   // 不足 2 字会被误判成 exact（R186 P1 根因），指代问法一律走普通召回。
   if (ASK_PRONOUN_REF_RE.test(question)) return null;
+  question = question.replace(PARALLEL_AGG_FRAME_RE, "");
   if (isFinanceAggQuestion(question)) return "exact";
   if (FACT_QUERY_RE.test(question)) return null;
   if (FINANCE_WORD_RE.test(question) && STRONG_AGG_RE.test(question)) return "fail_closed";
@@ -424,6 +431,34 @@ export function financeMomIntent(question: string): "month" | "week" | null {
   if (hasCurWeek && hasPrevWeek) return "week";
   if (hasCurMonth && hasPrevMonth) return "month";
   return null;
+}
+
+// ---- 财务双窗对比（R256 P2-2，audit-r255）----
+// 「今年上半年和下半年到现在，哪段花得多」这类任意双时间窗对比不在环比
+// （本月vs上月/本周vs上周）覆盖内，此前落普通召回答出与事实相反的空答。
+// 与环比同一架构：两窗各自 SQL 精确聚合后走 buildFinanceMomAnswer 确定性对比。
+const DUAL_WINDOW_COMPARE_RE =
+  /哪段|哪个时间段|哪个时期|哪半年|哪个季度|哪个月份?|[花支][得的出]了?(?:更)?[多少]|开销(?:更)?大|支出(?:更)?[多高]|还是/;
+
+/** 识别财务双时间窗对比问题，返回两个窗口；非此类返回 null。 */
+export function financeDualWindowIntent(question: string, now: Date = new Date()): { a: TimeRange; b: TimeRange } | null {
+  if (!FINANCE_WORD_RE.test(question)) return null;
+  if (!DUAL_WINDOW_COMPARE_RE.test(question)) return null;
+  const parts = question
+    .split(/和|与|跟|还是|、|，|,/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (parts.length < 2) return null;
+  const ranges: TimeRange[] = [];
+  for (const p of parts) {
+    const r = parseTimeRange(p, now);
+    if (r) ranges.push(r);
+    if (ranges.length === 2) break;
+  }
+  if (ranges.length !== 2) return null;
+  // 两窗必须是不同的时间段（「上半年和上半年」没有对比意义）
+  if (ranges[0].start === ranges[1].start && ranges[0].end === ranges[1].end) return null;
+  return { a: ranges[0], b: ranges[1] };
 }
 
 /** 收支比较的确定性答案：按币种分别比较（不同币种金额不可直接比较）。 */
@@ -1004,6 +1039,73 @@ export function buildTopicSummaryAnswer(
   return `按标签出现频次统计，${scope}你最关注的主题：\n${lines.join("\n")}\n\n以上为按笔记标签的精确计数；想看叙述性的主题回顾，可到「报告」页生成周报/月报。`;
 }
 
+// ---- 支出品类归纳（R256 P3-2，audit-r255：R253 P3-2 挂账两轮）----
+// 「我的钱主要花在哪些方面」此前落 LLM 兜底，只引 1 条还答「没有记录」。
+// 与主题归纳（R221）同一架构：按支出笔记的标签频次+金额确定性归纳，不经 LLM。
+const EXPENSE_FACET_RE =
+  /(?:钱|支出|开销|开支|花销|消费)[^？?。]{0,6}(?:主要|大头|大多|基本)(?:都)?(?:花|用)(?:在|到)了?(?:哪些?|什么|啥)|(?:花|用)(?:在|到)了?(?:哪些?|什么|啥)(?:方面|类别|类型|方向)|花钱(?:的)?大头|支出(?:主要)?(?:构成|分布|结构|占比|类别)/;
+
+export function expenseFacetIntent(question: string): boolean {
+  return EXPENSE_FACET_RE.test(question);
+}
+
+/** 支出品类归纳的确定性答案：按标签频次降序，附每标签笔数与金额（按币种）。 */
+export function buildExpenseFacetAnswer(
+  rows: Pick<NoteRow, "tags" | "is_sensitive" | "amount" | "currency">[],
+  phrase: string | null,
+  topN = 5
+): string {
+  const scope = phrase ?? "到目前为止";
+  if (rows.length === 0) {
+    return `${scope}没有支出记录，无法归纳花钱方向。\n\n以上为数据库精确统计（不含已删除笔记）。`;
+  }
+  const stats = new Map<string, { count: number; sums: Record<string, number> }>();
+  let untagged = 0;
+  let sensitiveCnt = 0;
+  for (const r of rows) {
+    if (r.is_sensitive) {
+      sensitiveCnt++;
+      continue;
+    }
+    let tags: string[] = [];
+    try {
+      tags = (JSON.parse(r.tags || "[]") as string[]).filter((t) => typeof t === "string" && t);
+    } catch {
+      /* ignore bad rows */
+    }
+    if (tags.length === 0) {
+      untagged++;
+      continue;
+    }
+    for (const t of tags) {
+      const s = stats.get(t) ?? { count: 0, sums: {} };
+      s.count++;
+      if (typeof r.amount === "number" && Number.isFinite(r.amount)) {
+        const cur = r.currency || "CNY";
+        s.sums[cur] = (s.sums[cur] ?? 0) + r.amount;
+      }
+      stats.set(t, s);
+    }
+  }
+  const top = [...stats.entries()].sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0], "zh")).slice(0, topN);
+  if (top.length === 0) {
+    return `${scope}共 ${rows.length} 笔支出，但都没有可归纳的标签，暂无法按品类归纳。可到「报告」页生成周报/月报看叙述性归纳。`;
+  }
+  const lines = top.map(([t, s], i) => {
+    const amounts = Object.entries(s.sums)
+      .map(([cur, v]) => formatAmount(Math.round(v * 100) / 100, cur))
+      .join("＋");
+    return `${i + 1}. ${t}：${s.count} 笔${amounts ? `，共 ${amounts}` : ""}`;
+  });
+  let md = `按支出笔记的标签归纳，${scope}你的钱主要花在：\n${lines.join("\n")}`;
+  const notes: string[] = [];
+  if (untagged > 0) notes.push(`另有 ${untagged} 笔无标签的支出未进入归纳`);
+  if (sensitiveCnt > 0) notes.push(`${sensitiveCnt} 笔加密的敏感支出不参与归纳展示`);
+  if (notes.length > 0) md += `\n（${notes.join("；")}。）`;
+  md += `\n\n以上为按笔记标签的精确统计（一笔可能有多个标签，各类金额不能直接相加；不含已删除笔记）。想看叙述性的分类回顾，可到「报告」页生成周报/月报。`;
+  return md;
+}
+
 /** 主题关键词计数的精确答案（如实标注按关键词匹配口径）。 */
 export function buildTopicCountAnswer(topic: string, cnt: number, sensitiveCnt: number, phrase: string | null): string {
   const scope = phrase ?? "到目前为止";
@@ -1028,7 +1130,7 @@ const SUBSET_AGG_RE = /一共|总共|合计|总计|共计|加起来|总额|花�
 export function financeTopicTerms(question: string): string[] | null {
   // 「X和Y分别/各花了多少」是并列子集合计而非事实检索（R250 P2-3）：
   // 紧跟合计措辞的「分别/各自」先归一化掉，别被 FACT_QUERY_RE 拦下
-  question = question.replace(/(?:各自|分别)(?=各?(?:花|用|要|是?多少|一共|总共|合计))/g, "");
+  question = question.replace(PARALLEL_AGG_FRAME_RE, "");
   if (isFinanceAggQuestion(question)) return null; // 无限定 → 全局精确合计
   if (FACT_QUERY_RE.test(question)) return null;
   // 「包括/算上…吗」是口径澄清问句而非子集合计：交澄清路由或普通召回，
@@ -1107,7 +1209,23 @@ function subsetTopicExtract(question: string): string[] | null {
         !TOPIC_ENUM_GENERIC_RE.test(s.replace(/^[买在喝吃点逛去为给用出]{1,2}/, "")) &&
         !PURE_NUMBER_RE.test(s)
     );
-  return terms.length > 0 && terms.length <= 3 ? terms : null;
+  if (terms.length > 0) return terms.length <= 3 ? terms : null;
+  // 单字主题（R256 P3-1，audit-r255：「书相关的支出一共多少」拒答而咖啡版
+  // 正确）：≥2 字门槛滤空时放宽接受单个实义汉字（语气/停用字除外），LIKE
+  // 过匹配由调用方用 hitsSingleCharTopic 邻字上下文过滤（与主题枚举同一口径）。
+  const singles = residual
+    .split(TOPIC_CONNECTIVE_SPLIT_RE)
+    .map((s) => trimTopicResidue(s.trim().replace(QUANTIFIER_TAIL_RE, "")))
+    .filter(
+      (s) =>
+        /^[\u4e00-\u9fa5]$/.test(s) &&
+        !TOPIC_ENUM_GENERIC_RE.test(s) &&
+        !new RegExp(`[${FILLER_CHAR_CLASS}]`).test(s) &&
+        // 原问句里该字必须独立成词（买书/书相关）；受益格「给猫花的钱」的
+        // 猫不是消费对象主题，仍回落 fail-closed（R242 P3-1 口径不变）
+        hitsSingleCharTopic(question.replace(/相关的?/g, "的"), s)
+    );
+  return singles.length > 0 && singles.length <= 3 ? singles : null;
 }
 
 // ---- 短问法数据门控路由（R198，audit-r197 §3）----
@@ -1234,9 +1352,9 @@ export function subsetDirectHit(
 }
 
 /** 财务主题子集的精确合计答案：逐笔明细 + 按币种合计，敏感笔记计入合计但不展示内容。
- * 仅标签命中的笔记单列不计入合计（R151 P2-1：分拣标签粒度偏宽——如燃气费被
- * 打上「水电费」标签——会把无关记账算进子集合计）；标题/正文零命中时才退回
- * 标签口径（标签可能是唯一信号，否则正常命中会退化成零结果）。 */
+ * 仅标签命中的笔记计入合计并单列标注（R256 P3-3，audit-r255：R151 的「标签命中
+ * 不计入」口径让同一批买书记录在不同问法下结果不一致，易误读；改为默认计入
+ * 并如实标注来源，粒度偏宽的标签命中由用户按标注自行排除）。 */
 export function buildFinanceSubsetAnswer(
   terms: string[],
   rows: Pick<NoteRow, "id" | "title" | "content" | "tags" | "created_at" | "category" | "is_sensitive" | "amount" | "currency">[],
@@ -1248,7 +1366,7 @@ export function buildFinanceSubsetAnswer(
   const direct = financeAll.filter((n) => subsetDirectHit(n, terms));
   const tagOnly = financeAll.filter((n) => !subsetDirectHit(n, terms));
   const tagFallback = direct.length === 0;
-  const finance = tagFallback ? financeAll : direct;
+  const finance = financeAll;
   // 台账行级明细（R196 P2-1）：关键词命中的是台账里某一行名目（标题不含
   // 该词、正文明细行含）时，该台账按命中行的行级金额计入，不拿整表合计
   // 答行级问题；标题命中（问的是台账本身）仍用整表合计。
@@ -1306,7 +1424,7 @@ export function buildFinanceSubsetAnswer(
     return `- ${text}（${amount}${ledger}，${date}）[${i + 1}]`;
   });
   const sensitiveCnt = finance.filter((n) => n.is_sensitive).length;
-  const matchScope = tagFallback ? "仅标签命中，标题/正文无直接命中" : "标题/正文";
+  const matchScope = tagFallback ? "仅标签命中，标题/正文无直接命中" : "标题/正文/标签";
   let md = `按关键词「${kw}」精确匹配（${matchScope}），${scope}共 ${expenseCount} 笔支出${incomeCount > 0 ? `、${incomeCount} 笔收入` : ""}：\n${totalLines.join("\n")}`;
   // 多主题并列问法（R250 P2-3，audit-r249）：「A和B各花了多少」必须逐主题
   // 拆分作答；部分主题零命中时如实声明，绝不以「精确统计」背书单主题结果。
@@ -1354,7 +1472,7 @@ export function buildFinanceSubsetAnswer(
         const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
         return `${text}（${amount}）`;
       });
-    md += `\n（另有 ${tagOnly.length} 笔仅标签命中「${kw}」、标题/正文不含该词的记账未计入合计${tagItems.length > 0 ? `：${tagItems.join("、")}` : ""}；如需把它们算进去，可按标签在时间流筛选后自行确认。）`;
+    md += `\n（其中 ${tagOnly.length} 笔仅标签命中「${kw}」、标题/正文不含该词，已计入合计${tagItems.length > 0 ? `：${tagItems.join("、")}` : ""}；如认为不应计入，可按标签在时间流筛选后核对。）`;
   }
   // 资金往来（transfer）不计收支合计，但直接命中时单列展示（R234 P3-3，
   // audit-r233：「信用卡还了多少钱」命中的还款笔记是 transfer，隐掉会答成
@@ -1427,13 +1545,49 @@ export function financeListIntent(question: string): FinanceListDirection | null
   }
   direction ??= financeListLooseDirection(question);
   if (!direction) return null;
-  // 残留主题词（「买了哪些书花了哪些钱」）说明不是纯财务列举：留给主题
-  // 子集/普通召回，与 isFinanceAggQuestion 同一剥离口径
-  const residual = applyStrips(question, [
-    ...STRIP_RES,
-    /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出来|列出|列举|列一下|列个?清单|罗列|拉个?清单|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的|所有|全部|我们?|你|咱|把|都|请|麻烦|帮我?|给我|收到|到账|款/g,
-  ]);
-  return residual.length < 2 ? direction : null;
+  // 残留主题词（「买了哪些书花了哪些钱」「列一下买书的支出」）说明不是纯
+  // 财务列举：单字残留（书/车/药）同样是主题限定（R256 P2-3，audit-r255：
+  // 「列一下买书的支出」残留「书」被 <2 门槛放行，吞掉限定回了全部 16 笔），
+  // 留给主题列举（financeListTopicTerms）/普通召回。
+  return financeListResidual(question).length === 0 ? direction : null;
+}
+
+const FINANCE_LIST_STRIP_RE =
+  /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出来|列出|列举|列一下|列个?清单|罗列|拉个?清单|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的|所有|全部|我们?|你|咱|把|都|请|麻烦|帮我?|给我|收到|到账|款/g;
+
+function financeListResidual(question: string): string {
+  return applyStrips(question, [...STRIP_RES, FINANCE_LIST_STRIP_RE]);
+}
+
+/**
+ * 财务列举 + 主题限定（R256 P2-3，audit-r255）：「列一下买书的支出」走
+ * 「关键词匹配 + 确定性列举合计」（buildFinanceSubsetAnswer 同一口径），
+ * 绝不丢掉限定条件回全量列举。纯列举（无残留主题）交 financeListIntent。
+ */
+export function financeListTopicTerms(question: string): { direction: FinanceListDirection; terms: string[] } | null {
+  let direction: FinanceListDirection | null = null;
+  for (const [re, dir] of FINANCE_LIST_CUES) {
+    if (re.test(question)) {
+      direction = dir;
+      break;
+    }
+  }
+  direction ??= financeListLooseDirection(question);
+  if (!direction) return null;
+  if (FACT_QUERY_RE.test(question.replace(/哪些|分别/g, ""))) return null;
+  const residual = financeListResidual(question);
+  if (residual.length === 0) return null;
+  const terms = residual
+    .split(TOPIC_CONNECTIVE_SPLIT_RE)
+    .map((s) => trimTopicResidue(s.trim().replace(QUANTIFIER_TAIL_RE, "")))
+    .filter(
+      (s) =>
+        /^[\u4e00-\u9fa5A-Za-z0-9]{1,8}$/.test(s) &&
+        !TOPIC_ENUM_GENERIC_RE.test(s) &&
+        !PURE_NUMBER_RE.test(s) &&
+        !(s.length === 1 && new RegExp(`[${FILLER_CHAR_CLASS}]`).test(s))
+    );
+  return terms.length > 0 && terms.length <= 3 ? { direction, terms } : null;
 }
 
 const FINANCE_LIST_LABELS: Record<FinanceListDirection, string> = {
@@ -2078,6 +2232,70 @@ export function hitsSingleCharTopic(hay: string, ch: string): boolean {
   return false;
 }
 
+// ---- 关系限定词忠实性护栏（R256 P1-1，audit-r255）----
+// 「我给女朋友买过什么礼物」在全库无「女朋友」字样时，召回命中的买书笔记
+// 被 LLM 硬凑成「给女朋友买的礼物」并带引用（R255 生产实测 1/1）。问题里的
+// 人物关系限定词在全部召回文本（含同义变体）中零出现时，片段不可能支撑该
+// 关系事实——生成前确定性短路到既有 not_in_notes 拒答通道（与 R244 时间窗
+// 短路同一架构，不平行打补丁）。只收人物关系词（词典可枚举、误伤面可控），
+// 不做开放实体抽取。问法侧正则从严（「对象/先生」等歧义词不进问法侧），
+// 笔记侧同义词从宽（口语变体都算支撑，口径同 R224 亲属称谓映射）。
+const RELATION_FAMILIES: { q: RegExp; syn: string[] }[] = [
+  { q: /女朋友|女友|女票/, syn: ["女朋友", "女友", "女票", "对象"] },
+  { q: /男朋友|男友|男票/, syn: ["男朋友", "男友", "男票", "对象"] },
+  { q: /老婆|妻子|媳妇|太太/, syn: ["老婆", "妻子", "媳妇", "太太", "爱人"] },
+  { q: /老公|丈夫/, syn: ["老公", "丈夫", "爱人", "先生"] },
+  { q: /爸爸|父亲|老爸|我爸/, syn: ["爸爸", "父亲", "老爸", "我爸", "爸妈", "父母"] },
+  { q: /妈妈|母亲|老妈|我妈/, syn: ["妈妈", "母亲", "老妈", "我妈", "爸妈", "父母"] },
+  { q: /父母|爸妈/, syn: ["父母", "爸妈", "爸爸", "妈妈", "父亲", "母亲", "我爸", "我妈"] },
+  { q: /儿子/, syn: ["儿子", "孩子", "娃"] },
+  { q: /女儿|闺女/, syn: ["女儿", "闺女", "孩子", "娃"] },
+  { q: /孩子|小孩/, syn: ["孩子", "小孩", "儿子", "女儿", "娃"] },
+  { q: /哥哥/, syn: ["哥哥", "我哥"] },
+  { q: /姐姐/, syn: ["姐姐", "我姐"] },
+  { q: /弟弟/, syn: ["弟弟", "我弟"] },
+  { q: /妹妹/, syn: ["妹妹", "我妹"] },
+  { q: /爷爷/, syn: ["爷爷", "祖父"] },
+  { q: /奶奶/, syn: ["奶奶", "祖母"] },
+  { q: /外公|姥爷/, syn: ["外公", "姥爷"] },
+  { q: /外婆|姥姥/, syn: ["外婆", "姥姥"] },
+  { q: /同事/, syn: ["同事"] },
+  { q: /室友/, syn: ["室友"] },
+  { q: /邻居/, syn: ["邻居"] },
+  { q: /客户/, syn: ["客户"] },
+  { q: /领导|上司/, syn: ["领导", "上司", "老板"] },
+];
+
+/**
+ * 问题里无法在召回文本中落地的人物关系限定词；全部可落地/无关系词时返回 null。
+ * 「朋友」不单独收（女朋友/男朋友的子串，单收会误拦泛指问法）。
+ */
+export function ungroundedRelationTerm(question: string, sourceText: string): string | null {
+  for (const fam of RELATION_FAMILIES) {
+    const m = question.match(fam.q);
+    if (!m) continue;
+    if (!fam.syn.some((s) => sourceText.includes(s))) return m[0];
+  }
+  return null;
+}
+
+/** 单字主题词的行集过滤（R256 P3-1）：LIKE '%书%' 会把「订书机/书房」这类
+ * 复合词也命中，按邻字上下文只保留独立成词的行；全被滤掉时如实返回空
+ * （宁缺毋滥：把「订书机」算进「书」的合计是错答，零命中走 fail-closed
+ * 诚实说明）。多字词命中的行一律保留。 */
+export function filterSingleCharTopicRows<T extends Pick<NoteRow, "title" | "content" | "tags" | "is_sensitive">>(
+  rows: T[],
+  terms: string[]
+): T[] {
+  const singles = terms.filter((t) => /^[\u4e00-\u9fa5]$/.test(t));
+  if (singles.length === 0) return rows;
+  const multi = terms.filter((t) => !singles.includes(t));
+  return rows.filter((n) => {
+    const hay = `${n.title ?? ""}\n${n.is_sensitive ? "" : n.content}\n${n.tags ?? ""}`;
+    return multi.some((t) => hay.includes(t)) || singles.some((c) => hitsSingleCharTopic(hay, c));
+  });
+}
+
 /** Whether a note textually contains any of the topic terms (title/content/tags). */
 export function noteHitsTopic(
   note: Pick<NoteRow, "title" | "content" | "tags">,
@@ -2460,12 +2678,19 @@ export function credentialHintLine(): string {
  */
 export function buildNoAnswerResponse(
   suggestions: Pick<NoteRow, "id" | "title" | "content">[],
-  mode: "no_recall" | "not_in_notes" = "no_recall"
+  mode: "no_recall" | "not_in_notes" = "no_recall",
+  missingTerm: string | null = null
 ): {
   answer: string;
   references: { index: number; note_id: string }[];
 } {
   if (suggestions.length === 0) {
+    if (missingTerm) {
+      return {
+        answer: `笔记里没有提到与「${missingTerm}」相关的信息。换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`,
+        references: [],
+      };
+    }
     return { answer: `${NO_ANSWER_TEXT}换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`, references: [] };
   }
   const lines = suggestions.slice(0, 3).map((n, i) => {
@@ -2474,7 +2699,9 @@ export function buildNoAnswerResponse(
   });
   const lead =
     mode === "not_in_notes"
-      ? "找到了相关的笔记，但里面没有提到你问的这个信息："
+      ? missingTerm
+        ? `找到了相近的记录，但里面没有提到与「${missingTerm}」相关的信息：`
+        : "找到了相关的笔记，但里面没有提到你问的这个信息："
       : `${NO_ANSWER_TEXT}以下是几条相近的记录，可能是你想找的：`;
   return {
     answer: `${lead}\n${lines.join("\n")}`,
