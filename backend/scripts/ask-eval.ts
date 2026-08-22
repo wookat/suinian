@@ -296,6 +296,20 @@ async function main() {
   }
 }
 
+// 中断也要自清（R250，audit-r249 P3-4）：Ctrl-C/SIGTERM 打断长等待窗口时
+// 绝不留下 qa-r79-eval-* 空壳账号（哪怕零笔记也算残留）。
+let interrupted = false;
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => {
+    if (interrupted) process.exit(130);
+    interrupted = true;
+    console.error(`\n${sig} received — cleaning up eval account before exit (repeat to force-quit)`);
+    void cleanup()
+      .catch((e) => console.error("cleanup failed:", e))
+      .finally(() => process.exit(130));
+  });
+}
+
 main().catch((e) => {
   console.error(e);
   process.exit(1);
