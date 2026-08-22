@@ -1211,8 +1211,10 @@ export const QUESTIONS: EvalQuestion[] = [
       { role: "user", content: "我一共花了多少钱" },
       { role: "assistant", content: "全部笔记共记录 2 笔支出。\n- CNY：支出 ¥659.00，收入 ¥0.00，结余 -¥659.00\n\n以上为精确统计，口径与周报/月报一致。" },
     ],
-    // 泛列举走既有枚举管道：只锁不再误路由为「仅收入+假否定」（R247 失败形态）
-    expectAny: ["exp1", "exp2"],
+    // 泛列举继承上一轮合计口径走收支双向精确列举（R247 失败形态为
+    // 「仅收入+假否定」；生产 eval 实测 LLM 枚举管道也只复述合计不列举）
+    expectAll: ["exp1", "exp2"],
+    expectAnswerContains: ["数据库精确列举"],
     forbidAnswerContains: ["没有找到收入记录", "没有记录支出", "没有支出"],
   },
 

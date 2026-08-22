@@ -18,7 +18,7 @@ describe("financeListFollowUpIntent (R248 P1, audit-r247 F-1)", () => {
     expect(financeListFollowUpIntent("账单明细呢？", AGG)).toBe("both");
   });
 
-  it("纯泛列举追问返回 generic（不改变既有枚举管道行为，只关财务回退）", () => {
+  it("纯泛列举追问返回 generic（路由层继承上一轮口径按收支双向列举）", () => {
     expect(financeListFollowUpIntent("能列一下吗？", AGG)).toBe("generic");
     expect(financeListFollowUpIntent("都有哪些？", AGG)).toBe("generic");
     expect(financeListFollowUpIntent("具体有哪些记录？", AGG)).toBe("generic");

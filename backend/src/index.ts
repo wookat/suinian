@@ -3166,10 +3166,11 @@ app.post("/api/ask", async (c) => {
   // 财务聚合后的裸列举追问闸（R248 P1，audit-r247 F-1）：上一轮是精确合计
   // 答案、本轮是不带主题词的裸列举追问时，改写产物会把上一轮答案措辞带入并
   // 污染下方各确定性财务意图的 recallQuestion 回退（「能列一下吗」4/4 误判为
-  // 仅收入）。此闸与元问题闸同一原理：关闭全部改写产物财务回退；带财务线索
-  // 的追问（「分别是哪几笔/都花在什么上了」）直接继承上一轮口径走财务列举。
+  // 仅收入）。此闸与元问题闸同一原理：关闭全部改写产物财务回退；追问直接
+  // 继承上一轮口径走财务列举——带方向线索的按方向，纯泛列举（「能列一下吗」）
+  // 问的就是上一轮合计覆盖的账目，按收支双向精确列举。
   const listFollowUp = financeListFollowUpIntent(intentBase, lastAssistant);
-  const listFollowUpDir = listFollowUp && listFollowUp !== "generic" ? listFollowUp : null;
+  const listFollowUpDir = listFollowUp === "generic" ? "both" : listFollowUp;
   // 意图判定以原始问题为准（R113 P1）：改写只服务于召回，带历史时改写器
   // 可能给普通合计补出限定成分，绝不能因此把 exact 打成 fail-closed。
   // R129 P2-a：原问题带财务词但判定为 null（具体单项，如「午饭花了多少钱」）
