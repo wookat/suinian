@@ -2062,7 +2062,7 @@ export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null
   const scope = phrase ?? "全部笔记";
   if (stats.expenseCount === 0 && stats.incomeCount === 0) {
     const transferNote = stats.transferCount > 0 ? `另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支。` : "";
-    return `${scope}没有记账记录（支出/收入均为 0 笔）。${transferNote}`;
+    return `${scope}没有记账记录（支出/收入均为 0 笔）。${transferNote}\n\n以上为精确统计，口径与周报/月报一致。`;
   }
   const lines = Object.entries(stats.totals).map(
     ([cur, t]) =>

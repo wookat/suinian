@@ -1229,28 +1229,28 @@ export const QUESTIONS: EvalQuestion[] = [
   },
 
   // —— R250 P2-1（audit-r249 §4.1）：绝对年月/整年/绝对日期并入统一
-  // parseTimeRange 管道。种子账目只覆盖最近 ~40 天，绝对窗可能为零记录，
-  // 与 q164 同法只锁窗口回显+确定性口径（P3-1：回显必须带年份，禁「年5月」）。——
+  // parseTimeRange 管道。种子账目只覆盖最近 ~40 天，绝对窗可能为零记录；
+  // 锁窗口回显（含年份，P3-1 禁「年5月」）+确定性口径尾注。——
   {
     id: "q172",
     category: "财务聚合",
     question: "2026年5月我花了多少？",
     expectAnswerContains: ["2026年5月", "口径与周报/月报一致"],
-    forbidAnswerContains: ["全部笔记"],
+    forbidAnswerContains: ["全部笔记", "不做心算合计"],
   },
   {
     id: "q173",
     category: "财务聚合",
     question: "2025年一共花了多少钱",
     expectAnswerContains: ["2025年", "口径与周报/月报一致"],
-    forbidAnswerContains: ["全部笔记"],
+    forbidAnswerContains: ["全部笔记", "不做心算合计"],
     holdout: true,
   },
   {
     id: "q174",
     category: "时间限定",
     question: "2026年3月5日到3月20日之间我花了多少",
-    expectAnswerContains: ["口径与周报/月报一致"],
+    expectAnswerContains: ["2026年3月5日到3月20日", "口径与周报/月报一致"],
     forbidAnswerContains: ["全部笔记", "不做心算合计"],
   },
 
