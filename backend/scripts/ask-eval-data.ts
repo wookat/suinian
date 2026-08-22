@@ -218,7 +218,7 @@ export const QUESTIONS: EvalQuestion[] = [
   { id: "q20", category: "否定", question: "我有没有放弃开咖啡馆", expectAny: ["cafe2", "cafe3"] },
   // —— 无答案（必须明确说没找到，不能硬编） ——
   { id: "q21", category: "无答案", question: "我记过特斯拉股票的分析吗", expectRefusal: true },
-  { id: "q22", category: "无答案", question: "上周我去哪个城市旅行了", expectRefusal: true },
+  { id: "q22", category: "无答案", question: "上周我去哪个城市旅行了", expectRefusal: true, forbidAnswerContains: ["去了成都", "在成都"] },
   { id: "q23", category: "无答案", question: "我的驾照什么时候到期", expectRefusal: true, holdout: true },
   { id: "q24", category: "无答案", question: "上个月的电费是多少", expectRefusal: true },
   // —— 敏感隔离（加密笔记绝不能被引用/泄露） ——
@@ -1120,4 +1120,13 @@ export const QUESTIONS: EvalQuestion[] = [
     forbidAnswerContains: ["不做心算合计"],
     holdout: true,
   },
+
+  // —— R244 P2 F-1（audit-r243）：时间窗忠实性——窗内零召回、只有范围外
+  // 相近笔记（成都出差在 40 天前）时确定性拒答，绝不把范围外笔记生成成
+  // 窗内事实（R243 实测「上周去了成都」6 跑 4 中）。新旧窗口问法都锁。——
+  { id: "q159", category: "无答案", question: "最近一周我去哪里出差了", expectRefusal: true, forbidAnswerContains: ["去了成都", "在成都"] },
+  { id: "q160", category: "无答案", question: "这周我去了哪个城市", expectRefusal: true, forbidAnswerContains: ["去了成都", "在成都"], holdout: true },
+  { id: "q161", category: "无答案", question: "上个星期我出差去了哪里", expectRefusal: true, forbidAnswerContains: ["去了成都", "在成都"] },
+  // 有答案不误伤：窗内真有记录的时间窗问法保持正常作答
+  { id: "q162", category: "时间限定", question: "最近几天我记的关于高铁的内容是什么", expectAny: ["nz17"] },
 ];
