@@ -1,6 +1,6 @@
 // R242 修改轮（audit-r241）：P2 「的」字变体聚合问法收口 + P3-1 主题词残片修剪
 import { describe, expect, it } from "vitest";
-import { financeAggIntent, financeTopicTerms, financeShortTopicTerms, degradeAskTerms } from "../src/ask";
+import { financeAggIntent, financeTopicTerms, financeShortTopicTerms, degradeAskTerms, topicCountIntent } from "../src/ask";
 
 describe("R242 P2: 「的」字变体聚合问法走精确聚合（audit-r241 §3.1）", () => {
   it("「这个月的总支出/总收入」带「的」仍判 exact", () => {
@@ -43,6 +43,13 @@ describe("R242 P3-1: 主题词残片修剪（audit-r241 §4）", () => {
 
   it("普通召回降级剥掉句首指代「那/这」", () => {
     expect(degradeAskTerms(["那买东西"])).toEqual(["买东西"]);
+  });
+
+  it("动宾语序计次问法（英文归一化产物「买了咖啡豆多少次」）判主题计次", () => {
+    expect(topicCountIntent("我买了咖啡豆多少次？")).toBe("咖啡豆");
+    expect(topicCountIntent("买了咖啡豆几次")).toBe("咖啡豆");
+    expect(topicCountIntent("我买了3次咖啡")).toBeNull();
+    expect(topicCountIntent("我这个月花了多少钱")).toBeNull();
   });
 
   it("既有主题提取行为不回退（R240 口径）", () => {
