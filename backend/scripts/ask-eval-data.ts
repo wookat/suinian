@@ -1290,4 +1290,65 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAnswerContains: ["按主题拆分", "「滑板车」：没有找到匹配的记账记录", "以上合计只包含已命中的主题"],
     holdout: true,
   },
+
+  // —— R252 P2-1（audit-r251 §3）：时间窗零命中必须回显生效窗口（显式窗与
+  // 继承窗统一处理）+ 放宽引导（去掉时间限制的精确合计）。有命中不误伤。——
+  {
+    id: "q179",
+    category: "财务子集",
+    question: "2026年5月机械键盘花了多少钱",
+    expectAnswerContains: ["2026年5月", "机械键盘", "没有找到记账记录", "去掉时间限制后共有 1 笔支出", "399"],
+  },
+  {
+    id: "q180",
+    category: "财务子集",
+    question: "机械键盘花了多少？",
+    history: [
+      { role: "user", content: "2026年5月我花了多少？" },
+      { role: "assistant", content: "2026年5月没有记账记录（支出/收入均为 0 笔）。" },
+    ],
+    expectAnswerContains: ["2026年5月", "机械键盘", "没有找到记账记录", "去掉时间限制"],
+  },
+  {
+    id: "q181",
+    category: "财务子集",
+    question: "2026年5月买滑板车花了多少",
+    expectAnswerContains: ["2026年5月", "滑板车", "去掉时间限制后也没有找到"],
+    holdout: true,
+  },
+  {
+    id: "q182",
+    category: "财务子集",
+    question: "最近一个月买机械键盘花了多少钱",
+    expectAny: ["exp1"],
+    expectAnswerContains: ["399"],
+    forbidAnswerContains: ["没有找到记账记录", "去掉时间限制"],
+  },
+
+  // —— R252 P3-1（audit-r251 §5 H05/H27）：「相关/那天」残片剥净 ——
+  {
+    id: "q183",
+    category: "财务子集",
+    question: "咖啡相关一共花了多少",
+    expectAny: ["led6"],
+    expectAnswerContains: ["咖啡"],
+    forbidAnswerContains: ["没有找到记账记录"],
+  },
+
+  // —— R252 P3-4（audit-r251 §5 H21）：英文分类名枚举按 category 精确筛选 ——
+  {
+    id: "q184",
+    category: "英文提问",
+    question: "What ideas have I recorded?",
+    expectAny: ["cafe3", "nz18"],
+    forbid: ["exp1", "led6"],
+  },
+
+  // —— R252 P3-5（audit-r251 §5 G10）：「平均每天」日均口径（总额÷窗口天数）——
+  {
+    id: "q185",
+    category: "财务聚合",
+    question: "最近一个月平均每天花多少钱",
+    expectAnswerContains: ["平均每天支出", "口径与周报/月报一致"],
+  },
 ];

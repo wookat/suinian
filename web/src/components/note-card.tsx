@@ -199,8 +199,8 @@ export function AmountChip({ note }: { note: Note }) {
       title={merchant ? `商家/用途：${merchant}` : undefined}
     >
       {label}
-      {/* 暗色下 80% 透明的 rose-400 小字对比度不足 4.5:1，保持全不透明 */}
-      {merchant && <span className="max-w-24 truncate font-normal opacity-80 dark:opacity-100">· {merchant}</span>}
+      {/* 商户后缀不加透明度：叠 opacity 后对比度低于 4.5:1（WCAG AA），粗细已区分主次 */}
+      {merchant && <span className="max-w-24 truncate font-normal">· {merchant}</span>}
     </span>
   )
 }
