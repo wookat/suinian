@@ -960,13 +960,24 @@ function subsetTopicExtract(question: string): string[] | null {
   // 本身就是主题的词剥空
   const stripped = residual.replace(/^[买在喝吃点逛去为给用出]{1,2}/, "").replace(/^(?:你|您|咱)+/, "");
   if (stripped.length >= 2) residual = stripped;
+  // 受益格「给X/为X」的介词是纯框架（「给猫」LIKE 零命中而「猫」才是主题）：
+  // 即使剥后不足 2 字也剥——剩单字会被下方长度门槛滤掉，整题回落
+  // fail-closed 全账口径，仍不做心算（R242 P3-1，audit-r241 §3.2）
+  residual = residual.replace(/^[给为](?=.)/, "");
   // 「在 X 上花了多少钱」的介词框架：尾部「上」是框架残留不是主题
   // （「咖啡豆上」LIKE 零命中），仅在原问句确为「在…上」形态时剥掉
   if (/在[^\s，。？?]{1,8}上/.test(question) && residual.length >= 3) residual = residual.replace(/上$/, "");
   const terms = residual
     .split(TOPIC_CONNECTIVE_SPLIT_RE)
     .map((s) => trimTopicResidue(s.trim().replace(QUANTIFIER_TAIL_RE, "")))
-    .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s) && !PURE_NUMBER_RE.test(s));
+    .filter(
+      (s) =>
+        /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) &&
+        !TOPIC_ENUM_GENERIC_RE.test(s) &&
+        // 「买东西/买点东西」剥掉动词后是泛指词，不构成主题限定（R242 P3-1）
+        !TOPIC_ENUM_GENERIC_RE.test(s.replace(/^[买在喝吃点逛去为给用出]{1,2}/, "")) &&
+        !PURE_NUMBER_RE.test(s)
+    );
   return terms.length > 0 && terms.length <= 3 ? terms : null;
 }
 

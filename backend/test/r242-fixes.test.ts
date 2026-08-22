@@ -33,6 +33,14 @@ describe("R242 P3-1: 主题词残片修剪（audit-r241 §4）", () => {
     expect(financeTopicTerms("的士一共花了多少钱")).toEqual(["的士"]);
   });
 
+  it("受益格「给X」介词剥掉、泛指「买东西」不构成主题：整题回落 fail-closed 全账口径", () => {
+    expect(financeTopicTerms("给猫花的钱合计有多少")).toBeNull();
+    expect(financeAggIntent("给猫花的钱合计有多少")).toBe("fail_closed");
+    expect(financeTopicTerms("那买东西一共用了多少钱")).toBeNull();
+    expect(financeAggIntent("那买东西一共用了多少钱")).toBe("fail_closed");
+    expect(financeTopicTerms("给妹妹买生日礼物一共花了多少钱")).toEqual(["妹妹买生日礼物"]);
+  });
+
   it("普通召回降级剥掉句首指代「那/这」", () => {
     expect(degradeAskTerms(["那买东西"])).toEqual(["买东西"]);
   });
