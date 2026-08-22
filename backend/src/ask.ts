@@ -188,7 +188,7 @@ const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|�
 const STRIP_RES: RegExp[] = [
   /(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?(?:之间|期间|以内|之内|前后|左右)?|今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?/g,
   /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
-  /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|还了|还款|收款|[收拿][到了]|到手|[缴交用]了?/g,
+  /总?(?:花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额)|花了?|记了?账|账单|赚了?|挣了?|用掉|还了|还款|收款|[收拿][到了]|到手|[缴交用]了?/g,
   /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|？|\?|，|,|。|、|\s/g,
 ];
 
@@ -198,7 +198,7 @@ const STRIP_RES: RegExp[] = [
 // fail-closed 拒答。安全口径：先把可整词剥离的措辞替换成边界标记，单字
 // 语气字只在「独立成段」（两侧都是边界/已剥离标记）时才删除，嵌在实词
 // 内（任一侧贴着保留文字）一律保留。
-const FILLER_CHAR_CLASS = "了过吗呢啊呀哦嘛吧是都在有和与记写存发条篇个样件事钱";
+const FILLER_CHAR_CLASS = "了过吗呢啊呀哦嘛吧是都在有和与的记写存发条篇个样件事钱";
 const STRIP_MARKER = "\u0001";
 // 连接词切分只在「夹在两个实词字中间」时生效（R240 P2-1：「和平精英」开头
 // 的「和」不是连接词，无条件切会切成「平精英」）
@@ -923,6 +923,19 @@ export function financeTopicTerms(question: string): string[] | null {
 const QUANTIFIER_TAIL_RE =
   /(?:买|吃|喝|用|囤|购|拿|来)?[了过的]{0,2}(?:每|一|两|几|多少|\d+)(?:多)?(?:斤|克|千克|公斤|磅|升|毫升|次|回|趟|顿|份|包|袋|盒|瓶|箱|杯|桶|支|卷|片|粒|颗|双|对|套|罐|听)(?:用|吃|喝|买|囤|服)?$/;
 
+// 主题词残片修剪（R242 P3-1，audit-r241 §4）：剥离流水线偶留句法残片——
+// 结构助词「的」贴在主题两侧（「这个月的咖啡」→「的咖啡」、「咖啡的钱」）、
+// 句首指代「那/这」。仅在剩余 ≥2 字时修剪，避免把「的士」剪成「士」；
+// LIKE 是包含语义，剪短只会提高召回不损精确。
+function trimTopicResidue(term: string): string {
+  let t = term;
+  const lead = t.replace(/^[的那这]+/, "");
+  if (lead.length >= 2) t = lead;
+  const tail = t.replace(/(?:的钱|的)+$/, "");
+  if (tail.length >= 2) t = tail;
+  return t;
+}
+
 /** 主题词剥离流水线（financeTopicTerms / financeShortTopicTerms 共用）。 */
 function subsetTopicExtract(question: string): string[] | null {
   // 复合主题连接词会被 STRIP_RES 剥成粘连词（「耳机和键盘」→「耳机键盘」
@@ -952,7 +965,7 @@ function subsetTopicExtract(question: string): string[] | null {
   if (/在[^\s，。？?]{1,8}上/.test(question) && residual.length >= 3) residual = residual.replace(/上$/, "");
   const terms = residual
     .split(TOPIC_CONNECTIVE_SPLIT_RE)
-    .map((s) => s.trim().replace(QUANTIFIER_TAIL_RE, ""))
+    .map((s) => trimTopicResidue(s.trim().replace(QUANTIFIER_TAIL_RE, "")))
     .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{2,8}$/.test(s) && !TOPIC_ENUM_GENERIC_RE.test(s) && !PURE_NUMBER_RE.test(s));
   return terms.length > 0 && terms.length <= 3 ? terms : null;
 }
@@ -1058,6 +1071,9 @@ export function degradeAskTerms(terms: string[]): string[] | null {
   };
   for (const t of terms) {
     let s = t.replace(ASK_TERM_TAIL_RE, "");
+    // 句首指代残片（R242 P3-1）：追问改写把「那」粘进关键词（「那买东西」），
+    // LIKE 包含语义下剪掉句首指代字只会提高召回
+    if (s.length >= 3 && CJK_TERM_RE.test(s)) s = s.replace(/^[那这](?=..)/, "");
     // 动宾回声残片：首尾同一个字（「打羽毛球打」）时剥掉尾字
     if (s.length >= 4 && CJK_TERM_RE.test(s) && s[0] === s[s.length - 1]) s = s.slice(0, -1);
     push(s);
