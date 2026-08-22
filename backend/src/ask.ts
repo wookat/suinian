@@ -1890,6 +1890,47 @@ export function inTimeRange(createdAt: string, range: TimeRange): boolean {
   return true;
 }
 
+/** UTC sql 串 → 上海本地日期 YYYY-MM-DD（endExclusive 时取前一刻所在日）。 */
+function shDate(utcSql: string, endExclusive = false): string {
+  const t = Date.parse(utcSql.replace(" ", "T") + "Z") + SH_OFFSET_MS - (endExclusive ? 1 : 0);
+  return new Date(t).toISOString().slice(0, 10);
+}
+
+/** 时间窗的上海本地日期区间展示（「2026-08-10 至 2026-08-16」）。 */
+export function timeRangeDisplay(range: TimeRange): string {
+  const s = range.start ? shDate(range.start) : null;
+  const e = range.end ? shDate(range.end, true) : null;
+  if (s && e) return s === e ? s : `${s} 至 ${e}`;
+  if (s) return `${s} 至今`;
+  if (e) return `截至 ${e}`;
+  return "";
+}
+
+/**
+ * 时间窗确定性拒答（R244 P2 F-1，audit-r243）：问题限定了时间范围而窗口内
+ * 零召回、只有范围外的相近笔记时，绝不把范围外片段交给 LLM 兜底生成——
+ * 生成层对时间约束的遵守不可靠（R243 实测 6 跑 4 次把 7 月的出差答成
+ * 「上周去了成都」）。确定性短路：如实说该时间范围内没有记录，范围外
+ * 命中只作为标注了日期的参考列出，时间对不上这一点由代码说死。
+ */
+export function buildTimeWindowNoAnswerResponse(
+  range: TimeRange,
+  outOfRange: Pick<NoteRow, "id" | "title" | "content" | "created_at">[]
+): { answer: string; references: { index: number; note_id: string }[] } {
+  const span = timeRangeDisplay(range);
+  const head = `${range.phrase}（${span}）范围内没有找到相关记录。`;
+  if (outOfRange.length === 0) return { answer: head, references: [] };
+  const top = outOfRange.slice(0, 3);
+  const lines = top.map((n, i) => {
+    const label = (n.title || n.content).replace(/\s+/g, " ").slice(0, 40);
+    return `[${i + 1}]（${shDate(n.created_at)}）${label}`;
+  });
+  return {
+    answer: `${head}以下 ${top.length} 条相近的记录不在这个时间范围内，仅供参考：\n${lines.join("\n")}`,
+    references: top.map((n, i) => ({ index: i + 1, note_id: n.id })),
+  };
+}
+
 /**
  * Relation/follow-up wording whose answer usually spans two notes (多跳：首轮
  * 命中的笔记 + 与它因果/对应的第二跳笔记)。Gates the second-pass seeded

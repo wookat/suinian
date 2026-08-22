@@ -28,6 +28,12 @@ binding = "AI"
 binding = "MEDIA"
 bucket_name = "suinian-media"
 
+# Workers Logs（R244，audit-r243 F-3/F-4）：持久化结构化日志（含 R202
+# 「sw register error」上报与问答 Server-Timing 打点），仪表盘可查历史，
+# 补齐长尾延迟与 SW 上报量的事后审计观测
+[observability]
+enabled = true
+
 [triggers]
 crons = ["0 0 * * 1", "0 0 1 * *", "0 20 * * *", "*/10 * * * *"]
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseTimeRange, inTimeRange, isRefusalAnswer, buildNoAnswerResponse, sensitiveHintLine } from "../src/ask";
+import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, sensitiveHintLine } from "../src/ask";
 
 // 2026-08-08 07:00 UTC = 2026-08-08 15:00 Asia/Shanghai (Saturday)
 const NOW = new Date("2026-08-08T07:00:00Z");
@@ -131,6 +131,61 @@ describe("buildNoAnswerResponse", () => {
     expect(answer).toContain("没有提到");
     expect(answer).toContain("体检记录");
     expect(references).toEqual([{ index: 1, note_id: "a" }]);
+  });
+});
+
+describe("timeRangeDisplay", () => {
+  it("renders bounded ranges as Shanghai local dates (end exclusive → last day)", () => {
+    expect(
+      timeRangeDisplay({ start: "2026-07-26 16:00:00", end: "2026-08-02 16:00:00", phrase: "上周" })
+    ).toBe("2026-07-27 至 2026-08-02");
+  });
+  it("renders open-ended ranges", () => {
+    expect(timeRangeDisplay({ start: "2026-07-31 16:00:00", end: null, phrase: "最近一周" })).toBe(
+      "2026-08-01 至今"
+    );
+    expect(timeRangeDisplay({ start: null, end: "2026-08-02 16:00:00", phrase: "" })).toBe(
+      "截至 2026-08-02"
+    );
+  });
+  it("collapses a single-day range", () => {
+    expect(
+      timeRangeDisplay({ start: "2026-08-06 16:00:00", end: "2026-08-07 16:00:00", phrase: "昨天" })
+    ).toBe("2026-08-07");
+  });
+});
+
+describe("buildTimeWindowNoAnswerResponse (R244 P2 F-1)", () => {
+  const range = { start: "2026-07-26 16:00:00", end: "2026-08-02 16:00:00", phrase: "上周" };
+  it("refuses honestly with the window spelled out when nothing is out of range either", () => {
+    const { answer, references } = buildTimeWindowNoAnswerResponse(range, []);
+    expect(answer).toContain("上周");
+    expect(answer).toContain("范围内没有找到相关记录");
+    expect(references).toEqual([]);
+  });
+  it("lists out-of-range hits only as dated, clearly-labeled suggestions", () => {
+    const notes = [
+      { id: "a", title: "成都出差台账", content: "打车,45", created_at: "2026-07-13 03:00:00" },
+      { id: "b", title: null, content: "买了双跑鞋 549 元", created_at: "2026-06-30 03:00:00" },
+      { id: "c", title: "t3", content: "x", created_at: "2026-06-01 03:00:00" },
+      { id: "d", title: "t4", content: "x", created_at: "2026-05-01 03:00:00" },
+    ];
+    const { answer, references } = buildTimeWindowNoAnswerResponse(range, notes);
+    expect(answer).toContain("范围内没有找到相关记录");
+    expect(answer).toContain("不在这个时间范围内");
+    expect(answer).toContain("2026-07-13");
+    expect(answer).toContain("成都出差台账");
+    // 绝不把范围外内容写成窗内事实
+    expect(answer).not.toMatch(/上周.*去了成都/);
+    expect(references).toEqual([
+      { index: 1, note_id: "a" },
+      { index: 2, note_id: "b" },
+      { index: 3, note_id: "c" },
+    ]);
+  });
+  it("reads as a refusal to the answer-quality gates", () => {
+    const { answer } = buildTimeWindowNoAnswerResponse(range, []);
+    expect(isRefusalAnswer(answer)).toBe(true);
   });
 });
 
