@@ -50,7 +50,7 @@ import {
   sweepAuthRateLimits,
   clientIp,
 } from "./auth";
-import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports, financeStats } from "./reports";
+import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports, financeStats, type FinanceStats } from "./reports";
 import { getTodayReview, generateAllDailyReviews, readCronHeartbeats, writeCronHeartbeat } from "./review";
 import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings, purgeLowSignalEmbeddings, EMBED_BACKFILL_BUDGET_MS, type SemanticRecallTiming } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteNotesGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
@@ -75,7 +75,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -3489,8 +3489,21 @@ app.post("/api/ask", async (c) => {
     if (!pronounFollowUp) {
       // 关键词零命中：fail-closed 如实说明，绝不心算估数。不再附无关的
       // 全账合计（R208 P3-1，audit-r207 §5.1）：用户问的是具体主题，
-      // 全局收支答非所问且暗示「查过了确实没有」，误导大于帮助
-      const answer = `按关键词「${(degraded ?? subsetTerms).join("、")}」精确匹配（标题/正文/标签）没有找到记账记录；为避免估算出错，我不做心算合计。如果你的记录用了别的说法（比如具体商品/商家名），换个关键词再问试试。`;
+      // 全局收支答非所问且暗示「查过了确实没有」，误导大于帮助。
+      // 带时间窗（显式/继承统一处理）时回显生效窗口，并用去掉时间限制的
+      // 同口径 SQL 精确合计给出放宽引导（R252 P2-1，audit-r251 §3）
+      const zeroTerms = degraded ?? subsetTerms;
+      let relaxed: FinanceStats | null = null;
+      if (sRange) {
+        const rLikeOrs = zeroTerms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ");
+        const rr = await c.env.DB.prepare(
+          `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND category IN ('expense','income','transfer') AND (${rLikeOrs}) LIMIT 2000`
+        )
+          .bind(userId, ...zeroTerms.flatMap((t) => Array(3).fill(likeContains(t)) as string[]))
+          .all<NoteRow>();
+        relaxed = financeStats(rr.results ?? []);
+      }
+      const answer = buildFinanceSubsetZeroHitAnswer(zeroTerms, sRange, relaxed);
       return c.json({ answer, references: [], notes: [], finance_subset: true, finance_fail_closed: true });
     }
   }
@@ -3564,9 +3577,17 @@ app.post("/api/ask", async (c) => {
     const stats = financeStats(frows);
     // fail-closed (R109 P1): aggregate wording we can't scope exactly — never
     // let the LLM mental-math truncated recall (multi-currency mixing risk)
+    // 「平均每天花多少」日均口径（R252 P3-5）：总额 ÷ 窗口天数；无时间窗时
+    // 以窗内最早一笔记账至今折算，仍是纯 SQL 可得的精确口径
+    const avgDays = FINANCE_AVG_PER_DAY_RE.test(intentQuestion)
+      ? (timeRangeAvgDays(fRange) ??
+        (frows.length > 0
+          ? timeRangeAvgDays({ start: frows[frows.length - 1].created_at, end: null, phrase: "" })
+          : null))
+      : null;
     const answer =
       financeIntent === "exact"
-        ? buildFinanceAggAnswer(stats, fRange?.phrase ?? null)
+        ? buildFinanceAggAnswer(stats, fRange?.phrase ?? null, avgDays)
         : buildFinanceFailClosedAnswer(stats, fRange?.phrase ?? null);
     // sensitive finance notes count toward totals (report口径) but never surface as cards
     const refRows = frows.filter((n) => !n.is_sensitive).slice(0, 10);
@@ -3728,7 +3749,7 @@ app.post("/api/ask", async (c) => {
   if (enumTopic) {
     // 分类名主题（「所有待办」）按 category 精确筛全集：LIKE '%待办%' 会漏掉
     // 正文里没写分类名的笔记（R159 P2-1 枚举召回不全）
-    const enumCategory = ENUM_TOPIC_CATEGORIES[enumTopic] ?? null;
+    const enumCategory = enumTopicCategory(enumTopic);
     const like = likeContains(enumTopic);
     const tConds = ["user_id = ?", "deleted_at IS NULL"];
     const tBinds: unknown[] = [userId];

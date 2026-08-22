@@ -1053,7 +1053,8 @@ function trimTopicResidue(term: string): string {
   let t = term;
   const lead = t.replace(/^[的那这]+/, "");
   if (lead.length >= 2) t = lead;
-  const tail = t.replace(/(?:的钱|的|各自|各|分别)+$/, "");
+  // 「相关/那天」残片（R252 P3-1）：「咖啡相关」「情人节那天」剥净成主题词
+  const tail = t.replace(/(?:的钱|的|各自|各|分别|相关|那天|这天|当天)+$/, "");
   if (tail.length >= 2) t = tail;
   return t;
 }
@@ -1707,7 +1708,17 @@ export const ENUM_TOPIC_CATEGORIES: Record<string, string> = {
   点子: "idea",
   收藏: "collect",
   资料: "data",
+  // 英文分类名（R252 P3-4）："What ideas have I recorded?" 按分类精确筛选
+  idea: "idea",
+  ideas: "idea",
+  todo: "todo",
+  todos: "todo",
 };
+
+/** 分类名主题词 → category（大小写不敏感，英文归一化小写；非分类名返回 null）。 */
+export function enumTopicCategory(topic: string): string | null {
+  return ENUM_TOPIC_CATEGORIES[topic] ?? ENUM_TOPIC_CATEGORIES[topic.toLowerCase()] ?? null;
+}
 
 /** 「这段时间都记了什么/记了哪些/有什么记录」——时间窗枚举，走 SQL 全量列举而非 top-k 召回。 */
 export function enumListIntent(question: string): boolean {
@@ -1723,7 +1734,7 @@ export function enumListIntent(question: string): boolean {
 
 const TOPIC_ENUM_RES: RegExp[] = [
   // 「存过哪些菜谱」「看过什么书」——经历/收纳动词 + 些/哪些/什么 + 主题名词收尾
-  /[看读买去吃喝听学玩逛用聊提存记写收藏保]{1,2}[过了]{1,2}(?:些|哪些|什么|啥)([\u4e00-\u9fa5A-Za-z0-9 ]{1,12}?)(?:的?(?:笔记|记录|内容|想法|点子))?(?:来着|呢|吗|么)?$/,
+  /(?:[看读买去吃喝听学玩逛用聊提存记写收藏保]{1,2}|记录)[过了]{1,2}(?:些|哪些|什么|啥)([\u4e00-\u9fa5A-Za-z0-9 ]{1,12}?)(?:的?(?:笔记|记录|内容|想法|点子))?(?:来着|呢|吗|么)?$/,
   // 「记过哪些关于 AI 创业的想法」——枚举措辞 + 关于/有关 + 主题词
   /[过了]?(?:些|哪些|什么|啥)(?:关于|有关)([\u4e00-\u9fa5A-Za-z0-9 ]{1,12}?)的?(?:笔记|记录|内容|想法|点子|事)?$/,
   // 「关于健身的笔记有哪些」「有哪些关于健身的记录」
@@ -1884,6 +1895,9 @@ export async function resolveAskEnumIntent(
   const reTopic = topicEnumIntent(question) ?? topicEnumIntent(recallQuestion);
   const reList = enumListIntent(question) || enumListIntent(recallQuestion);
   if (reTopic && !reList) return { topic: reTopic, list: false, extreme: null };
+  // 分类名主题（想法/待办/ideas…）与时间窗枚举同时命中时不必问 LLM：
+  // 「记录过哪些想法」明确要的是该分类筛选，不是全量列举（R252 P3-4）
+  if (reTopic && reList && enumTopicCategory(reTopic)) return { topic: reTopic, list: false, extreme: null };
   if (!reTopic && reList) return { topic: null, list: true, extreme: null };
   // 跨家族歧义（两者都命中）或全部未命中：LLM 统一分类主判
   const llm = await classifyAskIntent(env, question);
@@ -2057,8 +2071,20 @@ export function buildFinanceFailClosedAnswer(stats: FinanceStats, phrase: string
   );
 }
 
+/** 时间窗折算天数（含起始日，截到 now）：用于「平均每天花多少」日均口径。 */
+export function timeRangeAvgDays(range: TimeRange | null, now: Date = new Date()): number | null {
+  if (!range?.start) return null;
+  const startMs = Date.parse(range.start.replace(" ", "T") + "Z");
+  const endMs = Math.min(range.end ? Date.parse(range.end.replace(" ", "T") + "Z") : Infinity, now.getTime());
+  if (!Number.isFinite(startMs) || !(endMs > startMs)) return null;
+  return Math.max(1, Math.ceil((endMs - startMs) / 86_400_000));
+}
+
+/** 财务聚合的「平均每天」限定（R252 P3-5）：总额 ÷ 窗口天数，纯 SQL 口径。 */
+export const FINANCE_AVG_PER_DAY_RE = /平均每天|每天平均|日均/;
+
 /** Deterministic answer for finance aggregate questions, built from financeStats (report口径). */
-export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null): string {
+export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null, avgDays: number | null = null): string {
   const scope = phrase ?? "全部笔记";
   if (stats.expenseCount === 0 && stats.incomeCount === 0) {
     const transferNote = stats.transferCount > 0 ? `另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支。` : "";
@@ -2069,10 +2095,55 @@ export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null
       `- ${cur}：支出 ${formatAmount(t.expense, cur)}，收入 ${formatAmount(t.income, cur)}，结余 ${formatAmount(t.income - t.expense, cur)}`
   );
   let md = `${scope}共记录 ${stats.expenseCount} 笔支出、${stats.incomeCount} 笔收入。\n${lines.join("\n")}`;
+  if (avgDays) {
+    // 日均：总额 ÷ 窗口天数（窗口截到当前时刻，含起始日）
+    const avgParts = Object.entries(stats.totals)
+      .map(([cur, t]) => {
+        const seg: string[] = [];
+        if (t.expense > 0) seg.push(`支出 ${formatAmount(Math.round((t.expense / avgDays) * 100) / 100, cur)}`);
+        if (stats.incomeCount > 0 && t.income > 0) seg.push(`收入 ${formatAmount(Math.round((t.income / avgDays) * 100) / 100, cur)}`);
+        return seg.join("、");
+      })
+      .filter(Boolean);
+    if (avgParts.length > 0) md += `\n按 ${avgDays} 天折算，平均每天${avgParts.join("；")}。`;
+  }
   if (stats.unknownAmount > 0) md += `\n（另有 ${stats.unknownAmount} 笔未识别出金额，未计入合计。）`;
   if (stats.transferCount > 0) md += `\n（另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支合计。）`;
   md += `\n\n以上为精确统计，口径与周报/月报一致${phrase ? "；时间范围按笔记记录时间划定，不按正文里写的时间" : ""}。`;
   return md;
+}
+
+/**
+ * 财务子集零命中答复（R252 P2-1，audit-r251 §3）：带时间窗（显式或继承）时
+ * 必须回显生效窗口——否则多轮里答复语义等价于「全库没有这笔记录」；并主动
+ * 给出放宽路径（去掉时间限制后的精确合计）。无窗口时保持原措辞不变。
+ */
+export function buildFinanceSubsetZeroHitAnswer(
+  terms: string[],
+  range: TimeRange | null,
+  relaxed: FinanceStats | null
+): string {
+  const kw = terms.join("、");
+  const retryHint = "如果你的记录用了别的说法（比如具体商品/商家名），换个关键词再问试试。";
+  if (!range) {
+    return `按关键词「${kw}」精确匹配（标题/正文/标签）没有找到记账记录；为避免估算出错，我不做心算合计。${retryHint}`;
+  }
+  const span = timeRangeDisplay(range);
+  const scope = range.phrase ? `${range.phrase}（${span}）` : span;
+  const head = `在${scope}内按关键词「${kw}」精确匹配（标题/正文/标签）没有找到记账记录；为避免估算出错，我不做心算合计。`;
+  if (relaxed && (relaxed.expenseCount > 0 || relaxed.incomeCount > 0)) {
+    const totalParts = Object.entries(relaxed.totals)
+      .map(([cur, t]) => {
+        const seg: string[] = [];
+        if (t.expense > 0) seg.push(`支出 ${formatAmount(t.expense, cur)}`);
+        if (t.income > 0) seg.push(`收入 ${formatAmount(t.income, cur)}`);
+        return seg.join("、");
+      })
+      .filter(Boolean);
+    const count = `${relaxed.expenseCount} 笔支出${relaxed.incomeCount > 0 ? `、${relaxed.incomeCount} 笔收入` : ""}`;
+    return `${head}\n去掉时间限制后共有 ${count}（${totalParts.join("；")}），如需全部时间范围的明细，可在时间流搜索该关键词逐条查看。`;
+  }
+  return `${head}去掉时间限制后也没有找到。${retryHint}`;
 }
 
 /** True when a note's created_at (UTC sql string) falls inside the range. */
