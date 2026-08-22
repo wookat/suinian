@@ -3421,7 +3421,10 @@ app.post("/api/ask", async (c) => {
   // 哪些方面」按支出笔记标签频次+金额确定性归纳，不再落 LLM 兜底；须排在
   // 财务列举之前（「钱都花在哪」的列举 cue 会误接「哪些方面」问法）。
   if (!metaQuestion && !listFollowUp && (expenseFacetIntent(intentQuestion) || (!FINANCE_WORD_RE.test(intentQuestion) && expenseFacetIntent(recallQuestion)))) {
-    const eRange = (expenseFacetIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
+    // 时间窗只认本轮原问题：改写产物会把上一轮对比里的「今年上半年」等
+    // 窗口带入（R256 实测品类归纳被污染成「上半年没有支出」），仅当归纳
+    // 意图本身来自改写产物（裸追问）时才沿用改写窗口。
+    const eRange = expenseFacetIntent(intentQuestion) ? parseTimeRange(intentQuestion) : timeRange;
     const eConds = ["user_id = ?", "deleted_at IS NULL", "category = 'expense'"];
     const eBinds: unknown[] = [userId];
     if (eRange?.start) {
@@ -3861,6 +3864,20 @@ app.post("/api/ask", async (c) => {
       }
     }
     if (tTotal > 0) {
+      // 关系限定词忠实性护栏（R256 P1-1）同样覆盖枚举路由：「给女朋友买过
+      // 什么礼物」按关键词「礼物」命中他人礼物记录时，列举答案仍会把无关
+      // 记录当作答案呈现——命中文本零关系词族时走同一 not_in_notes 通道。
+      if (!metaQuestion) {
+        const tRelSource = tRows.map((n) => `${n.title ?? ""}\n${n.is_sensitive ? "" : n.content}\n${n.tags ?? ""}`).join("\n");
+        const tMissingRel = ungroundedRelationTerm(`${intentQuestion}\n${recallQuestion}`, tRelSource);
+        if (tMissingRel) {
+          const tSuggestions = tRows.filter((n) => !n.is_sensitive).slice(0, 3);
+          const { answer, references } = buildNoAnswerResponse(tSuggestions, "not_in_notes", tMissingRel);
+          const tById = new Map(tSuggestions.map((n) => [n.id, n]));
+          const refNotes = await Promise.all(references.map((r) => noteToJsonDecrypted(c.env, tById.get(r.note_id)!)));
+          return c.json({ answer, references, notes: refNotes, no_answer: true, relation_guard: true });
+        }
+      }
       const tLines = enumNoteLines(tRows, true);
       let answer = enumCategory
         ? `${timeRange?.phrase ?? ""}分类为「${enumTopic}」的记录共 ${tTotal} 条`

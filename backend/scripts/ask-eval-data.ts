@@ -609,8 +609,8 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q106",
     category: "财务极值",
     question: "金额最小的一笔消费是哪笔",
-    expectAll: ["exp2"],
-    expectAnswerContains: ["260", "数据库精确查询"],
+    expectAll: ["book1"],
+    expectAnswerContains: ["52", "数据库精确查询"],
     holdout: true,
   },
   // 主题零命中：绝不能退回全局极值冒充主题答案（落回普通召回，如实说没找到；
@@ -683,7 +683,7 @@ export const QUESTIONS: EvalQuestion[] = [
 
   // —— R182（audit-r181 P1-2）：序数金额提问必须走确定性 SQL 排名 ——
   // 「第二贵/排名第二/倒数第二」曾走 LLM 猜排序，答错且与台账口径矛盾。
-  // 支出金额序：nz20 549 > exp1 399 > exp2 260。
+  // 支出金额序：nz20 549 > exp1 399 > exp2 260 > book1 52（R256 新增种子）。
   {
     id: "q113",
     category: "财务极值",
@@ -706,9 +706,9 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q115",
     category: "财务极值",
     question: "金额倒数第二的一笔支出是哪笔",
-    expectAll: ["exp1"],
-    expectAnswerContains: ["399", "第 2 小", "数据库精确查询"],
-    forbidAnswerContains: ["549", "260"],
+    expectAll: ["exp2"],
+    expectAnswerContains: ["260", "第 2 小", "数据库精确查询"],
+    forbidAnswerContains: ["549", "399"],
   },
   {
     id: "q116",
@@ -741,8 +741,8 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q119",
     category: "财务极值",
     question: "我最便宜的一笔支出是多少钱",
-    expectAll: ["exp2"],
-    expectAnswerContains: ["260", "未参与单笔比较", "数据库精确查询"],
+    expectAll: ["book1"],
+    expectAnswerContains: ["52", "未参与单笔比较", "数据库精确查询"],
     forbidAnswerContains: ["356", "1200", "¥77"],
   },
   {
@@ -811,8 +811,8 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q125",
     category: "财务极值",
     question: "单笔最便宜的一笔支出是哪一笔",
-    expectAll: ["exp2"],
-    expectAnswerContains: ["260", "数据库精确查询"],
+    expectAll: ["book1"],
+    expectAnswerContains: ["52", "数据库精确查询"],
     forbidAnswerContains: ["¥77", "356"],
     holdout: true,
   },
@@ -868,8 +868,8 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q131",
     category: "财务极值",
     question: "金额倒数第一的支出是哪笔",
-    expectAll: ["exp2"],
-    expectAnswerContains: ["260"],
+    expectAll: ["book1"],
+    expectAnswerContains: ["52"],
     forbidAnswerContains: ["123", "233", "¥77"],
     holdout: true,
   },
@@ -921,8 +921,8 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q136",
     category: "财务极值",
     question: "金额最小的一笔支出是多少",
-    expectAll: ["exp2"],
-    expectAnswerContains: ["260"],
+    expectAll: ["book1"],
+    expectAnswerContains: ["52"],
     forbidAnswerContains: ["224"],
   },
 

@@ -1678,7 +1678,7 @@ export function financeListFollowUpIntent(question: string, lastAssistant: strin
   // 残留主题词（「买了哪些书」）说明不是裸列举：留给主题子集/普通召回
   const residual = applyStrips(q, [...STRIP_RES, BARE_LIST_STRIP_RE]);
   if (residual.length >= 2) return null;
-  if (/收入|进账|入账|[赚挣]/.test(q)) return "income";
+  if (/收入|进账|入账|收[到过了]|[赚挣]/.test(q)) return "income";
   if (/支出|开支|开销|花销|消费|[花用](?:在|到)/.test(q)) return "expense";
   if (/[笔账]|明细|清单|钱/.test(q)) return "both";
   return "generic";

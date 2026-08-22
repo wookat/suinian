@@ -7,6 +7,7 @@ import {
   financeAggIntent,
   financeDualWindowIntent,
   financeListIntent,
+  financeListFollowUpIntent,
   financeListTopicTerms,
   financeTopicTerms,
   filterSingleCharTopicRows,
@@ -14,6 +15,17 @@ import {
   buildExpenseFacetAnswer,
 } from "../src/ask";
 import type { NoteRow } from "../src/types";
+
+describe("R256 fix: 列举追问方向不被上一轮收支口径覆盖", () => {
+  const aggAnswer = "本月：支出 ¥546（5 笔），收入 ¥8000（1 笔）。口径与周报/月报一致";
+  it("「收到过哪些钱」在合计答案后仍是收入方向，不继承 both", () => {
+    expect(financeListFollowUpIntent("收到过哪些钱", aggAnswer)).toBe("income");
+    expect(financeListFollowUpIntent("收了哪几笔", aggAnswer)).toBe("income");
+  });
+  it("无方向词的裸列举追问仍继承 both", () => {
+    expect(financeListFollowUpIntent("分别是哪几笔", aggAnswer)).toBe("both");
+  });
+});
 
 function row(over: Partial<NoteRow>): NoteRow {
   return {
