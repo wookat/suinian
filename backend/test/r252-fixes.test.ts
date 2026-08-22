@@ -103,6 +103,16 @@ describe("category enum topic (P3-4)", () => {
   });
 });
 
+// ---- QA-R252 回归修复：「列出我所有支出」的「所有/全部/我」框架词剥净 ----
+describe("financeListIntent pronoun/quantifier residual", () => {
+  it("accepts 「列出我所有支出」 as a pure expense listing", async () => {
+    const { financeListIntent } = await import("../src/ask");
+    expect(financeListIntent("列出我所有支出")).toBe("expense");
+    expect(financeListIntent("列出我所有的支出")).toBe("expense");
+    expect(financeListIntent("列出全部开销")).toBe("expense");
+  });
+});
+
 // ---- P3-5: 「平均每天花多少」日均口径 ----
 describe("finance avg-per-day (P3-5)", () => {
   it("detects avg-per-day wording", () => {
