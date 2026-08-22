@@ -1227,4 +1227,67 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAnswerContains: ["口径与周报/月报一致"],
     forbidAnswerContains: ["不做心算合计"],
   },
+
+  // —— R250 P2-1（audit-r249 §4.1）：绝对年月/整年/绝对日期并入统一
+  // parseTimeRange 管道。种子账目只覆盖最近 ~40 天，绝对窗可能为零记录；
+  // 锁窗口回显（含年份，P3-1 禁「年5月」）+确定性口径尾注。——
+  {
+    id: "q172",
+    category: "财务聚合",
+    question: "2026年5月我花了多少？",
+    expectAnswerContains: ["2026年5月", "口径与周报/月报一致"],
+    forbidAnswerContains: ["全部笔记", "不做心算合计"],
+  },
+  {
+    id: "q173",
+    category: "财务聚合",
+    question: "2025年一共花了多少钱",
+    expectAnswerContains: ["2025年", "口径与周报/月报一致"],
+    forbidAnswerContains: ["全部笔记", "不做心算合计"],
+    holdout: true,
+  },
+  {
+    id: "q174",
+    category: "时间限定",
+    question: "2026年3月5日到3月20日之间我花了多少",
+    expectAnswerContains: ["2026年3月5日到3月20日", "口径与周报/月报一致"],
+    forbidAnswerContains: ["全部笔记", "不做心算合计"],
+  },
+
+  // —— R250 P2-2（audit-r249 §4.2）：历史时间窗动宾/裸列举收口 R248 同一
+  // 财务确定性列举管道。去年下半年种子零记录：确定性零答复必须如实说
+  // 窗内没有、且绝不引用窗外笔记冒充。——
+  {
+    id: "q175",
+    category: "财务列举",
+    question: "去年下半年我买了什么",
+    expectAnswerContains: ["去年下半年", "数据库精确"],
+    forbid: ["exp1", "exp2", "nz20"],
+  },
+  {
+    id: "q176",
+    category: "财务列举",
+    question: "去年下半年分别是哪几笔？",
+    expectAnswerContains: ["去年下半年", "数据库精确"],
+    forbid: ["exp1", "exp2", "nz20"],
+    holdout: true,
+  },
+
+  // —— R250 P2-3（audit-r249 §4.3）：双主题并列合计必须按主题拆分作答；
+  // 只命中一个主题时如实说明部分覆盖，禁止以「精确统计」背书单主题。——
+  {
+    id: "q177",
+    category: "财务子集",
+    question: "请客吃饭和团建烧烤各花了多少？",
+    expectAny: ["led4", "led8"],
+    expectAnswerContains: ["按主题拆分", "请客吃饭", "团建烧烤"],
+  },
+  {
+    id: "q178",
+    category: "财务子集",
+    question: "机械键盘和滑板车分别花了多少钱",
+    expectAny: ["exp1"],
+    expectAnswerContains: ["按主题拆分", "「滑板车」：没有找到匹配的记账记录", "以上合计只包含已命中的主题"],
+    holdout: true,
+  },
 ];

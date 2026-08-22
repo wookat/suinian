@@ -121,6 +121,12 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     end: toUtcSql(new Date(Date.UTC(y, qi * 3 + 3, 1) - SH_OFFSET_MS)),
     phrase,
   });
+  // 绝对年份前缀（R250 P2-1，audit-r249）：「2026年」与「今年/去年」同一
+  // 管道解析，绝不平行打补丁。捕获组可能是相对词或四位年份。
+  const absYear = (s: string | undefined): number | null => {
+    const ym = s?.match(/((?:19|20)\d{2})\s*年/);
+    return ym ? parseInt(ym[1], 10) : null;
+  };
   if (/季度|[Qq][1-4]/.test(q)) {
     const sh = new Date(now.getTime() + SH_OFFSET_MS);
     const curY = sh.getUTCFullYear();
@@ -135,11 +141,15 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     if (/本季度|这个?季度|当前季度|这一?季度/.test(q)) {
       return { start: quarterRange(curY, curQ, "本季度").start, end: null, phrase: "本季度" };
     }
-    if ((m = q.match(/(今年|去年)?\s*(?:第\s*)?([一二三四1-4])\s*季度/)) || (m = q.match(/(今年|去年)?\s*[Qq]([1-4])/))) {
+    if (
+      (m = q.match(/(今年|去年|(?:19|20)\d{2}\s*年)?\s*(?:第\s*)?([一二三四1-4])\s*季度/)) ||
+      (m = q.match(/(今年|去年|(?:19|20)\d{2}\s*年)?\s*[Qq]([1-4])/))
+    ) {
       const n = parseNum(m[2]);
       if (n !== null && n >= 1 && n <= 4) {
         const qi = n - 1;
-        const y = m[1] === "去年" ? curY - 1 : m[1] === "今年" ? curY : qi > curQ ? curY - 1 : curY;
+        const y =
+          absYear(m[1]) ?? (m[1] === "去年" ? curY - 1 : m[1] === "今年" ? curY : qi > curQ ? curY - 1 : curY);
         return quarterRange(y, qi, m[0].trim());
       }
     }
@@ -147,10 +157,10 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
 
   // 半年窗（R246 F-5）：上/下半年按日历半年；「半年前」不在此列（无上下前后
   // 前缀，由「过去半年」滚动窗与 N月前模糊窗覆盖）。
-  if ((m = q.match(/(今年|去年)?\s*([上前下后])半年/))) {
+  if ((m = q.match(/(今年|去年|(?:19|20)\d{2}\s*年)?\s*([上前下后])半年/))) {
     const sh = new Date(now.getTime() + SH_OFFSET_MS);
     const firstHalf = m[2] === "上" || m[2] === "前";
-    let y = m[1] === "去年" ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear();
+    let y = absYear(m[1]) ?? (m[1] === "去年" ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear());
     // 裸「下半年」在上半年问出时指去年下半年（未来窗与裸「X月」同口径）
     if (!m[1] && !firstHalf && sh.getUTCMonth() < 6) y -= 1;
     const startMon = firstHalf ? 0 : 6;
@@ -165,11 +175,15 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
   // 分支，否则被整年窗吞掉、不按具体月份窗执行。
   // 「今年8月10号」带具体日，不在本分支收口（负向前瞻只拒「N号/日」
   // 真正的日期后缀，「今年8月一共花了多少」的「一」不能误拒）。
-  if ((m = q.match(/(今年|去年)\s*(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?(?!\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])/))) {
+  if (
+    (m = q.match(
+      /(今年|去年|(?:19|20)\d{2}\s*年)\s*(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?(?!\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])/
+    ))
+  ) {
     const n = parseNum(m[2]);
     if (n !== null && n >= 1 && n <= 12) {
       const sh = new Date(now.getTime() + SH_OFFSET_MS);
-      const y = m[1] === "去年" ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear();
+      const y = absYear(m[1]) ?? (m[1] === "去年" ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear());
       return {
         start: toUtcSql(new Date(Date.UTC(y, n - 1, 1) - SH_OFFSET_MS)),
         end: toUtcSql(new Date(Date.UTC(y, n, 1) - SH_OFFSET_MS)),
@@ -192,25 +206,41 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     return { start: toUtcSql(new Date(Date.UTC(sh.getUTCFullYear(), 0, 1) - SH_OFFSET_MS)), end: null, phrase: "今年" };
   }
 
+  // 裸「YYYY年」整年窗（R250 P2-1）：后面紧跟月/季度/半年时不在此收口
+  //（上面各分支已带年处理），跟「初/中/底」的模糊问法保持 fail-closed。
+  if (
+    (m = q.match(
+      /(?:^|[^0-9])((?:19|20)\d{2})\s*年(?!\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月|\s*(?:第\s*)?[一二三四1-4]\s*季度|\s*[Qq][1-4]|\s*[上前下后]半年|[初中底])/
+    ))
+  ) {
+    const y = parseInt(m[1], 10);
+    return {
+      start: toUtcSql(new Date(Date.UTC(y, 0, 1) - SH_OFFSET_MS)),
+      end: toUtcSql(new Date(Date.UTC(y + 1, 0, 1) - SH_OFFSET_MS)),
+      phrase: `${y}年`,
+    };
+  }
+
   // 明确日期与日期区间（R236 P3-4，audit-r235 §6：「8月10号到8月20号之间买咖啡豆
   // 花了多少」时间窗问法落空）：「M月D号」「M月D号到(M月)D号(之间)」确定性
   // 解析成上海日界的闭开区间；年份与裸「X月」同口径（未来月份取去年）。
   if (
     (m = q.match(
-      /(\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?/
+      /(?:((?:19|20)\d{2})\s*年\s*)?(\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?/
     ))
   ) {
-    const mon1 = parseNum(m[1]);
-    const day1 = parseNum(m[2]);
-    const mon2 = m[3] ? parseNum(m[3]) : mon1;
-    const day2 = m[4] ? parseNum(m[4]) : null;
+    const yAbs = m[1] ? parseInt(m[1], 10) : null;
+    const mon1 = parseNum(m[2]);
+    const day1 = parseNum(m[3]);
+    const mon2 = m[4] ? parseNum(m[4]) : mon1;
+    const day2 = m[5] ? parseNum(m[5]) : null;
     if (
       mon1 !== null && day1 !== null && mon2 !== null &&
       mon1 >= 1 && mon1 <= 12 && mon2 >= 1 && mon2 <= 12 &&
       day1 >= 1 && day1 <= 31 && (day2 === null || (day2 >= 1 && day2 <= 31))
     ) {
       const sh = new Date(now.getTime() + SH_OFFSET_MS);
-      const y = mon1 - 1 > sh.getUTCMonth() ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear();
+      const y = yAbs ?? (mon1 - 1 > sh.getUTCMonth() ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear());
       const start = new Date(Date.UTC(y, mon1 - 1, day1) - SH_OFFSET_MS);
       const end =
         day2 !== null
@@ -271,7 +301,7 @@ const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|�
 // meaningful text remains means the question is about a specific item
 // ("买咖啡花了多少钱"), not an overall aggregate — fall through to normal ask.
 const STRIP_RES: RegExp[] = [
-  /(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?(?:之间|期间|以内|之内|前后|左右)?|今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|(?:今年|去年)?\s*(?:上上个?|上一?个?|下一?个?|本|这一?个?|当前)季度|(?:今年|去年)?\s*第?\s*[一二三四1-4]\s*季度|[Qq][1-4]|(?:今年|去年)?\s*[上前下后]半年|(?:今年|去年)\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?|(?:一直)?[到至]\s*(?:现在|今天|目前(?:为止)?)|至今|以来/g,
+  /(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?(?:之间|期间|以内|之内|前后|左右)?|今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|(?:今年|去年)?\s*(?:上上个?|上一?个?|下一?个?|本|这一?个?|当前)季度|(?:今年|去年)?\s*第?\s*[一二三四1-4]\s*季度|[Qq][1-4]|(?:今年|去年)?\s*[上前下后]半年|(?:今年|去年)\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?|(?:一直)?[到至]\s*(?:现在|今天|目前(?:为止)?)|至今|以来|(?:19|20)\d{2}\s*年/g,
   /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
   /总?(?:花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额)|花了?|记了?账|账单|赚了?|挣了?|用掉|还了|还款|收款|[收拿][到了]|到手|[缴交用]了?/g,
   /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|？|\?|，|,|。|、|\s/g,
@@ -996,6 +1026,9 @@ const SUBSET_AGG_RE = /一共|总共|合计|总计|共计|加起来|总额|花�
 
 /** 从财务合计问法中提取主题限定词；非「主题 + 合计」问法返回 null。 */
 export function financeTopicTerms(question: string): string[] | null {
+  // 「X和Y分别/各花了多少」是并列子集合计而非事实检索（R250 P2-3）：
+  // 紧跟合计措辞的「分别/各自」先归一化掉，别被 FACT_QUERY_RE 拦下
+  question = question.replace(/(?:各自|分别)(?=各?(?:花|用|要|是?多少|一共|总共|合计))/g, "");
   if (isFinanceAggQuestion(question)) return null; // 无限定 → 全局精确合计
   if (FACT_QUERY_RE.test(question)) return null;
   // 「包括/算上…吗」是口径澄清问句而非子集合计：交澄清路由或普通召回，
@@ -1014,12 +1047,13 @@ const QUANTIFIER_TAIL_RE =
 // 主题词残片修剪（R242 P3-1，audit-r241 §4）：剥离流水线偶留句法残片——
 // 结构助词「的」贴在主题两侧（「这个月的咖啡」→「的咖啡」、「咖啡的钱」）、
 // 句首指代「那/这」。仅在剩余 ≥2 字时修剪，避免把「的士」剪成「士」；
-// LIKE 是包含语义，剪短只会提高召回不损精确。
+// LIKE 是包含语义，剪短只会提高召回不损精确。尾部「各/各自/分别」是
+// 并列问法的疑问框架（「团建各花了多少」→「团建」，R250 P2-3）。
 function trimTopicResidue(term: string): string {
   let t = term;
   const lead = t.replace(/^[的那这]+/, "");
   if (lead.length >= 2) t = lead;
-  const tail = t.replace(/(?:的钱|的)+$/, "");
+  const tail = t.replace(/(?:的钱|的|各自|各|分别)+$/, "");
   if (tail.length >= 2) t = tail;
   return t;
 }
@@ -1044,6 +1078,8 @@ function subsetTopicExtract(question: string): string[] | null {
   // 时间限定词不属于主题（「2026年7月咖啡」→「咖啡」）：时间过滤由
   // parseTimeRange 负责，残留的年月日 token 一律剥掉
   residual = residual.replace(/\d{2,4}\s*年|\d{1,2}\s*月(?:份)?|\d{1,2}\s*[日号]|上+个?[月周]|这个?[月周]|本[月周]|最近|今年|去年|前年/g, "");
+  // 并列疑问框架词不是主题（R250 P2-3：「买书分别花了多少」→「买书」）
+  residual = residual.replace(/各自|分别/g, "");
   // 剥掉开头的购买/消费动词（「买咖啡」→「咖啡」），但不能把「吃喝」这类
   // 本身就是主题的词剥空
   const stripped = residual.replace(/^[买在喝吃点逛去为给用出]{1,2}/, "").replace(/^(?:你|您|咱)+/, "");
@@ -1267,6 +1303,39 @@ export function buildFinanceSubsetAnswer(
   const sensitiveCnt = finance.filter((n) => n.is_sensitive).length;
   const matchScope = tagFallback ? "仅标签命中，标题/正文无直接命中" : "标题/正文";
   let md = `按关键词「${kw}」精确匹配（${matchScope}），${scope}共 ${expenseCount} 笔支出${incomeCount > 0 ? `、${incomeCount} 笔收入` : ""}：\n${totalLines.join("\n")}`;
+  // 多主题并列问法（R250 P2-3，audit-r249）：「A和B各花了多少」必须逐主题
+  // 拆分作答；部分主题零命中时如实声明，绝不以「精确统计」背书单主题结果。
+  if (terms.length > 1) {
+    const hitOf = (t: string) =>
+      finance.filter((n) => !n.is_sensitive && ((n.title ?? "").includes(t) || n.content.includes(t) || (n.tags ?? "").includes(t)));
+    const perLines = terms.map((t) => {
+      const hits = hitOf(t);
+      if (hits.length === 0) return `- 「${t}」：没有找到匹配的记账记录`;
+      const sums: Record<string, { expense: number; income: number }> = {};
+      for (const n of hits) {
+        const amt = effAmount(n);
+        if (amt === null) continue;
+        const cur = n.currency || "CNY";
+        sums[cur] ??= { expense: 0, income: 0 };
+        if (n.category === "expense") sums[cur].expense += amt;
+        else sums[cur].income += amt;
+      }
+      const parts = Object.entries(sums)
+        .map(([cur, s]) =>
+          [s.expense > 0 ? `支出 ${formatAmount(s.expense, cur)}` : null, s.income > 0 ? `收入 ${formatAmount(s.income, cur)}` : null]
+            .filter(Boolean)
+            .join("，")
+        )
+        .filter((s) => s.length > 0);
+      return `- 「${t}」：${hits.length} 笔${parts.length > 0 ? `，${parts.join("；")}` : ""}`;
+    });
+    md += `\n\n按主题拆分：\n${perLines.join("\n")}`;
+    if (sensitiveCnt > 0) md += `\n（加密的敏感记录无法按主题拆分，仅计入上方总合计。）`;
+    const missing = terms.filter((t) => hitOf(t).length === 0);
+    if (missing.length > 0 && missing.length < terms.length) {
+      md += `\n（注意：以上合计只包含已命中的主题；「${missing.join("、")}」没有找到匹配的记账记录，如果你的记录用了别的说法，换个关键词再问试试。）`;
+    }
+  }
   if (itemLines.length > 0) md += `\n\n逐笔明细${finance.length > visible.length ? `（共 ${finance.length} 笔，仅展示前 ${visible.length} 笔）` : ""}：\n${itemLines.join("\n")}`;
   if (sensitiveCnt > 0) md += `\n（含 ${sensitiveCnt} 笔加密的敏感记录，金额已计入合计，内容不在问答中展示。）`;
   if (unknown > 0) md += `\n（另有 ${unknown} 笔未识别出金额，未计入合计。）`;
@@ -1309,11 +1378,16 @@ export type FinanceListDirection = "expense" | "income" | "both";
 const FINANCE_LIST_CUES: [RegExp, FinanceListDirection][] = [
   // 收入/收支线索先判（「赚了哪些钱」不能被支出侧的裸「哪些钱」抢先）
   [/(?:收入|进账|入账)(?:记录|明细|情况)?(?:都)?有哪些|有(?:过)?(?:哪些|些什么|什么)(?:收入|进账|入账)|(?:收入|进账)明细|[赚挣](?:了|到|过)?(?:哪些|些什么|什么)钱|记[了过]?(?:哪些|些什么|什么)(?:收入|进账|入账)/, "income"],
-  [/记[了过]?(?:哪些|些什么|什么)账|账单(?:明细)?(?:都)?有哪些|收支明细/, "both"],
+  // 「哪几笔」无方向词时按收支双向列（R250 P2-2：无历史的「去年下半年
+  // 分别是哪几笔」与追问式同一管道收口，不平行打补丁）
+  [/记[了过]?(?:哪些|些什么|什么)账|账单(?:明细)?(?:都)?有哪些|收支明细|哪几笔/, "both"],
   // 「花了哪些钱/花了些什么钱」「哪些钱」「钱都花在哪了」
   [/花了?(?:哪些|些什么|什么)钱|哪些钱|钱(?:都)?(?:花|用)(?:在|到)了?(?:哪|什么)/, "expense"],
   // 「有哪些支出/开销」「支出有哪些」「消费明细」「列一下开销」
   [/(?:支出|开支|开销|花销|消费)(?:记录|明细|情况)?(?:都)?有哪些|有(?:过)?(?:哪些|些什么|什么)(?:支出|开支|开销|花销|消费)|(?:支出|开支|开销|花销|消费)明细|列(?:一下|出|举)?[^？?。]{0,6}(?:支出|开支|开销|花销|消费)/, "expense"],
+  // 尾部裸「买了什么」（R250 P2-2）：句尾无主题词才算（「买了哪些书」
+  // 不在此列，留给主题子集/普通召回）
+  [/买[了过]?(?:些)?(?:哪些|什么|啥)(?:东西)?\s*[？?。！!]*$/, "expense"],
 ];
 
 /** 识别财务列举问题（「花了哪些钱」）；带主题限定（「买了哪些书」）返回 null。 */
@@ -1330,7 +1404,7 @@ export function financeListIntent(question: string): FinanceListDirection | null
   // 子集/普通召回，与 isFinanceAggQuestion 同一剥离口径
   const residual = applyStrips(question, [
     ...STRIP_RES,
-    /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|明细|记录|清单|情况|列出|列举|列一下|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的/g,
+    /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出|列举|列一下|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的/g,
   ]);
   return residual.length < 2 ? direction : null;
 }
@@ -1988,7 +2062,7 @@ export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null
   const scope = phrase ?? "全部笔记";
   if (stats.expenseCount === 0 && stats.incomeCount === 0) {
     const transferNote = stats.transferCount > 0 ? `另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支。` : "";
-    return `${scope}没有记账记录（支出/收入均为 0 笔）。${transferNote}`;
+    return `${scope}没有记账记录（支出/收入均为 0 笔）。${transferNote}\n\n以上为精确统计，口径与周报/月报一致。`;
   }
   const lines = Object.entries(stats.totals).map(
     ([cur, t]) =>
