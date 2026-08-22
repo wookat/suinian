@@ -75,7 +75,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
+import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -3163,13 +3163,21 @@ app.post("/api/ask", async (c) => {
     }
     // 限定项没有对应记账笔记：落回普通召回，让 LLM 结合笔记原文解释
   }
+  // 财务聚合后的裸列举追问闸（R248 P1，audit-r247 F-1）：上一轮是精确合计
+  // 答案、本轮是不带主题词的裸列举追问时，改写产物会把上一轮答案措辞带入并
+  // 污染下方各确定性财务意图的 recallQuestion 回退（「能列一下吗」4/4 误判为
+  // 仅收入）。此闸与元问题闸同一原理：关闭全部改写产物财务回退；追问直接
+  // 继承上一轮口径走财务列举——带方向线索的按方向，纯泛列举（「能列一下吗」）
+  // 问的就是上一轮合计覆盖的账目，按收支双向精确列举。
+  const listFollowUp = financeListFollowUpIntent(intentBase, lastAssistant);
+  const listFollowUpDir = listFollowUp === "generic" ? "both" : listFollowUp;
   // 意图判定以原始问题为准（R113 P1）：改写只服务于召回，带历史时改写器
   // 可能给普通合计补出限定成分，绝不能因此把 exact 打成 fail-closed。
   // R129 P2-a：原问题带财务词但判定为 null（具体单项，如「午饭花了多少钱」）
   // 时，改写补出的聚合措辞不得覆盖——单项问题必须走普通召回直答该项。
   // 财务极值（R148 P1-2）：「最贵的一笔支出」走 ORDER BY amount 精确查询，
   // 按币种分组比较（不同币种金额不可直接比大小），绝不交 LLM 猜极值。
-  const finExtreme = financeExtremeIntent(intentQuestion) ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeExtremeIntent(recallQuestion));
+  const finExtreme = financeExtremeIntent(intentQuestion) ?? (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? null : financeExtremeIntent(recallQuestion));
   if (finExtreme) {
     const xRange = (financeExtremeIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     // 主题限定（R174 P1）：「键盘里最贵的」的「键盘」注入 WHERE（与财务
@@ -3267,7 +3275,7 @@ app.post("/api/ask", async (c) => {
   // 财务比较（R168 P1）：「赚得多还是花得多/入不敷出/收支差多少」与环比对比
   // 都必须基于 financeStats 的 SQL 精确聚合做比较后确定性措辞，绝不让 LLM
   // 对被 LIMIT 截断的召回自由加总再比较（R167 P1-1：漏项算错总支出）。
-  const finMom = financeMomIntent(intentQuestion) ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeMomIntent(recallQuestion));
+  const finMom = financeMomIntent(intentQuestion) ?? (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? null : financeMomIntent(recallQuestion));
   if (finMom) {
     const curRange = parseTimeRange(finMom === "month" ? "本月" : "本周")!;
     const prevRange = parseTimeRange(finMom === "month" ? "上个月" : "上周")!;
@@ -3288,7 +3296,7 @@ app.post("/api/ask", async (c) => {
       finance_compare: true,
     });
   }
-  const finCompare = financeCompareIntent(intentQuestion) || (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? false : financeCompareIntent(recallQuestion));
+  const finCompare = financeCompareIntent(intentQuestion) || (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? false : financeCompareIntent(recallQuestion));
   if (finCompare) {
     const cmpRange = (financeCompareIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const cmpConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
@@ -3322,7 +3330,7 @@ app.post("/api/ask", async (c) => {
   // 金额阈值筛选（R240 P2-3）：「列出超过 80 元的支出」是 WHERE amount > ?
   // 的确定性查询，绝不交 LLM 对截断召回筛选（漏项/心算错）。
   const origThresholdQ = !metaQuestion && financeThresholdIntent(intentQuestion) ? intentQuestion : null;
-  const thresholdQ = origThresholdQ ?? (!metaQuestion && financeThresholdIntent(recallQuestion) ? recallQuestion : null);
+  const thresholdQ = origThresholdQ ?? (!metaQuestion && !listFollowUp && financeThresholdIntent(recallQuestion) ? recallQuestion : null);
   const finThreshold = thresholdQ ? financeThresholdIntent(thresholdQ) : null;
   const finThresholdTerms = thresholdQ ? financeThresholdTopicTerms(thresholdQ) : null;
   if (finThreshold && !(finThresholdTerms?.includes("\u0000"))) {
@@ -3375,9 +3383,13 @@ app.post("/api/ask", async (c) => {
       finance_threshold: true,
     });
   }
-  const finList = financeListIntent(intentQuestion) ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeListIntent(recallQuestion));
+  const finList = listFollowUpDir ?? financeListIntent(intentQuestion) ?? (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? null : financeListIntent(recallQuestion));
   if (finList) {
-    const lRange = (financeListIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
+    // 裸列举追问的时间窗继承：本轮原问题优先，否则沿用上一轮合计答案里的
+    // 时间短语（口径一致），绝不取改写产物注入的时间窗
+    const lRange = listFollowUpDir
+      ? (parseTimeRange(intentBase) ?? parseTimeRange(lastAssistant ?? ""))
+      : ((financeListIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange);
     const lConds = ["user_id = ?", "deleted_at IS NULL"];
     const lBinds: unknown[] = [userId];
     if (finList === "both") {
@@ -3413,7 +3425,7 @@ app.post("/api/ask", async (c) => {
   }
   const origFinanceIntent = financeAggIntent(intentQuestion);
   let financeIntent =
-    origFinanceIntent ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeAggIntent(recallQuestion));
+    origFinanceIntent ?? (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? null : financeAggIntent(recallQuestion));
   // 代词追问问的是前轮那个具体事物的价格（「它一共花了多少钱」），绝不能
   // fail-closed 复读全账合计——主题子集命中则精确直答，否则普通召回能直答
   if (pronounFollowUp && financeIntent === "fail_closed") financeIntent = null;
@@ -3426,7 +3438,7 @@ app.post("/api/ask", async (c) => {
   const subsetTerms =
     financeIntent === "exact" || mixedSubQ
       ? null
-      : (financeTopicTerms(intentQuestion) ?? (metaQuestion || FINANCE_WORD_RE.test(intentQuestion) ? null : financeTopicTerms(recallQuestion)));
+      : (financeTopicTerms(intentQuestion) ?? (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? null : financeTopicTerms(recallQuestion)));
   if (subsetTerms) {
     const sRange = (financeTopicTerms(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     // 关键词降级重试（R192 P2-2）：整串零命中时剥残片/拆词再试一次，

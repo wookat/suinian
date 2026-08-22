@@ -1475,17 +1475,21 @@ export function TimelinePage() {
         </div>
       )}
 
-      {/* Mobile FAB: scroll to quick input and focus it */}
-      <button
-        onClick={() => {
-          quickInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
-          quickInputRef.current?.querySelector("textarea")?.focus()
-        }}
-        aria-label="快速记录"
-        className="fixed bottom-20 right-4 z-20 flex size-13 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform active:scale-95 md:hidden"
-      >
-        <Plus className="size-6" />
-      </button>
+      {/* Mobile FAB: scroll to quick input and focus it.
+          问答模式下隐藏：面板内没有快速记录入口，悬浮钮只会遮挡引用卡片
+          右下角（audit-r247 F-5）。 */}
+      {!askMode && (
+        <button
+          onClick={() => {
+            quickInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+            quickInputRef.current?.querySelector("textarea")?.focus()
+          }}
+          aria-label="快速记录"
+          className="fixed bottom-20 right-4 z-20 flex size-13 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform active:scale-95 md:hidden"
+        >
+          <Plus className="size-6" />
+        </button>
+      )}
     </div>
   )
 }

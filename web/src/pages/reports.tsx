@@ -275,7 +275,7 @@ export function ReportsPage() {
         >
           <div className="flex items-center gap-2">
             <FileText className="size-4 shrink-0 text-muted-foreground" />
-            <h3 className="text-[15px] font-medium">{reportTitle(r)}</h3>
+            <h2 className="text-[15px] font-medium">{reportTitle(r)}</h2>
           </div>
           <p className="mt-1.5 text-xs text-muted-foreground">{reportRangeLabel(r)}</p>
           {r.content_md && (

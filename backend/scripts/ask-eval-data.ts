@@ -1172,4 +1172,59 @@ export const QUESTIONS: EvalQuestion[] = [
     question: "第三季度给猫花的钱一共多少",
     expectAnswerContains: ["不做心算合计", "口径与周报/月报一致"],
   },
+
+  // —— R248 P1（audit-r247 F-1）：财务聚合答案后的裸列举追问。这类追问自身
+  // 无财务措辞，依赖改写注入历史，改写产物会污染财务意图方向判定（R247 实测
+  // 「能列一下吗」4/4 误判为仅收入并假否定）。带财务线索的追问确定性继承上一
+  // 轮口径走财务列举；纯泛列举只关财务回退、走既有枚举管道。lastAssistant 不带
+  // 时间短语（全账口径），窗口继承与运行日期无关。——
+  {
+    id: "q168",
+    category: "财务列举",
+    question: "分别是哪几笔？",
+    history: [
+      { role: "user", content: "我一共花了多少钱" },
+      { role: "assistant", content: "全部笔记共记录 2 笔支出。\n- CNY：支出 ¥659.00，收入 ¥0.00，结余 -¥659.00\n\n以上为精确统计，口径与周报/月报一致。" },
+    ],
+    expectAll: ["exp1", "exp2"],
+    expectAnswerContains: ["数据库精确列举"],
+    forbid: ["todo1"],
+  },
+  {
+    id: "q169",
+    category: "财务列举",
+    question: "都花在什么上了？",
+    history: [
+      { role: "user", content: "我一共花了多少钱" },
+      { role: "assistant", content: "全部笔记共记录 2 笔支出。\n- CNY：支出 ¥659.00，收入 ¥0.00，结余 -¥659.00\n\n以上为精确统计，口径与周报/月报一致。" },
+    ],
+    expectAll: ["exp1", "exp2"],
+    expectAnswerContains: ["数据库精确列举"],
+    forbid: ["todo1"],
+    holdout: true,
+  },
+  {
+    id: "q170",
+    category: "财务列举",
+    question: "能列一下吗？",
+    history: [
+      { role: "user", content: "我一共花了多少钱" },
+      { role: "assistant", content: "全部笔记共记录 2 笔支出。\n- CNY：支出 ¥659.00，收入 ¥0.00，结余 -¥659.00\n\n以上为精确统计，口径与周报/月报一致。" },
+    ],
+    // 泛列举继承上一轮合计口径走收支双向精确列举（R247 失败形态为
+    // 「仅收入+假否定」；生产 eval 实测 LLM 枚举管道也只复述合计不列举）
+    expectAll: ["exp1", "exp2"],
+    expectAnswerContains: ["数据库精确列举"],
+    forbidAnswerContains: ["没有找到收入记录", "没有记录支出", "没有支出"],
+  },
+
+  // —— R248 P3（audit-r247 F-3）：「X月到现在」开放时间窗问法走精确聚合，
+  // 不再关键词化为「到现在」后 fail-closed 拒答 ——
+  {
+    id: "q171",
+    category: "财务聚合",
+    question: "8月到现在一共支出多少",
+    expectAnswerContains: ["口径与周报/月报一致"],
+    forbidAnswerContains: ["不做心算合计"],
+  },
 ];
