@@ -121,6 +121,11 @@ describe("enumListIntent", () => {
     expect(enumListIntent("昨天记了哪些")).toBe(true);
   });
 
+  it("「有什么记录/有哪些笔记」枚举措辞命中（R246 prod QA：下半年有什么记录漏召回）", () => {
+    expect(enumListIntent("下半年有什么记录")).toBe(true);
+    expect(enumListIntent("上个季度有哪些笔记")).toBe(true);
+  });
+
   it("普通问答不命中", () => {
     expect(enumListIntent("健身计划是什么")).toBe(false);
     expect(enumListIntent("上周花了多少钱")).toBe(false);

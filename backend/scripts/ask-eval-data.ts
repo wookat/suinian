@@ -1143,14 +1143,19 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q164",
     category: "财务聚合",
     question: "上个季度一共支出多少",
-    expectAnswerContains: ["口径与周报/月报一致"],
+    // 锁季度窗本身：答案必须回显「上个季度」窗口而非落入全量/整年；
+    // 种子账目只覆盖最近 ~40 天，上个季度可能为零记录（确定性零答复也算对）。
+    expectAnswerContains: ["上个季度"],
+    forbidAnswerContains: ["全部笔记"],
     holdout: true,
   },
   {
     id: "q165",
     category: "财务聚合",
     question: "上半年总共花了多少钱",
-    expectAnswerContains: ["口径与周报/月报一致"],
+    // 同 q164：锁半年窗回显，零记录确定性答复也算对。
+    expectAnswerContains: ["上半年"],
+    forbidAnswerContains: ["全部笔记"],
   },
   {
     id: "q166",

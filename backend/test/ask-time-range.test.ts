@@ -136,6 +136,14 @@ describe("parseTimeRange", () => {
     expect(lyNov.start).toBe("2025-10-31 16:00:00");
     expect(lyNov.end).toBe("2025-11-30 16:00:00");
   });
+  it("does not let 一共/合计 after 今年X月 break the month window (R246 prod QA)", () => {
+    const r = parseTimeRange("今年8月一共花了多少钱", NOW)!;
+    expect(r.phrase).toBe("今年8月");
+    expect(r.start).toBe("2026-07-31 16:00:00");
+    expect(r.end).toBe("2026-08-31 16:00:00");
+    const cjk = parseTimeRange("今年八月一共花了多少", NOW)!;
+    expect(cjk.start).toBe("2026-07-31 16:00:00");
+  });
   it("keeps 今年8月10号 (explicit day) out of the year-month branch", () => {
     const r = parseTimeRange("今年8月10号买了什么", NOW)!;
     // 不误窄化成整月窗：维持现状（整年窗或后续日期分支）
