@@ -1351,4 +1351,14 @@ export const QUESTIONS: EvalQuestion[] = [
     question: "最近一个月平均每天花多少钱",
     expectAnswerContains: ["平均每天支出", "口径与周报/月报一致"],
   },
+
+  // —— R252 QA 回归修复：「列出我所有支出」的「所有/我」框架词不挡纯财务列举 ——
+  {
+    id: "q186",
+    category: "财务列举",
+    question: "列出我所有支出",
+    expectAny: ["exp1", "exp2"],
+    expectAnswerContains: ["数据库精确"],
+    forbidAnswerContains: ["没找到相关笔记"],
+  },
 ];

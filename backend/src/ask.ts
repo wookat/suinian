@@ -1405,7 +1405,7 @@ export function financeListIntent(question: string): FinanceListDirection | null
   // 子集/普通召回，与 isFinanceAggQuestion 同一剥离口径
   const residual = applyStrips(question, [
     ...STRIP_RES,
-    /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出|列举|列一下|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的/g,
+    /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出|列举|列一下|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的|所有|全部|我们?|你|咱/g,
   ]);
   return residual.length < 2 ? direction : null;
 }
