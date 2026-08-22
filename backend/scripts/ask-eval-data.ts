@@ -1129,4 +1129,42 @@ export const QUESTIONS: EvalQuestion[] = [
   { id: "q161", category: "无答案", question: "上个星期我出差去了哪里", expectRefusal: true, forbidAnswerContains: ["去了成都", "在成都"] },
   // 有答案不误伤：窗内真有记录的时间窗问法保持正常作答
   { id: "q162", category: "时间限定", question: "最近几天我记的关于高铁的内容是什么", expectAny: ["nz17"] },
+
+  // —— R246 F-5/F-6（audit-r245）：季度/半年/今年X月并入统一时间窗管道。
+  // 聚合问法必须走 SQL 精确路径（确定性口径标记），绝不落 LLM 心算；
+  // 相对窗内容随运行日期变化，故只锁口径不锁数字。——
+  {
+    id: "q163",
+    category: "财务聚合",
+    question: "第三季度总共花了多少钱",
+    expectAnswerContains: ["口径与周报/月报一致"],
+  },
+  {
+    id: "q164",
+    category: "财务聚合",
+    question: "上个季度一共支出多少",
+    expectAnswerContains: ["口径与周报/月报一致"],
+    holdout: true,
+  },
+  {
+    id: "q165",
+    category: "财务聚合",
+    question: "上半年总共花了多少钱",
+    expectAnswerContains: ["口径与周报/月报一致"],
+  },
+  {
+    id: "q166",
+    category: "财务聚合",
+    question: "今年8月一共花了多少钱",
+    expectAnswerContains: ["口径与周报/月报一致"],
+    holdout: true,
+  },
+  // 反例护栏：「半年前」是时点不是日历窗，不得被半年窗误吞；
+  // 主题限定的季度合计仍 fail-closed
+  {
+    id: "q167",
+    category: "财务聚合",
+    question: "第三季度给猫花的钱一共多少",
+    expectAnswerContains: ["不做心算合计", "口径与周报/月报一致"],
+  },
 ];

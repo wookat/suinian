@@ -20,6 +20,16 @@ describe("financeAggIntent R112 synonyms (P2-1)", () => {
     expect(financeAggIntent("上个月我花销总额是多少")).toBe("exact");
     expect(financeAggIntent("买咖啡花了多少钱")).toBe(null);
   });
+  // R246 F-5/F-6：季度/半年/今年X月时间措辞剥离，聚合问法照走 SQL 精确路径
+  it("strips quarter / half-year / 今年X月 time phrases for exact aggregates", () => {
+    expect(financeAggIntent("第三季度花了多少")).toBe("exact");
+    expect(financeAggIntent("上个季度一共花了多少钱")).toBe("exact");
+    expect(financeAggIntent("去年第二季度总共支出多少")).toBe("exact");
+    expect(financeAggIntent("上半年一共花了多少")).toBe("exact");
+    expect(financeAggIntent("去年下半年的总支出是多少")).toBe("exact");
+    expect(financeAggIntent("今年2月一共花了多少钱")).toBe("exact");
+    expect(financeAggIntent("第三季度买咖啡花了多少钱")).toBe(null);
+  });
 });
 
 describe("reconcileAskCitations dangling lead-in cleanup (R111 q54)", () => {
