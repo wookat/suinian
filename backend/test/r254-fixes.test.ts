@@ -117,7 +117,9 @@ describe("净剩 as balance wording (P3-3)", () => {
 // ---- P3-4: 「X相关的支出」语序的「相关」框架残片剥净 ----
 describe("相关的 residue trim (P3-4)", () => {
   it("no longer injects 「书相关的」 as a LIKE keyword", () => {
-    expect(financeTopicTerms("书相关的支出一共多少")).toBeNull();
+    // R256 P3-1：修剪「相关的」后残留单字「书」不再拒答，作为单字主题放行
+    // （行集由 filterSingleCharTopicRows 邻字上下文过滤兜住过匹配）
+    expect(financeTopicTerms("书相关的支出一共多少")).toEqual(["书"]);
   });
   it("keeps multi-char topics after trimming 相关", () => {
     expect(financeTopicTerms("咖啡相关的支出一共多少")).toEqual(["咖啡"]);

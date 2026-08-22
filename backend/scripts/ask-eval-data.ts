@@ -117,6 +117,8 @@ export const NOTES: EvalNote[] = [
   N("nz18", 2, "idea", "快闪店定价", "快闪店定价想法：手冲一律 35，套餐（咖啡+甜点）50，比市区门店便宜一点吸引尝鲜", ["咖啡馆", "创业"]),
   N("nz19", 1, "collect", "手冲滤杯测评视频", "https://example.com/v60-review V60 和折纸滤杯的对比测评，新手建议 V60", ["咖啡馆"]),
   N("nz20", 30, "expense", "买跑鞋", "买了双跑鞋 549 元，结果现在改游泳了，有点浪费", ["购物", "健身"]),
+  // R256：买书支出（P2-3 列举主题限定 / P3-1 单字主题「书」的真值锚点）
+  N("book1", 14, "expense", "买书：《置身事内》", "买了本《置身事内》52 元", ["买书"]),
   // —— R88 badcase：具体数字细节的召回（土鸡蛋报价类） ——
   N("num1", 6, "data", "土鸡蛋团购报价", "供应商老王的土鸡蛋报价：每斤 8.5 元，30 枚礼盒装 25.5 元，周三前下单周五提货", ["团购"]),
   // —— 副业播客线索（R79：多跳/为什么/溯源难例用，与 nz4 同一演化链） ——
@@ -147,7 +149,8 @@ export type QuestionCategory =
   | "财务极值"
   | "主题枚举"
   | "财务澄清"
-  | "多轮切题";
+  | "多轮切题"
+  | "忠实性";
 
 export interface EvalQuestion {
   id: string;
@@ -606,8 +609,8 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q106",
     category: "财务极值",
     question: "金额最小的一笔消费是哪笔",
-    expectAll: ["exp2"],
-    expectAnswerContains: ["260", "数据库精确查询"],
+    expectAll: ["book1"],
+    expectAnswerContains: ["52", "数据库精确查询"],
     holdout: true,
   },
   // 主题零命中：绝不能退回全局极值冒充主题答案（落回普通召回，如实说没找到；
@@ -680,7 +683,7 @@ export const QUESTIONS: EvalQuestion[] = [
 
   // —— R182（audit-r181 P1-2）：序数金额提问必须走确定性 SQL 排名 ——
   // 「第二贵/排名第二/倒数第二」曾走 LLM 猜排序，答错且与台账口径矛盾。
-  // 支出金额序：nz20 549 > exp1 399 > exp2 260。
+  // 支出金额序：nz20 549 > exp1 399 > exp2 260 > book1 52（R256 新增种子）。
   {
     id: "q113",
     category: "财务极值",
@@ -703,9 +706,9 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q115",
     category: "财务极值",
     question: "金额倒数第二的一笔支出是哪笔",
-    expectAll: ["exp1"],
-    expectAnswerContains: ["399", "第 2 小", "数据库精确查询"],
-    forbidAnswerContains: ["549", "260"],
+    expectAll: ["exp2"],
+    expectAnswerContains: ["260", "第 2 小", "数据库精确查询"],
+    forbidAnswerContains: ["549", "399"],
   },
   {
     id: "q116",
@@ -738,8 +741,8 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q119",
     category: "财务极值",
     question: "我最便宜的一笔支出是多少钱",
-    expectAll: ["exp2"],
-    expectAnswerContains: ["260", "未参与单笔比较", "数据库精确查询"],
+    expectAll: ["book1"],
+    expectAnswerContains: ["52", "未参与单笔比较", "数据库精确查询"],
     forbidAnswerContains: ["356", "1200", "¥77"],
   },
   {
@@ -808,8 +811,8 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q125",
     category: "财务极值",
     question: "单笔最便宜的一笔支出是哪一笔",
-    expectAll: ["exp2"],
-    expectAnswerContains: ["260", "数据库精确查询"],
+    expectAll: ["book1"],
+    expectAnswerContains: ["52", "数据库精确查询"],
     forbidAnswerContains: ["¥77", "356"],
     holdout: true,
   },
@@ -865,8 +868,8 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q131",
     category: "财务极值",
     question: "金额倒数第一的支出是哪笔",
-    expectAll: ["exp2"],
-    expectAnswerContains: ["260"],
+    expectAll: ["book1"],
+    expectAnswerContains: ["52"],
     forbidAnswerContains: ["123", "233", "¥77"],
     holdout: true,
   },
@@ -918,8 +921,8 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q136",
     category: "财务极值",
     question: "金额最小的一笔支出是多少",
-    expectAll: ["exp2"],
-    expectAnswerContains: ["260"],
+    expectAll: ["book1"],
+    expectAnswerContains: ["52"],
     forbidAnswerContains: ["224"],
   },
 
@@ -1442,5 +1445,75 @@ export const QUESTIONS: EvalQuestion[] = [
     category: "财务子集",
     question: "书相关的支出一共多少",
     forbidAnswerContains: ["按关键词「书相关"],
+    // R256 P3-1：单字主题「书」不再拒答，命中 book1（52 元）；订书机（led7
+    // 台账行）绝不能被当成「书」算进合计
+    expectAny: ["book1"],
+    expectAnswerContains: ["52"],
+    forbid: ["led7"],
+  },
+
+  // —— R256 P1-1（audit-r255：关系限定词带引用编造「给女朋友买的礼物」）：
+  // 全库无「女朋友」字样时必须诚实拒答，绝不把买书/给爸妈的礼物硬凑成
+  // 关系事实；关系词真实在库（nz9 给爸妈买按摩椅）时不得误伤。——
+  {
+    id: "q196",
+    category: "忠实性",
+    question: "我给女朋友买过什么礼物",
+    expectRefusal: true,
+    expectAnswerContains: ["女朋友"],
+    forbidAnswerContains: ["买过的礼物有", "给女朋友买过", "《置身事内》[", "按摩椅["],
+  },
+  {
+    id: "q197",
+    category: "忠实性",
+    question: "我给老婆买过什么生日礼物",
+    expectRefusal: true,
+    expectAnswerContains: ["老婆"],
+    forbidAnswerContains: ["买过的礼物有", "给老婆买过"],
+    holdout: true,
+  },
+  {
+    id: "q198",
+    category: "忠实性",
+    question: "我打算给爸妈买什么生日礼物",
+    expectAny: ["nz9"],
+    expectAnswerContains: ["按摩椅"],
+  },
+
+  // —— R256 P2-1（audit-r255：「本月支出和收入分别多少」未走确定性聚合）——
+  {
+    id: "q199",
+    category: "财务聚合",
+    question: "本月支出和收入分别是多少",
+    expectAnswerContains: ["口径与周报/月报一致"],
+    forbidAnswerContains: ["没找到相关笔记"],
+  },
+
+  // —— R256 P2-2（audit-r255：双窗对比答「上半年没有找到相关记录」与事实相反）——
+  {
+    id: "q200",
+    category: "财务聚合",
+    question: "今年上半年和下半年到现在，哪段花得多",
+    expectAnswerContains: ["口径与周报/月报一致"],
+    forbidAnswerContains: ["没有找到相关记录"],
+  },
+
+  // —— R256 P2-3（audit-r255：「列一下买书的支出」吞掉主题限定回全量 16 笔）——
+  {
+    id: "q201",
+    category: "财务列举",
+    question: "列一下买书的支出",
+    expectAny: ["book1"],
+    expectAnswerContains: ["置身事内"],
+    forbidAnswerContains: ["机械键盘", "跑鞋"],
+  },
+
+  // —— R256 P3-2（audit-r255：品类归纳落 LLM 兜底只引 1 条还答没记录）——
+  {
+    id: "q202",
+    category: "财务聚合",
+    question: "我的钱主要花在哪些方面",
+    expectAnswerContains: ["标签归纳"],
+    forbidAnswerContains: ["没有记录", "没找到相关笔记"],
   },
 ];
