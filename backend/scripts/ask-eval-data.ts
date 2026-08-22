@@ -1361,4 +1361,86 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAnswerContains: ["数据库精确"],
     forbidAnswerContains: ["没找到相关笔记"],
   },
+
+  // —— R254 P2-2（audit-r253：「今天收到了哪些钱」被裸「哪些钱」抢成支出
+  // 列举）：收入向动词（收到/到账/进账/入账）优先于支出侧。种子无收入
+  // 记录，正确路由 = 收入侧 fail-closed，绝不列支出充数。——
+  {
+    id: "q187",
+    category: "财务列举",
+    question: "今天收到了哪些钱",
+    expectRefusal: true,
+    forbid: ["exp1", "exp2", "led6", "todo1"],
+    forbidAnswerContains: ["笔支出"],
+  },
+  {
+    id: "q188",
+    category: "财务列举",
+    question: "今天收到的钱有哪些",
+    expectRefusal: true,
+    forbid: ["exp1", "exp2", "todo1"],
+    forbidAnswerContains: ["笔支出"],
+    holdout: true,
+  },
+
+  // —— R254 P2-3（audit-r253：#279 框架词剥净在收入方向与倒装语序不命中）：
+  // 方向 × 语序 × 框架词矩阵——方向词与列举动词解耦，同一剥离口径收口。——
+  {
+    id: "q189",
+    category: "财务列举",
+    question: "我所有收入列一下",
+    expectRefusal: true,
+    forbid: ["exp1", "exp2", "todo1"],
+    forbidAnswerContains: ["笔支出"],
+  },
+  {
+    id: "q190",
+    category: "财务列举",
+    question: "列出所有收入",
+    expectRefusal: true,
+    forbid: ["exp1", "exp2", "todo1"],
+    forbidAnswerContains: ["笔支出"],
+    holdout: true,
+  },
+  {
+    id: "q191",
+    category: "财务列举",
+    question: "把咱的支出都列一下",
+    expectAny: ["exp1", "exp2"],
+    expectAnswerContains: ["数据库精确"],
+    forbidAnswerContains: ["没找到相关笔记"],
+  },
+  {
+    id: "q192",
+    category: "财务列举",
+    question: "你把全部支出列出来",
+    expectAny: ["exp1", "exp2"],
+    expectAnswerContains: ["数据库精确"],
+    holdout: true,
+  },
+  {
+    id: "q193",
+    category: "财务列举",
+    question: "支出列出来",
+    expectAny: ["exp1", "exp2"],
+    expectAnswerContains: ["数据库精确"],
+  },
+
+  // —— R254 P3-3（audit-r253：口语化结余「净剩」未路由到聚合）——
+  {
+    id: "q194",
+    category: "财务聚合",
+    question: "这个月净剩多少",
+    expectAnswerContains: ["口径与周报/月报一致"],
+    forbidAnswerContains: ["无法确定"],
+  },
+
+  // —— R254 P3-4（audit-r253：「书相关的支出一共多少」把「书相关的」整体
+  // 注入 LIKE 零命中假否定）：不再落「没有找到记账记录」的误读回显。——
+  {
+    id: "q195",
+    category: "财务子集",
+    question: "书相关的支出一共多少",
+    forbidAnswerContains: ["按关键词「书相关"],
+  },
 ];

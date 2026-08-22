@@ -291,19 +291,19 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
 // 「X 时间一共花了多少钱」类合计问题必须走 SQL 精确聚合（与周报/月报同一
 // financeStats 口径），绝不能靠 LLM 对被 LIMIT 截断的召回片段心算。
 
-export const FINANCE_WORD_RE = /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额|记了?账|账单|赚了?|挣了?|用掉|缴费|交费|收款|[收拿][到了](?=[^？?。]{0,6}[钱款])|到手(?=[^？?。]{0,6}[钱款])|[缴交用]了?(?=[^？?。]{0,10}(?:多少|几))/;
-const AGG_WORD_RE = /一共|总共|合计|总计|共计|加起来|多少钱|多少笔|几笔|平均每|总额|结余|收支|余额|多少|怎么样|怎样|如何|情况/;
+export const FINANCE_WORD_RE = /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|净剩|收支|余额|记了?账|账单|赚了?|挣了?|用掉|缴费|交费|收款|[收拿][到了](?=[^？?。]{0,6}[钱款])|到手(?=[^？?。]{0,6}[钱款])|[缴交用]了?(?=[^？?。]{0,10}(?:多少|几))/;
+const AGG_WORD_RE = /一共|总共|合计|总计|共计|加起来|多少钱|多少笔|几笔|平均每|总额|结余|净剩|收支|余额|多少|怎么样|怎样|如何|情况/;
 // sum-style wording that only makes sense as a books-level aggregate: when it
 // appears with a finance word but the question can't be routed to the exact
 // aggregate (extra qualifiers remain), the LLM must NOT mental-math it.
-const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|总额|结余|收支|余额/;
+const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|总额|结余|净剩|收支|余额/;
 // strip time phrases / finance verbs / aggregation words / filler; whatever
 // meaningful text remains means the question is about a specific item
 // ("买咖啡花了多少钱"), not an overall aggregate — fall through to normal ask.
 const STRIP_RES: RegExp[] = [
   /(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?(?:之间|期间|以内|之内|前后|左右)?|今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|(?:今年|去年)?\s*(?:上上个?|上一?个?|下一?个?|本|这一?个?|当前)季度|(?:今年|去年)?\s*第?\s*[一二三四1-4]\s*季度|[Qq][1-4]|(?:今年|去年)?\s*[上前下后]半年|(?:今年|去年)\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底)?|(?:一直)?[到至]\s*(?:现在|今天|目前(?:为止)?)|至今|以来|(?:19|20)\d{2}\s*年/g,
   /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
-  /总?(?:花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|收支|余额)|花了?|记了?账|账单|赚了?|挣了?|用掉|还了|还款|收款|[收拿][到了]|到手|[缴交用]了?/g,
+  /总?(?:花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|净剩|收支|余额)|(?:工资|薪水)(?:到账|发了?)之?后|花了?|记了?账|账单|赚了?|挣了?|用掉|还了|还款|收款|[收拿][到了]|到手|[缴交用]了?/g,
   /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|？|\?|，|,|。|、|\s/g,
 ];
 
@@ -1056,6 +1056,10 @@ function trimTopicResidue(term: string): string {
   // 「相关/那天」残片（R252 P3-1）：「咖啡相关」「情人节那天」剥净成主题词
   const tail = t.replace(/(?:的钱|的|各自|各|分别|相关|那天|这天|当天)+$/, "");
   if (tail.length >= 2) t = tail;
+  // 「X相关的」语序（R254 P3-4，audit-r253：「书相关的支出」把「书相关的」
+  // 整串注入 LIKE 必零命中）：「相关」是纯框架词不可能是主题尾字，
+  // 不受 ≥2 门槛限制；剩单字主题由下游长度门槛滤掉，整题回落普通召回
+  t = t.replace(/相关的?$/, "") || t;
   return t;
 }
 
@@ -1379,6 +1383,9 @@ export type FinanceListDirection = "expense" | "income" | "both";
 const FINANCE_LIST_CUES: [RegExp, FinanceListDirection][] = [
   // 收入/收支线索先判（「赚了哪些钱」不能被支出侧的裸「哪些钱」抢先）
   [/(?:收入|进账|入账)(?:记录|明细|情况)?(?:都)?有哪些|有(?:过)?(?:哪些|些什么|什么)(?:收入|进账|入账)|(?:收入|进账)明细|[赚挣](?:了|到|过)?(?:哪些|些什么|什么)钱|记[了过]?(?:哪些|些什么|什么)(?:收入|进账|入账)/, "income"],
+  // 收入向动词（R254 P2-2，audit-r253：「今天收到了哪些钱」被裸
+  // 「哪些钱」抢成支出）：收到/到账/进账/入账 的列举变体优先于支出侧
+  [/(?:收到|到账|进账|入账)[了过]?(?:的钱)?[^？?。]{0,4}?(?:哪些|些什么|什么)(?:钱|款)?|(?:哪些|什么)钱(?:收到|到账|进账|入账)/, "income"],
   // 「哪几笔」无方向词时按收支双向列（R250 P2-2：无历史的「去年下半年
   // 分别是哪几笔」与追问式同一管道收口，不平行打补丁）
   [/记[了过]?(?:哪些|些什么|什么)账|账单(?:明细)?(?:都)?有哪些|收支明细|哪几笔/, "both"],
@@ -1391,6 +1398,24 @@ const FINANCE_LIST_CUES: [RegExp, FinanceListDirection][] = [
   [/买[了过]?(?:些)?(?:哪些|什么|啥)(?:东西)?\s*[？?。！!]*$/, "expense"],
 ];
 
+// 方向词 × 列举动词解耦兜底（R254 P2-3，audit-r253：「我所有收入列一下」
+// 「把咱的支出都列一下」等倒装/口语语序不在 CUES 的固定语序内）：
+// 列举意图与方向词分别命中即可，语序不限；主题限定仍由下方同一
+// 剥离口径的残留门拦住（「列一下买书的支出」残留「书」→ null）。
+const FINANCE_LIST_VERB_RE = /列(?:出来|出|举|一下|个?清单)|罗列|都列|拉个?清单/;
+const FINANCE_LIST_INCOME_WORD_RE = /收入|进账|入账/;
+const FINANCE_LIST_EXPENSE_WORD_RE = /支出|开支|开销|花销|消费|花费/;
+
+function financeListLooseDirection(question: string): FinanceListDirection | null {
+  if (!FINANCE_LIST_VERB_RE.test(question)) return null;
+  const inn = FINANCE_LIST_INCOME_WORD_RE.test(question);
+  const out = FINANCE_LIST_EXPENSE_WORD_RE.test(question);
+  if (inn && out) return "both";
+  if (inn) return "income";
+  if (out) return "expense";
+  return null;
+}
+
 /** 识别财务列举问题（「花了哪些钱」）；带主题限定（「买了哪些书」）返回 null。 */
 export function financeListIntent(question: string): FinanceListDirection | null {
   let direction: FinanceListDirection | null = null;
@@ -1400,12 +1425,13 @@ export function financeListIntent(question: string): FinanceListDirection | null
       break;
     }
   }
+  direction ??= financeListLooseDirection(question);
   if (!direction) return null;
   // 残留主题词（「买了哪些书花了哪些钱」）说明不是纯财务列举：留给主题
   // 子集/普通召回，与 isFinanceAggQuestion 同一剥离口径
   const residual = applyStrips(question, [
     ...STRIP_RES,
-    /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出|列举|列一下|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的|所有|全部|我们?|你|咱/g,
+    /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出来|列出|列举|列一下|列个?清单|罗列|拉个?清单|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的|所有|全部|我们?|你|咱|把|都|请|麻烦|帮我?|给我|收到|到账|款/g,
   ]);
   return residual.length < 2 ? direction : null;
 }

@@ -481,6 +481,12 @@ const CASES: EvalCase[] = [
   },
   // ---- R212（audit-r211：AA 收回被判 transfer 致收入漏计）----
   { content: `${PREFIX} 公司团建 AA 收回 240`, category: "income", amount: 240, currency: "CNY" },
+  // ---- R254 P2-1（audit-r253：退票净额落库 income -930 污染收入合计）----
+  // 退票×退款×赔付×退货方向 + 金额恒正（记录者实际发生金额原则）
+  { content: `${PREFIX} 机票退票，退回 1130 手续费扣了 200`, category: "income", amount: 930, currency: "CNY" },
+  { content: `${PREFIX} 高铁退票退款 553.5 到账`, category: "income", amount: 553.5, currency: "CNY" },
+  { content: `${PREFIX} 退货退款 200，手续费扣了 5`, category: "income", amount: 195, currency: "CNY" },
+  { content: `${PREFIX} 演出取消主办方赔付 80`, category: "income", amount: 80, currency: "CNY" },
 ];
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
