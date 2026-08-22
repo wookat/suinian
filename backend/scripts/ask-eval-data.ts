@@ -1087,4 +1087,37 @@ export const QUESTIONS: EvalQuestion[] = [
     question: "这个月收到多少钱",
     expectAnswerContains: ["口径与周报/月报一致"],
   },
+
+  // —— R242 P2（audit-r241 §3.1）：「的」字变体聚合问法必须走同一精确
+  // 聚合管道（「这个月的总支出」曾因残留「的」被判有主题限定而落
+  // fail-closed/未找到）。数字口径与不带「的」的既有问法完全一致。——
+  {
+    id: "q155",
+    category: "财务聚合",
+    question: "这个月的总支出是多少",
+    expectAnswerContains: ["口径与周报/月报一致"],
+  },
+  {
+    id: "q156",
+    category: "财务聚合",
+    question: "这个月的总收入是多少",
+    expectAnswerContains: ["口径与周报/月报一致"],
+    holdout: true,
+  },
+  {
+    id: "q157",
+    category: "财务聚合",
+    question: "上个月的结余是多少",
+    expectAnswerContains: ["口径与周报/月报一致"],
+  },
+  // 反例护栏：带「的」的主题限定合计仍走子集管道（「的」残片修剪后
+  // LIKE 命中咖啡耗材台账），绝不落全账合计
+  {
+    id: "q158",
+    category: "财务子集",
+    question: "咖啡的钱一共花了多少",
+    expectAny: ["led6"],
+    forbidAnswerContains: ["不做心算合计"],
+    holdout: true,
+  },
 ];

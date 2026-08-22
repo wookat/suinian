@@ -83,6 +83,15 @@ const TRIADS: Triad[] = [
     mixed: "这个月 total expenses 是多少",
     nums: ["1236.5"],
   },
+  // R242 P2（audit-r241 §3.1）：「的」字变体×中英聚合问法锁住——
+  // 「这个月的总支出」曾因残留「的」落 fail-closed/未找到
+  {
+    key: "agg-expense-de",
+    zh: "这个月的总支出是多少",
+    en: "What is the total of my expenses this month?",
+    mixed: "这个月的 total expenses 是多少",
+    nums: ["1236.5"],
+  },
   {
     key: "agg-income",
     zh: "这个月总收入是多少",
