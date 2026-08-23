@@ -1516,4 +1516,93 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAnswerContains: ["标签归纳"],
     forbidAnswerContains: ["没有记录", "没找到相关笔记"],
   },
+
+  // —— R258 P2×3（audit-r257 同根：组合限定词在统一管道中的交接缺口）——
+  // 组合矩阵锁定：时间窗×主题（双窗对比携带主题）、时间窗×方向（哪几笔
+  // cue 被显式方向词覆盖）、关键词×追问（子集合计的裸列举追问继承关键词）。
+  // P2-1 时间窗×主题：双窗对比必须按「买书」筛行再分窗聚合，绝不冒充全账对比
+  {
+    id: "q203",
+    category: "财务聚合",
+    question: "这个月和上个月哪个月买书花得多",
+    expectAnswerContains: ["按关键词「买书」", "52"],
+    forbidAnswerContains: ["没有找到相关记录"],
+  },
+  // P2-2 时间窗×方向：「收入有哪几笔」绝不混入支出（库内无收入 → 如实零命中）
+  {
+    id: "q204",
+    category: "财务列举",
+    question: "最近一周收入有哪几笔",
+    expectRefusal: true,
+    forbid: ["exp1", "exp2", "todo1"],
+    forbidAnswerContains: ["笔支出", "疫苗", "机械键盘"],
+  },
+  // P2-3 关键词×追问：子集合计后的裸列举追问必须继承「买书」限定，
+  // 绝不退回全量列举（audit-r257 实测回了全年收支混合列表）
+  {
+    id: "q205",
+    category: "财务列举",
+    question: "分别是哪几笔？",
+    history: [
+      { role: "user", content: "今年买书一共花了多少" },
+      {
+        role: "assistant",
+        content:
+          "按关键词「买书」精确匹配（标题/正文/标签），今年共 1 笔支出：\n- CNY：支出 ¥52\n\n以上为数据库精确统计（关键词匹配口径，金额口径与周报/月报一致，不含已删除笔记）。",
+      },
+    ],
+    expectAny: ["book1"],
+    expectAnswerContains: ["置身事内", "按关键词「买书」"],
+    forbidAnswerContains: ["机械键盘", "跑鞋", "疫苗"],
+  },
+  // 追问时间窗只继承答案头行（R258 QA badcase）：上一轮明细行回显的笔记原文
+  // 含「今天」等时间字样时绝不能污染继承口径（此前把「今年」窄化成明细行短语）
+  {
+    id: "q209",
+    category: "财务列举",
+    question: "分别是哪几笔？",
+    history: [
+      { role: "user", content: "今年买书一共花了多少" },
+      {
+        role: "assistant",
+        content:
+          "按关键词「买书」精确匹配（标题/正文/标签），今年共 1 笔支出：\n- CNY：支出 ¥52\n\n逐笔明细：\n- 今天翻了下账，买了本《置身事内》52 元（¥52）[1]\n\n以上为数据库精确统计（关键词匹配口径，金额口径与周报/月报一致，不含已删除笔记）。",
+      },
+    ],
+    expectAny: ["book1"],
+    expectAnswerContains: ["置身事内", "按关键词「买书」"],
+    forbidAnswerContains: ["没有匹配", "机械键盘", "跑鞋"],
+    holdout: true,
+  },
+  // 单限定不误伤：全账合计后的裸追问仍走全量列举（继承逻辑只在子集答案后生效）
+  {
+    id: "q206",
+    category: "财务列举",
+    question: "分别是哪几笔？",
+    history: [
+      { role: "user", content: "最近一周花了多少钱" },
+      { role: "assistant", content: "最近一周你一共花了 ¥260（共 1 笔支出）。\n\n以上为精确统计，口径与周报/月报一致。" },
+    ],
+    expectAny: ["exp2"],
+    forbidAnswerContains: ["按关键词"],
+    holdout: true,
+  },
+  // —— R258 P3-1（audit-r257，R251 P3-2 收尾）：裸时间短语按时间窗精确列举 ——
+  {
+    id: "q207",
+    category: "时间限定",
+    question: "上个月",
+    expectAnswerContains: ["你一共记了", "数据库精确列举"],
+    forbidAnswerContains: ["没找到相关笔记"],
+  },
+  // —— R258 P3-3（audit-r257：待办列举靠语义召回漏报）：分类名直问走
+  // category 精确筛选，窗内待办一条不漏 ——
+  {
+    id: "q208",
+    category: "主题枚举",
+    question: "我有什么待办事项？",
+    expectAny: ["todo1", "todo2"],
+    expectAll: ["todo1", "todo2"],
+    expectAnswerContains: ["按分类", "数据库精确筛选"],
+  },
 ];
