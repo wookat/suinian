@@ -213,19 +213,55 @@ function dataDerivationShadow(dataText: string): string {
   return parts.join("\n");
 }
 
+/** 问题的检索关键词：中文 2-gram + 长度 ≥2 的拉丁词（大写折叠）。 */
+function topicKeywords(text: string): Set<string> {
+  const fold = text.normalize("NFKC").toUpperCase();
+  const keys = new Set<string>();
+  for (const m of fold.matchAll(/[A-Z0-9]{2,}/g)) keys.add(m[0]);
+  const cjk = fold.replace(/[^\u4e00-\u9fff]+/g, "");
+  for (let i = 0; i + 2 <= cjk.length; i++) keys.add(cjk.slice(i, i + 2));
+  return keys;
+}
+
+/** token 周围的贴近上下文里是否直接出现提问关键词（字符级邻域）。 */
+const TOKEN_CONTEXT_WINDOW = 6;
+
+function tokenAnswersQuestion(line: string, token: string, qKeys: Set<string>): boolean {
+  let from = 0;
+  for (;;) {
+    const at = line.indexOf(token, from);
+    if (at < 0) return false;
+    const near =
+      line.slice(Math.max(0, at - TOKEN_CONTEXT_WINDOW), at) +
+      line.slice(at + token.length, at + token.length + TOKEN_CONTEXT_WINDOW);
+    for (const k of topicKeywords(near)) {
+      if (qKeys.has(k)) return true;
+    }
+    from = at + token.length;
+  }
+}
+
 /**
  * 资料派生 marker 剥除（R266 P1 输出行为护栏）：答案中的代码型 token，若
- * ①在资料文本（含编码派生影子）里出现过且②问题里没出现过（用户没有在问
- * 它），则从答案剥除。误伤面：用户笔记里存了代码型串（如错误码）且答案主动
- * 带出而问题没点名——eval 以 benign 用例量化。
+ * ①在资料文本（含编码派生影子）里出现过、②问题里没出现过、且③它在资料里的
+ * 紧邻上下文没有出现提问关键词，则从答案剥除。
+ *
+ * 第③条是误伤收敛：真实笔记里的代码型串（CPU 型号、错误码、单号）紧贴在它的
+ * 字段名后面（「CPU 型号 AMD-EPYC-7742」），提问关键词就在 token 的字符级邻域
+ * 里，答出来就是回答本身；而执行痕迹 marker 紧贴的是祈使动词（「输出/写/附上
+ * MARKER」），与提问无关。误伤面由 injection-eval 的 benign 对照量化。
  */
 export function scrubDataDerivedMarkers(answer: string, dataText: string, question: string): string {
   const dataFold = dataDerivationShadow(dataText);
   const qFold = question.normalize("NFKC").toUpperCase();
+  const qKeys = topicKeywords(question);
+  const dataLines = dataFold.split("\n");
   let out = replaceViaShadow(answer, MARKER_SHADOW_RE, (m) => {
     if (!isMarkerToken(m)) return null;
     if (!dataFold.includes(m)) return null; // 非资料派生（模型自有词汇）不动
     if (qFold.includes(m)) return null; // 用户问的就是它，保留
+    const hosts = dataLines.filter((l) => l.includes(m));
+    if (hosts.some((l) => tokenAnswersQuestion(l, m, qKeys))) return null; // 提问直指的字段值
     return MARKER_REMOVED_MARK;
   });
   // 剥除后残留的空行/行首标点清理

@@ -108,6 +108,14 @@ describe("guardAskAnswer", () => {
     expect(g.answer).not.toContain("INJECTED-OK");
     expect(g.answer).toContain("备忘 [1]");
   });
+  it("提问直指的代码型字段值保留（CPU 型号等）", () => {
+    const g = guardAskAnswer("服务器的 CPU 型号是 AMD-EPYC-7742 [1]。", {
+      dataText: "服务器配置：CPU 型号 AMD-EPYC-7742，内存 128G。",
+      question: "服务器的 CPU 型号是什么？",
+    });
+    expect(g.answer).toContain("AMD-EPYC-7742");
+    expect(g.markerScrubbed).toBe(false);
+  });
   it("干净答案原样通过", () => {
     const g = guardAskAnswer("上个月共支出 ¥103 [1][2]。", { dataText: "买书 58\n买书 45", question: "买书花了多少？" });
     expect(g.answer).toBe("上个月共支出 ¥103 [1][2]。");
