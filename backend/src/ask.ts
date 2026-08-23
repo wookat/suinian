@@ -1714,11 +1714,27 @@ export function financeListFollowUpIntent(question: string, lastAssistant: strin
 // 精确匹配」），追问从上一轮答案解析出该保留集——time window / keyword /
 // direction 三个限定维度正交携带，不新增会话状态实体。
 const FINANCE_SUBSET_KW_RE = /按关键词「([^」]{1,32})」精确匹配/;
+// 子集答案头行的方向笔数（buildFinanceSubsetAnswer：「共 X 笔支出、Y 笔收入」）
+const FINANCE_SUBSET_DIR_RE = /共 (\d+) 笔支出(?:、(\d+) 笔收入)?/;
 
-/** 上一轮精确合计答案里的关键词限定集；非关键词子集答案返回 null。 */
-export function financeAggAnswerTerms(lastAssistant: string | null): string[] | null {
+/** 上一轮精确合计答案里的关键词限定集；非关键词子集答案返回 null。
+ * 方向显式切换撤销继承（R260 P1-1，audit-r259）：本轮追问显式点名的方向在
+ * 上一轮子集答案里为零笔（「买书」支出合计后问「本月收入有哪几笔」）时，
+ * 用户已切出该关键词话题，继承只会得到 0 笔误答——撤销继承，让追问按本轮
+ * 显式方向走全量列举（时间窗仍按本轮问题优先的既有口径）。 */
+export function financeAggAnswerTerms(
+  lastAssistant: string | null,
+  followUpDir: FinanceListFollowUp | null = null
+): string[] | null {
   const m = lastAssistant?.match(FINANCE_SUBSET_KW_RE);
   if (!m) return null;
+  if (followUpDir === "income" || followUpDir === "expense") {
+    const d = lastAssistant!.match(FINANCE_SUBSET_DIR_RE);
+    if (d) {
+      const cnt = followUpDir === "expense" ? parseInt(d[1], 10) : parseInt(d[2] ?? "0", 10);
+      if (cnt === 0) return null;
+    }
+  }
   const terms = m[1]
     .split("、")
     .map((s) => s.trim())
@@ -2533,6 +2549,30 @@ export const MULTI_HOP_RE = /关系|关联|依据|后来|进展|着落|落地|�
 
 /** Cosine similarity below which a semantic-only recall hit is too weak to appear as a citation. */
 export const ASK_CITATION_MIN_SCORE = 0.55;
+
+/**
+ * 依据/为什么类问题（R260 P2/q31）：答案需要引用「原因笔记 + 结果笔记」两条以上
+ * 支撑片段，但候选序里语义强命中常被零分的关键词/图谱补位片段隔开（q31 实测
+ * cafe2 语义 0.72 却排第 9），模型只从头部引用导致十跑 6/10。此类问题按语义
+ * 分数把强命中重排到头部（只重排不增删，召回集合不变、不影响其他问题族）。
+ */
+export const BASIS_INTENT_RE = /为什么|依据|理由|原因|根据/;
+
+/**
+ * Stable rerank for basis-intent questions: strong semantic hits (score >=
+ * minScore) move to the head in score order; everything else keeps its
+ * relative order behind them. Pure reorder — no note enters or leaves.
+ */
+export function rerankBasisCandidates<T extends { id: string }>(
+  notes: T[],
+  score: Map<string, number>,
+  minScore = ASK_CITATION_MIN_SCORE
+): T[] {
+  const strong = notes.filter((n) => (score.get(n.id) ?? 0) >= minScore);
+  if (strong.length < 2 || strong.length === notes.length) return notes;
+  strong.sort((a, b) => (score.get(b.id) ?? 0) - (score.get(a.id) ?? 0));
+  return [...strong, ...notes.filter((n) => (score.get(n.id) ?? 0) < minScore)];
+}
 
 /**
  * Cosine similarity floor for the "相近的记录" suggestions attached to a 没找到
