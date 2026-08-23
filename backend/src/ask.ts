@@ -1345,6 +1345,11 @@ export function degradeFinanceSubsetTerms(terms: string[]): string[] | null {
     } else {
       push(t);
     }
+    // 动宾二字词剥动词得单字主题（R264 P2-1，audit-r263：「买书」LIKE 命不中
+    // 「《置身事内》 88 元 #书籍」）：单字降级只在此处产出，且命中集必过
+    // filterSingleCharTopicRows 的邻字/标签词头口径，不会引回「订书机」误命中
+    const vo = t.match(/^[买购吃喝看读听玩修租借还乘坐打][\u4e00-\u9fa5]$/);
+    if (vo && !out.includes(t[1]!)) out.push(t[1]!);
   }
   if (out.length === 0 || out.length > 4) return null;
   if (out.length === terms.length && out.every((t, i) => t === terms[i])) return null;
@@ -2866,7 +2871,7 @@ export function sensitiveHintLine(count: number, terms: string[]): string {
  * 敏感笔记元数据时（敏感笔记正文加密、常无标题），拒答分支既无敏感提示
  * 又引无关笔记——同一意图两种体验。识别出凭据意图后统一给敏感指引。
  */
-export const CREDENTIAL_Q_RE = /密码|口令|私钥|助记词|恢复码|密钥|passwords?|passphrase|secret key|pin\s?码/i;
+export const CREDENTIAL_Q_RE = /密码|口令|私钥|助记词|恢复码|密钥|门禁码|passwords?|passphrase|secret key|pin\s?码/i;
 
 /**
  * 敏感兜底指引（R190 P1-2，与 R188 凭据口径同一分支架构）：关键词没匹配上

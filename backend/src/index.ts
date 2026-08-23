@@ -4444,6 +4444,16 @@ app.post("/api/ask", async (c) => {
     if (amtScrubbed !== answer2) console.log("ask: unsourced amount sentence scrubbed");
     answer2 = amtScrubbed.trim() === "" ? "没找到" : amtScrubbed;
   }
+  // 凭据类问法防编造（R264，QA-R264 实测 fallback 模型对「门禁码」编造 1234）：
+  // 答案里出现来源片段/问句都没有的 3+ 位数字串即视为编造，整答按拒答处理，
+  // 走下方诚实拒答通道给敏感指引
+  if (answer2 && CREDENTIAL_Q_RE.test(question)) {
+    const fabricated = [...answer2.matchAll(/\d{3,}/g)].some((m) => !askScrubSource.includes(m[0]));
+    if (fabricated) {
+      console.log("ask: fabricated credential digits scrubbed");
+      answer2 = "没找到";
+    }
+  }
   askMarks.push(["gen", Date.now() - tGen]);
   // 流式分支的响应头已发出，Server-Timing 只在整段 JSON 分支可设
   if (!onDelta) c.header("Server-Timing", serverTimingHeader([...askMarks, ["total", Date.now() - askT0]]));

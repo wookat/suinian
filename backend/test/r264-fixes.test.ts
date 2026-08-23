@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { neutralizePromptInjection, INJECTION_NEUTRALIZED_MARK, scrubModelOutputInjectionArtifacts } from "../src/triage";
-import { filterSingleCharTopicRows, tagHitsSingleCharTopic, buildFinanceSubsetZeroHitAnswer, parseTimeRange, financeAggIntent } from "../src/ask";
+import { filterSingleCharTopicRows, tagHitsSingleCharTopic, buildFinanceSubsetZeroHitAnswer, parseTimeRange, financeAggIntent, degradeFinanceSubsetTerms, CREDENTIAL_Q_RE } from "../src/ask";
 import type { NoteRow } from "../src/types";
 
 // ---- R264 P1：注入防护分层收口（audit-r263 §2.2）----
@@ -194,6 +194,18 @@ describe("R264 P2-1 single-char topic matrix", () => {
     expect(financeAggIntent("从余额宝转出的 500 算收入吗？")).toBeNull();
     expect(financeAggIntent("余额还剩多少")).toBe("fail_closed");
     expect(financeAggIntent("这个月结余多少")).toBe("exact");
+  });
+
+  it("verb-object 2-char term degrades to single-char topic (QA-R264: 买书 misses #书籍)", () => {
+    expect(degradeFinanceSubsetTerms(["买书"])).toEqual(["买书", "书"]);
+    expect(degradeFinanceSubsetTerms(["看电影"])).toBeNull();
+    const degraded = degradeFinanceSubsetTerms(["打车"]);
+    expect(degraded).toContain("车");
+  });
+
+  it("QA-R264: 门禁码 counts as credential question (anti-fabrication gate)", () => {
+    expect(CREDENTIAL_Q_RE.test("我的门禁码是多少")).toBe(true);
+    expect(CREDENTIAL_Q_RE.test("今年买书花了多少")).toBe(false);
   });
 
   it("zero-hit relaxed answer still reports filtered relaxed totals when present", () => {
