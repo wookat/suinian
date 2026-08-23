@@ -107,9 +107,16 @@ describe("R222 P2-2 bare URL sanitization", () => {
     expect(sanitizeBareUrls(md)).toBe(md);
   });
 
-  it("is applied by sanitizeNarrative", () => {
+  // R266 P0：叙述里非白名单外链改为剥除（回传通道收口），白名单域仍走 <> 包裹
+  it("sanitizeNarrative strips non-allowlisted external links", () => {
     const t = sanitizeNarrative("你收藏了 https://example.com/read，值得回看。", "本周", nums());
-    expect(t).toContain("<https://example.com/read>，");
+    expect(t).not.toContain("example.com");
+    expect(t).toContain("〔已移除外部链接〕");
+  });
+
+  it("sanitizeNarrative keeps allowlisted links wrapped", () => {
+    const t = sanitizeNarrative("详见 https://suinian.zalize.com/notes，值得回看。", "本周", nums());
+    expect(t).toContain("<https://suinian.zalize.com/notes>，");
   });
 });
 

@@ -2,6 +2,7 @@ import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { DEFAULT_TZ, loadUserTz, tzOffsetMs, tzOffsetMinutes, tzSqlModifier } from "./triage";
 import { localDateOf, parseCreatedAt } from "./stats";
+import { scrubAnswerLinks } from "./prompt-armor";
 
 const SH_OFFSET_MS = 8 * 3600 * 1000;
 
@@ -317,7 +318,10 @@ export function sanitizeNarrative(text: string, unit: string, nums: ReportNumber
   }
   t = t.replace(/新增待办\s*(\d+)\s*条/g, `新增待办 ${nums.todoCreated} 条`);
   t = t.replace(/共完成\s*(\d+)\s*条/g, `共完成 ${nums.todoDone} 条`);
-  return sanitizeBareUrls(t.trim());
+  // R266 P0：周/月报叙述同样是「笔记内容进模型后生成的文本」，且报告页把它
+  // 当 markdown 渲染成 HTML（外链可点、img 会自动加载）——与 ask 答案同一口径
+  // 做外链收口，笔记里植入的第三方 URL 到不了渲染层。
+  return sanitizeBareUrls(scrubAnswerLinks(t.trim()));
 }
 
 /**
