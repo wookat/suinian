@@ -4,6 +4,7 @@ import {
   financeDualWindowTopicTerms,
   financeListIntent,
   financeAggAnswerTerms,
+  answerHeadTimeRange,
   categoryEnumIntent,
   bareTimeWindowListIntent,
   buildFinanceMomAnswer,
@@ -11,6 +12,21 @@ import {
 } from "../src/ask";
 
 // R258：audit-r257 P2×3 同根收口（组合限定词在统一管道中的交接缺口）+ P3 落实
+
+describe("answerHeadTimeRange (R258 P2-3 追问时间窗继承)", () => {
+  it("只解析答案头行的时间短语，明细行回显的笔记原文不污染继承口径", () => {
+    const agg =
+      "按关键词「买书」精确匹配（标题/正文/标签），今年共 2 笔支出：\n- CNY：支出 ¥140\n\n逐笔明细：\n- 这个月买书花了88元（¥88，2026-08-20）[1]\n- 3月买书花52元（¥52，2026-03-05）[2]";
+    expect(answerHeadTimeRange(agg)?.phrase).toBe("今年");
+  });
+  it("头行无时间短语返回 null；空输入返回 null", () => {
+    expect(answerHeadTimeRange("按关键词「买书」精确匹配（标题/正文/标签），共 1 笔支出：\n- 今天买书（¥88）")).toBeNull();
+    expect(answerHeadTimeRange(null)).toBeNull();
+  });
+  it("普通合计答案头行时间窗正常解析", () => {
+    expect(answerHeadTimeRange("最近一周你一共花了 ¥260（共 1 笔支出）。")?.phrase).toBe("最近一周");
+  });
+});
 
 describe("financeDualWindowTopicTerms (R258 P2-1)", () => {
   it("双窗对比携带主题限定词", () => {

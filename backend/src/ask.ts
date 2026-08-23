@@ -1726,6 +1726,14 @@ export function financeAggAnswerTerms(lastAssistant: string | null): string[] | 
   return terms.length > 0 && terms.length <= 3 ? terms : null;
 }
 
+/** 上一轮精确合计答案头行的时间窗。追问只允许继承答案头行（合计口径行）
+ * 里的时间短语；正文逐笔明细会回显笔记原文，笔记里写的「这个月/今天」等
+ * 字样若参与解析会污染继承口径（如把「今年」窄化成当月）。 */
+export function answerHeadTimeRange(lastAssistant: string | null, now: Date = new Date()): TimeRange | null {
+  if (!lastAssistant) return null;
+  return parseTimeRange(lastAssistant.split("\n")[0], now);
+}
+
 // ---- 财务金额阈值筛选（R240 P2-3，audit-r239 §4.4）----
 // 「列出超过 80 元的支出」是一条 WHERE amount > ? 就能精确回答的问题，
 // 此前无确定性管道，落 LLM 对截断召回筛选（漏项/心算错）。与极值/列举

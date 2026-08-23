@@ -1555,6 +1555,25 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAnswerContains: ["置身事内", "按关键词「买书」"],
     forbidAnswerContains: ["机械键盘", "跑鞋", "疫苗"],
   },
+  // 追问时间窗只继承答案头行（R258 QA badcase）：上一轮明细行回显的笔记原文
+  // 含「今天」等时间字样时绝不能污染继承口径（此前把「今年」窄化成明细行短语）
+  {
+    id: "q209",
+    category: "财务列举",
+    question: "分别是哪几笔？",
+    history: [
+      { role: "user", content: "今年买书一共花了多少" },
+      {
+        role: "assistant",
+        content:
+          "按关键词「买书」精确匹配（标题/正文/标签），今年共 1 笔支出：\n- CNY：支出 ¥52\n\n逐笔明细：\n- 今天翻了下账，买了本《置身事内》52 元（¥52）[1]\n\n以上为数据库精确统计（关键词匹配口径，金额口径与周报/月报一致，不含已删除笔记）。",
+      },
+    ],
+    expectAny: ["book1"],
+    expectAnswerContains: ["置身事内", "按关键词「买书」"],
+    forbidAnswerContains: ["没有匹配", "机械键盘", "跑鞋"],
+    holdout: true,
+  },
   // 单限定不误伤：全账合计后的裸追问仍走全量列举（继承逻辑只在子集答案后生效）
   {
     id: "q206",
