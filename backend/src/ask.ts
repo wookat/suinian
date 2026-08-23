@@ -461,6 +461,18 @@ export function financeDualWindowIntent(question: string, now: Date = new Date()
   return { a: ranges[0], b: ranges[1] };
 }
 
+// R258 P2-1（audit-r257）：双窗对比吞主题限定（「3月和4月哪个月买书花得多」
+// 对比的是全月总支出）。主题词与时间窗是正交限定维度：剥掉对比疑问框架词
+// 后走财务子集同一套主题词剥离流水线（subsetTopicExtract），无主题时返回
+// null、行为与既有纯时间窗对比完全一致。
+const DUAL_WINDOW_FRAME_STRIP_RE =
+  /哪段|哪个时间段|哪个时期|哪半年|哪个季度|哪个月份?|哪一?[年月周天]|还是|相比(?:之下)?|[花支][得的出]了?(?:更)?[多少]|开销(?:更)?大|支出(?:更)?[多高]|[赚挣][得的]了?(?:更)?[多少]|更[多少]/g;
+
+/** 双窗对比问法里的主题限定词（「哪个月买书花得多」→ [买书]）；无主题返回 null。 */
+export function financeDualWindowTopicTerms(question: string): string[] | null {
+  return subsetTopicExtract(question.replace(DUAL_WINDOW_FRAME_STRIP_RE, ""));
+}
+
 /** 收支比较的确定性答案：按币种分别比较（不同币种金额不可直接比较）。 */
 export function buildFinanceCompareAnswer(stats: FinanceStats, phrase: string | null): string {
   const scope = phrase ?? "全部笔记";
@@ -499,12 +511,17 @@ export function buildFinanceMomAnswer(
   cur: FinanceStats,
   prev: FinanceStats,
   curPhrase: string,
-  prevPhrase: string
+  prevPhrase: string,
+  topic: string[] | null = null
 ): string {
+  // 主题限定的双窗对比（R258 P2-1）：答案口径必须回显关键词，绝不把主题
+  // 对比冒充全账对比
+  const kwHead = topic ? `按关键词「${topic.join("、")}」精确匹配（标题/正文/标签），` : "";
+  const kwCaliber = topic ? "（关键词匹配口径）" : "";
   const noCur = cur.expenseCount === 0 && cur.incomeCount === 0;
   const noPrev = prev.expenseCount === 0 && prev.incomeCount === 0;
   if (noCur && noPrev) {
-    return `${curPhrase}和${prevPhrase}都没有记账记录，无法对比。\n\n以上为精确统计，口径与周报/月报一致。`;
+    return `${kwHead}${curPhrase}和${prevPhrase}都没有${topic ? "匹配的" : ""}记账记录，无法对比。\n\n以上为精确统计${kwCaliber}，口径与周报/月报一致。`;
   }
   const currencies = [...new Set([...Object.keys(cur.totals), ...Object.keys(prev.totals)])];
   const lines = currencies.map((c) => {
@@ -516,10 +533,10 @@ export function buildFinanceMomAnswer(
     const incVerdict = dInc > 0 ? `多 ${formatAmount(dInc, c)}` : dInc < 0 ? `少 ${formatAmount(-dInc, c)}` : "持平";
     return `- ${c}：支出 ${curPhrase} ${formatAmount(a.expense, c)}，${prevPhrase} ${formatAmount(b.expense, c)}，较${prevPhrase}${expVerdict}；收入 ${curPhrase} ${formatAmount(a.income, c)}，${prevPhrase} ${formatAmount(b.income, c)}，较${prevPhrase}${incVerdict}`;
   });
-  let md = `${curPhrase}与${prevPhrase}对比（按币种分别比较，不同币种金额不可直接比较）：\n${lines.join("\n")}\n${curPhrase}共 ${cur.expenseCount} 笔支出、${cur.incomeCount} 笔收入；${prevPhrase}共 ${prev.expenseCount} 笔支出、${prev.incomeCount} 笔收入。`;
+  let md = `${kwHead}${curPhrase}与${prevPhrase}对比（按币种分别比较，不同币种金额不可直接比较）：\n${lines.join("\n")}\n${curPhrase}共 ${cur.expenseCount} 笔支出、${cur.incomeCount} 笔收入；${prevPhrase}共 ${prev.expenseCount} 笔支出、${prev.incomeCount} 笔收入。`;
   const unknown = cur.unknownAmount + prev.unknownAmount;
   if (unknown > 0) md += `\n（另有 ${unknown} 笔未识别出金额，未计入对比。）`;
-  md += `\n\n以上为精确统计，口径与周报/月报一致。`;
+  md += `\n\n以上为精确统计${kwCaliber}，口径与周报/月报一致。`;
   return md;
 }
 
@@ -1526,6 +1543,13 @@ const FINANCE_LIST_EXPENSE_WORD_RE = /支出|开支|开销|花销|消费|花费/
 
 function financeListLooseDirection(question: string): FinanceListDirection | null {
   if (!FINANCE_LIST_VERB_RE.test(question)) return null;
+  return financeListWordDirection(question);
+}
+
+// R258 P2-2（audit-r257）：方向词是正交限定维度——「本月收入有哪几笔」被
+// 无方向的「哪几笔」cue 抢成收支双向。问句里的显式收/支名词覆盖 cue 的
+// 默认方向；无显式方向词时保持 cue 方向不变（单限定行为零改动）。
+function financeListWordDirection(question: string): FinanceListDirection | null {
   const inn = FINANCE_LIST_INCOME_WORD_RE.test(question);
   const out = FINANCE_LIST_EXPENSE_WORD_RE.test(question);
   if (inn && out) return "both";
@@ -1534,8 +1558,8 @@ function financeListLooseDirection(question: string): FinanceListDirection | nul
   return null;
 }
 
-/** 识别财务列举问题（「花了哪些钱」）；带主题限定（「买了哪些书」）返回 null。 */
-export function financeListIntent(question: string): FinanceListDirection | null {
+/** 财务列举方向的统一判定（cue 语序 + 松散语序 + 显式方向词覆盖）。 */
+function financeListDirectionOf(question: string): FinanceListDirection | null {
   let direction: FinanceListDirection | null = null;
   for (const [re, dir] of FINANCE_LIST_CUES) {
     if (re.test(question)) {
@@ -1544,6 +1568,13 @@ export function financeListIntent(question: string): FinanceListDirection | null
     }
   }
   direction ??= financeListLooseDirection(question);
+  if (!direction) return null;
+  return financeListWordDirection(question) ?? direction;
+}
+
+/** 识别财务列举问题（「花了哪些钱」）；带主题限定（「买了哪些书」）返回 null。 */
+export function financeListIntent(question: string): FinanceListDirection | null {
+  const direction = financeListDirectionOf(question);
   if (!direction) return null;
   // 残留主题词（「买了哪些书花了哪些钱」「列一下买书的支出」）说明不是纯
   // 财务列举：单字残留（书/车/药）同样是主题限定（R256 P2-3，audit-r255：
@@ -1565,14 +1596,7 @@ function financeListResidual(question: string): string {
  * 绝不丢掉限定条件回全量列举。纯列举（无残留主题）交 financeListIntent。
  */
 export function financeListTopicTerms(question: string): { direction: FinanceListDirection; terms: string[] } | null {
-  let direction: FinanceListDirection | null = null;
-  for (const [re, dir] of FINANCE_LIST_CUES) {
-    if (re.test(question)) {
-      direction = dir;
-      break;
-    }
-  }
-  direction ??= financeListLooseDirection(question);
+  const direction = financeListDirectionOf(question);
   if (!direction) return null;
   if (FACT_QUERY_RE.test(question.replace(/哪些|分别/g, ""))) return null;
   const residual = financeListResidual(question);
@@ -1682,6 +1706,24 @@ export function financeListFollowUpIntent(question: string, lastAssistant: strin
   if (/支出|开支|开销|花销|消费|[花用](?:在|到)/.test(q)) return "expense";
   if (/[笔账]|明细|清单|钱/.test(q)) return "both";
   return "generic";
+}
+
+// R258 P2-3（audit-r257）：关键词子集合计（「今年买书花了多少」）的裸列举
+// 追问（「分别是哪几笔」）此前只继承时间窗、吞掉关键词限定回全量列举。
+// buildFinanceSubsetAnswer 的答案口径里已如实回显了关键词（「按关键词「买书」
+// 精确匹配」），追问从上一轮答案解析出该保留集——time window / keyword /
+// direction 三个限定维度正交携带，不新增会话状态实体。
+const FINANCE_SUBSET_KW_RE = /按关键词「([^」]{1,32})」精确匹配/;
+
+/** 上一轮精确合计答案里的关键词限定集；非关键词子集答案返回 null。 */
+export function financeAggAnswerTerms(lastAssistant: string | null): string[] | null {
+  const m = lastAssistant?.match(FINANCE_SUBSET_KW_RE);
+  if (!m) return null;
+  const terms = m[1]
+    .split("、")
+    .map((s) => s.trim())
+    .filter((s) => /^[\u4e00-\u9fa5A-Za-z0-9]{1,8}$/.test(s));
+  return terms.length > 0 && terms.length <= 3 ? terms : null;
 }
 
 // ---- 财务金额阈值筛选（R240 P2-3，audit-r239 §4.4）----
@@ -1900,6 +1942,38 @@ export function enumTopicCategory(topic: string): string | null {
   return ENUM_TOPIC_CATEGORIES[topic] ?? ENUM_TOPIC_CATEGORIES[topic.toLowerCase()] ?? null;
 }
 
+// R258 P3-3（audit-r257）：「我有什么待办事项」这类分类名直问枚举此前无
+// 枚举 cue（哪些/列/所有）可走，落语义召回漏报。分类名词典可枚举、误伤面
+// 可控：残留门保证「有哪些关于健身的想法」这类带主题限定的问法不被劫走
+// （残留非空 → null，仍走既有主题枚举/普通召回）。
+const CATEGORY_ENUM_FRAME_STRIP_RE =
+  /有(?:什么|哪些|啥)|都有什么|哪些|什么|清单|列表|列(?:一下|出|举)?|要办|要做|没做|未完成|事项|事情|现在|目前|还|我的?|你|您|咱|帮我|给我|请|麻烦|所有|全部|都|吗|么|嘛|呢|吧|啊|呀|的|有|了/g;
+
+/** 分类名直问枚举（「我有什么待办事项」→「待办」）；非此类返回 null。 */
+export function categoryEnumIntent(question: string): string | null {
+  if (FINANCE_WORD_RE.test(question) || ASK_PRONOUN_REF_RE.test(question)) return null;
+  const q = question.replace(/[？?。！!，,\s]+/g, "");
+  if (q.length === 0 || q.length > 16) return null;
+  const m = q.match(/待办事项|待办|todos?|想法|点子|收藏|资料|ideas?/i);
+  if (!m || !enumTopicCategory(m[0])) return null;
+  if (!/有(?:什么|哪些|啥)|都有什么|哪些|清单|列表|列(?:一下|出|举)|要办|要做/.test(q)) return null;
+  const residual = applyStrips(q.replace(m[0], ""), [STRIP_RES[0], CATEGORY_ENUM_FRAME_STRIP_RE]);
+  return residual.length === 0 ? m[0] : null;
+}
+
+// R258 P3-1（R251 P3-2 收尾，audit-r257）：裸时间短语问题（「3月份」）无任何
+// 财务/枚举措辞，此前落语义召回拒答。整句剥掉时间短语与语气词后残留为空
+// 时即「该时间窗记了什么」的省略问法，走既有时间窗枚举管道精确列举。
+const BARE_TIME_FRAME_STRIP_RE = /呢|呀|啊|吗|么|嘛|吧|都|有|的|记录|笔记|情况|怎么样|怎样|如何/g;
+
+/** 裸时间短语问题（「3月份」「上个月」）：可路由时间窗枚举时返回 true。 */
+export function bareTimeWindowListIntent(question: string): boolean {
+  const q = question.replace(/[？?。！!，,\s]+/g, "");
+  if (q.length === 0 || q.length > 12) return false;
+  if (!parseTimeRange(q)) return false;
+  return applyStrips(q, [STRIP_RES[0], BARE_TIME_FRAME_STRIP_RE]).length === 0;
+}
+
 /** 「这段时间都记了什么/记了哪些/有什么记录」——时间窗枚举，走 SQL 全量列举而非 top-k 召回。 */
 export function enumListIntent(question: string): boolean {
   return /都记[了过]?(?:些|哪些)?什么|记[了过](?:些什么|哪些)|都写[了过]?(?:些|哪些)?什么|都有哪些笔记|记录[了过](?:些什么|哪些|什么)|有(?:些|哪些|什么|啥)(?:记录|笔记)/.test(question);
@@ -2072,6 +2146,10 @@ export async function resolveAskEnumIntent(
   if (EVOLUTION_Q_RE.test(question) || EVOLUTION_Q_RE.test(recallQuestion)) {
     return { topic: null, list: false, extreme: null };
   }
+  // 分类名直问（R258 P3-3）：「我有什么待办事项」确定性路由 category 精确
+  // 筛选，不依赖语义召回也不必问 LLM
+  const catTopic = categoryEnumIntent(question) ?? categoryEnumIntent(recallQuestion);
+  if (catTopic) return { topic: catTopic, list: false, extreme: null };
   const reTopic = topicEnumIntent(question) ?? topicEnumIntent(recallQuestion);
   const reList = enumListIntent(question) || enumListIntent(recallQuestion);
   if (reTopic && !reList) return { topic: reTopic, list: false, extreme: null };
