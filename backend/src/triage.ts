@@ -1289,11 +1289,12 @@ export function fixSplitBillAmount(content: string, triage: TriageResult): Triag
 // 同样的标记可以让模型误以为笔记提前结束、其后文本被当成真实指令（生产实测
 // 可操纵单条分类与金额）。发给模型前把正文中出现的定界标记字面量（含全/半角
 // 括号与空白变体）改写成不可作定界的中和文本；正常笔记不含该标记，不受影响。
-const DELIM_SPOOF_RE = /[【\[]\s*待分拣笔记内容\s*(?:开始|结束)\s*[】\]]/g;
+// R264：问答上下文也用结构化定界（【笔记片段数据开始/结束】），仿冒中和同口径覆盖两组标记。
+const DELIM_SPOOF_RE = /[【\[]\s*(?:待分拣笔记内容|笔记片段数据)\s*(?:开始|结束)\s*[】\]]/g;
 // 仿冒「结束」标记到下一个仿冒「开始」标记（或正文末尾）之间的文本，是伪装在数据窗口
 // 之外的注入载荷（生产实测即使标记被中和，载荷祈使句仍能间歇带偏模型），确定性移除。
 const DELIM_SPOOF_PAYLOAD_RE =
-  /[【\[]\s*待分拣笔记内容\s*结束\s*[】\]][\s\S]*?(?:[【\[]\s*待分拣笔记内容\s*开始\s*[】\]]|$)/g;
+  /[【\[]\s*(?:待分拣笔记内容|笔记片段数据)\s*结束\s*[】\]][\s\S]*?(?:[【\[]\s*(?:待分拣笔记内容|笔记片段数据)\s*开始\s*[】\]]|$)/g;
 
 export function neutralizeDelimiterSpoof(content: string): string {
   return content
@@ -1308,7 +1309,7 @@ export function neutralizeDelimiterSpoof(content: string): string {
 // 仿冒同一管道收口：发给模型前确定性改写为中和标注（分拣与问答共用，勿平行
 // 打补丁）。词形取自真实注入语料的强指令骨架，正常笔记语义（如「忽略这条
 // 消息」「系统提示音」）不含「指示/指令 + 面向 assistant 的祈使」组合，不受影响。
-const INJECTION_IMPERATIVE_RES: RegExp[] = [
+const INJECTION_IMPERATIVE_CJK_RES: RegExp[] = [
   // 「忽略/无视…（之前的/以上）指示/指令/提示词/设定/规则」整句
   /[^。\n！!？?]*(?:忽略|无视|忘记|忘掉|抛弃|不要(?:理会|遵守|执行))[^。\n！!？?]{0,16}(?:指示|指令|提示词|系统提示|设定|规则|约束)[^。\n！!？?]*[。！!？?]?/g,
   // 「从现在开始…（每次）回答/输出/回复/扮演…」整句
@@ -1320,19 +1321,164 @@ const INJECTION_IMPERATIVE_RES: RegExp[] = [
   /[^。\n！!？?]*\bassistant\b[^。\n！!？?]{0,10}必须[^。\n！!？?]*[。！!？?]?/gi,
   // 「公开/泄露/输出…系统提示词/内部指令」整句
   /[^。\n！!？?]*(?:公开|泄露|透露|输出|打印|展示)[^。\n！!？?]{0,10}(?:系统提示词|内部指令|内部提示)[^。\n！!？?]*[。！!？?]?/g,
-  // English: "ignore/disregard (all) previous/above instructions ..."
+];
+// English: "ignore/disregard (all) previous/above instructions ..."（依赖词间空格，
+// 只在原文/折叠影子上匹配，不进去空白影子）
+const INJECTION_IMPERATIVE_EN_RES: RegExp[] = [
   /[^.\n]*\b(?:ignore|disregard|forget)\s+(?:all\s+)?(?:your\s+)?(?:previous|prior|above|earlier)\s+(?:instructions?|prompts?|rules?)\b[^.\n]*\.?/gi,
 ];
+const INJECTION_IMPERATIVE_RES: RegExp[] = [...INJECTION_IMPERATIVE_CJK_RES, ...INJECTION_IMPERATIVE_EN_RES];
 export const INJECTION_NEUTRALIZED_MARK = "〔笔记中疑似注入指令已中和，仅作数据保存〕";
 
+// ---- R264 P1 分层收口（audit-r263 §2.2）----
+// R262 的正则黑名单按字面形态枚举，对表示层混淆（全角/零宽/拆字/伪结构标记/
+// 编码载荷）结构性不足。改为分层防御，仍从 neutralizePromptInjection 单入口收口：
+//   层 0  不可见字符剥除——零宽/双向控制符在笔记里无正当用途，直接删；
+//   层 1  结构标记去毒——ChatML 特殊 token 与行首角色标记改写为同形非控制文本，
+//         只动标记本身，技术笔记里合法出现的代码/分隔符整句内容不受影响；
+//   层 2  编码载荷——「解码并遵从」诱导整句中和；base64 串解码后过同一祈使
+//         检测，命中才移除（普通编码数据原样保留）；
+//   层 3  祈使中和——在 NFKC 折叠影子与去空白影子上匹配（吃掉全角变体与
+//         字符间插空格混淆），命中区间映射回原文改写，正常文本逐字不动。
+// 输出侧另有 scrubModelOutputInjectionArtifacts 护栏（防执行残留标记外带）。
+
+// 层 0：零宽/双向控制/BOM/软连字符
+const INVISIBLE_CHARS_RE = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u00ad\ufeff]/g;
+
+// 层 1：ChatML 角色/控制 token（audit-r263 V9）与行首伪角色行（V4）。
+// token 改写成全角尖括号同形文本，角色行冒号换全角——保留可读性、丧失控制语义。
+const CHATML_TOKEN_RE =
+  /<\|\s*(?:im_start|im_end|im_sep|system|user|assistant|developer|endoftext|eot_id|start_header_id|end_header_id)\s*\|>/gi;
+const ROLE_LINE_RE = /^([ \t>*-]{0,4})(system|assistant|developer|tool)(\s*):(?=\s)/gim;
+
+function defuseStructuralTokens(text: string): string {
+  return text
+    .replace(CHATML_TOKEN_RE, (m) => `＜${m.slice(1, -1)}＞`)
+    .replace(ROLE_LINE_RE, (_m, pre: string, role: string, sp: string) => `${pre}${role}${sp}：`);
+}
+
+// 层 3 影子：逐字符 NFKC 折叠（全角→半角等），保留折叠字符到原文下标的映射
+type Shadow = { form: string; map: number[] };
+
+function foldShadow(text: string): Shadow {
+  const chars: string[] = [];
+  const map: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const folded = text[i].normalize("NFKC") || text[i];
+    for (const c of folded) {
+      chars.push(c);
+      map.push(i);
+    }
+  }
+  return { form: chars.join(""), map };
+}
+
+/** 折叠影子再去掉行内空白（拆字混淆「忽 略 之 前」→「忽略之前」），只喂中文祈使正则。 */
+function squeezeShadow(s: Shadow): Shadow {
+  const chars: string[] = [];
+  const map: number[] = [];
+  for (let i = 0; i < s.form.length; i++) {
+    const c = s.form[i];
+    if (c === " " || c === "\t") continue;
+    chars.push(c);
+    map.push(s.map[i]);
+  }
+  return { form: chars.join(""), map };
+}
+
+function collectSpans(shadow: Shadow, res: RegExp[], spans: Array<[number, number]>): void {
+  for (const re of res) {
+    for (const m of shadow.form.matchAll(re)) {
+      if (!m[0] || !m[0].trim() || m.index === undefined) continue;
+      spans.push([shadow.map[m.index], shadow.map[m.index + m[0].length - 1] + 1]);
+    }
+  }
+}
+
+function replaceSpans(text: string, spans: Array<[number, number]>, mark: string): string {
+  if (spans.length === 0) return text;
+  spans.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const s of spans) {
+    const last = merged[merged.length - 1];
+    if (last && s[0] <= last[1]) last[1] = Math.max(last[1], s[1]);
+    else merged.push([s[0], s[1]]);
+  }
+  let out = "";
+  let pos = 0;
+  for (const [s, e] of merged) {
+    out += text.slice(pos, s) + mark;
+    pos = e;
+  }
+  return out + text.slice(pos);
+}
+
+function neutralizeImperatives(text: string): string {
+  const folded = foldShadow(text);
+  const spans: Array<[number, number]> = [];
+  collectSpans(folded, INJECTION_IMPERATIVE_RES, spans);
+  collectSpans(squeezeShadow(folded), INJECTION_IMPERATIVE_CJK_RES, spans);
+  return replaceSpans(text, spans, INJECTION_NEUTRALIZED_MARK);
+}
+
+function injectionImperativeHit(text: string): boolean {
+  const folded = foldShadow(text);
+  if (INJECTION_IMPERATIVE_RES.some((re) => folded.form.search(re) !== -1)) return true;
+  const sq = squeezeShadow(folded);
+  return INJECTION_IMPERATIVE_CJK_RES.some((re) => sq.form.search(re) !== -1);
+}
+
+// 层 2：编码载荷（audit-r263 V10）。「解码并遵从」诱导要求同句内出现编码串才
+// 中和（技术笔记「base64 解码后执行以下命令」这类无载荷说明文字不受影响）；
+// 独立 base64 串解码成可读文本后过同一祈使/结构标记检测，命中才移除。
+const DECODE_BAIT_RE =
+  /[^.。\n！!？?]*(?:decode|decrypt|解码|解密)[^.。\n！!？?]{0,40}(?:obey|follow|comply|execute|遵从|遵循|照做|服从|执行)[^.。\n！!？?]{0,80}[A-Za-z0-9+/]{16,}={0,2}[^.。\n！!？?]*[.。！!？?]?/gi;
+const BASE64_BLOB_RE = /[A-Za-z0-9+/]{24,}={0,2}/g;
+const ENCODED_PAYLOAD_MARK = "〔已移除疑似编码注入载荷〕";
+
+function decodeBase64Text(blob: string): string | null {
+  if (blob.length % 4 === 1) return null;
+  try {
+    const bin = atob(blob.padEnd(Math.ceil(blob.length / 4) * 4, "="));
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+    // 含控制字符的解码结果视为二进制数据，不是文本指令
+    return /[\u0000-\u0008\u000b\u000e-\u001f]/.test(text) ? null : text;
+  } catch {
+    return null;
+  }
+}
+
+function neutralizeEncodedPayloads(text: string): string {
+  let out = text.replace(DECODE_BAIT_RE, INJECTION_NEUTRALIZED_MARK);
+  out = out.replace(BASE64_BLOB_RE, (blob) => {
+    const decoded = decodeBase64Text(blob);
+    if (!decoded) return blob;
+    CHATML_TOKEN_RE.lastIndex = 0;
+    return injectionImperativeHit(decoded) || CHATML_TOKEN_RE.test(decoded) ? ENCODED_PAYLOAD_MARK : blob;
+  });
+  return out;
+}
+
 /**
- * 统一注入中和入口（R216 定界仿冒 + R262 祈使注入）：分拣提示与问答召回片段
- * 发给模型前都必须过这里。
+ * 统一注入中和入口（R216 定界仿冒 + R262 祈使注入 + R264 分层收口）：分拣提示
+ * 与问答召回片段发给模型前都必须过这里。
  */
 export function neutralizePromptInjection(content: string): string {
-  let out = neutralizeDelimiterSpoof(content);
-  for (const re of INJECTION_IMPERATIVE_RES) out = out.replace(re, INJECTION_NEUTRALIZED_MARK);
-  return out;
+  let out = content.replace(INVISIBLE_CHARS_RE, ""); // 层 0
+  out = neutralizeDelimiterSpoof(out); // R216 定界仿冒
+  out = defuseStructuralTokens(out); // 层 1
+  out = neutralizeEncodedPayloads(out); // 层 2
+  return neutralizeImperatives(out); // 层 3
+}
+
+/**
+ * 输出侧防执行护栏（R264 P1 层 4）：即使某个未知混淆变体穿透输入侧中和，
+ * 模型输出里的结构控制 token / 不可见字符也绝不外带给客户端——它们在正常
+ * 回答里没有正当用途，确定性剥除，不影响正文文字。
+ */
+export function scrubModelOutputInjectionArtifacts(answer: string): string {
+  return answer.replace(INVISIBLE_CHARS_RE, "").replace(CHATML_TOKEN_RE, "").trimStart();
 }
 
 // 中文数字金额兜底（R238 P3-2，audit-r235 P3-3 / audit-r237 P3-2 遗留）：语音

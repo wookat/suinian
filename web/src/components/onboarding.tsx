@@ -64,12 +64,18 @@ export function Onboarding() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
-      <div className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-xl border bg-card p-6 shadow-lg animate-in fade-in zoom-in-95 duration-300">
+      {/* dialog landmark：欢迎弹层内容全部落在地标内（axe region，audit-r263 P3-3） */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="onboarding-title"
+        className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-xl border bg-card p-6 shadow-lg animate-in fade-in zoom-in-95 duration-300"
+      >
         <div className="mb-1 flex items-center gap-2">
           <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
             碎
           </span>
-          <h2 className="text-lg font-semibold">欢迎来到碎念</h2>
+          <h2 id="onboarding-title" className="text-lg font-semibold">欢迎来到碎念</h2>
         </div>
         {/* R182 P2-3：首屏收敛为一句话主张，移动端不再被长段落撑出可视区 */}
         <p className="mb-1 text-sm font-medium">什么都能丢，AI 帮你想起来。</p>

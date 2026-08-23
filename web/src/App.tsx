@@ -218,7 +218,10 @@ export default function App() {
         </div>
       )}
       {isMock && (
-        <div className="flex items-center justify-center gap-2 border-b border-amber-500/30 bg-amber-500/15 px-4 py-2 text-sm text-amber-800 backdrop-blur dark:text-amber-300 md:pl-52">
+        <div
+          role="region"
+          aria-label="演示模式提示"
+          className="flex items-center justify-center gap-2 border-b border-amber-500/30 bg-amber-500/15 px-4 py-2 text-sm text-amber-800 backdrop-blur dark:text-amber-300 md:pl-52">
           <Info className="size-4 shrink-0" />
           <span>
             当前为演示数据，
