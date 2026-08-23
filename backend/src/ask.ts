@@ -2586,6 +2586,37 @@ export const MULTI_HOP_RE = /关系|关联|依据|后来|进展|着落|落地|�
 /** Cosine similarity below which a semantic-only recall hit is too weak to appear as a citation. */
 export const ASK_CITATION_MIN_SCORE = 0.55;
 
+// ---- 逐字复述引证补全（R262，audit-r261 P2-5）----
+// 答案正文逐字复述了某条召回笔记的内容（≥VERBATIM_CITE_MIN_LEN 连续字符
+// 重叠）却没把它列入引用时，把该笔记增补进 references。只增补、不改写答案
+// 文本，与多跳引证补全同一口径。弱语义命中不补（保持 weak 不出现在引用的
+// 既有约束）。
+
+const VERBATIM_CITE_MIN_LEN = 8;
+const VERBATIM_NONWORD_RE = /[^\p{L}\p{N}]+/gu;
+
+export function verbatimUncitedSourceIds(
+  answer: string,
+  notes: readonly { id: string; content: string }[],
+  citedIds: ReadonlySet<string>,
+  weakIds: ReadonlySet<string>
+): string[] {
+  const a = answer.replace(VERBATIM_NONWORD_RE, "");
+  if (a.length < VERBATIM_CITE_MIN_LEN) return [];
+  const out: string[] = [];
+  for (const n of notes) {
+    if (citedIds.has(n.id) || weakIds.has(n.id)) continue;
+    const c = n.content.replace(VERBATIM_NONWORD_RE, "");
+    let hit = false;
+    for (let i = 0; i + VERBATIM_CITE_MIN_LEN <= c.length && !hit; i += 1) {
+      if (a.includes(c.slice(i, i + VERBATIM_CITE_MIN_LEN))) hit = true;
+    }
+    if (hit) out.push(n.id);
+    if (out.length >= 2) break;
+  }
+  return out;
+}
+
 /**
  * 依据/为什么类问题（R260 P2/q31）：答案需要引用「原因笔记 + 结果笔记」两条以上
  * 支撑片段，但候选序里语义强命中常被零分的关键词/图谱补位片段隔开（q31 实测

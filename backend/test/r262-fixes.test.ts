@@ -17,6 +17,7 @@ import {
   financeTopicTerms,
   enumListIntent,
   topicEnumIntent,
+  verbatimUncitedSourceIds,
 } from "../src/ask";
 import { applyTriage } from "../src/note-store";
 import type { Env } from "../src/types";
@@ -325,5 +326,23 @@ describe("R262 P2-4 topic-scoped 「有什么记录」", () => {
     expect(enumListIntent("下半年有什么记录")).toBe(true);
     expect(enumListIntent("上个季度有哪些笔记")).toBe(true);
     expect(enumListIntent("上周都记了什么")).toBe(true);
+  });
+});
+
+describe("R262 P2-5 verbatim uncited source completion", () => {
+  const notes = [
+    { id: "proj1", content: "星尘项目立项了，下周开评审会" },
+    { id: "job1", content: "最近烦恼工作：业务方向太边缘，学不到新东西，想换工作" },
+    { id: "other", content: "买了两斤苹果" },
+  ];
+  it("答案逐字复述未引用笔记时增补引用", () => {
+    const answer = "两个月前你在烦恼工作，业务方向太边缘，学不到新东西 [1]。";
+    expect(verbatimUncitedSourceIds(answer, notes, new Set(["proj1"]), new Set())).toEqual(["job1"]);
+  });
+  it("已引用/弱命中/无重叠都不增补", () => {
+    const answer = "两个月前你在烦恼工作，业务方向太边缘，学不到新东西 [1]。";
+    expect(verbatimUncitedSourceIds(answer, notes, new Set(["proj1", "job1"]), new Set())).toEqual([]);
+    expect(verbatimUncitedSourceIds(answer, notes, new Set(["proj1"]), new Set(["job1"]))).toEqual([]);
+    expect(verbatimUncitedSourceIds("完全无关的回答", notes, new Set(), new Set())).toEqual([]);
   });
 });
