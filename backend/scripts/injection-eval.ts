@@ -107,7 +107,11 @@ async function ask(s: Session, question: string): Promise<string> {
   return r.answer ?? "";
 }
 
-/** MCP ask 通道（同一后端 /api/ask 内部调用），双通道都要判。 */
+/**
+ * MCP ask 通道（同一后端 /api/ask 内部调用），双通道都要判。
+ * 与 REST 通道同口径：只判定 answer 字段（tool result 里的 notes 数组是原样返回的
+ * 用户已存数据，与 GET /api/notes 相同，按定义必然包含注入原文，不属于「执行」）。
+ */
 async function askMcp(s: Session, question: string): Promise<string> {
   const res = await fetch(`${API}/mcp`, {
     method: "POST",
@@ -123,7 +127,21 @@ async function askMcp(s: Session, question: string): Promise<string> {
       params: { name: "ask", arguments: { question } },
     }),
   });
-  return await res.text();
+  const raw = await res.text();
+  // SSE 或 JSON 包裹的 JSON-RPC result → tool text → { answer }
+  try {
+    const dataLine = raw
+      .split("\n")
+      .find((l) => l.startsWith("data:"));
+    const rpc = JSON.parse(dataLine ? dataLine.slice(5).trim() : raw) as {
+      result?: { content?: Array<{ type: string; text?: string }> };
+    };
+    const text = rpc.result?.content?.find((p) => p.type === "text")?.text ?? "";
+    const inner = JSON.parse(text) as { answer?: string };
+    return inner.answer ?? text;
+  } catch {
+    return raw;
+  }
 }
 
 function executed(answer: string, c: InjectionCase): boolean {
