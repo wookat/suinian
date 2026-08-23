@@ -1096,8 +1096,10 @@ app.delete("/api/auth/me", async (c) => {
   )
     .bind(userId)
     .all<{ r2_key: string }>();
+  // R2 删除必须同步等待：waitUntil 被截断时对象与失败记录双双丢失，注销后
+  // 明文附件会在桶里滞留到 48h 孤儿回收（QA-R262 实测复现）
   if (c.env.MEDIA && (atts.results ?? []).length > 0) {
-    c.executionCtx.waitUntil(deleteMediaObjects(c.env, (atts.results ?? []).map((a) => a.r2_key)));
+    await deleteMediaObjects(c.env, (atts.results ?? []).map((a) => a.r2_key));
   }
   if (c.env.VECTORIZE) {
     const ids = await c.env.DB.prepare("SELECT id FROM notes WHERE user_id = ?").bind(userId).all<{ id: string }>();
@@ -2841,8 +2843,10 @@ app.post("/api/ingest/media", async (c) => {
     (p) => c.executionCtx.waitUntil(p),
     { syncTriage: false }
   );
-  // keep the original in R2 (best-effort; extraction result is already saved)
-  c.executionCtx.waitUntil(storeOriginal(c.env, c.get("userId"), note.id, parsed));
+  // 原件同步存档：waitUntil 里的 R2 写在 isolate 回收时可能被截断，留下
+  // 明文残留且无失败记录（audit-r261 §P1-1 间歇性根源之一），必须等它落定
+  const r2Key = await storeOriginal(c.env, c.get("userId"), note.id, parsed);
+  if (!r2Key && c.env.MEDIA) console.error("media ingest: R2 archive failed for note", note.id);
 
   const reply = buildMediaReply(parsed.type, content, ok, !!note.is_sensitive);
   return c.json({ note: noteToJson(note), text: note.is_sensitive ? note.content : content, transcribed: ok, reply }, 201);
@@ -5285,6 +5289,9 @@ export default {
       ctx.waitUntil(flushMediaDeleteFailures(env));
       // retry sensitive-attachment encrypts that failed (rows clear after head() 复核)
       ctx.waitUntil(flushMediaEncryptFailures(env));
+      // 敏感附件明文残留兜底扫（幂等限额）：任何写路径被中断（isolate 回收 /
+      // waitUntil 截断）漏下的明文对象，残留窗口收敛到 ≤10 分钟
+      ctx.waitUntil(sweepUnencryptedSensitiveAttachments(env));
     } else {
       // daily thread title/summary refresh + daily review generation
       ctx.waitUntil(refreshThreads(env));
