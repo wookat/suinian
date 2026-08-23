@@ -551,13 +551,30 @@ export async function deleteMediaObjects(env: Pick<Env, "MEDIA" | "DB">, keys: s
  * 删除失败而触发整批重删。 */
 async function verifyMediaDeleted(env: Pick<Env, "MEDIA" | "DB">, keys: string[]): Promise<void> {
   if (!env.MEDIA) return;
-  const survivors: string[] = [];
+  let survivors: string[] = [];
   for (const k of keys) {
     try {
       if ((await env.MEDIA.head(k)) !== null) survivors.push(k);
     } catch (e) {
       console.error("verifyMediaDeleted: head failed (skipping verify for key)", k, e);
     }
+  }
+  if (survivors.length === 0) return;
+  // 幸存对象就地重删一次再复核（QA-R262：批量 delete 静默不生效时对象会
+  // 滞留到下一轮 cron，私密原件多暴露最长 10 分钟），仍存活才落表
+  try {
+    await env.MEDIA.delete(survivors);
+    const still: string[] = [];
+    for (const k of survivors) {
+      try {
+        if ((await env.MEDIA.head(k)) !== null) still.push(k);
+      } catch {
+        still.push(k);
+      }
+    }
+    survivors = still;
+  } catch (e) {
+    console.error("verifyMediaDeleted: inline re-delete failed", e);
   }
   if (survivors.length === 0) return;
   console.error(`verifyMediaDeleted: ${survivors.length} object(s) still present after delete, recording for cron retry`, survivors);
