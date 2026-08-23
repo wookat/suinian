@@ -1656,7 +1656,8 @@ const FINANCE_LIST_LABELS: Record<FinanceListDirection, string> = {
 export function buildFinanceListAnswer(
   direction: FinanceListDirection,
   rows: Pick<NoteRow, "id" | "title" | "content" | "created_at" | "category" | "is_sensitive" | "amount" | "currency">[],
-  phrase: string | null
+  phrase: string | null,
+  transferCount = 0
 ): string {
   const scope = phrase ?? "到目前为止";
   const label = FINANCE_LIST_LABELS[direction];
@@ -1703,6 +1704,7 @@ export function buildFinanceListAnswer(
   if (itemLines.length > 0) md += `\n\n逐笔明细${rows.length > visible.length ? `（共 ${rows.length} 笔，仅展示前 ${visible.length} 笔）` : ""}：\n${itemLines.join("\n")}`;
   if (sensitiveCnt > 0) md += `\n（含 ${sensitiveCnt} 笔加密的敏感记录，金额已计入合计，内容不在问答中展示。）`;
   if (unknown > 0) md += `\n（另有 ${unknown} 笔未识别出金额，未计入合计。）`;
+  if (transferCount > 0) md += `\n（另有 ${transferCount} 笔资金往来（内转/提现/借还），不计入收支合计。）`;
   md += `\n\n${caliber}`;
   return md;
 }

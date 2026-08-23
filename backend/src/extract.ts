@@ -2,7 +2,7 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import { chatComplete } from "./ai";
 import { parseHtmlMeta, isBlockedTitle, ssrfSafeFetch, FETCH_PROFILES, fallbackTitleFromUrl } from "./linkmeta";
-import { sanitizeTags } from "./triage";
+import { sanitizeTags, neutralizePromptInjection } from "./triage";
 import { prepareTagsUpdate } from "./note-store";
 import type { Env, NoteMeta, NoteRow } from "./types";
 
@@ -230,7 +230,7 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
     meta.link_status = extract ? "no_content" : "fetch_failed";
     if (failReason) meta.link_fail_reason = failReason;
     meta.link_site = extract?.site ?? hostnameOf(note.url) ?? undefined;
-    const title = extract?.title ?? null;
+    const title = extract?.title ? neutralizePromptInjection(extract.title) : null;
     const fallback = note.url_title ? null : (title ?? fallbackTitleFromUrl(note.url));
     await env.DB.prepare(
       "UPDATE notes SET url_title = COALESCE(?, url_title), meta = json_patch(coalesce(meta, '{}'), ?), updated_at = datetime('now') WHERE id = ? AND is_sensitive = 0"
@@ -243,7 +243,9 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
   meta.link_status = "ok";
   meta.link_fail_reason = null; // json_patch: null 清除上次失败归因
   meta.link_site = extract.site ?? undefined;
-  meta.link_excerpt = extract.excerpt;
+  // R266（audit-r265 P2-2）：剪藏派生字段是攻击者可控的入模/展示文本来源，
+  // 持久化前走与笔记正文同一中和管道
+  meta.link_excerpt = neutralizePromptInjection(extract.excerpt);
 
   const ai = await summarizeArticle(env, {
     url: note.url,
@@ -251,12 +253,13 @@ export async function enrichLinkInto(env: Env, noteId: string): Promise<void> {
     site: extract.site,
     excerpt: extract.excerpt,
   });
-  const summary = ai?.summary ?? extract.description ?? null;
+  const rawSummary = ai?.summary ?? extract.description ?? null;
+  const summary = rawSummary ? neutralizePromptInjection(rawSummary) : null;
 
   await env.DB.prepare(
     "UPDATE notes SET url_title = COALESCE(?, url_title), url_summary = COALESCE(?, url_summary), meta = json_patch(coalesce(meta, '{}'), ?), updated_at = datetime('now') WHERE id = ? AND is_sensitive = 0"
   )
-    .bind(extract.title && !note.url_title ? extract.title : null, summary ?? null, JSON.stringify(meta), noteId)
+    .bind(extract.title && !note.url_title ? neutralizePromptInjection(extract.title) : null, summary ?? null, JSON.stringify(meta), noteId)
     .run();
   if (ai && ai.tags.length > 0) {
     const existing = (() => {

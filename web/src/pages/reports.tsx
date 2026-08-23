@@ -3,7 +3,7 @@ import { FileText, ChevronLeft, RefreshCw, Loader2, Sparkles } from "lucide-reac
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { marked } from "marked"
-import DOMPurify from "dompurify"
+import { sanitizeGeneratedHtml } from "@/lib/safe-html"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { cn, parseServerTime } from "@/lib/utils"
@@ -65,7 +65,7 @@ function stripLeadingH1(md: string): string {
 }
 
 function ReportBody({ md }: { md: string }) {
-  const html = useMemo(() => DOMPurify.sanitize(marked.parse(md, { async: false })), [md])
+  const html = useMemo(() => sanitizeGeneratedHtml(marked.parse(md, { async: false })), [md])
   return (
     <div
       className="prose-report text-sm leading-relaxed [&_h1]:mb-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2.5 [&_h2]:mt-7 [&_h2]:border-b [&_h2]:pb-1.5 [&_h2]:text-base [&_h2]:font-semibold [&_h2:first-child]:mt-0 [&_h3]:mb-1.5 [&_h3]:mt-4 [&_h3]:font-medium [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5"

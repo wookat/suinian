@@ -111,7 +111,14 @@ function Heatmap({ daily }: { daily: StatsResponse["daily"] }) {
   }
 
   return (
-    <div ref={scrollRef} className="overflow-x-auto pb-1" data-testid="heatmap">
+    <div
+      ref={scrollRef}
+      className="overflow-x-auto pb-1"
+      data-testid="heatmap"
+      tabIndex={0}
+      role="region"
+      aria-label="过去一年每日记录热力图（可横向滚动）"
+    >
       <svg width={width} height={height} role="img" aria-label="过去一年每日记录热力图">
         {monthLabels.map((m) => (
           <text
@@ -160,10 +167,10 @@ function StatTile({
   return (
     <Card className="flex flex-col gap-1 p-4">
       <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Icon className={cn("size-3.5", accent && "text-orange-500")} />
+        <Icon className={cn("size-3.5", accent && "text-orange-600 dark:text-orange-500")} />
         {label}
       </span>
-      <span className={cn("text-2xl font-semibold tabular-nums", accent && "text-orange-500")}>{value}</span>
+      <span className={cn("text-2xl font-semibold tabular-nums", accent && "text-orange-600 dark:text-orange-500")}>{value}</span>
     </Card>
   )
 }
@@ -180,7 +187,7 @@ function DistBars({
   if (total === 0) return null
   return (
     <Card className="space-y-3 p-4">
-      <h3 className="text-sm font-medium">{title}</h3>
+      <h2 className="text-sm font-medium">{title}</h2>
       <div className="flex h-2.5 overflow-hidden rounded-full">
         {items.map((it, i) => (
           <div
@@ -360,7 +367,7 @@ export function InsightsPage() {
 
       {/* 热力图 */}
       <Card className="space-y-2 p-4">
-        <h3 className="text-sm font-medium">过去一年的记录</h3>
+        <h2 className="text-sm font-medium">过去一年的记录</h2>
         <Heatmap daily={stats.daily} />
         <p className="text-xs text-muted-foreground">点击某一天可跳转到当天的笔记列表</p>
       </Card>
@@ -368,10 +375,10 @@ export function InsightsPage() {
       {/* 随机漫步 */}
       <Card className="space-y-3 p-4">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="flex items-center gap-1.5 text-sm font-medium">
+          <h2 className="flex items-center gap-1.5 text-sm font-medium">
             <Dices className="size-4" />
             随机漫步
-          </h3>
+          </h2>
           <Button size="sm" variant={randomNote ? "outline" : "default"} disabled={drawing} onClick={() => void draw()}>
             {drawing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
             {randomNote ? "再抽一条" : "抽一条旧笔记"}
@@ -416,10 +423,10 @@ export function InsightsPage() {
       {/* 常用标签 */}
       {stats.top_tags.length > 0 && (
         <Card className="space-y-3 p-4">
-          <h3 className="flex items-center gap-1.5 text-sm font-medium">
+          <h2 className="flex items-center gap-1.5 text-sm font-medium">
             <Tag className="size-4" />
             常用标签
-          </h3>
+          </h2>
           <div className="flex flex-wrap gap-2">
             {stats.top_tags.map((t) => (
               <a

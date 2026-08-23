@@ -115,6 +115,8 @@ npx wrangler pages deploy dist --project-name suinian --branch main
 
 ### 2.1 允许你的 Web 域名跨域访问 API（必做，否则注册/登录报「网络连接失败」）
 
+Web 端 `web/public/_headers` 的 CSP `connect-src` 只放行 `*.zalize.com` 与 `*.workers.dev`（R266 收紧）：API 用自定义域名时，把你的域名加进该指令再部署 Pages。
+
 API 默认只允许官方域名与本地开发端口跨域。自部署的 Pages 域名（如 `https://suinian.pages.dev` 或你的自定义域）要加进 `backend/wrangler.toml` 的 `[vars]`：
 
 ```toml
