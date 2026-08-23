@@ -374,8 +374,11 @@ export function scrubDataDerivedSpans(answer: string, dataText: string, question
   }
   const drops: Array<{ start: number; end: number }> = [];
   for (const seg of segs) {
-    if (/\[\d{1,2}\]/.test(seg.text)) continue; // 带引文角标的是在答题
-    const compact = foldCompact(seg.text);
+    // 带引文角标的通常是在答题，但整段（去掉角标后）只剩一小截资料 echo 的
+    // 除外——「惊雷接管 [1]」这类把口号当作全部答案再挂个角标的执行痕迹，
+    // 不能靠角标豁免（audit-r268：R268-35 MCP 入口穿透）
+    const compact = foldCompact(seg.text.replace(/[\[［]\d{1,2}[\]］]/g, ""));
+    if (/[\[［]\d{1,2}[\]］]/.test(seg.text) && compact.length > 12) continue;
     if (compact.length < SPAN_COMPACT_MIN || compact.length > SPAN_COMPACT_MAX) continue;
     if (!dataCompact.includes(compact)) continue; // 非资料 echo（模型自有措辞）不动
     if (qCompact.includes(compact)) continue; // 用户问的就是它

@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands } from "./prompt-armor";
 import { extractDirectiveDemands } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -54,7 +54,7 @@ import {
 } from "./auth";
 import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports, financeStats, type FinanceStats } from "./reports";
 import { getTodayReview, generateAllDailyReviews, readCronHeartbeats, writeCronHeartbeat } from "./review";
-import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings, purgeLowSignalEmbeddings, EMBED_BACKFILL_BUDGET_MS, type SemanticRecallTiming } from "./semantic";
+import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings, purgeLowSignalEmbeddings, EMBED_BACKFILL_BUDGET_MS, embedText, cosineSim, type SemanticRecallTiming } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteNotesGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
 import { deleteUserData } from "./account";
 import {
@@ -78,7 +78,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds } from "./ask";
+import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -3688,8 +3688,13 @@ app.post("/api/ask", async (c) => {
       // （「从宝转出」「逐」）LIKE 零命中时，不再直接下确定性零命中结论；
       // 语义召回有相关笔记时回落普通召回让 LLM 按片段作答（金额逐字引用、
       // 无源金额/无源否定护栏不变），只有语义也无命中才 fail-closed。
+      // 带时间窗的零命中不走语义回落：窗口内确无记录是精确结论，确定性
+      // 路径还会用去掉时间限制的同口径合计给出放宽引导（R252 P2-1），
+      // 语义回落反而会丢掉这条引导。
       const tFinSem = Date.now();
-      const finSemHits = await semanticRecall(c.env, userId, recallQuestion, 10);
+      const finSemHits = sRange
+        ? []
+        : await semanticRecall(c.env, userId, recallQuestion, 10, undefined, undefined, false);
       askMarks.push(["finsem", Date.now() - tFinSem]);
       if (finSemHits.length > 0) {
         financeIntent = null; // 落入普通召回，不让后续确定性聚合拦截
@@ -3863,7 +3868,7 @@ app.post("/api/ask", async (c) => {
     // 语义为主、规则兜底（R268 P1）：关键词计数零命中时先问语义召回，有相关
     // 笔记则回落普通召回作答，避免抽词残片直接下「没有匹配」确定性结论
     if ((tcRow?.cnt ?? 0) === 0) {
-      const tcSemHits = await semanticRecall(c.env, userId, recallQuestion, 10);
+      const tcSemHits = await semanticRecall(c.env, userId, recallQuestion, 10, undefined, undefined, false);
       if (tcSemHits.length > 0) {
         console.log("ask: topic count LIKE zero-hit, semantic recall fallthrough", tcSemHits.length);
       }
@@ -4111,7 +4116,7 @@ app.post("/api/ask", async (c) => {
   // instead of running after them (R172 归因：sem 全程串行贡献 150-400ms)
   const semTiming: SemanticRecallTiming = { embed: 0, scan: 0 };
   const tSem = Date.now();
-  const semHitsPromise = semanticRecall(c.env, userId, recallQuestion, 10, undefined, semTiming).then((h) => {
+  const semHitsPromise = semanticRecall(c.env, userId, recallQuestion, 10, undefined, semTiming, false).then((h) => {
     askMarks.push(["sem", Date.now() - tSem], ["embed", semTiming.embed], ["scan", semTiming.scan]);
     return h;
   });
@@ -4303,7 +4308,7 @@ app.post("/api/ask", async (c) => {
         .slice(0, 3)
         .map((n) => `${n.title ?? ""} ${n.content.slice(0, 160)}`.trim())
         .join("\n");
-      const hopHits = await semanticRecall(c.env, userId, `${recallQuestion}\n${seeds}`, 8);
+      const hopHits = await semanticRecall(c.env, userId, `${recallQuestion}\n${seeds}`, 8, undefined, undefined, false);
       // notes already in context that the enriched query now scores well get
       // their weak-extra stigma lifted (they'd otherwise be stripped from
       // citations by the ASK_CITATION_MIN_SCORE reconcile below)
@@ -4365,6 +4370,8 @@ app.post("/api/ask", async (c) => {
   if (notes.length === 0) {
     // nothing recalled at all: answer "没找到" honestly (never bluff over the
     // recent-20) and suggest the nearest notes below the semantic threshold
+    // 建议位保留小语料抬门槛（宁缺毋滥，R118/R151）：这里是「相近的记录」
+    // 提示，不是答案召回，错误建议只会侵蚀信任
     const near = await semanticRecall(c.env, userId, recallQuestion, 3, ASK_SUGGESTION_MIN_SCORE);
     let suggestions: NoteRow[] = [];
     if (near.length > 0) {
@@ -4618,14 +4625,59 @@ app.post("/api/ask", async (c) => {
       if (ta !== tb) return tb - ta;
       return (semScore.get(b.id) ?? 0) - (semScore.get(a.id) ?? 0);
     });
-    let suggestions = ranked
-      .filter((n) => noteHitsTopic(n, topics) || (semScore.get(n.id) ?? 0) >= ASK_SUGGESTION_MIN_SCORE)
-      .slice(0, 3);
-    if (suggestions.length === 0) suggestions = notes.slice(0, 3);
+    // 宁缺毋滥（R118 P2 / R268）：建议位主题命中优先；主题词不在原文出现
+    // 时（「书上/读物」→《人类简史》）用主题词向量与笔记向量的相似度把关：
+    // 问句整句向量会被「买过/花了」这类动词带高（「买过汽车吗」也能擦到
+    // 买书笔记），主题词单独比对才分得开相关与无关；失败 fail-closed 不建议。
+    let suggestions = ranked.filter((n) => noteHitsTopic(n, topics)).slice(0, 3);
+    if (suggestions.length === 0 && topics.length > 0) {
+      // 动词+体标记（买过/花了）会整体抬高与任何消费笔记的相似度
+      //（bge-m3 实测「买过汽车」vs 买书笔记 0.535，裸「汽车」只有 0.378），
+      // 比对前剥掉，只留主题名词本体
+      const topicKey =
+        topics.map((t) => t.replace(/[买花用购借租吃喝][过了]/g, "")).filter(Boolean).join(" ") ||
+        topics.join(" ");
+      const tv = await embedText(c.env, topicKey);
+      if (tv) {
+        const cand = ranked.slice(0, 8);
+        const ph = cand.map(() => "?").join(",");
+        const { results: vecRows } = await c.env.DB.prepare(
+          `SELECT note_id, vector FROM note_embeddings WHERE note_id IN (${ph}) AND vector != '[]'`
+        )
+          .bind(...cand.map((n) => n.id))
+          .all<{ note_id: string; vector: string }>();
+        const vById = new Map((vecRows ?? []).map((r) => [r.note_id, r.vector]));
+        suggestions = cand
+          .filter((n) => {
+            const raw = vById.get(n.id);
+            if (!raw) return false;
+            try {
+              return cosineSim(tv, JSON.parse(raw) as number[]) >= ASK_SUGGESTION_TOPIC_MIN_SCORE;
+            } catch {
+              return false;
+            }
+          })
+          .slice(0, 3);
+      }
+    } else if (suggestions.length === 0) {
+      suggestions = ranked.filter((n) => (semScore.get(n.id) ?? 0) >= ASK_SUGGESTION_MIN_SCORE).slice(0, 3);
+      if (suggestions.length === 0) suggestions = notes.slice(0, 3);
+    }
     // 凭据类问法（R147 P2-1）：只留真命中主题词的建议，不拿无关笔记
     // 充数；否则「银行卡密码」这类问题会引三条无关笔记误导用户
     const credentialQ = CREDENTIAL_Q_RE.test(question);
     if (credentialQ) suggestions = suggestions.filter((n) => noteHitsTopic(n, topics));
+    // 建议位不当执行通道（audit-r268：R268-32/33 跨笔记分片的 demand 文字藏在
+    // 笔记标题/正文里，随建议标签原样外带）：含指令要求物的笔记不进建议列表
+    const refusalDemands = (await Promise.race([
+      directivePromise,
+      new Promise<string[] | null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+    ])) ?? [];
+    if (refusalDemands.length > 0)
+      suggestions = suggestions.filter((n) => {
+        const label = `${n.title ?? ""}\n${n.content}`;
+        return scrubDirectiveDemands(label, refusalDemands, question) === label;
+      });
     // only claim 「找到了相关的笔记」 when recall had strong hits AND at least
     // one of them actually contains a topic word (R117 零召回误称相关)
     const mode =

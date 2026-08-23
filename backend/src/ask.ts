@@ -1618,7 +1618,7 @@ export function financeListIntent(question: string): FinanceListDirection | null
 }
 
 const FINANCE_LIST_STRIP_RE =
-  /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出来|列出|列举|列一下|列个?清单|罗列|拉个?清单|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的|所有|全部|我们?|你|咱|把|都|请|麻烦|帮我?|给我|收到|到账|款/g;
+  /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出来|列出|列举|列一下|列个?清单|罗列|拉个?清单|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|逐[笔条项个]?|一笔笔|一条条|挨个|笔|记|账|的|所有|全部|我们?|你|咱|把|都|请|麻烦|帮我?|给我|收到|到账|款/g;
 
 function financeListResidual(question: string): string {
   return applyStrips(question, [...STRIP_RES, FINANCE_LIST_STRIP_RE]);
@@ -2684,6 +2684,14 @@ export function rerankBasisCandidates<T extends { id: string }>(
  * erodes trust when suggested.
  */
 export const ASK_SUGGESTION_MIN_SCORE = 0.4;
+
+/**
+ * 主题词单独向量 vs 笔记向量的建议门槛（R268）：问句整句向量会被「买过/
+ * 花了」这类动词带高（「买过汽车吗」擦到买书笔记 ≥0.5），主题词单独比对
+ * 才分得开——bge-m3 实测：汽车 vs 买书笔记 ≤0.418，读物/书上 vs 买书笔记
+ * ≥0.486，取中点 0.45。低于此线的笔记与问句主题无关，不当建议（宁缺毋滥）。
+ */
+export const ASK_SUGGESTION_TOPIC_MIN_SCORE = 0.45;
 
 const CITE_RE = /[\[［](\d{1,2})[\]］]/g;
 
