@@ -41,7 +41,9 @@ describe("buildFinanceSubsetZeroHitAnswer (P2-1)", () => {
   });
   it("says relaxed search also found nothing when zero overall", () => {
     const md = buildFinanceSubsetZeroHitAnswer(["咖啡"], MAY, stats(0, 0));
-    expect(md).toContain("去掉时间限制后也没有找到");
+    // R264 P2-1（audit-r263 §2.3）：字面零匹配不作全库否定断言，只陈述
+    // 关键词字面匹配结果
+    expect(md).toContain("去掉时间限制后按这个关键词的字面匹配也没有匹配到");
     expect(md).toContain("换个关键词再问试试");
   });
   it("keeps the original wording exactly when no window applies", () => {

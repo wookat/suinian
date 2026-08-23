@@ -249,7 +249,12 @@ async function cleanup(): Promise<void> {
         break;
       } catch (e) {
         if (attempt >= 2) {
-          console.error(`FAILED to delete eval account ${accountName} — delete it manually!`);
+          // 残留账号必须逐表清干净（audit-r263 P3-4）：直接给出可执行的核查语句
+          console.error(
+            `FAILED to delete eval account ${accountName} — delete it manually!\n` +
+              `  查 id: npx wrangler d1 execute suinian --remote --command "SELECT id FROM users WHERE name='${accountName}'"\n` +
+              `  然后按 backend/src/account.ts 的 USER_ID_TABLES/NOTE_ID_TABLES 逐表 DELETE 该 user_id`
+          );
           throw e;
         }
         await sleep(5_000);

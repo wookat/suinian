@@ -292,11 +292,13 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
 // financeStats 口径），绝不能靠 LLM 对被 LIMIT 截断的召回片段心算。
 
 export const FINANCE_WORD_RE = /花了?|花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|净剩|收支|余额|记了?账|账单|赚了?|挣了?|用掉|缴费|交费|收款|[收拿][到了](?=[^？?。]{0,6}[钱款])|到手(?=[^？?。]{0,6}[钱款])|[缴交用]了?(?=[^？?。]{0,10}(?:多少|几))/;
-const AGG_WORD_RE = /一共|总共|合计|总计|共计|加起来|多少钱|多少笔|几笔|平均每|总额|结余|净剩|收支|余额|多少|怎么样|怎样|如何|情况/;
+// 「余额宝」是产品名不是聚合措辞（R264 P3-1，audit-r263：「从余额宝转出的
+// 500 算收入吗」被「余额」误判成 fail_closed 全账合计）
+const AGG_WORD_RE = /一共|总共|合计|总计|共计|加起来|多少钱|多少笔|几笔|平均每|总额|结余|净剩|收支|余额(?!宝)|多少|怎么样|怎样|如何|情况/;
 // sum-style wording that only makes sense as a books-level aggregate: when it
 // appears with a finance word but the question can't be routed to the exact
 // aggregate (extra qualifiers remain), the LLM must NOT mental-math it.
-const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|总额|结余|净剩|收支|余额/;
+const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|总额|结余|净剩|收支|余额(?!宝)/;
 // strip time phrases / finance verbs / aggregation words / filler; whatever
 // meaningful text remains means the question is about a specific item
 // ("买咖啡花了多少钱"), not an overall aggregate — fall through to normal ask.
@@ -2417,10 +2419,26 @@ export function ungroundedRelationTerm(question: string, sourceText: string): st
   return null;
 }
 
+/** 标签是否以单字主题为词头（R264 P2-1，audit-r263 §2.3）：标签是分拣产出的
+ * 主题词而非自由文本，「书籍/书单/书评」这类以该字开头的标签是主题上位词，
+ * 不是「订书机」式的复合词误命中；正文邻字规则对标签不适用（JSON 串里
+ * 邻字是标签内部字符），单独按词头判。 */
+export function tagHitsSingleCharTopic(tagsJson: string | null | undefined, ch: string): boolean {
+  if (!tagsJson) return false;
+  try {
+    const tags = JSON.parse(tagsJson) as unknown[];
+    return tags.some((t) => typeof t === "string" && t.startsWith(ch));
+  } catch {
+    return false;
+  }
+}
+
 /** 单字主题词的行集过滤（R256 P3-1）：LIKE '%书%' 会把「订书机/书房」这类
  * 复合词也命中，按邻字上下文只保留独立成词的行；全被滤掉时如实返回空
  * （宁缺毋滥：把「订书机」算进「书」的合计是错答，零命中走 fail-closed
- * 诚实说明）。多字词命中的行一律保留。 */
+ * 诚实说明）。多字词命中的行一律保留；以该字为词头的标签（「书籍」）命中
+ * 的行也保留（R264 P2-1）。零命中放宽路径必须与窗口路径同走这一层，两套
+ * 口径不得在同一条答案里对撞。 */
 export function filterSingleCharTopicRows<T extends Pick<NoteRow, "title" | "content" | "tags" | "is_sensitive">>(
   rows: T[],
   terms: string[]
@@ -2430,7 +2448,10 @@ export function filterSingleCharTopicRows<T extends Pick<NoteRow, "title" | "con
   const multi = terms.filter((t) => !singles.includes(t));
   return rows.filter((n) => {
     const hay = `${n.title ?? ""}\n${n.is_sensitive ? "" : n.content}\n${n.tags ?? ""}`;
-    return multi.some((t) => hay.includes(t)) || singles.some((c) => hitsSingleCharTopic(hay, c));
+    return (
+      multi.some((t) => hay.includes(t)) ||
+      singles.some((c) => hitsSingleCharTopic(hay, c) || tagHitsSingleCharTopic(n.tags, c))
+    );
   });
 }
 
@@ -2514,6 +2535,9 @@ export function buildFinanceSubsetZeroHitAnswer(
   const scope = range.phrase ? `${range.phrase}（${span}）` : span;
   const head = `在${scope}内按关键词「${kw}」精确匹配（标题/正文/标签）没有找到记账记录；为避免估算出错，我不做心算合计。`;
   if (relaxed && (relaxed.expenseCount > 0 || relaxed.incomeCount > 0)) {
+    // 注：relaxed 必须是与窗口路径同一过滤口径（filterSingleCharTopicRows）后的
+    // 统计，否则同一条答案里会出现「今年没找到、去掉时间限制又有」的自相矛盾
+    //（audit-r263 §2.3）。
     const totalParts = Object.entries(relaxed.totals)
       .map(([cur, t]) => {
         const seg: string[] = [];
@@ -2525,7 +2549,9 @@ export function buildFinanceSubsetZeroHitAnswer(
     const count = `${relaxed.expenseCount} 笔支出${relaxed.incomeCount > 0 ? `、${relaxed.incomeCount} 笔收入` : ""}`;
     return `${head}\n去掉时间限制后共有 ${count}（${totalParts.join("；")}），如需全部时间范围的明细，可在时间流搜索该关键词逐条查看。`;
   }
-  return `${head}去掉时间限制后也没有找到。${retryHint}`;
+  // 不作全库否定断言（R264 P2-1，audit-r263：「看了电影」字面匹配不到「看电影」
+  // 时说「也没找到」是无依据否定）：只陈述关键词字面匹配结果，不断言没有相关记录。
+  return `${head}去掉时间限制后按这个关键词的字面匹配也没有匹配到（说法不同的记录可能匹配不到，不代表一定没有相关记录）。${retryHint}`;
 }
 
 /** True when a note's created_at (UTC sql string) falls inside the range. */
