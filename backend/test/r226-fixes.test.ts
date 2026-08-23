@@ -154,7 +154,9 @@ describe("R226 P1 deleteMediaObjects retry + failure recording", () => {
       async (key) => (key === "stuck.png" ? {} : null)
     );
     await deleteMediaObjects(env, ["stuck.png", "gone.txt"]);
-    expect(media.head).toHaveBeenCalledTimes(2);
+    // 2 次首轮逐 key 复核 + 1 次幸存对象就地重删后的再复核（R262）
+    expect(media.head).toHaveBeenCalledTimes(3);
+    expect(media.delete).toHaveBeenCalledWith(["stuck.png"]);
     expect(rows.size).toBe(1);
     expect(rows.get("stuck.png")?.last_error).toContain("still present");
   });
