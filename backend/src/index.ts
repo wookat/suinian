@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
-import { triageNote, triageNoteDetailed, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE } from "./triage";
+import { triageNote, triageNoteDetailed, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE, neutralizePromptInjection } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import {
@@ -67,6 +67,7 @@ import {
   flushMediaDeleteFailures,
   loadOriginal,
   sweepUnencryptedSensitiveAttachments,
+  flushMediaEncryptFailures,
   AUDIO_FAILED_PLACEHOLDER,
   IMAGE_FAILED_PLACEHOLDER,
 } from "./media";
@@ -210,7 +211,10 @@ app.get("/health", async (c) => {
     // 外部拨测只需 ok 与状态码（R166 P2-5）
     const auth = c.req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
     const isAdmin = !!c.env.ADMIN_TOKEN && auth === c.env.ADMIN_TOKEN;
-    return c.json({ ok: true, ai: isAdmin ? ai : { ok: ai.ok } }, ai.ok ? 200 : 503);
+    // degraded＝主链路失败、由 fallback 层应答（R262 P2-8，audit-r261：主模型
+    // 100% 失败在探针上零可见性）：布尔可观测位不泄露 provider/model 配置指纹，
+    // ok 口径不变（fallback 是常态基线，外部告警仍只看 ok:false）
+    return c.json({ ok: true, ai: isAdmin ? { ...ai, degraded: ai.provider === "fallback" } : { ok: ai.ok, degraded: ai.provider === "fallback" } }, ai.ok ? 200 : 503);
   }
   // ?probe=bridge reports the WeChat bridge state from its heartbeat so external
   // monitoring sees the real login state (online / waiting_scan / stale) instead
@@ -1765,7 +1769,7 @@ app.patch("/api/notes/:id", async (c) => {
     extraSets.push("todo_done = ?", "done_at = ?");
     extraBinds.push(body.todo_done ? 1 : 0, body.todo_done ? new Date().toISOString() : null);
   }
-  const override: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean } = {};
+  const override: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean; is_sensitive?: boolean } = {};
   if (typeof body.category === "string" && ["idea", "todo", "collect", "data", "expense", "income", "transfer"].includes(body.category)) {
     extraSets.push("category = ?");
     extraBinds.push(body.category);
@@ -1773,6 +1777,9 @@ app.patch("/api/notes/:id", async (c) => {
   }
   if (patch.tags) override.tags = true;
   if (typeof patch.title === "string") override.title = true;
+  // 用户手动定敏感位优于模型复判（R262 P2-6，audit-r261：PATCH 标敏感后被
+  // 异步复判静默撤销恢复明文）：与分类/标签同一 manual_override 机制锁住
+  if (typeof patch.is_sensitive === "boolean") override.is_sensitive = true;
   if (typeof body.todo_due === "string" || body.todo_due === null) {
     extraSets.push("todo_due = ?");
     extraBinds.push(normalizeTodoDue(body.todo_due));
@@ -3182,10 +3189,19 @@ app.post("/api/ask", async (c) => {
   // 按币种分组比较（不同币种金额不可直接比大小），绝不交 LLM 猜极值。
   const finExtreme = financeExtremeIntent(intentQuestion) ?? (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? null : financeExtremeIntent(recallQuestion));
   if (finExtreme) {
-    const xRange = (financeExtremeIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
+    // 同话题极值追问继承上一轮关键词限定（R262 P2-1，audit-r261：「今年买书
+    // 一共花了多少」后追问「其中最贵的一笔」退化为全局极值）：与裸列举追问
+    // 同一解析口径（financeAggAnswerTerms），只认本轮无自带主题且带显式指代
+    // （其中/里面/当中）的追问，新起的全局极值问题行为零改动。
+    const xOwnTerms = financeExtremeIntent(intentQuestion) ? financeExtremeTopicTerms(intentQuestion) : financeExtremeTopicTerms(recallQuestion);
+    const xInherited = !xOwnTerms && /其中|里面|当中|这里面|这些里/.test(intentBase) ? financeAggAnswerTerms(lastAssistant) : null;
+    const xRange =
+      (financeExtremeIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ??
+      (xInherited ? answerHeadTimeRange(lastAssistant) : null) ??
+      timeRange;
     // 主题限定（R174 P1）：「键盘里最贵的」的「键盘」注入 WHERE（与财务
     // 子集同一 LIKE 匹配口径），绝不把主题极值答成全局极值
-    const xTerms = financeExtremeIntent(intentQuestion) ? financeExtremeTopicTerms(intentQuestion) : financeExtremeTopicTerms(recallQuestion);
+    const xTerms = xOwnTerms ?? xInherited;
     const xConds = ["user_id = ?", "deleted_at IS NULL", "category = ?"];
     const xBinds: unknown[] = [userId, finExtreme.direction];
     if (xTerms) {
@@ -4322,7 +4338,9 @@ app.post("/api/ask", async (c) => {
       const outTag = timeRange && !inTimeRange(n.created_at, timeRange) ? `, 不在${timeRange.phrase}范围内` : "";
       // 正文开头的 [xxx]/【xxx】前缀标记是元数据（R212 P3-5）：送进生成上下文
       // 前剔除，避免模型把它们复制进回答充当引文号（引文只认 [数字]）
-      const body = n.content.replace(/^\s*(?:[[【][^\]】\n]{1,24}[\]】]\s*)+/, "");
+      // 召回片段是不可信数据（R262 P1-2，audit-r261 §P1-2）：送进生成上下文前
+      // 走与分拣同一注入中和管道（R216 定界仿冒 + 祈使注入改写）
+      const body = neutralizePromptInjection(n.content).replace(/^\s*(?:[[【][^\]】\n]{1,24}[\]】]\s*)+/, "");
       return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${n.title ?? ""}\n${body.slice(0, 500)}`;
     })
     .join("\n\n");
@@ -5256,6 +5274,8 @@ export default {
       ctx.waitUntil(sweepAuthRateLimits(env.DB));
       // retry R2 deletes that failed during note/account cascades (rows clear on success)
       ctx.waitUntil(flushMediaDeleteFailures(env));
+      // retry sensitive-attachment encrypts that failed (rows clear after head() 复核)
+      ctx.waitUntil(flushMediaEncryptFailures(env));
     } else {
       // daily thread title/summary refresh + daily review generation
       ctx.waitUntil(refreshThreads(env));

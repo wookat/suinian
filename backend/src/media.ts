@@ -673,8 +673,11 @@ export async function reconcileMediaOrphans(env: Env): Promise<number> {
 
 /**
  * Store the original media file in R2 (if bound) and record it in attachments.
- * 敏感笔记的原件（R154 P2-2）以 AES-GCM 信封（SNE1 + IV + 密文）落 R2；
- * 分拣异步转敏感的窗口由 syncAttachmentEncryption 收口。
+ * 敏感笔记的原件（R154 P2-2）以 AES-GCM 信封（SNE1 + IV + 密文）落 R2。
+ * 竞态收口（R262 P1-1，audit-r261 §P1-1 根因之一）：异步分拣可能在「本函数
+ * 读到 is_sensitive=0」与「明文 put 落地」之间把笔记转敏感——彼时分拣侧的
+ * syncAttachmentEncryption 还看不到附件行，双方都以为无事可做，明文永久残留。
+ * 因此明文写入后必须复读敏感位，命中则就地走同一加密闭环重写。
  */
 export async function storeOriginal(
   env: { MEDIA?: R2Bucket; DB: D1Database; SUINIAN_ENC_KEY?: string },
@@ -705,6 +708,23 @@ export async function storeOriginal(
     await env.DB.prepare("INSERT INTO attachments (id, note_id, r2_key, mime, size) VALUES (?, ?, ?, ?, ?)")
       .bind(crypto.randomUUID(), noteId, key, mime, req.bytes.length)
       .run();
+    // 明文落地后复读敏感位，堵「写入期间分拣转敏感」竞态窗口；失败落表绝不静默
+    if (!encrypted && env.SUINIAN_ENC_KEY) {
+      const after = await env.DB.prepare("SELECT is_sensitive FROM notes WHERE id = ?")
+        .bind(noteId)
+        .first<{ is_sensitive: number }>();
+      if (after?.is_sensitive) {
+        try {
+          await encryptObjectVerified(
+            { MEDIA: env.MEDIA, SUINIAN_ENC_KEY: env.SUINIAN_ENC_KEY },
+            key,
+            mime
+          );
+        } catch (err) {
+          await recordEncryptFailure(env, noteId, key, err);
+        }
+      }
+    }
     return key;
   } catch (err) {
     console.error("storeOriginal: failed", err);
@@ -726,67 +746,164 @@ export async function loadOriginal(env: Env, r2Key: string): Promise<Uint8Array 
   return decryptBytes(env.SUINIAN_ENC_KEY, bytes);
 }
 
+const ENCRYPT_MAX_ATTEMPTS = 3;
+
+/**
+ * 单对象加密闭环（R262 P1-1）：读原件 → 已是 SNE1 信封则只补齐 enc 元数据 →
+ * 否则加密重写 → put 后逐对象 head() 复核 customMetadata.enc（put 不抛错不等于
+ * 写成功，与 R228 删除复核同一口径）。对象内重试至多 3 次，最终失败抛错由
+ * 调用方落表，绝不静默。返回 "encrypted"（本次重写）/"already"（已加密）/
+ * "missing"（对象不存在）。
+ */
+export async function encryptObjectVerified(
+  env: { MEDIA?: R2Bucket; SUINIAN_ENC_KEY?: string },
+  r2Key: string,
+  mime: string | null
+): Promise<"encrypted" | "already" | "missing"> {
+  if (!env.MEDIA || !env.SUINIAN_ENC_KEY) throw new Error("media/enc-key unavailable");
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= ENCRYPT_MAX_ATTEMPTS; attempt++) {
+    try {
+      const obj = await env.MEDIA.get(r2Key);
+      if (!obj) return "missing";
+      const bytes = new Uint8Array(await obj.arrayBuffer());
+      if (isEncryptedAttachment(bytes)) {
+        if (obj.customMetadata?.enc === "1") return "already";
+        // 存量手工加密对象缺 enc 元数据：补齐，让 head 口径与 magic 口径一致
+        await env.MEDIA.put(r2Key, bytes, {
+          httpMetadata: { contentType: obj.httpMetadata?.contentType || mime || "application/octet-stream" },
+          customMetadata: { enc: "1" },
+        });
+      } else {
+        const enc = await encryptBytes(env.SUINIAN_ENC_KEY, bytes);
+        await env.MEDIA.put(r2Key, enc, {
+          httpMetadata: { contentType: mime || obj.httpMetadata?.contentType || "application/octet-stream" },
+          customMetadata: { enc: "1" },
+        });
+      }
+      const head = await env.MEDIA.head(r2Key);
+      if (head?.customMetadata?.enc === "1") return "encrypted";
+      lastErr = new Error("head verify: enc metadata missing after put");
+    } catch (err) {
+      lastErr = err;
+    }
+    if (attempt < ENCRYPT_MAX_ATTEMPTS) await new Promise((r) => setTimeout(r, 200 * attempt));
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+/** 加密失败落表（media_encrypt_failures），10 分钟 cron 重试；落表本身失败才降级为日志。 */
+async function recordEncryptFailure(
+  env: { DB: D1Database },
+  noteId: string,
+  r2Key: string,
+  err: unknown
+): Promise<void> {
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error(`attachment encrypt failed, recording for cron retry note=${noteId} key=${r2Key}`, err);
+  try {
+    await env.DB.prepare(
+      "INSERT INTO media_encrypt_failures (r2_key, note_id, last_error) VALUES (?, ?, ?) ON CONFLICT(r2_key) DO UPDATE SET attempts = attempts + 1, last_error = excluded.last_error"
+    )
+      .bind(r2Key, noteId, msg.slice(0, 500))
+      .run();
+  } catch (e) {
+    console.error("recordEncryptFailure: failed to persist", r2Key, e);
+  }
+}
+
 /**
  * 笔记转敏感时的附件加密收口（异步分拣/手动标敏/媒体重试共用）：把该笔记
- * 名下仍为明文的 R2 原件就地重写为加密信封。幂等，失败只记日志（下一次
- * 日常 sweep 兜底）。
+ * 名下仍为明文的 R2 原件逐对象走加密闭环（head() 复核加密态 + 对象内重试），
+ * 单对象失败落 media_encrypt_failures 由 cron 重试并继续处理其余对象，
+ * 杜绝静默失败（R262 P1-1）。幂等。
  */
 export async function syncAttachmentEncryption(
   env: { MEDIA?: R2Bucket; DB: D1Database; SUINIAN_ENC_KEY?: string },
   noteId: string
 ): Promise<void> {
   if (!env.MEDIA || !env.SUINIAN_ENC_KEY) return;
+  let rows: { r2_key: string; mime: string | null }[];
   try {
-    const rows = await env.DB.prepare("SELECT r2_key, mime FROM attachments WHERE note_id = ?")
+    const res = await env.DB.prepare("SELECT r2_key, mime FROM attachments WHERE note_id = ?")
       .bind(noteId)
       .all<{ r2_key: string; mime: string | null }>();
-    for (const a of rows.results ?? []) {
-      const obj = await env.MEDIA.get(a.r2_key);
-      if (!obj) continue;
-      const bytes = new Uint8Array(await obj.arrayBuffer());
-      if (isEncryptedAttachment(bytes)) continue;
-      const enc = await encryptBytes(env.SUINIAN_ENC_KEY, bytes);
-      await env.MEDIA.put(a.r2_key, enc, {
-        httpMetadata: { contentType: a.mime || "application/octet-stream" },
-        customMetadata: { enc: "1" },
-      });
-    }
+    rows = res.results ?? [];
   } catch (err) {
-    console.error("syncAttachmentEncryption: failed", noteId, err);
+    console.error("syncAttachmentEncryption: attachments query failed", noteId, err);
+    return;
+  }
+  for (const a of rows) {
+    try {
+      await encryptObjectVerified(env, a.r2_key, a.mime);
+    } catch (err) {
+      await recordEncryptFailure(env, noteId, a.r2_key, err);
+    }
   }
 }
 
 /**
+ * Cron retry for recorded attachment-encrypt failures (10-min cron, R262 P1-1):
+ * rows clear only after head() 复核加密态；对象已删/笔记已转非敏感的行直接清。
+ */
+export async function flushMediaEncryptFailures(env: Env): Promise<number> {
+  if (!env.MEDIA || !env.SUINIAN_ENC_KEY) return 0;
+  const { results } = await env.DB.prepare(
+    "SELECT r2_key, note_id FROM media_encrypt_failures ORDER BY enqueued_at ASC LIMIT 100"
+  ).all<{ r2_key: string; note_id: string }>();
+  let cleared = 0;
+  for (const row of results ?? []) {
+    try {
+      const note = await env.DB.prepare("SELECT is_sensitive FROM notes WHERE id = ?")
+        .bind(row.note_id)
+        .first<{ is_sensitive: number }>();
+      if (note && !note.is_sensitive) {
+        // 笔记已转非敏感：无需加密，清行（明文由非敏感语义允许）
+        await env.DB.prepare("DELETE FROM media_encrypt_failures WHERE r2_key = ?").bind(row.r2_key).run();
+        cleared++;
+        continue;
+      }
+      const state = await encryptObjectVerified(env, row.r2_key, null);
+      await env.DB.prepare("DELETE FROM media_encrypt_failures WHERE r2_key = ?").bind(row.r2_key).run();
+      cleared++;
+      if (state !== "missing") console.warn(`flushMediaEncryptFailures: recovered ${row.r2_key} (${state})`);
+    } catch (err) {
+      await recordEncryptFailure(env, row.note_id, row.r2_key, err);
+    }
+  }
+  return cleared;
+}
+
+/**
  * 存量敏感附件迁移 sweep（每日 cron）：把所有敏感笔记名下仍为明文的 R2 原件
- * 加密重写。已加密对象靠 customMetadata.enc 的 head 检查跳过（存量手工对象
- * 兜底看 magic），幂等且限额，可反复运行直至清零。
+ * 走加密闭环重写。已加密对象靠 customMetadata.enc 的 head 检查跳过（存量对象
+ * 缺元数据时由闭环按 magic 兜底补齐），单对象失败落表重试并继续其余对象
+ *（R262 P1-1：此前一个失败整批中止且静默）。幂等且限额，可反复运行直至清零。
  */
 export async function sweepUnencryptedSensitiveAttachments(env: Env, limit = 100): Promise<number> {
   if (!env.MEDIA || !env.SUINIAN_ENC_KEY) return 0;
   let migrated = 0;
+  let rows: { r2_key: string; mime: string | null; note_id: string }[];
   try {
-    const rows = await env.DB.prepare(
+    const res = await env.DB.prepare(
       "SELECT a.r2_key, a.mime, a.note_id FROM attachments a JOIN notes n ON a.note_id = n.id WHERE n.is_sensitive = 1 LIMIT ?"
     )
       .bind(limit)
       .all<{ r2_key: string; mime: string | null; note_id: string }>();
-    for (const a of rows.results ?? []) {
+    rows = res.results ?? [];
+  } catch (err) {
+    console.error("sweepUnencryptedSensitiveAttachments: query failed", err);
+    return 0;
+  }
+  for (const a of rows) {
+    try {
       const head = await env.MEDIA.head(a.r2_key);
       if (!head || head.customMetadata?.enc === "1") continue;
-      const obj = await env.MEDIA.get(a.r2_key);
-      if (!obj) continue;
-      const bytes = new Uint8Array(await obj.arrayBuffer());
-      if (isEncryptedAttachment(bytes)) continue;
-      const enc = await encryptBytes(env.SUINIAN_ENC_KEY, bytes);
-      await env.MEDIA.put(a.r2_key, enc, {
-        httpMetadata: { contentType: a.mime || "application/octet-stream" },
-        customMetadata: { enc: "1" },
-      });
-      migrated++;
+      if ((await encryptObjectVerified(env, a.r2_key, a.mime)) === "encrypted") migrated++;
+    } catch (err) {
+      await recordEncryptFailure(env, a.note_id, a.r2_key, err);
     }
-    if (migrated > 0) console.warn(`sweepUnencryptedSensitiveAttachments: migrated ${migrated} object(s)`);
-  } catch (err) {
-    console.error("sweepUnencryptedSensitiveAttachments: failed", err);
   }
+  if (migrated > 0) console.warn(`sweepUnencryptedSensitiveAttachments: migrated ${migrated} object(s)`);
   return migrated;
 }

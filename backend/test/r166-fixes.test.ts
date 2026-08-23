@@ -11,7 +11,8 @@ describe("GET /health?probe=ai admin gating (R166 P2-5)", () => {
     const res = await app.request(new Request("http://x/health?probe=ai"), undefined, env, ctx);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; ai: Record<string, unknown> };
-    expect(body.ai).toEqual({ ok: true });
+    // degraded 是布尔可观测位（R262 P2-8），不泄露 provider/model 配置指纹
+    expect(body.ai).toEqual({ ok: true, degraded: false });
   });
 
   it("hides provider/model from a wrong bearer token", async () => {
@@ -22,7 +23,8 @@ describe("GET /health?probe=ai admin gating (R166 P2-5)", () => {
       ctx
     );
     const body = (await res.json()) as { ai: Record<string, unknown> };
-    expect(body.ai).toEqual({ ok: true });
+    // degraded 是布尔可观测位（R262 P2-8），不泄露 provider/model 配置指纹
+    expect(body.ai).toEqual({ ok: true, degraded: false });
   });
 
   it("returns full metadata for ADMIN_TOKEN", async () => {
@@ -33,7 +35,7 @@ describe("GET /health?probe=ai admin gating (R166 P2-5)", () => {
       ctx
     );
     const body = (await res.json()) as { ai: { ok: boolean; provider: string; model: string } };
-    expect(body.ai).toEqual({ ok: true, provider: "mock", model: "mock" });
+    expect(body.ai).toEqual({ ok: true, provider: "mock", model: "mock", degraded: false });
   });
 
   it("never exposes metadata when ADMIN_TOKEN is unset", async () => {
@@ -44,6 +46,7 @@ describe("GET /health?probe=ai admin gating (R166 P2-5)", () => {
       ctx
     );
     const body = (await res.json()) as { ai: Record<string, unknown> };
-    expect(body.ai).toEqual({ ok: true });
+    // degraded 是布尔可观测位（R262 P2-8），不泄露 provider/model 配置指纹
+    expect(body.ai).toEqual({ ok: true, degraded: false });
   });
 });

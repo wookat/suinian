@@ -851,10 +851,12 @@ export function NoteCard({
               e.stopPropagation()
               setRevealed(true)
             }}
-            aria-label="敏感内容，点击查看"
             className="flex min-h-7 min-w-0 flex-1 flex-wrap items-center gap-2 rounded-lg text-left"
           >
-            <span className="select-none text-sm leading-7 tracking-widest text-muted-foreground">
+            {/* 遮罩圆点不进可访问名（R262 P3-1，audit-r261：aria-label 与可见文本
+                不一致命中 label-content-name-mismatch）：去掉 aria-label，让可见
+                文案自身充当可访问名 */}
+            <span aria-hidden="true" className="select-none text-sm leading-7 tracking-widest text-muted-foreground">
               ••••••••••••
             </span>
             <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border bg-secondary px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">

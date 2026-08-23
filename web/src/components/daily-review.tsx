@@ -123,10 +123,10 @@ export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void
                 onClick={() =>
                   setRevealedIds((s) => new Set(s).add(item.note.id))
                 }
-                aria-label="敏感内容，点击查看"
                 className="flex flex-wrap items-center gap-2 text-left"
               >
-                <span className="select-none text-sm leading-7 tracking-widest text-muted-foreground">••••••••••••</span>
+                {/* 遮罩圆点不进可访问名（R262 P3-1）：去 aria-label，可见文案即可访问名 */}
+                <span aria-hidden="true" className="select-none text-sm leading-7 tracking-widest text-muted-foreground">••••••••••••</span>
                 <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border bg-secondary px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
                   <Eye className="size-3" /> 敏感内容，点击查看
                 </span>
