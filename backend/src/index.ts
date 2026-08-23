@@ -17,6 +17,7 @@ import {
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
 import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks } from "./prompt-armor";
+import { extractDirectiveDemands } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
 import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads, detachZeroSignalThreadMembers } from "./threads";
@@ -3497,6 +3498,21 @@ app.post("/api/ask", async (c) => {
     const answer = buildExpenseFacetAnswer(erows, eRange?.phrase ?? null);
     return c.json({ answer, references: [], notes: [], expense_facet: true, ...(erows.length === 0 ? { finance_fail_closed: true } : {}) });
   }
+  // R268（audit-r267 P1-3）：写入后短时间内 category 尚未分拣落库，财务确定性
+  // 答案会少算且不自知。存在近 10 分钟内未分拣笔记时显式提示结果可能不完整。
+  const pendingTriageHint = async (): Promise<string> => {
+    try {
+      const r = await c.env.DB.prepare(
+        `SELECT COUNT(*) AS cnt FROM notes WHERE user_id = ? AND deleted_at IS NULL AND category IS NULL AND created_at >= datetime('now','-10 minutes')`
+      )
+        .bind(userId)
+        .first<{ cnt: number }>();
+      const cnt = r?.cnt ?? 0;
+      return cnt > 0 ? `\n\n（另有 ${cnt} 条刚写入的笔记仍在分拣中，未计入上述结果；稍后再问会更完整。）` : "";
+    } catch {
+      return "";
+    }
+  };
   const finList = listFollowUpDir ?? financeListIntent(intentQuestion) ?? (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? null : financeListIntent(recallQuestion));
   if (finList) {
     // 裸列举追问的时间窗继承：本轮原问题优先，否则沿用上一轮合计答案里的
@@ -3584,7 +3600,7 @@ app.post("/api/ask", async (c) => {
     const tCnt = await c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM notes WHERE ${tConds.join(" AND ")}`)
       .bind(...tBinds)
       .first<{ cnt: number }>();
-    const answer = buildFinanceListAnswer(finList, lrows, lRange?.phrase ?? null, tCnt?.cnt ?? 0);
+    const answer = buildFinanceListAnswer(finList, lrows, lRange?.phrase ?? null, tCnt?.cnt ?? 0) + (await pendingTriageHint());
     // references 与逐笔明细同集合同顺序（敏感记账计入合计但不露出）
     const lRefRows = lrows.filter((n) => !n.is_sensitive).slice(0, 20);
     return c.json({
@@ -3652,7 +3668,7 @@ app.post("/api/ask", async (c) => {
       }
     }
     if (srows.length > 0) {
-      const answer = buildFinanceSubsetAnswer(usedTerms, srows, sRange?.phrase ?? null);
+      const answer = buildFinanceSubsetAnswer(usedTerms, srows, sRange?.phrase ?? null) + (await pendingTriageHint());
       // references 必须与答案里的逐笔明细同一个集合同一顺序（R256 P3-3：
       // 仅标签命中也计入合计/明细，引用同步改为全部收支命中）
       const sFinance = srows.filter((n) => n.category === "expense" || n.category === "income");
@@ -3668,6 +3684,17 @@ app.post("/api/ask", async (c) => {
     // 而零命中；此时用户问的是前轮那个具体事物，绝不能兜底复读全账合计——
     // 回落普通召回直答（R186 生产实测）
     if (!pronounFollowUp) {
+      // 语义为主、规则兜底（R268 P1，audit-r267 §2）：正则抽词产出的坑词
+      // （「从宝转出」「逐」）LIKE 零命中时，不再直接下确定性零命中结论；
+      // 语义召回有相关笔记时回落普通召回让 LLM 按片段作答（金额逐字引用、
+      // 无源金额/无源否定护栏不变），只有语义也无命中才 fail-closed。
+      const tFinSem = Date.now();
+      const finSemHits = await semanticRecall(c.env, userId, recallQuestion, 10);
+      askMarks.push(["finsem", Date.now() - tFinSem]);
+      if (finSemHits.length > 0) {
+        financeIntent = null; // 落入普通召回，不让后续确定性聚合拦截
+        console.log("ask: finance subset LIKE zero-hit, semantic recall fallthrough", finSemHits.length);
+      } else {
       // 关键词零命中：fail-closed 如实说明，绝不心算估数。不再附无关的
       // 全账合计（R208 P3-1，audit-r207 §5.1）：用户问的是具体主题，
       // 全局收支答非所问且暗示「查过了确实没有」，误导大于帮助。
@@ -3689,6 +3716,7 @@ app.post("/api/ask", async (c) => {
       }
       const answer = buildFinanceSubsetZeroHitAnswer(zeroTerms, sRange, relaxed);
       return c.json({ answer, references: [], notes: [], finance_subset: true, finance_fail_closed: true });
+      }
     }
   }
   // 短问法数据门控路由（R198，audit-r197 §3）：「X多少钱？」无财务词，
@@ -3769,9 +3797,9 @@ app.post("/api/ask", async (c) => {
           : null))
       : null;
     const answer =
-      financeIntent === "exact"
+      (financeIntent === "exact"
         ? buildFinanceAggAnswer(stats, fRange?.phrase ?? null, avgDays)
-        : buildFinanceFailClosedAnswer(stats, fRange?.phrase ?? null);
+        : buildFinanceFailClosedAnswer(stats, fRange?.phrase ?? null)) + (await pendingTriageHint());
     // sensitive finance notes count toward totals (report口径) but never surface as cards
     const refRows = frows.filter((n) => !n.is_sensitive).slice(0, 10);
     const references = refRows.map((n, i) => ({ index: i + 1, note_id: n.id }));
@@ -3832,6 +3860,18 @@ app.post("/api/ask", async (c) => {
         .bind(...tcBinds)
         .all<NoteRow>(),
     ]);
+    // 语义为主、规则兜底（R268 P1）：关键词计数零命中时先问语义召回，有相关
+    // 笔记则回落普通召回作答，避免抽词残片直接下「没有匹配」确定性结论
+    if ((tcRow?.cnt ?? 0) === 0) {
+      const tcSemHits = await semanticRecall(c.env, userId, recallQuestion, 10);
+      if (tcSemHits.length > 0) {
+        console.log("ask: topic count LIKE zero-hit, semantic recall fallthrough", tcSemHits.length);
+      }
+      if (tcSemHits.length === 0) {
+        const answer = buildTopicCountAnswer(topicCnt, 0, tcRow?.sens ?? 0, tcRange?.phrase ?? null);
+        return c.json({ answer, references: [], notes: [], count_aggregate: true, topic_count: true });
+      }
+    } else {
     const answer = buildTopicCountAnswer(topicCnt, tcRow?.cnt ?? 0, tcRow?.sens ?? 0, tcRange?.phrase ?? null);
     const tcRefRows = (tcRows.results ?? []).filter((n) => !n.is_sensitive);
     return c.json({
@@ -3841,6 +3881,7 @@ app.post("/api/ask", async (c) => {
       count_aggregate: true,
       topic_count: true,
     });
+    }
   }
   const origCountQuery = countQueryIntent(intentQuestion);
   const countQuery = origCountQuery ?? (metaQuestion ? null : countQueryIntent(recallQuestion));
@@ -4422,6 +4463,21 @@ app.post("/api/ask", async (c) => {
     .map((n) => `${n.title ?? ""}\n${n.content}\n${n.url_title ?? ""}\n${n.url_summary ?? ""}`)
     .join("\n")}\n${graphTriples.join("\n")}`;
   const askGuardQuestion = `${question}\n${recallQuestion}`;
+  // R268 语义级主判（docs/decision-r268.md）：独立 LLM 判别器对资料区做指令
+  // 抽取（语言无关），与生成并行启动；判别失败退化为 guardAskAnswer 内的
+  // 确定性资料派生句段剥除兜底，不阻断回答。
+  const tDir = Date.now();
+  let directiveDemands: string[] | null = null;
+  const directivePromise = extractDirectiveDemands(c.env, askGuardData)
+    .then((d) => {
+      directiveDemands = d;
+      askMarks.push(["dirext", Date.now() - tDir]);
+      return d;
+    })
+    .catch((err) => {
+      console.error("ask: directive extraction failed", err);
+      return null;
+    });
   const dataMessage = buildDataBlock(
     `${context || "（无相关笔记）"}${graphTriples.length > 0 ? `\n\n实体关系：\n${graphTriples.join("\n")}` : ""}`,
     dataNonce
@@ -4435,7 +4491,11 @@ app.post("/api/ask", async (c) => {
   const guardedDelta = onDelta
     ? (text: string) => {
         deltaRaw += text;
-        const safe = guardAskAnswer(deltaRaw, { dataText: askGuardData, question: askGuardQuestion }).answer;
+        const safe = guardAskAnswer(deltaRaw, {
+          dataText: askGuardData,
+          question: askGuardQuestion,
+          directiveDemands: directiveDemands ?? [],
+        }).answer;
         const stable = Math.max(0, safe.length - 200);
         if (stable > deltaSent) {
           onDelta(safe.slice(deltaSent, stable));
@@ -4510,9 +4570,21 @@ app.post("/api/ask", async (c) => {
   // R266 输出侧收口：外链零输出（回传通道）+ 资料派生 marker 剥除（执行痕迹）。
   // 与变体形态无关：不猜哪句是注入，只封死攻击必需的外带通道。
   if (answer2) {
-    const g = guardAskAnswer(answer2, { dataText: askGuardData, question: askGuardQuestion });
+    // 等判别器收尾（与生成并行启动，通常已完成）；到预算仍未回按判别
+    // 失败处理，确定性兜底照常生效
+    const demands = await Promise.race([
+      directivePromise,
+      new Promise<string[] | null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+    ]);
+    const g = guardAskAnswer(answer2, {
+      dataText: askGuardData,
+      question: askGuardQuestion,
+      directiveDemands: demands ?? [],
+    });
     if (g.linkScrubbed) console.log("ask: external link scrubbed from answer");
     if (g.markerScrubbed) console.log("ask: data-derived marker scrubbed from answer");
+    if (g.spanScrubbed) console.log("ask: data-derived span scrubbed from answer");
+    if (g.directiveScrubbed) console.log("ask: directive-demanded text scrubbed from answer");
     answer2 = g.answer.trim() === "" ? "没找到" : g.answer;
   }
   if (answer2) {

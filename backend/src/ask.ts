@@ -334,7 +334,9 @@ function applyStrips(text: string, res: RegExp[]): string {
 // 复合名词保护（R234 P3-3，audit-r233 §P3-3：「信用卡还了多少钱」被逐字
 // 剥成「信卡还」注入 LIKE 必零命中）：含财务动词字的常见复合名词先占位
 // 保护、剥离后还原，避免词中字被当作动词剥掉。
-const PROTECTED_COMPOUND_RE = /信用卡|花呗|日用品|公交|交通|住宿/g;
+// 「余额宝」是产品名（R268，audit-r267 §2.2：「从余额宝转出」被剥成
+// 「从宝转出」注入 LIKE 必零命中），与「余额」聚合词同形，先占位保护。
+const PROTECTED_COMPOUND_RE = /信用卡|花呗|余额宝|零钱通|日用品|公交|交通|住宿/g;
 
 /** 剥离财务/聚合/时间措辞（STRIP_RES），复合名词占位保护后再剥。 */
 function stripFinanceWording(text: string): string {
@@ -2516,6 +2518,8 @@ export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null
       })
       .filter(Boolean);
     if (avgParts.length > 0) md += `\n按 ${avgDays} 天折算，平均每天${avgParts.join("；")}。`;
+    // R268（audit-r267 P3-2）：只覆盖 1 天时日均=单日总额，如实提示参考意义
+    if (avgParts.length > 0 && avgDays === 1) md += `（记录仅覆盖 1 天，日均参考意义有限。）`;
   }
   if (stats.unknownAmount > 0) md += `\n（另有 ${stats.unknownAmount} 笔未识别出金额，未计入合计。）`;
   if (stats.transferCount > 0) md += `\n（另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支合计。）`;

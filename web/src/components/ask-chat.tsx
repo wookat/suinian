@@ -98,7 +98,7 @@ function AnswerText({ msgId, content, refIndexes }: { msgId: string; content: st
           return (
             <button
               key={i}
-              className="mx-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/15 px-1 align-text-bottom text-xs font-medium text-primary hover:bg-primary/25"
+              className="relative mx-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/15 px-1 align-text-bottom text-xs font-medium text-primary before:absolute before:-inset-1 before:content-[''] hover:bg-primary/25"
               onClick={() => {
                 const el = document.getElementById(`ask-ref-${msgId}-${n}`)
                 el?.scrollIntoView({ behavior: "smooth", block: "center" })

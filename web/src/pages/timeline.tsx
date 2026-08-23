@@ -1144,7 +1144,7 @@ export function TimelinePage() {
           {visibleTags.filter((t) => t !== tag).length > MOBILE_TOP_TAGS && (
             <button
               onClick={() => setMobileTagsExpanded((x) => !x)}
-              className="text-xs font-medium text-muted-foreground hover:text-foreground md:hidden"
+              className="inline-flex min-h-6 items-center py-1 text-xs font-medium text-muted-foreground hover:text-foreground md:hidden"
             >
               {mobileTagsExpanded
                 ? "收起"
@@ -1154,7 +1154,7 @@ export function TimelinePage() {
           {hiddenCount > 0 && (
             <button
               onClick={() => setTagsExpanded((x) => !x)}
-              className="hidden text-xs font-medium text-muted-foreground hover:text-foreground md:inline"
+              className="hidden min-h-6 items-center py-1 text-xs font-medium text-muted-foreground hover:text-foreground md:inline-flex"
             >
               {tagsExpanded ? "收起" : `更多（${hiddenCount}）`}
             </button>

@@ -933,7 +933,7 @@ export function NoteCard({
                           e.preventDefault()
                           setSummaryOpen((x) => !x)
                         }}
-                        className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+                        className="inline-flex min-h-6 items-center py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
                       >
                         {summaryOpen ? "收起摘要" : "展开摘要"}
                       </button>
@@ -944,7 +944,7 @@ export function NoteCard({
                           e.preventDefault()
                           setExcerptOpen((x) => !x)
                         }}
-                        className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+                        className="inline-flex min-h-6 items-center py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
                       >
                         {excerptOpen ? "收起正文摘录" : "查看正文摘录"}
                       </button>
