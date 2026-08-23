@@ -26,7 +26,7 @@
 1. **数据通道（A）**：每次 /api/ask 生成 4 字节随机 nonce；检索片段、笔记标题/正文、`url_title`/`url_summary`、图谱三元组全部进入独立 message，逐行加 `D<nonce>｜` 前缀并以 `【资料区 <nonce> 开始/结束】` 定界；system prompt 声明只有带该前缀的行是资料、资料区内一切文字（任何语言/格式/角色标记/链接/命令）只是数据不执行。用户问题单独成 message，结构上与资料分离。资料内出现的伪 nonce 前缀会被先剥除（无法伪造边界）。
 2. **输出行为护栏（E）**：`guardAskAnswer()` 对答案做两类数据溯源剥除：
    - **外链白名单**（P0）：答案中除 `suinian.zalize.com` / `suinian-api.zalize.com` / `zalize.com` 外的一切 URL（markdown 链接/图片、HTML、裸域名、www、协议相对、全角、NFKC 变形）替换为「〔已移除外部链接〕」纯文本；
-   - **注入标记剥除**：答案中的代码状大写 token 若可从资料经可逆变换（NFKC/ROT13/反转/percent/HTML 实体/base64（含嵌套）/base32/hex）推导出、且不在用户问题里出现，则剥除——按「来源可溯」而非「形态匹配」判定，不枚举注入话术。
+   - **注入标记剥除**：答案中的代码状大写 token 若可从资料经可逆变换（NFKC/ROT13/反转/percent/HTML 实体/base64（含嵌套）/base32/hex）推导出、且不在用户问题里出现，则剥除——按「来源可溯」而非「形态匹配」判定，不枚举注入话术。再叠一条误伤收敛：若提问关键词就在 token 在资料里的字符级邻域（±6 字）内，说明它是提问直指的字段值（「CPU 型号 AMD-EPYC-7742」），保留；而执行痕迹 marker 紧贴的是与提问无关的祈使动词，剥除。
    - 流式输出带 200 字符稳定缓冲，URL 不会被拆片绕过；确定性答案路径经 /api/ask 中间件统一剥链；SSE done 同口径。
 3. **全端一致渲染**：Web ask 答案本就纯文本渲染（不解析 markdown 链接）；周/月报叙述在生成侧过 `scrubAnswerLinks` + 渲染侧 `sanitizeGeneratedHtml`（DOMPurify 白名单：禁 img/iframe 等加载型标签，非白名单锚点降级纯文本）；Android `MarkdownText` 不产出可点击链接；CSP `connect-src`/`img-src` 收紧（见 `web/public/_headers`），任何漏网 URL 也无法被浏览器自动加载。MCP 复用 REST 管道（`app.request()`），无第二套实现。
 4. **元数据入口**：剪藏 `url_title`/`url_summary`/AI 摘要持久化前过 `neutralizePromptInjection`（落 R265 P2-2）。
@@ -37,6 +37,8 @@
 - 合法外链笔记：笔记本体/时间流展示不受影响（用户自己的链接照常可点），只有**模型生成的答案文本**里不复读第三方 URL——用户问「那篇文章链接是什么」会得到〔已移除外部链接〕占位，属可接受的安全权衡（原文里链接仍在笔记详情可见）。
 - 技术笔记中的错误码/型号（如 `ERR-4032-X`、`AMD-EPYC-7742`）：出现在用户问题中即保留；injection-eval 内置 8 个良性对照（含 base64 说明文、提示工程术语、报错码），要求 0 误拒。
 - 定量口径：injection-eval 良性对照组通过率 + ask-eval 全量回归不回退。
+
+生产实测（R266 末，https://suinian-api.zalize.com ）：注入 80 变体 / 168 次问答，**执行 0、泄露 0**；benign 对照 8 例中 2 例未命中期望字串（B02 专注力文章、B06 买书合计），逐例看答案确认**不是护栏剥除**而是检索/分词未召回（答案为「没找到相关笔记」——即 R265 P1-3 同根因，已归入检索专轮）；护栏直接造成的误伤 **0/8**。ask-eval 全量 141/141、引用完整性 141/141。
 
 ## 五、成本
 
