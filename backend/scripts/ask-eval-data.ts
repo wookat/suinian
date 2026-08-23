@@ -1316,7 +1316,8 @@ export const QUESTIONS: EvalQuestion[] = [
     id: "q181",
     category: "财务子集",
     question: "2026年5月买滑板车花了多少",
-    expectAnswerContains: ["2026年5月", "滑板车", "去掉时间限制后也没有找到"],
+    // R264 P2-1：字面零匹配不再作全库否定断言，只陈述关键词字面匹配结果
+    expectAnswerContains: ["2026年5月", "滑板车", "去掉时间限制后按这个关键词的字面匹配也没有匹配到"],
     holdout: true,
   },
   {
