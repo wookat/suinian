@@ -8,22 +8,24 @@ import type { Env } from "../src/types";
 const KEY = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
 const OTHER_KEY = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
 
-function fakeR2(store: Map<string, Uint8Array>) {
+function fakeR2(store: Map<string, Uint8Array>, meta = new Map<string, Record<string, string>>()) {
   return {
     async get(key: string) {
       const data = store.get(key);
       if (!data) return null;
       return {
+        customMetadata: meta.get(key) ?? {},
         async arrayBuffer() {
           return data.slice().buffer;
         },
       };
     },
-    async put(key: string, value: Uint8Array) {
+    async put(key: string, value: Uint8Array, opts?: { customMetadata?: Record<string, string> }) {
       store.set(key, value);
+      meta.set(key, opts?.customMetadata ?? {});
     },
     async head(key: string) {
-      return store.has(key) ? { customMetadata: {} } : null;
+      return store.has(key) ? { customMetadata: meta.get(key) ?? {} } : null;
     },
   } as unknown as R2Bucket;
 }
@@ -39,6 +41,9 @@ function fakeDb(attachments: { r2_key: string; mime: string | null }[]) {
             },
             async first() {
               return null;
+            },
+            async run() {
+              return { meta: {} };
             },
           };
         },

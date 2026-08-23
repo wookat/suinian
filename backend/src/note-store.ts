@@ -336,10 +336,10 @@ export async function applyTriage(
   // imported notes carry their original tags in meta.import_tags: keep them
   // first and union in the AI-suggested ones
   const row = await env.DB.prepare(
-    "SELECT meta, todo_due, content, content_enc, updated_at FROM notes WHERE id = ?"
+    "SELECT meta, todo_due, content, content_enc, is_sensitive, updated_at FROM notes WHERE id = ?"
   )
     .bind(noteId)
-    .first<{ meta: string | null; todo_due: string | null; content: string; content_enc: string | null; updated_at: string }>();
+    .first<{ meta: string | null; todo_due: string | null; content: string; content_enc: string | null; is_sensitive: number; updated_at: string }>();
   if (!row) return;
   // 库内当前明文（预检加密的 pending 笔记存的是密文）与分拣快照比对
   let current = row.content;
@@ -358,6 +358,12 @@ export async function applyTriage(
   // 的分拣模型不能凭「正文无秘密值」推翻（值可能正好没被抽入正文，而原图
   // 里的秘密仍在附件里）：敏感位取两者并集，加密/洗净仍走下方统一管道
   if (meta?.vision_sensitive && !triage.is_sensitive) {
+    triage = { ...triage, is_sensitive: true };
+  }
+  // 用户手动标的敏感位不被模型复判降级（R262 P2-6，audit-r261：手动标敏感后
+  // 被异步复判静默撤销恢复明文）：只锁降级方向——模型/预检升级为敏感的
+  // fail-closed 方向永远放行（手动解敏后新内容含密仍能被重新加密）
+  if (meta?.manual_override?.is_sensitive && row.is_sensitive && !triage.is_sensitive) {
     triage = { ...triage, is_sensitive: true };
   }
   // 存疑转写禁强副作用（R218 P2-2，audit-r217 §3）：transcript_suspect 的语音

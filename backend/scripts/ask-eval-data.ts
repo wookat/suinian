@@ -1643,4 +1643,25 @@ export const QUESTIONS: EvalQuestion[] = [
     expectAll: ["todo1", "todo2"],
     expectAnswerContains: ["按分类", "数据库精确筛选"],
   },
+  // —— R262 P1-3（audit-r261 §P1-3）：笔数口径统一进确定性列举管道 ——
+  // 「有几笔？分别是什么」此前被 FACT_QUERY 的「分别/是什么」拦下落普通
+  // 召回，LLM 心算出与聚合答案（F30）矛盾的笔数。锁定：笔数问法必须走
+  // 数据库精确列举，笔数与金额同出一条 SQL。
+  {
+    id: "q212",
+    category: "财务列举",
+    question: "支出总共有几笔？分别是什么",
+    expectAnswerContains: ["笔支出", "数据库精确列举"],
+    forbidAnswerContains: ["没找到相关笔记"],
+  },
+  // 语料无收入：笔数问法 fail-closed 如实答无收入记录，与「收支情况」聚合
+  // 答案（收入 ¥0）口径一致，绝不由 LLM 编造笔数
+  {
+    id: "q213",
+    category: "财务列举",
+    question: "今年收入总共有几笔？分别是什么",
+    expectAnswerContains: ["没有找到收入记录"],
+    forbidAnswerContains: ["笔收入"],
+    holdout: true,
+  },
 ];

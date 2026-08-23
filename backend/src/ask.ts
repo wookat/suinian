@@ -437,8 +437,11 @@ export function financeMomIntent(question: string): "month" | "week" | null {
 // 「今年上半年和下半年到现在，哪段花得多」这类任意双时间窗对比不在环比
 // （本月vs上月/本周vs上周）覆盖内，此前落普通召回答出与事实相反的空答。
 // 与环比同一架构：两窗各自 SQL 精确聚合后走 buildFinanceMomAnswer 确定性对比。
+// 「3月和4月分别花了多少」是双窗并列问法（R262 P2-2，audit-r261：不在比较
+// 词表内时退化为单窗且静默丢半个问题）：并列疑问框架与比较同一双窗管道，
+// 答案本就并列给出两窗金额与差额。
 const DUAL_WINDOW_COMPARE_RE =
-  /哪段|哪个时间段|哪个时期|哪半年|哪个季度|哪个月份?|[花支][得的出]了?(?:更)?[多少]|开销(?:更)?大|支出(?:更)?[多高]|还是/;
+  /哪段|哪个时间段|哪个时期|哪半年|哪个季度|哪个月份?|[花支][得的出]了?(?:更)?[多少]|开销(?:更)?大|支出(?:更)?[多高]|还是|(?:分别|各自?)[^？?。]{0,8}(?:多少|几笔)/;
 
 /** 识别财务双时间窗对比问题，返回两个窗口；非此类返回 null。 */
 export function financeDualWindowIntent(question: string, now: Date = new Date()): { a: TimeRange; b: TimeRange } | null {
@@ -466,7 +469,7 @@ export function financeDualWindowIntent(question: string, now: Date = new Date()
 // 后走财务子集同一套主题词剥离流水线（subsetTopicExtract），无主题时返回
 // null、行为与既有纯时间窗对比完全一致。
 const DUAL_WINDOW_FRAME_STRIP_RE =
-  /哪段|哪个时间段|哪个时期|哪半年|哪个季度|哪个月份?|哪一?[年月周天]|还是|相比(?:之下)?|[花支][得的出]了?(?:更)?[多少]|开销(?:更)?大|支出(?:更)?[多高]|[赚挣][得的]了?(?:更)?[多少]|更[多少]/g;
+  /哪段|哪个时间段|哪个时期|哪半年|哪个季度|哪个月份?|哪一?[年月周天]|还是|相比(?:之下)?|[花支][得的出]了?(?:更)?[多少]|开销(?:更)?大|支出(?:更)?[多高]|[赚挣][得的]了?(?:更)?[多少]|更[多少]|分别|各自?|[花支][了出]了?多少|几笔/g;
 
 /** 双窗对比问法里的主题限定词（「哪个月买书花得多」→ [买书]）；无主题返回 null。 */
 export function financeDualWindowTopicTerms(question: string): string[] | null {
@@ -1179,6 +1182,8 @@ function trimTopicResidue(term: string): string {
   // 整串注入 LIKE 必零命中）：「相关」是纯框架词不可能是主题尾字，
   // 不受 ≥2 门槛限制；剩单字主题由下游长度门槛滤掉，整题回落普通召回
   t = t.replace(/相关的?$/, "") || t;
+  // 尾部结构助词同理不受 ≥2 门槛限制（R262 P2-3：「书的」注入 LIKE 必零命中）
+  t = t.replace(/的$/, "") || t;
   return t;
 }
 
@@ -1204,14 +1209,21 @@ function subsetTopicExtract(question: string): string[] | null {
   residual = residual.replace(/\d{2,4}\s*年|\d{1,2}\s*月(?:份)?|\d{1,2}\s*[日号]|上+个?[月周]|这个?[月周]|本[月周]|最近|今年|去年|前年/g, "");
   // 并列疑问框架词不是主题（R250 P2-3：「买书分别花了多少」→「买书」）
   residual = residual.replace(/各自|分别/g, "");
+  // 疑问代词与「这个主题」类元话语是纯框架不是主题（R262 P2-3，audit-r261：
+  // 「买过什么书」抽出「什么书」、「书这个主题上」整串注入 LIKE 必零命中）
+  residual = residual.replace(/些?什么|啥/g, "").replace(/[这那]个?(?:主题|话题|方面|类型|类别)上?/g, "");
   // 剥掉开头的购买/消费动词（「买咖啡」→「咖啡」），但不能把「吃喝」这类
-  // 本身就是主题的词剥空
-  const stripped = residual.replace(/^[买在喝吃点逛去为给用出]{1,2}/, "").replace(/^(?:你|您|咱)+/, "");
-  if (stripped.length >= 2) residual = stripped;
+  // 本身就是主题的词剥空；「买过/买了」的体貌助词一并剥（R262 P2-3）
+  const stripped = residual.replace(/^[买在喝吃点逛去为给用出]{1,2}[了过]?/, "").replace(/^(?:你|您|咱)+/, "");
+  // 带体貌助词的「买过/买了X」剥后剩单字也接受（R262 P2-3：「买过书」→「书」，
+  // 整串注入 LIKE 必零命中）：单字主题由下方 singles 门槛（hitsSingleCharTopic
+  // 邻字上下文）把关；无助词的「买书」保持原样（既有 ≥2 口径，R256 P3-1）
+  const aspectStripped = /^[买在喝吃点逛去为给用出]{1,2}[了过]/.test(residual);
+  if (stripped.length >= 2 || (aspectStripped && stripped.length >= 1)) residual = stripped;
   // 受益格「给X/为X」的介词是纯框架（「给猫」LIKE 零命中而「猫」才是主题）：
   // 即使剥后不足 2 字也剥——剩单字会被下方长度门槛滤掉，整题回落
   // fail-closed 全账口径，仍不做心算（R242 P3-1，audit-r241 §3.2）
-  residual = residual.replace(/^[给为](?=.)/, "");
+  residual = residual.replace(/^[给为在](?=.)/, "");
   // 「在 X 上花了多少钱」的介词框架：尾部「上」是框架残留不是主题
   // （「咖啡豆上」LIKE 零命中），仅在原问句确为「在…上」形态时剥掉
   if (/在[^\s，。？?]{1,8}上/.test(question) && residual.length >= 3) residual = residual.replace(/上$/, "");
@@ -1240,7 +1252,14 @@ function subsetTopicExtract(question: string): string[] | null {
         !new RegExp(`[${FILLER_CHAR_CLASS}]`).test(s) &&
         // 原问句里该字必须独立成词（买书/书相关）；受益格「给猫花的钱」的
         // 猫不是消费对象主题，仍回落 fail-closed（R242 P3-1 口径不变）
-        hitsSingleCharTopic(question.replace(/相关的?/g, "的"), s)
+        hitsSingleCharTopic(
+          question
+            .replace(/相关的?/g, "的")
+            // 疑问代词/元话语框架同步剥掉（R262 P2-3），邻字判定才看得到真实语境
+            .replace(/些?什么|啥/g, "")
+            .replace(/[这那]个?(?:主题|话题|方面|类型|类别)上?/g, "的"),
+          s
+        )
     );
   return singles.length > 0 && singles.length <= 3 ? singles : null;
 }
@@ -1524,6 +1543,12 @@ const FINANCE_LIST_CUES: [RegExp, FinanceListDirection][] = [
   // 「哪几笔」无方向词时按收支双向列（R250 P2-2：无历史的「去年下半年
   // 分别是哪几笔」与追问式同一管道收口，不平行打补丁）
   [/记[了过]?(?:哪些|些什么|什么)账|账单(?:明细)?(?:都)?有哪些|收支明细|哪几笔/, "both"],
+  // 笔数问法统一进确定性列举管道（R262 P1-3，audit-r261 §P1-3：「今年收入
+  // 总共有几笔？分别是什么」被 FACT_QUERY 的「分别/是什么」拦下落普通召回，
+  // LLM 对截断召回心算出「1 笔」，与 F30 聚合答案自相矛盾）。笔数与金额
+  // 必须同源：列举答案头行的「共 X 笔」与合计同出一条 SQL。方向词覆盖
+  // （financeListWordDirection）照常生效。
+  [/几笔|多少笔/, "both"],
   // 「花了哪些钱/花了些什么钱」「哪些钱」「钱都花在哪了」
   [/花了?(?:哪些|些什么|什么)钱|哪些钱|钱(?:都)?(?:花|用)(?:在|到)了?(?:哪|什么)/, "expense"],
   // 「有哪些支出/开销」「支出有哪些」「消费明细」「列一下开销」
@@ -1998,9 +2023,17 @@ export function bareTimeWindowListIntent(question: string): boolean {
   return applyStrips(q, [STRIP_RES[0], BARE_TIME_FRAME_STRIP_RE]).length === 0;
 }
 
+// 「有什么记录」cue 的主题限定门（R262 P2-4，audit-r261：「我对咖啡豆供应商
+// 有什么记录」被劫成全库精确列举答非所问）：该 cue 只服务裸时间窗问法，
+// cue 前后剥掉时间/语气词仍有残留（主题限定）时不走全库列举。
+const ENUM_LIST_HAVE_CUE_RE = /有(?:些|哪些|什么|啥)(?:记录|笔记)/;
+const ENUM_LIST_FILLER_STRIP_RE = /[？?。！!，,\s]|我们?|你|您|咱|都|还|里|中|内|期间|这段时间|一共|总共|具体|所有|全部|东西|事情|事儿?|内容|信息|的|有|了|呢|呀|啊|吗|么|嘛|吧/g;
+
 /** 「这段时间都记了什么/记了哪些/有什么记录」——时间窗枚举，走 SQL 全量列举而非 top-k 召回。 */
 export function enumListIntent(question: string): boolean {
-  return /都记[了过]?(?:些|哪些)?什么|记[了过](?:些什么|哪些)|都写[了过]?(?:些|哪些)?什么|都有哪些笔记|记录[了过](?:些什么|哪些|什么)|有(?:些|哪些|什么|啥)(?:记录|笔记)/.test(question);
+  if (/都记[了过]?(?:些|哪些)?什么|记[了过](?:些什么|哪些)|都写[了过]?(?:些|哪些)?什么|都有哪些笔记|记录[了过](?:些什么|哪些|什么)/.test(question)) return true;
+  if (!ENUM_LIST_HAVE_CUE_RE.test(question)) return false;
+  return applyStrips(question.replace(ENUM_LIST_HAVE_CUE_RE, ""), [STRIP_RES[0], BARE_TIME_FRAME_STRIP_RE, ENUM_LIST_FILLER_STRIP_RE]).length === 0;
 }
 
 // ---- 主题枚举问答（R130 P1-1/P1-2）----
@@ -2018,6 +2051,9 @@ const TOPIC_ENUM_RES: RegExp[] = [
   // 「关于健身的笔记有哪些」「有哪些关于健身的记录」
   /(?:关于|有关)([\u4e00-\u9fa5A-Za-z0-9 ]{1,12}?)的?(?:笔记|记录|内容)?(?:都)?有哪些/,
   /有哪些(?:关于|有关)([\u4e00-\u9fa5A-Za-z0-9 ]{1,12}?)的?(?:笔记|记录|内容)/,
+  // 「我对咖啡豆供应商有什么记录」（R262 P2-4，audit-r261：此前被无主题的
+  // 「有什么记录」cue 劫成全库精确列举）：「对/就 X」的介词宾语是主题限定
+  /[对就]([\u4e00-\u9fa5A-Za-z0-9 ]{1,12}?)(?:[这那]个?(?:主题|方面))?有(?:什么|哪些|啥)(?:记录|笔记|内容)/,
 ];
 
 // 泛指词不构成主题限定：落回时间窗枚举或普通召回。「什/啥/么/哪些」这类
@@ -2316,8 +2352,8 @@ export function askTopicTerms(terms: string[]): string[] {
 // 且后邻是边界/助词（书。/书的/书吗）」即命中。代价是「书单/书评」这类
 // 相关复合词命中会被过滤（准确优先；答案已注明按关键词筛选、可换说法再问），
 // 调用方在过滤后全空时回落原始命中，绝不因此把有命中变成零命中。
-const SINGLE_TOPIC_PREV_RE = /[本些的了买看读借还送写记听唱学做煮炒烧一两三几每部套张首道口条只株盆杯瓶箱袋]/;
-const SINGLE_TOPIC_NEXT_RE = /[的了是吗么呢啊呀哦嘛吧也都还很]/;
+const SINGLE_TOPIC_PREV_RE = /[本些的了过在买看读借还送写记听唱学做煮炒烧一两三几每部套张首道口条只株盆杯瓶箱袋]/;
+const SINGLE_TOPIC_NEXT_RE = /[的了是吗么呢啊呀哦嘛吧也都还很一]/;
 const CJK_CHAR_RE = /[\u4e00-\u9fa5]/;
 
 /** 单字主题在文本中是否有「独立成词」的出现（邻字上下文判定）。 */
@@ -2549,6 +2585,37 @@ export const MULTI_HOP_RE = /关系|关联|依据|后来|进展|着落|落地|�
 
 /** Cosine similarity below which a semantic-only recall hit is too weak to appear as a citation. */
 export const ASK_CITATION_MIN_SCORE = 0.55;
+
+// ---- 逐字复述引证补全（R262，audit-r261 P2-5）----
+// 答案正文逐字复述了某条召回笔记的内容（≥VERBATIM_CITE_MIN_LEN 连续字符
+// 重叠）却没把它列入引用时，把该笔记增补进 references。只增补、不改写答案
+// 文本，与多跳引证补全同一口径。弱语义命中不补（保持 weak 不出现在引用的
+// 既有约束）。
+
+const VERBATIM_CITE_MIN_LEN = 8;
+const VERBATIM_NONWORD_RE = /[^\p{L}\p{N}]+/gu;
+
+export function verbatimUncitedSourceIds(
+  answer: string,
+  notes: readonly { id: string; content: string }[],
+  citedIds: ReadonlySet<string>,
+  weakIds: ReadonlySet<string>
+): string[] {
+  const a = answer.replace(VERBATIM_NONWORD_RE, "");
+  if (a.length < VERBATIM_CITE_MIN_LEN) return [];
+  const out: string[] = [];
+  for (const n of notes) {
+    if (citedIds.has(n.id) || weakIds.has(n.id)) continue;
+    const c = n.content.replace(VERBATIM_NONWORD_RE, "");
+    let hit = false;
+    for (let i = 0; i + VERBATIM_CITE_MIN_LEN <= c.length && !hit; i += 1) {
+      if (a.includes(c.slice(i, i + VERBATIM_CITE_MIN_LEN))) hit = true;
+    }
+    if (hit) out.push(n.id);
+    if (out.length >= 2) break;
+  }
+  return out;
+}
 
 /**
  * 依据/为什么类问题（R260 P2/q31）：答案需要引用「原因笔记 + 结果笔记」两条以上

@@ -74,6 +74,9 @@ description: How to run browser UI / accessibility / cache-identity tests agains
 - Devin-managed Chrome (port 29229) can crash mid-session; relaunch by rebuilding the exact argv list (see the /proc cmdline note above) with `subprocess.Popen` under DISPLAY=:0 — localStorage state survives. After relaunch the first page may render blank ("Untitled"); one F5 fixes it.
 - Day1 timings measured R215 (fresh account, prod): /api/auth/register ~1.0s, POST /api/notes ~0.2s, triage badge ~8s, /api/ask ~1.5s. Useful as regression baselines.
 
+## R2 对象存在性/删除验证（R262）
+- 验证 R2 对象是否存在/已删时，绝不要重复 GET `api.cloudflare.com/.../r2/buckets/<bucket>/objects/<key>`——该端点走 CDN 缓存，已删除对象可继续返回旧字节 30 分钟以上（`CF-Cache-Status: HIT`）。以带 `prefix` 的 list 端点（不缓存）为准，或仅信首次 GET（`CF-Cache-Status: MISS`）。
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_GLOBAL_API_TOKEN` (D1 HTTP query API for read-only residual/orphan checks)
 - QA accounts themselves are self-registered (no secret needed)

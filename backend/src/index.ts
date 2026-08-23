@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
-import { triageNote, triageNoteDetailed, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE } from "./triage";
+import { triageNote, triageNoteDetailed, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE, neutralizePromptInjection } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import {
@@ -67,6 +67,7 @@ import {
   flushMediaDeleteFailures,
   loadOriginal,
   sweepUnencryptedSensitiveAttachments,
+  flushMediaEncryptFailures,
   AUDIO_FAILED_PLACEHOLDER,
   IMAGE_FAILED_PLACEHOLDER,
 } from "./media";
@@ -75,7 +76,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates } from "./ask";
+import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -210,7 +211,10 @@ app.get("/health", async (c) => {
     // 外部拨测只需 ok 与状态码（R166 P2-5）
     const auth = c.req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
     const isAdmin = !!c.env.ADMIN_TOKEN && auth === c.env.ADMIN_TOKEN;
-    return c.json({ ok: true, ai: isAdmin ? ai : { ok: ai.ok } }, ai.ok ? 200 : 503);
+    // degraded＝主链路失败、由 fallback 层应答（R262 P2-8，audit-r261：主模型
+    // 100% 失败在探针上零可见性）：布尔可观测位不泄露 provider/model 配置指纹，
+    // ok 口径不变（fallback 是常态基线，外部告警仍只看 ok:false）
+    return c.json({ ok: true, ai: isAdmin ? { ...ai, degraded: ai.provider === "fallback" } : { ok: ai.ok, degraded: ai.provider === "fallback" } }, ai.ok ? 200 : 503);
   }
   // ?probe=bridge reports the WeChat bridge state from its heartbeat so external
   // monitoring sees the real login state (online / waiting_scan / stale) instead
@@ -1092,8 +1096,10 @@ app.delete("/api/auth/me", async (c) => {
   )
     .bind(userId)
     .all<{ r2_key: string }>();
+  // R2 删除必须同步等待：waitUntil 被截断时对象与失败记录双双丢失，注销后
+  // 明文附件会在桶里滞留到 48h 孤儿回收（QA-R262 实测复现）
   if (c.env.MEDIA && (atts.results ?? []).length > 0) {
-    c.executionCtx.waitUntil(deleteMediaObjects(c.env, (atts.results ?? []).map((a) => a.r2_key)));
+    await deleteMediaObjects(c.env, (atts.results ?? []).map((a) => a.r2_key));
   }
   if (c.env.VECTORIZE) {
     const ids = await c.env.DB.prepare("SELECT id FROM notes WHERE user_id = ?").bind(userId).all<{ id: string }>();
@@ -1765,7 +1771,7 @@ app.patch("/api/notes/:id", async (c) => {
     extraSets.push("todo_done = ?", "done_at = ?");
     extraBinds.push(body.todo_done ? 1 : 0, body.todo_done ? new Date().toISOString() : null);
   }
-  const override: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean } = {};
+  const override: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean; is_sensitive?: boolean } = {};
   if (typeof body.category === "string" && ["idea", "todo", "collect", "data", "expense", "income", "transfer"].includes(body.category)) {
     extraSets.push("category = ?");
     extraBinds.push(body.category);
@@ -1773,6 +1779,9 @@ app.patch("/api/notes/:id", async (c) => {
   }
   if (patch.tags) override.tags = true;
   if (typeof patch.title === "string") override.title = true;
+  // 用户手动定敏感位优于模型复判（R262 P2-6，audit-r261：PATCH 标敏感后被
+  // 异步复判静默撤销恢复明文）：与分类/标签同一 manual_override 机制锁住
+  if (typeof patch.is_sensitive === "boolean") override.is_sensitive = true;
   if (typeof body.todo_due === "string" || body.todo_due === null) {
     extraSets.push("todo_due = ?");
     extraBinds.push(normalizeTodoDue(body.todo_due));
@@ -2834,8 +2843,10 @@ app.post("/api/ingest/media", async (c) => {
     (p) => c.executionCtx.waitUntil(p),
     { syncTriage: false }
   );
-  // keep the original in R2 (best-effort; extraction result is already saved)
-  c.executionCtx.waitUntil(storeOriginal(c.env, c.get("userId"), note.id, parsed));
+  // 原件同步存档：waitUntil 里的 R2 写在 isolate 回收时可能被截断，留下
+  // 明文残留且无失败记录（audit-r261 §P1-1 间歇性根源之一），必须等它落定
+  const r2Key = await storeOriginal(c.env, c.get("userId"), note.id, parsed);
+  if (!r2Key && c.env.MEDIA) console.error("media ingest: R2 archive failed for note", note.id);
 
   const reply = buildMediaReply(parsed.type, content, ok, !!note.is_sensitive);
   return c.json({ note: noteToJson(note), text: note.is_sensitive ? note.content : content, transcribed: ok, reply }, 201);
@@ -3182,10 +3193,19 @@ app.post("/api/ask", async (c) => {
   // 按币种分组比较（不同币种金额不可直接比大小），绝不交 LLM 猜极值。
   const finExtreme = financeExtremeIntent(intentQuestion) ?? (metaQuestion || listFollowUp || FINANCE_WORD_RE.test(intentQuestion) ? null : financeExtremeIntent(recallQuestion));
   if (finExtreme) {
-    const xRange = (financeExtremeIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
+    // 同话题极值追问继承上一轮关键词限定（R262 P2-1，audit-r261：「今年买书
+    // 一共花了多少」后追问「其中最贵的一笔」退化为全局极值）：与裸列举追问
+    // 同一解析口径（financeAggAnswerTerms），只认本轮无自带主题且带显式指代
+    // （其中/里面/当中）的追问，新起的全局极值问题行为零改动。
+    const xOwnTerms = financeExtremeIntent(intentQuestion) ? financeExtremeTopicTerms(intentQuestion) : financeExtremeTopicTerms(recallQuestion);
+    const xInherited = !xOwnTerms && /其中|里面|当中|这里面|这些里/.test(intentBase) ? financeAggAnswerTerms(lastAssistant) : null;
+    const xRange =
+      (financeExtremeIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ??
+      (xInherited ? answerHeadTimeRange(lastAssistant) : null) ??
+      timeRange;
     // 主题限定（R174 P1）：「键盘里最贵的」的「键盘」注入 WHERE（与财务
     // 子集同一 LIKE 匹配口径），绝不把主题极值答成全局极值
-    const xTerms = financeExtremeIntent(intentQuestion) ? financeExtremeTopicTerms(intentQuestion) : financeExtremeTopicTerms(recallQuestion);
+    const xTerms = xOwnTerms ?? xInherited;
     const xConds = ["user_id = ?", "deleted_at IS NULL", "category = ?"];
     const xBinds: unknown[] = [userId, finExtreme.direction];
     if (xTerms) {
@@ -4322,7 +4342,9 @@ app.post("/api/ask", async (c) => {
       const outTag = timeRange && !inTimeRange(n.created_at, timeRange) ? `, 不在${timeRange.phrase}范围内` : "";
       // 正文开头的 [xxx]/【xxx】前缀标记是元数据（R212 P3-5）：送进生成上下文
       // 前剔除，避免模型把它们复制进回答充当引文号（引文只认 [数字]）
-      const body = n.content.replace(/^\s*(?:[[【][^\]】\n]{1,24}[\]】]\s*)+/, "");
+      // 召回片段是不可信数据（R262 P1-2，audit-r261 §P1-2）：送进生成上下文前
+      // 走与分拣同一注入中和管道（R216 定界仿冒 + 祈使注入改写）
+      const body = neutralizePromptInjection(n.content).replace(/^\s*(?:[[【][^\]】\n]{1,24}[\]】]\s*)+/, "");
       return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${n.title ?? ""}\n${body.slice(0, 500)}`;
     })
     .join("\n\n");
@@ -4473,6 +4495,15 @@ app.post("/api/ask", async (c) => {
       )
       .slice(0, 2);
     for (const n of missingSources) references.push({ index: references.length + 1, note_id: n.id });
+  }
+  // 逐字复述引证补全（R262，audit-r261 P2-5，q49 引证遗漏）：答案逐字复述了
+  // 某条召回笔记的内容却没引用它时，把该笔记增补进 references。只增补、不
+  // 改写答案文本，与上面的多跳引证补全同一口径。
+  {
+    const citedIds = new Set(references.map((r) => r.note_id));
+    for (const id of verbatimUncitedSourceIds(finalAnswer, notes, citedIds, weakIds)) {
+      references.push({ index: references.length + 1, note_id: id });
+    }
   }
   const byId = new Map(notes.map((n) => [n.id, n]));
   const refNotes = await Promise.all(
@@ -5256,6 +5287,11 @@ export default {
       ctx.waitUntil(sweepAuthRateLimits(env.DB));
       // retry R2 deletes that failed during note/account cascades (rows clear on success)
       ctx.waitUntil(flushMediaDeleteFailures(env));
+      // retry sensitive-attachment encrypts that failed (rows clear after head() 复核)
+      ctx.waitUntil(flushMediaEncryptFailures(env));
+      // 敏感附件明文残留兜底扫（幂等限额）：任何写路径被中断（isolate 回收 /
+      // waitUntil 截断）漏下的明文对象，残留窗口收敛到 ≤10 分钟
+      ctx.waitUntil(sweepUnencryptedSensitiveAttachments(env));
     } else {
       // daily thread title/summary refresh + daily review generation
       ctx.waitUntil(refreshThreads(env));
