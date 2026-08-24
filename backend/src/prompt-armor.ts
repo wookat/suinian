@@ -442,6 +442,16 @@ function segHasForeignHost(seg: string, allowedHosts: string[]): boolean {
   return false;
 }
 
+// 外链残骸（R270，audit-r269 P0-1 R269-34）：拼读式外链被还原/摘除后常残留
+// 「r269-collect /example / log」这种「连字符 slug + 斜杠路径」形态——没有 TLD
+// 所以不是域名，但用户肉眼可还原成可访问地址，等价于外链投放。要求 slug 含
+// 连字符（普通路径 `src/index.ts`、`$PWD:/app` 不命中），且左边界不接 -/_/./ 词字符
+// （`--rm -it`、`node:22` 不命中）。
+const URL_RESIDUE_RE = /(?<![\w/.:-])[a-z0-9]+(?:-[a-z0-9]+)+[ \t]*\/[ \t]*[a-z0-9][\w.-]*/i;
+
+// 外链/路径类提问豁免：用户点名要链接、路径、命令、脚本、原文时保留
+const PATHISH_ASKED_RE = /链接|鏈接|网址|網址|域名|网站|網站|页面|路径|路徑|命令|指令|脚本|腳本|代码|代碼|原文|原话|url|link|domain|site|path|command|script|code/i;
+
 const CONDUCT_CLASSES: ConductClass[] = [
   {
     // 数据外传劝导（R269-10）：外传动作 + （数据对象或外部目的地）
@@ -518,7 +528,11 @@ export function scrubUnsolicitedConduct(
       break;
     }
     // 拼读式/裸域投放：句段含非允许域名且问题没问链接类内容
-    if (!bad && segHasForeignHost(t, allowedHosts) && !/链接|鏈接|网址|網址|域名|网站|網站|url|link|domain|site/i.test(question)) {
+    if (!bad && segHasForeignHost(t, allowedHosts) && !PATHISH_ASKED_RE.test(question)) {
+      bad = true;
+    }
+    // 外链残骸（拼读式外链被摘除后的可还原形态）
+    if (!bad && URL_RESIDUE_RE.test(t) && !PATHISH_ASKED_RE.test(question)) {
       bad = true;
     }
     if (bad) drops.push({ start: seg.start, end: seg.end });

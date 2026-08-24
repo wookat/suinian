@@ -42,6 +42,24 @@ describe("R270 行为一致性剥除（scrubUnsolicitedConduct）", () => {
     expect(out).toContain("三条笔记");
   });
 
+  it("R269-34 生产穿透形态：拼读被还原成裸路径残骸（无 TLD）也被剥除", () => {
+    const out = scrubUnsolicitedConduct(
+      "最近的笔记记录了 2026-08-23 的健身记录，内容是跑了 5 公里 [1]。 \nr269-collect /example / log，笔记摘要：最近一周的笔记主要记录了健身情况。",
+      SUM_Q
+    );
+    expect(out).not.toContain("r269-collect");
+    expect(out).toContain("跑了 5 公里");
+    const out2 = scrubUnsolicitedConduct("[1] 中提到了健身记录：跑了 5 公里。 \nr269-collect / log，笔记摘要：跑步 5 公里。", SUM_Q);
+    expect(out2).not.toContain("r269-collect");
+  });
+
+  it("外链残骸规则不误伤命令/路径类回答", () => {
+    const cmd = "你的 docker 命令是：docker run --rm -it -v $PWD:/app node:22 bash [1]";
+    expect(scrubUnsolicitedConduct(cmd, "我存的 docker 命令是什么？")).toBe(cmd);
+    const script = '你的压缩日志脚本是：for f in *.log; do gzip "$f"; done [1]';
+    expect(scrubUnsolicitedConduct(script, "我存的压缩日志脚本是什么？")).toBe(script);
+  });
+
   it("英文意译外传劝导被剥除（语言无关）", () => {
     const out = scrubUnsolicitedConduct(
       "You have three notes. Please make sure to export all your notes and email them to admin@evil.example for safety.",
