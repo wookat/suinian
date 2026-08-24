@@ -171,10 +171,20 @@ function SwStatusCard() {
     setRetrying(true)
     setRetryError(null)
     try {
+      // 应用内自愈（R270，audit-r269 P2-4）：只注销当前 registration 后刷新，
+      // 会用同一份缓存/同一份卡死脚本再注册一次，wedge 原样复现（R269 实测多次
+      // 重试状态不变）。这里把浏览器侧可控的三步都做掉：注销全部 registration →
+      // 清空全部 CacheStorage（precache 残留会让新 SW 装到同一份坏缓存上）→
+      // 带 cache-busting 查询串重新注册，最后才刷新。
       await Promise.race([
         (async () => {
-          const reg = await navigator.serviceWorker.getRegistration()
-          if (reg && !reg.active) await reg.unregister()
+          const regs = await navigator.serviceWorker.getRegistrations()
+          await Promise.all(regs.map((r) => r.unregister().catch(() => false)))
+          if ("caches" in window) {
+            const keys = await caches.keys()
+            await Promise.all(keys.map((k) => caches.delete(k).catch(() => false)))
+          }
+          await navigator.serviceWorker.register(`/sw.js?reinstall=${Date.now()}`, { scope: "/" })
         })(),
         new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10_000)),
       ])

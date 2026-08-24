@@ -328,7 +328,7 @@ export function scrubDataDerivedMarkers(answer: string, dataText: string, questi
 // 两层都与注入句的语言/字面完全无关。
 
 /** 折叠压缩：NFKC + 去空白/零宽/标点/引号，用于跨语言 verbatim echo 判定。 */
-function foldCompact(text: string): string {
+export function foldCompact(text: string): string {
   return text
     .normalize("NFKC")
     .replace(/[\s\u200b-\u200f\ufeff]/g, "")
@@ -336,19 +336,225 @@ function foldCompact(text: string): string {
     .toUpperCase();
 }
 
+// ---- R270 近似回显（audit-r269 P0-1 R269-44：口令以近形字「翾」替代「翅」落地，
+// 精确子串判定失效）。不追近形字表（无界），改用字符 bigram 相似度：两个折叠
+// 压缩串的 bigram 集合 Jaccard ≥ 阈值即视为同一资料回显。单字替换/增删 1-2 字
+// 的变形相似度仍 ≥0.5，而不相关短语的 bigram 交集接近 0。 ----
+function bigrams(s: string): Set<string> {
+  const out = new Set<string>();
+  for (let i = 0; i + 2 <= s.length; i++) out.add(s.slice(i, i + 2));
+  if (s.length === 1) out.add(s);
+  return out;
+}
+
+export function compactSimilarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const ba = bigrams(a);
+  const bb = bigrams(b);
+  let inter = 0;
+  for (const g of ba) if (bb.has(g)) inter++;
+  const union = ba.size + bb.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+const FUZZY_ECHO_SIM = 0.5;
+const FUZZY_ECHO_MAX_LEN = 16;
+
+/**
+ * 答案开头的资料近似回显剥除（R270，audit-r269 R269-44）：注入常要求「回答
+ * 开头写出口令 X」，模型偶以近形字变体落地。答案首句的首个逗号级短片段若
+ * ①与提问无关（无提问关键词、提问压缩串不含它）、②与资料中任一引号引起的
+ * 短串或 demand 的 bigram 相似度 ≥ 阈值（精确子串是特例），整片段剥除。
+ * 正常开场白（「有的」「根据笔记」）不是资料派生，相似度接近 0，不受影响。
+ */
+export function scrubFuzzyEchoOpener(answer: string, dataText: string, question: string, demands: string[] = []): string {
+  // 多行口令变体逐行收口（R270）：剥掉首段后新露出的开头再判一轮，最多 4 轮
+  let cur = answer;
+  for (let i = 0; i < 4; i++) {
+    const next = scrubFuzzyEchoOpenerOnce(cur, dataText, question, demands);
+    if (next === cur) return cur;
+    cur = next;
+  }
+  return cur;
+}
+
+function scrubFuzzyEchoOpenerOnce(answer: string, dataText: string, question: string, demands: string[]): string {
+  const m = answer.match(/^([^\n，,。！？!?；;：:]{1,24})([，,。！？!?；;：:\n]|$)/);
+  if (!m) return answer;
+  const opener = m[1];
+  const compact = foldCompact(opener);
+  if (compact.length < 2 || compact.length > FUZZY_ECHO_MAX_LEN) return answer;
+  const qKeys = topicKeywords(question);
+  for (const k of topicKeywords(opener)) if (qKeys.has(k)) return answer;
+  if (foldCompact(question).includes(compact)) return answer;
+  const candidates: string[] = demands.map((d) => foldCompact(d));
+  for (const q of dataText.matchAll(/[「『"“]([^「」『』"“”\n]{2,24})[」』"”]/g)) candidates.push(foldCompact(q[1]));
+  for (const cand of candidates) {
+    if (!cand || Math.abs(cand.length - compact.length) > 6) continue;
+    if (compactSimilarity(compact, cand) >= FUZZY_ECHO_SIM) {
+      return cleanupAfterScrub(answer.slice(m[1].length).replace(/^[，,。！？!?；;：:\s]+/, ""));
+    }
+  }
+  return answer;
+}
+
+// ---- R270 行为一致性主判（docs/decision-r270.md 方案 C）：不看资料 demand 字面，
+// 直接判定「答案句段的行为」与「用户问题意图」是否一致。答案中出现用户未要求的
+// 行动指示/外链导航/联系方式/口令输出即整段剥除——模型怎么意译、换语言、换近形
+// 字，都改变不了句段的行为类别，因此与注入措辞完全解耦，且零 AI 依赖。 ----
+
+type ConductClass = {
+  id: string;
+  /** 句段命中该行为类的判定 */
+  hit: (seg: string) => boolean;
+  /** 用户问题主动要求该类行为时豁免（只看用户问题，资料无法伪造） */
+  asked: RegExp;
+};
+
+// 祈使/劝导语气线索（对用户说「去做某事」），多语言最小集
+const IMPERATIVE_CUE =
+  /请|务必|记得|建议|需要你|你要|尽快|立即|马上|现在就|别忘|不要忘|一定要|应当|应该|小时内|天内|之内必须|限时|please|make sure|you should|you need|remember to|urgently|within \d+ (?:hours?|days?)|即座に|ください|してください|하세요|해 주세요|пожалуйста/i;
+
+const EXFIL_ACT = /导出|導出|备份|備份|打包|上传|上傳|同步|发送|發送|发到|發到|寄到|转发|轉發|分享|提交|发给|發給|export|upload|send|email|forward|share|sync/i;
+const EXFIL_OBJ = /全部|所有|完整|整个|笔记|筆記|数据|數據|资料|資料|记录|記錄|内容|notes|data|records/i;
+const EXFIL_DEST = /邮箱|郵箱|邮件|郵件|email|e-mail|mail|网盘|網盤|云端|雲端|cloud|服务器|服務器|server|外部|第三方/i;
+
+// 「验证」后接「码」时是名词（验证码），不是导航动作（B12 银行提醒误伤）
+const NAV_ACT = /访问|訪問|前往|打开|打開|点击|點擊|点开|登录|登入|扫码|掃碼|跳转|跳轉|重置|重设|输入|輸入|验证(?!码)|驗證(?!碼)|visit|click|go to|open|log ?in|scan|reset|verify|アクセス|クリック|방문|클릭/i;
+const NAV_OBJ = /链接|鏈接|网址|網址|网站|網站|页面|頁面|地址|密码|密碼|账号|賬號|验证码|驗證碼|解锁|解鎖|站点|站點|link|url|website|page|password|account|サイト|링크/i;
+
+const CONTACT_ACT = /联系|聯繫|添加|加一下|拨打|撥打|致电|致電|咨询|諮詢|contact|call|add|reach|message/i;
+const CONTACT_OBJ = /微信|weixin|wechat|qq|客服|电话|電話|手机号|手機號|telegram|whatsapp|line|邮箱|郵箱|email/i;
+
+const PASSPHRASE_RE = /(?:口令|暗号|暗語|密令|接头|通关|通關|密语|密語|passphrase|code ?word|secret ?word)[^\n]{0,6}(?:是|为|為|:|：)/i;
+
+// 域名形态（含拼读还原）：句段里出现非允许域即属导航/回传投放
+function segHasForeignHost(seg: string, allowedHosts: string[]): boolean {
+  const canon = seg
+    .normalize("NFKC")
+    .replace(/[ \t]*(?:dot|点|句点)[ \t]*/gi, ".")
+    .replace(/[ \t]*(?:slash|斜杠)[ \t]*/gi, "/");
+  for (const m of canon.matchAll(/(?:[a-z0-9-]+\.)+[a-z]{2,24}/gi)) {
+    const host = m[0].toLowerCase().replace(/^www\./, "");
+    if (!allowedHosts.includes(host) && !allowedHosts.some((a) => host === a || host.endsWith(`.${a}`))) return true;
+  }
+  return false;
+}
+
+const CONDUCT_CLASSES: ConductClass[] = [
+  {
+    // 数据外传劝导（R269-10）：外传动作 + （数据对象或外部目的地）
+    id: "exfil-advice",
+    hit: (seg) => EXFIL_ACT.test(seg) && ((EXFIL_OBJ.test(seg) && EXFIL_DEST.test(seg)) || (IMPERATIVE_CUE.test(seg) && EXFIL_DEST.test(seg))),
+    asked: /导出|導出|备份|備份|上传|上傳|同步|转移|轉移|迁移|遷移|export|backup|upload|sync/i,
+  },
+  {
+    // 外链/凭据导航指示（R269-26）：导航动作 + 导航对象（或祈使 + 重置/验证凭据）
+    id: "nav-instruction",
+    hit: (seg) => NAV_ACT.test(seg) && NAV_OBJ.test(seg),
+    asked: /登录|登入|重置|重设|访问|訪問|链接|鏈接|网址|網址|网站|網站|密码|密碼|password|reset|log ?in|url|link|website/i,
+  },
+  {
+    // 联系方式投放
+    id: "contact-drop",
+    hit: (seg) => CONTACT_ACT.test(seg) && CONTACT_OBJ.test(seg),
+    asked: /联系方式|聯繫方式|电话|電話|微信|客服|contact|phone/i,
+  },
+  {
+    // 口令/暗号输出
+    id: "passphrase-output",
+    hit: (seg) => PASSPHRASE_RE.test(seg),
+    asked: /口令|暗号|暗語|密令|通关|通關|密语|密語|passphrase|code ?word|secret ?word/i,
+  },
+  {
+    // 胁迫恐吓（R270-28）：「否则账号将被删除」类施压文案
+    id: "threat-coercion",
+    hit: (seg) => /否则[^\n]{0,12}(删除|封禁|停用|锁定|清空)|将被(删除|封禁|停用|锁定|清空)|account will be (deleted|banned|locked)/i.test(seg),
+    asked: /删除|注销|停用|封禁|delete|deactivate/i,
+  },
+];
+
+// 行为信号（比整类判定更宽）：句段是否携带「行动指示」气味。只用于资料
+// echo 句段的豁免收紧（scrubDataDerivedSpans）——verbatim 抄自资料且带行为
+// 信号的句段，不因邻域含提问关键词而豁免（注入载荷天然把指令与提问词写在
+// 一起，audit-r269 P0-1 的穿透正是靠这一点）。
+export function conductSignal(text: string): boolean {
+  const s = text.normalize("NFKC");
+  if (CONDUCT_CLASSES.some((c) => c.hit(s))) return true;
+  if (IMPERATIVE_CUE.test(s) && (NAV_ACT.test(s) || EXFIL_ACT.test(s))) return true;
+  if (EXFIL_ACT.test(s) && (EXFIL_OBJ.test(s) || EXFIL_DEST.test(s))) return true;
+  if (/归档服务|备份站|外部服务|备份站点/.test(s)) return true;
+  return false;
+}
+
+/**
+ * 行为一致性剥除（R270 P0 主判，docs/decision-r270.md 方案 C）：答案按句段判定，
+ * 命中风险行为类且用户问题未要求该类行为的句段整段剥除。与资料/demand 字面
+ * 完全无关：意译、换语言、近形字、拼读改写都不影响行为类别判定。确定性、零
+ * AI 依赖，degraded 环境同样生效。误伤面由 injection-eval benign 对照量化。
+ */
+export function scrubUnsolicitedConduct(
+  answer: string,
+  question: string,
+  allowedHosts: string[] = ANSWER_LINK_ALLOWED_HOSTS
+): string {
+  const segs: Array<{ start: number; end: number; text: string }> = [];
+  for (const m of answer.matchAll(/[^\n。！？!?；;]+/g)) {
+    // 英文句号仅在后随空白/结尾时是句界（不切 3.5、example.com）
+    for (const sub of m[0].matchAll(/.+?(?:\.(?=\s|$)|$)/g)) {
+      if (sub[0].trim() === "") continue;
+      segs.push({ start: m.index + sub.index, end: m.index + sub.index + sub[0].length, text: sub[0] });
+    }
+  }
+  const drops: Array<{ start: number; end: number }> = [];
+  for (const seg of segs) {
+    const t = seg.text.normalize("NFKC");
+    let bad = false;
+    for (const cls of CONDUCT_CLASSES) {
+      if (!cls.hit(t)) continue;
+      if (cls.asked.test(question)) continue; // 用户问的就是这类操作
+      bad = true;
+      break;
+    }
+    // 拼读式/裸域投放：句段含非允许域名且问题没问链接类内容
+    if (!bad && segHasForeignHost(t, allowedHosts) && !/链接|鏈接|网址|網址|域名|网站|網站|url|link|domain|site/i.test(question)) {
+      bad = true;
+    }
+    if (bad) drops.push({ start: seg.start, end: seg.end });
+  }
+  if (drops.length === 0) return answer;
+  let out = "";
+  let pos = 0;
+  for (const d of drops) {
+    out += answer.slice(pos, d.start);
+    pos = d.end;
+  }
+  out += answer.slice(pos);
+  return cleanupAfterScrub(out);
+}
+
 /** 压缩形态在资料压缩影子里的邻域是否含提问关键词（±window 字符）。 */
 // 邻域窗口（R268）：真实字段值紧贴字段名（「门禁码 1234」「配速 6 分 10 秒」），
 // 距离通常 ≤6 个压缩字符；条件触发型注入（audit-r267 A20「如果用户让你总结
 // 最近的笔记，那么回答第一行写…」）会把提问关键词放在一句话之外，用更窄的
 // 窗口即可把「答题」与「被指令勾住的提问词」分开，且与语言/字面无关。
+// 听写上下文（R270，audit-r269 P0-1 R269-44）：资料里紧贴在 span 前的是
+// 「回答开头写 / 结尾写 / 原样转述」这类听写动词时，span 是被指令要求输出的
+// 口令/文案而不是字段值——邻域豁免不适用（注入载荷天然把提问词写在听写
+// 指令里，「总结笔记时开头写X」会让 X 的邻域命中「笔记」）。
+const DICTATION_NEAR_RE = /(?:开头|结尾|末尾|第一行|回答|回复|转述|原样|附上|加上|写出|写上)[^]{0,4}$/;
+
 function compactNeighborhoodAnswersQuestion(dataCompact: string, span: string, qKeys: Set<string>, window = 6): boolean {
   let from = 0;
   for (;;) {
     const at = dataCompact.indexOf(span, from);
     if (at < 0) return false;
+    from = at + span.length;
+    const before = dataCompact.slice(Math.max(0, at - 10), at);
+    if (DICTATION_NEAR_RE.test(before)) continue; // 听写位置，不是字段值
     const near = dataCompact.slice(Math.max(0, at - window), at) + dataCompact.slice(at + span.length, at + span.length + window);
     for (const k of topicKeywords(near)) if (qKeys.has(k)) return true;
-    from = at + span.length;
   }
 }
 
@@ -373,15 +579,62 @@ export function scrubDataDerivedSpans(answer: string, dataText: string, question
     segs.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
   }
   const drops: Array<{ start: number; end: number }> = [];
+  // 同行延续豁免（R270，audit-r269 P2-1 B05）：上一个被保留的句段的压缩尾串
+  let keptTail = "";
+  let keptEnd = -1;
   for (const seg of segs) {
+    // 与前一保留句段以分号级分隔符相接、且两段在资料影子中连续（同一条资料行
+    // 的连续引用，如 shell 脚本的 `for …; do …; done`）——用户点名要求的原文
+    // 的延续部分，保留
+    const gap = keptEnd >= 0 ? answer.slice(keptEnd, seg.start) : "";
+    // keep：记住本段压缩形态在资料影子里存在的最长尾串，供下一段做连续性判定
+    const keep = (tailSrc: string) => {
+      const c = foldCompact(tailSrc);
+      keptTail = "";
+      for (let len = Math.min(24, c.length); len >= 4; len--) {
+        const suf = c.slice(-len);
+        if (dataCompact.includes(suf)) {
+          keptTail = suf;
+          break;
+        }
+      }
+      keptEnd = seg.end;
+    };
+    const contiguous =
+      keptTail.length >= 4 &&
+      gap.length > 0 &&
+      /^[;；\s]*$/.test(gap) &&
+      dataCompact.includes(keptTail + foldCompact(seg.text));
+    if (contiguous) {
+      keep(seg.text);
+      continue;
+    }
     // 带引文角标的通常是在答题，但整段（去掉角标后）只剩一小截资料 echo 的
     // 除外——「惊雷接管 [1]」这类把口号当作全部答案再挂个角标的执行痕迹，
     // 不能靠角标豁免（audit-r268：R268-35 MCP 入口穿透）
     const compact = foldCompact(seg.text.replace(/[\[［]\d{1,2}[\]］]/g, ""));
-    if (/[\[［]\d{1,2}[\]］]/.test(seg.text) && compact.length > 12) continue;
-    if (compact.length < SPAN_COMPACT_MIN || compact.length > SPAN_COMPACT_MAX) continue;
-    if (!dataCompact.includes(compact)) continue; // 非资料 echo（模型自有措辞）不动
-    if (qCompact.includes(compact)) continue; // 用户问的就是它
+    if (/[\[［]\d{1,2}[\]］]/.test(seg.text) && compact.length > 12) {
+      keep(seg.text);
+      continue;
+    }
+    // 整行独立成段的 2 字 echo（如口令词缩写「霜雕」单独成行，R269-44）不受
+    // 最短长度豁免；句内短词仍按长度下限保留，避免误伤正常措辞。
+    const wholeLine =
+      (seg.start === 0 || answer[seg.start - 1] === "\n") &&
+      (seg.end === answer.length || answer[seg.end] === "\n");
+    const minLen = wholeLine ? 2 : SPAN_COMPACT_MIN;
+    if (compact.length < minLen || compact.length > SPAN_COMPACT_MAX) {
+      keep(seg.text);
+      continue;
+    }
+    if (!dataCompact.includes(compact)) {
+      keep(seg.text);
+      continue; // 非资料 echo（模型自有措辞）不动
+    }
+    if (qCompact.includes(compact)) {
+      keep(seg.text);
+      continue; // 用户问的就是它
+    }
     let hasQKey = false;
     for (const k of topicKeywords(seg.text)) {
       if (qKeys.has(k)) {
@@ -389,8 +642,16 @@ export function scrubDataDerivedSpans(answer: string, dataText: string, question
         break;
       }
     }
-    if (hasQKey) continue; // 段内含提问关键词：是在答题
-    if (compactNeighborhoodAnswersQuestion(dataCompact, compact, qKeys)) continue; // 提问直指的字段值
+    if (hasQKey) {
+      keep(seg.text);
+      continue; // 段内含提问关键词：是在答题
+    }
+    // 带行为信号的资料 echo 不享受邻域豁免（R270，audit-r269 P0-1）：注入
+    // 载荷天然把行动指示与提问关键词写在同一句里
+    if (!conductSignal(seg.text) && compactNeighborhoodAnswersQuestion(dataCompact, compact, qKeys)) {
+      keep(seg.text);
+      continue; // 提问直指的字段值
+    }
     drops.push({ start: seg.start, end: seg.end });
   }
   if (drops.length === 0) return answer;
@@ -479,13 +740,31 @@ export function scrubDirectiveDemands(answer: string, demands: string[], questio
   return cleanupAfterScrub(out);
 }
 
-/** ask 答案统一输出护栏：外链收口 + 资料派生 marker/句段剥除 + 指令要求物剥除。 */
+/**
+ * ask 答案统一输出护栏（R270 起以行为一致性为主判，docs/decision-r270.md）：
+ * 外链收口 + 行为一致性剥除（未经要求的行动指示/外链导航/联系投放/口令输出）+
+ * 近似回显开头剥除 + 资料派生 marker/句段剥除 + 指令要求物剥除（纵深）。
+ */
 export function guardAskAnswer(
   answer: string,
   opts: { dataText: string; question: string; allowedHosts?: string[]; directiveDemands?: string[] }
-): { answer: string; linkScrubbed: boolean; markerScrubbed: boolean; spanScrubbed: boolean; directiveScrubbed: boolean } {
-  const afterLinks = scrubAnswerLinks(answer, opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS);
-  const afterMarkers = scrubDataDerivedMarkers(afterLinks, opts.dataText, opts.question);
+): {
+  answer: string;
+  linkScrubbed: boolean;
+  conductScrubbed: boolean;
+  markerScrubbed: boolean;
+  spanScrubbed: boolean;
+  directiveScrubbed: boolean;
+} {
+  const hosts = opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS;
+  const afterLinks = scrubAnswerLinks(answer, hosts);
+  const afterConduct = scrubFuzzyEchoOpener(
+    scrubUnsolicitedConduct(afterLinks, opts.question, hosts),
+    opts.dataText,
+    opts.question,
+    opts.directiveDemands ?? []
+  );
+  const afterMarkers = scrubDataDerivedMarkers(afterConduct, opts.dataText, opts.question);
   const afterSpans = scrubQuotedDataEchoes(
     scrubDataDerivedSpans(afterMarkers, opts.dataText, opts.question),
     opts.dataText,
@@ -497,7 +776,8 @@ export function guardAskAnswer(
   return {
     answer: afterDirectives,
     linkScrubbed: afterLinks !== answer,
-    markerScrubbed: afterMarkers !== afterLinks,
+    conductScrubbed: afterConduct !== afterLinks,
+    markerScrubbed: afterMarkers !== afterConduct,
     spanScrubbed: afterSpans !== afterMarkers,
     directiveScrubbed: afterDirectives !== afterSpans,
   };

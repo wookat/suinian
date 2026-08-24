@@ -282,7 +282,9 @@ ${
 // Backstop only: force-flags content that clearly contains a real credential VALUE.
 // Mentions of 密码/token/密钥 as concepts (tech docs, tutorials, code) must NOT match.
 const SENSITIVE_ASSIGN_RE =
-  /(密码|口令|密钥|秘钥|私钥|passw(?:or)?d|passphrase|pwd|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|验证码|pin\s?码?)[^\S\n]{0,4}(改成了|改为|设为|设置为|更新为|[:：=是为])[^\S\n]*([^\s，。；,;]{4,})/i;
+  // pwd 需词边界且排除 shell 变量 $PWD（R270，audit-r269 P2-2：`-v $PWD:/app`
+  // 被当成「pwd: /app」凭证赋值，普通 docker 命令整条误判敏感）
+  /(密码|口令|密钥|秘钥|私钥|passw(?:or)?d|passphrase|(?<![$\w])pwd\b|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|验证码|pin\s?码?)[^\S\n]{0,4}(改成了|改为|设为|设置为|更新为|[:：=是为])[^\S\n]*([^\s，。；,;]{4,})/i;
 const SENSITIVE_KEY_LITERAL_RE =
   /\bsk-[A-Za-z0-9_\-]{16,}\b|\bAKIA[0-9A-Z]{16}\b|\bghp_[A-Za-z0-9]{20,}\b|\bxox[bap]-[A-Za-z0-9\-]{10,}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const ID_CARD_RE = /身份证[^\n]{0,10}\d{17}[\dXx]\b|\b\d{17}[Xx]\b/;
@@ -317,7 +319,7 @@ const SENSITIVE_CRED_PAIR_RE =
 // model remains the primary judge; applyTriage restores plaintext when it
 // confidently says non-sensitive.
 const SENSITIVE_TOPIC_RE =
-  /密码|口令|密钥|秘钥|私钥|passw(?:or)?d|passphrase|\bpwd\b|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|\bsecret\b|\btoken\b|验证码|pin\s?码|身份证|银行卡|信用卡|储蓄卡|卡号|账号/i;
+  /密码|口令|密钥|秘钥|私钥|passw(?:or)?d|passphrase|(?<![$\w])pwd\b|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|\bsecret\b|\btoken\b|验证码|pin\s?码|身份证|银行卡|信用卡|储蓄卡|卡号|账号/i;
 
 /**
  * Write-time pre-check for notes awaiting AI triage (fail-closed): true when
@@ -341,6 +343,21 @@ export function detectSensitive(content: string): boolean {
   return [ID_CARD_RE, BANK_CARD_RE, PHONE_RE].some(
     (re) => re.test(content) || re.test(normalized)
   );
+}
+
+// 命令/配置类笔记误判敏感的确定性纠偏（R270，audit-r269 P2-2）：普通 docker/
+// shell/npx 命令行（`docker run --rm -it -v $PWD:/app node:22 bash`）被模型判为
+// 敏感后会系统性从问答中消失。只在确定性凭证检测（detectSensitive）与凭证
+// 主题词（SENSITIVE_TOPIC_RE）双双不命中、且正文呈命令行形态时才纠偏；任何
+// 凭证影子（含密码/token/key/卡号等词或真实密钥形态串）一律不纠（fail-closed）。
+const COMMAND_LINE_RE =
+  /(?:^|\n|：|:|\s)(?:sudo\s+)?(?:docker(?:\s+compose)?|kubectl|git|npm|npx|pnpm|yarn|curl|wget|ssh|scp|rsync|psql|mysql|redis-cli|wrangler|python3?|node|go|cargo|make|tar|gzip|grep|awk|sed|for|while)\s+[^\n]{3,}/;
+
+/** 是否是「不含任何凭证影子的纯命令/配置类笔记」（可安全地反转模型的敏感误判）。 */
+export function isPlainCommandNote(content: string): boolean {
+  if (detectSensitive(content)) return false;
+  if (SENSITIVE_TOPIC_RE.test(content)) return false;
+  return COMMAND_LINE_RE.test(content);
 }
 
 const TAG_SECRET_RE = /^(?=.*\d)[A-Za-z0-9_\-@#$%.]{6,}$|^\d{6,}$|^sk-/i;
@@ -1602,6 +1619,11 @@ export async function triageNoteDetailed(
     result = result
       ? { ...result, is_sensitive: true }
       : { ...FALLBACK_TRIAGE, category: "data", is_sensitive: true };
+  }
+  // 反向纠偏（R270，audit-r269 P2-2）：模型判敏感但正文只是普通命令/配置行，
+  // 无任何凭证影子时取消敏感——否则开发者的命令类笔记会系统性退出问答。
+  if (result?.is_sensitive && isPlainCommandNote(content)) {
+    result = { ...result, is_sensitive: false };
   }
   if (result) return { triage: result, failure: null };
   return { triage: null, failure: text ? "unparseable" : "unavailable" };
