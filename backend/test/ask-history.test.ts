@@ -50,8 +50,9 @@ describe("extractAskTerms", () => {
       { role: "user" as const, content: "flomo 竞品分析" },
       { role: "assistant" as const, content: "答案 [1]" },
     ];
+    // R270：尾部语气词（呢/吗）剥除后作为 LIKE 关键词
     expect(extractAskTerms("它的定价呢", history)).toEqual([
-      "它的定价呢",
+      "它的定价",
       "flomo",
       "竞品分析",
     ]);

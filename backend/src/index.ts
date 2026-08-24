@@ -17,7 +17,7 @@ import {
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
 import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands } from "./prompt-armor";
-import { extractDirectiveDemands } from "./answer-guard";
+import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
 import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads, detachZeroSignalThreadMembers } from "./threads";
@@ -2922,11 +2922,12 @@ export function extractAskTerms(question: string, history: AskHistoryMessage[]):
 // 问句功能词包裹（R189 P2-3）：「我记的空气炸锅是哪条笔记」整句作为 LIKE
 // 关键词永远命中不了笔记——剥掉前后的指代载体词，让内层实词直接召回，
 // 不依赖 LLM 关键词抽取兼作其失败时的兜底。剥后不足 2 字则保留原词。
-const TERM_WRAP_LEAD_RE = /^(?:我(?:记|存|写|拍|收藏)[过了下]{0,2}的?|(?:记|存|写|拍|收藏)[过了下]{0,2}的)(?:那条|这条|一条)?/;
+const TERM_WRAP_LEAD_RE = /^(?:我(?:记|存|写|拍|收藏)[过了下]{0,2}的?|(?:记|存|写|拍|收藏)[过了下]{0,2}的|有什么|有没有|有啥)(?:那条|这条|一条)?/;
 const TERM_WRAP_TAIL_RES = [
   /(?:是|在)?哪一?[条个篇张则]?(?:笔记|记录)?$/,
   /(?:的|那条|这条)(?:笔记|记录)$/,
   /是什么$/,
+  /[吗呢]$/,
 ];
 export function stripTermFunctionalWrap(term: string): string {
   let t = term.replace(TERM_WRAP_LEAD_RE, "");
@@ -3805,8 +3806,20 @@ app.post("/api/ask", async (c) => {
       (financeIntent === "exact"
         ? buildFinanceAggAnswer(stats, fRange?.phrase ?? null, avgDays)
         : buildFinanceFailClosedAnswer(stats, fRange?.phrase ?? null)) + (await pendingTriageHint());
+    // 引用口径与提问口径一致（R270，audit-r269 P1-1 q31）：只问支出/只问收入时，
+    // 引用列表只列对应类目的明细行——收入、资金往来不作为「支出依据」混入。
+    // 问结余/收支的保持全量（合计确实同时依赖两类）。
+    const qExpenseOnly =
+      /支出|花了|花销|开销|开支|消费/.test(intentQuestion) && !/收入|进账|结余|收支/.test(intentQuestion);
+    const qIncomeOnly =
+      /收入|进账|挣|赚/.test(intentQuestion) && !/支出|花|开销|开支|消费|结余|收支/.test(intentQuestion);
+    const refPool = qExpenseOnly
+      ? frows.filter((n) => n.category === "expense")
+      : qIncomeOnly
+        ? frows.filter((n) => n.category === "income")
+        : frows;
     // sensitive finance notes count toward totals (report口径) but never surface as cards
-    const refRows = frows.filter((n) => !n.is_sensitive).slice(0, 10);
+    const refRows = refPool.filter((n) => !n.is_sensitive).slice(0, 10);
     const references = refRows.map((n, i) => ({ index: i + 1, note_id: n.id }));
     const refNotes = refRows.map((n) => noteToJson(n));
     return c.json({
@@ -4111,6 +4124,13 @@ app.post("/api/ask", async (c) => {
     });
   }
   let terms = extractAskTerms(recallQuestion, history);
+  // R270 单字长尾（audit-r269 P1-1 q11：裸问「潮」0 召回）：整问剥掉标点/语气词
+  // 后只剩 1-2 个 CJK 字时，该短词直接作为 LIKE 关键词——单字主题是语义向量
+  // 的固有弱区，子串精确匹配才召得回
+  const bareShortQ = recallQuestion.replace(/[\s,，。？?！!、;；:：的呢吗啊嘛呀]/g, "");
+  if (bareShortQ.length >= 1 && bareShortQ.length <= 2 && /^[\u4e00-\u9fff]+$/.test(bareShortQ) && !terms.includes(bareShortQ)) {
+    terms.unshift(bareShortQ);
+  }
   // semantic recall only depends on recallQuestion — start it here so the
   // embedding call overlaps the keyword-extraction LLM call and keyword SQL
   // instead of running after them (R172 归因：sem 全程串行贡献 150-400ms)
@@ -4498,6 +4518,9 @@ app.post("/api/ask", async (c) => {
   const guardedDelta = onDelta
     ? (text: string) => {
         deltaRaw += text;
+        // R270 fail-closed：抽取器判定资料含指令时，增量停发——只交付行为审计
+        // 终判后的全文（done 事件），意译型执行不经流式先行落地
+        if ((directiveDemands?.length ?? 0) > 0) return;
         const safe = guardAskAnswer(deltaRaw, {
           dataText: askGuardData,
           question: askGuardQuestion,
@@ -4589,10 +4612,27 @@ app.post("/api/ask", async (c) => {
       directiveDemands: demands ?? [],
     });
     if (g.linkScrubbed) console.log("ask: external link scrubbed from answer");
+    if (g.conductScrubbed) console.log("ask: unsolicited conduct scrubbed from answer");
     if (g.markerScrubbed) console.log("ask: data-derived marker scrubbed from answer");
     if (g.spanScrubbed) console.log("ask: data-derived span scrubbed from answer");
     if (g.directiveScrubbed) console.log("ask: directive-demanded text scrubbed from answer");
     answer2 = g.answer.trim() === "" ? "没找到" : g.answer;
+    // R270 语义主判（docs/decision-r270.md 方案 D）：独立 LLM 行为审计对
+    // （问题, 答案句段）判定未经要求的行动指示/外链导航/联系投放/口令输出，
+    // 序号确定性剥除。审计失败时确定性行为门（guardAskAnswer 内）独立生效。
+    if (answer2 !== "没找到") {
+      const tAud = Date.now();
+      const verdict = await auditAnswerConduct(c.env, { question: askGuardQuestion, answer: answer2 }).catch((err) => {
+        console.error("ask: conduct audit failed", err);
+        return null;
+      });
+      askMarks.push(["conaud", Date.now() - tAud]);
+      if (verdict && verdict.length > 0) {
+        console.log(`ask: conduct audit scrubbed ${verdict.length} segment(s)`);
+        const audited = applyConductVerdict(answer2, verdict);
+        answer2 = audited.trim() === "" ? "没找到" : audited;
+      }
+    }
   }
   if (answer2) {
     const amtScrubbed = scrubUnsourcedAmounts(answer2, askScrubSource);

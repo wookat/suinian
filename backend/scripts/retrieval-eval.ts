@@ -7,7 +7,7 @@
  *
  * 目的：把「关键词抽取正则流水线导致的系统性召回缺口」从个案叙述变成可量化指标。
  * 方法：
- *  - 独立 [QA-R268] 账号，导入固定语料（每条一个 key），等 embedding/金额就绪；
+ *  - 独立 [QA-R270] 账号，导入固定语料（每条一个 key），等 embedding/金额就绪；
  *  - 每个问题记：是否召回到期望笔记（recall）、引用集里期望笔记占比（precision）、
  *    是否落入「精确匹配没有找到」型确定性零命中（failClosed）、答案是否含期望文字、
  *    以及是否回显了垃圾关键词（regexLeak，audit-r267 P1-2 的用户可见症状）；
@@ -68,6 +68,13 @@ const NOTES: EvalNote[] = [
   { key: "dentist", content: "预约周五 15:00 牙科复诊，记得带社保卡。", category: "todo", tags: ["就医"] },
   { key: "filter", content: "手冲用的滤纸 V60 比蛋糕杯更适合浅烘，回头换一批。", category: "idea", tags: ["咖啡"] },
   { key: "sqlite", content: "读到一篇讲 SQLite 单文件数据库设计取舍的文章，值得再看一遍。", category: "collect", tags: ["数据库"] },
+  // ---- R270 扩充：R269 独立召回集的失败/精确率 case（audit-r269 §5）----
+  { key: "dehumid", content: "回南天太潮了，考虑买个除湿机放卧室。", category: "idea", tags: ["家电"] },
+  { key: "product-idea", content: "产品点子：给碎念做一个「一句话回顾昨天」的每日卡片。", category: "idea", tags: ["点子"] },
+  { key: "sprint", content: "sprint review 定在周四下午三点，准备演示稿。", category: "todo", tags: ["工作"] },
+  { key: "catfood", content: "고양이 사료 45000원에 샀다.", category: "expense", tags: ["宠物"] },
+  { key: "travel-list", content: "旅行清单：充电器、雨伞、防晒霜、耳塞。", category: "data", tags: ["旅行"] },
+  { key: "gym", content: "办了健身房年卡 1980 元，每周去三次。", category: "expense", tags: ["健身"] },
 ];
 
 interface EvalQuery {
@@ -106,6 +113,13 @@ const QUERIES: EvalQuery[] = [
   { id: "q14", question: "读物方面的支出有多少", expectAny: ["book-1", "book-2"], origin: "历史召回 case（上位词）", gate: true },
   // 负控：确实没有的内容必须拒答，不许因语义放宽而编造
   { id: "q15", question: "我买过汽车吗？花了多少？", expectAny: [], origin: "负控（不得编造）", gate: true },
+  // ---- R270 扩充：R269 独立召回集失败/精确率 case（audit-r269 §5）----
+  { id: "q16", question: "潮", expectAny: ["dehumid"], origin: "audit-r269 §5 q11（单字长尾 0 召回）", gate: true },
+  { id: "q17", question: "有什么产品点子吗？", expectAny: ["product-idea"], origin: "audit-r269 §5 q20（语义近邻误引 n23）", gate: true },
+  { id: "q18", question: "When is the sprint review?", expectAny: ["sprint"], origin: "audit-r269 §5（跨语言召回）", gate: true },
+  { id: "q19", question: "고양이 사료 얼마?", expectAny: ["catfood"], origin: "audit-r269 §5（跨语言召回）", gate: true },
+  { id: "q20", question: "健身上花了多少钱", expectAny: ["gym"], origin: "audit-r269 §5（长尾短词）", gate: true },
+  { id: "q21", question: "我的护照号是多少？", expectAny: [], origin: "audit-r269 §5 z02 负控（不得引用旅行清单）", gate: false },
 ];
 
 const FAIL_CLOSED_RE = /精确匹配|没有找到|没有相关|未找到|找不到|没记过/;
@@ -114,7 +128,7 @@ const GARBAGE_TERMS = ["钱是别人打给", "是别人转给", "从宝转出", 
 
 async function ensureAccount(): Promise<void> {
   if (token) return;
-  accountName = `[QA-R268]retr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  accountName = `[QA-R270]retr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const res = await api<{ api_token: string; user: { id: string } }>("/api/auth/register", {
     method: "POST",
     body: JSON.stringify({ name: accountName, password: `Qa!${Math.random().toString(36).slice(2, 12)}A9` }),
