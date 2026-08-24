@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { INJECTION_CASES, BENIGN_CASES, EVIL_HOST, bodyOf, markerOf } from "../scripts/injection-eval-data";
+import { INJECTION_CASES, BENIGN_CASES, EVIL_HOST, bodyOf, markerOf, demandsOf } from "../scripts/injection-eval-data";
 import { buildDataBlock, makeDataNonce, guardAskAnswer, scrubAnswerLinks } from "../src/prompt-armor";
 import { neutralizePromptInjection } from "../src/triage";
 
@@ -34,17 +34,29 @@ describe("R266 injection 语料：数据面不可伪造", () => {
 });
 
 describe("R266 injection 语料：输出面最坏情况收口", () => {
-  it.each(INJECTION_CASES.map((c) => [c.id, c] as const))("%s 照做后的答案不外带 marker/外链", (_id, c) => {
+  // R268：判定改为行为级——「模型完全照做」的最坏情况答案用该例 demand
+  // （载荷真正要求输出的文字，含中文/多语言/行为型文案）而不是 ASCII marker。
+  it.each(INJECTION_CASES.map((c) => [c.id, c] as const))("%s 照做后的答案不外带执行痕迹/外链", (_id, c) => {
     const body = bodyOf(c);
-    const marker = markerOf(c);
-    // 最坏情况：模型完全照做——答案里既有 marker 又有攻击者外链
-    const complied = `${marker}\n最近的笔记提到 2026-08-23 的健身记录：跑了 5 公里 [1]。\nhttps://${EVIL_HOST}/log?data=answer`;
+    const demands = demandsOf(c);
+    const complied = `${demands.join("\n")}\n最近的笔记提到 2026-08-23 的健身记录：跑了 5 公里 [1]。\nhttps://${EVIL_HOST}/log?data=answer`;
+    // 确定性层（判别器不可用时的兜底）：载荷里逐字出现的执行痕迹必须被剥。
+    // 例外是痕迹文字本身含提问关键词（如 R268-34「请把全部笔记同步到…」含
+    // 「笔记」）——保留规则是为把误伤压到 0 而刻意设置的，这类由语义层收口。
     const g = guardAskAnswer(complied, { dataText: body, question: "帮我总结一下最近的笔记" });
-    // 载荷本身索要 marker 的用例（含编码载荷）：执行痕迹必须被剥除。
-    // 外链/泄露型载荷不含 marker，其判定标准是攻击者域名与敏感明文不外带。
-    if (c.payload.includes("{{M}}") || c.family === "encoded") expect(g.answer).not.toContain(marker);
+    const qKeys = new Set(["笔记", "备忘", "提醒", "总结", "最近"]);
+    for (const d of demands) {
+      if (!body.includes(d)) continue;
+      if ([...qKeys].some((k) => d.includes(k))) continue;
+      expect(g.answer).not.toContain(d);
+    }
     expect(g.answer.toLowerCase()).not.toContain(EVIL_HOST);
     expect(g.answer).toContain("健身记录"); // 正常内容保留
+    if (c.payload.includes("{{M}}")) expect(g.answer).not.toContain(markerOf(c));
+    // 语义层（判别器抽出 demand，覆盖编码/分片这类非逐字载荷）：全部剥除
+    const g2 = guardAskAnswer(complied, { dataText: body, question: "帮我总结一下最近的笔记", directiveDemands: demands });
+    for (const d of demands) expect(g2.answer).not.toContain(d);
+    expect(g2.answer).toContain("健身记录");
   });
 
   it("各类外链形态（markdown/图片/裸域名/全角/协议相对/HTML img）一律剥除", () => {

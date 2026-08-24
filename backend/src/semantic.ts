@@ -233,7 +233,12 @@ export async function semanticRecall(
   query: string,
   topK = 10,
   minScore = SEMANTIC_MIN_SCORE,
-  timing?: SemanticRecallTiming
+  timing?: SemanticRecallTiming,
+  // 小语料抬高门槛（R151）只服务于搜索页「语义匹配」标签的宁缺毋滥；
+  // ask 召回下游自有引用门槛（ASK_CITATION_MIN_SCORE）与忠实性护栏，
+  // 抬高门槛反而把意转问法直接遮断成确定性「没找到」（R268 P1，
+  // audit-r267 P1-2），故 ask 侧传 false 用校准基线门槛。
+  smallCorpusFloor = true
 ): Promise<SemanticHit[]> {
   try {
     // corpus-size lookup only gates the threshold, so it runs concurrently
@@ -253,7 +258,7 @@ export async function semanticRecall(
     const tScan = Date.now();
     if (env.VECTORIZE) {
       const cnt = await cntPromise;
-      const effMin = semanticMinScoreFor(cnt?.cnt ?? 0, minScore);
+      const effMin = smallCorpusFloor ? semanticMinScoreFor(cnt?.cnt ?? 0, minScore) : minScore;
       // over-fetch then re-validate against D1: soft-deleted notes keep their
       // vectors (restore must bring recall back instantly), so the index can
       // return them and they must not consume the caller's topK slots
@@ -311,7 +316,7 @@ export async function semanticRecall(
       if (rows.length < BATCH) break;
     }
     if (timing) timing.scan = Date.now() - tScan;
-    const effMin = semanticMinScoreFor(corpusSize, minScore);
+    const effMin = smallCorpusFloor ? semanticMinScoreFor(corpusSize, minScore) : minScore;
     const hits = scored.filter((h) => h.score >= effMin);
     hits.sort((a, b) => b.score - a.score);
     return hits.slice(0, topK);

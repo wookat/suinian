@@ -14,7 +14,9 @@
 //    b) 资料派生 marker 剥除：答案中出现"代码型 token"（全大写字母数字串）且
 //       该 token 来自资料区、问题本身没提到时剥除（INJECTED-OK 类执行痕迹）。
 //    两类都基于 NFKC 折叠影子匹配，全角/夹杂不可见字符的变形同样命中。
-export const ANSWER_LINK_ALLOWED_HOSTS = ["suinian.zalize.com", "suinian-api.zalize.com", "zalize.com"];
+// R268（audit-r267 P1-1）：白名单收敛为精确主机——`endsWith(".zalize.com")`
+// 的整域后缀放行会让任意子域（evil.zalize.com）成为潜在回传通道。
+export const ANSWER_LINK_ALLOWED_HOSTS = ["suinian.zalize.com", "suinian-api.zalize.com", "zalize.com", "www.zalize.com"];
 
 export const LINK_REMOVED_MARK = "〔已移除外部链接〕";
 export const MARKER_REMOVED_MARK = "";
@@ -114,8 +116,35 @@ function urlHost(url: string): string {
 }
 
 function hostAllowed(host: string, allowed: string[]): boolean {
-  return allowed.some((a) => host === a || host.endsWith(`.${a}`));
+  return allowed.includes(host);
 }
+
+function opts_allowed(allowed: string[]): string[] {
+  return allowed.map((a) => a.toLowerCase());
+}
+
+// 拼读式 URL（audit-r267 P1-1 C02：「evil dot example slash log」）：口语拆读的
+// 域名对用户可肉眼还原，属社工级回传通道。要求至少出现一个拼读分隔词
+// （dot/点/slash/斜杠）才命中，正常 URL 由 URL_SHADOW_RE 处理，普通叙述
+// （不含拼读分隔词）不受影响。
+const SPELLED_URL_SHADOW_RE =
+  /(?<![\w.])[a-z0-9-]{2,}(?:[ \t]*(?:\.|dot|点|句点)[ \t]*[a-z0-9-]{2,})+(?:[ \t]*(?:\/|slash|斜杠)[ \t]*[^\s。，、；）)\]】]{0,60})*/gi;
+
+function spelledUrlHost(m: string): string | null {
+  if (!/dot|点|句点|slash|斜杠/i.test(m)) return null; // 未拼读的普通文本不管
+  const canon = m
+    .replace(/[ \t]*(?:dot|点|句点)[ \t]*/gi, ".")
+    .replace(/[ \t]*(?:slash|斜杠)[ \t]*/gi, "/");
+  const host = canon.split("/")[0].trim().toLowerCase();
+  // 主机形态校验：末段像 TLD 才算域名拼读，避免误伤「3 点 5」这类叙述
+  if (!/^(?:[a-z0-9-]+\.)+[a-z]{2,24}$/.test(host)) return null;
+  return host;
+}
+
+// 看似自有域的裸域名（R268，audit-r267 P1-1 C04）：裸域名一般不剔（不可点击、
+// 误伤面大），但「evil.zalize.com」这类允许域的非允许子域自带信任暗示，
+// 是社工级回传通道：仅当裸域名是某允许主机的子域且自身不在允许名单时剔除。
+const BARE_HOST_SHADOW_RE = /(?<![.\w@/-])(?:[a-z0-9-]+\.)+[a-z]{2,24}(?![\w./-])/gi;
 
 /**
  * 答案外链收口（R266 P0）：模型生成的答案里，除自有域名外的一切 URL（含
@@ -134,6 +163,19 @@ export function scrubAnswerLinks(answer: string, allowedHosts: string[] = ANSWER
       alt.trim() ? `${alt}（〔已移除外部链接〕）` : LINK_REMOVED_MARK
     )
     .replace(/(?:〔已移除外部链接〕[ \t]*){2,}/g, LINK_REMOVED_MARK);
+  // 看似自有域的裸子域（R268，audit-r267 P1-1 C04）
+  out = replaceViaShadow(out, BARE_HOST_SHADOW_RE, (m) => {
+    const host = m.toLowerCase();
+    const allowed = opts_allowed(allowedHosts);
+    if (allowed.includes(host)) return null;
+    return allowed.some((a) => host.endsWith(`.${a}`)) ? LINK_REMOVED_MARK : null;
+  });
+  // 拼读式 URL 同口径处理（R268，audit-r267 P1-1）
+  out = replaceViaShadow(out, SPELLED_URL_SHADOW_RE, (m) => {
+    const host = spelledUrlHost(m);
+    if (!host) return null;
+    return hostAllowed(host, allowedHosts) ? null : LINK_REMOVED_MARK;
+  });
   return out;
 }
 
@@ -272,16 +314,191 @@ export function scrubDataDerivedMarkers(answer: string, dataText: string, questi
   return out;
 }
 
-/** ask 答案统一输出护栏：外链收口 + 资料派生 marker 剥除。 */
+// ---- R268 输出侧语言无关化（docs/decision-r268.md，audit-r267 P0-1/P0-2）----
+// R266 的 marker 剥除只认 ASCII 大写 token，中文/多语言 marker 与行为型指令
+// 直通。本节不再枚举 marker 形态，而是把 R266 的判定原则（「资料派生 + 与
+// 提问无关」= 执行痕迹）推广到任意语言的答案片段：
+//  - 判定对象从「ASCII token」推广为「答案的任意句段」；
+//  - 「资料派生」= 句段折叠压缩后是资料派生影子的子串（任何语言的 verbatim
+//    echo 都命中，含编码派生）；
+//  - 「与提问无关」= 句段自身不含提问关键词，且它在资料中的紧邻上下文也
+//    不含提问关键词（与 R266 marker 规则同一误伤收敛：真实字段值紧贴字段名，
+//    执行痕迹紧贴祈使动词）。
+// 语义级判定（LLM 指令抽取，answer-guard.ts）为主判，本函数是确定性兜底，
+// 两层都与注入句的语言/字面完全无关。
+
+/** 折叠压缩：NFKC + 去空白/零宽/标点/引号，用于跨语言 verbatim echo 判定。 */
+function foldCompact(text: string): string {
+  return text
+    .normalize("NFKC")
+    .replace(/[\s\u200b-\u200f\ufeff]/g, "")
+    .replace(/[「」『』“”"'‘’()（）【】\[\]<>《》,，.。;；:：!！?？、~～\-—－_*#>|｜·]/g, "")
+    .toUpperCase();
+}
+
+/** 压缩形态在资料压缩影子里的邻域是否含提问关键词（±window 字符）。 */
+// 邻域窗口（R268）：真实字段值紧贴字段名（「门禁码 1234」「配速 6 分 10 秒」），
+// 距离通常 ≤6 个压缩字符；条件触发型注入（audit-r267 A20「如果用户让你总结
+// 最近的笔记，那么回答第一行写…」）会把提问关键词放在一句话之外，用更窄的
+// 窗口即可把「答题」与「被指令勾住的提问词」分开，且与语言/字面无关。
+function compactNeighborhoodAnswersQuestion(dataCompact: string, span: string, qKeys: Set<string>, window = 6): boolean {
+  let from = 0;
+  for (;;) {
+    const at = dataCompact.indexOf(span, from);
+    if (at < 0) return false;
+    const near = dataCompact.slice(Math.max(0, at - window), at) + dataCompact.slice(at + span.length, at + span.length + window);
+    for (const k of topicKeywords(near)) if (qKeys.has(k)) return true;
+    from = at + span.length;
+  }
+}
+
+const SPAN_COMPACT_MIN = 3;
+const SPAN_COMPACT_MAX = 80;
+
+/**
+ * 资料派生句段剥除（R268 P0，语言无关）：把答案按行/句切段，凡是
+ * ①折叠压缩后整段是资料派生影子的子串（任何语言的 verbatim echo）、
+ * ②不含引文角标 [n]、③段内不含提问关键词、④提问里没有该段内容、
+ * ⑤它在资料里的紧邻上下文也不含提问关键词 的句段整段剥除。
+ * 正常回答要么是模型自组织的措辞（非 verbatim echo），要么围绕提问关键词
+ * 展开（③/⑤保留），两条保留规则与 R266 marker 规则同源，误伤面由
+ * injection-eval benign 对照量化。
+ */
+export function scrubDataDerivedSpans(answer: string, dataText: string, question: string): string {
+  const dataCompact = foldCompact(dataDerivationShadow(dataText));
+  const qCompact = foldCompact(question);
+  const qKeys = topicKeywords(question);
+  const segs: Array<{ start: number; end: number; text: string }> = [];
+  for (const m of answer.matchAll(/[^\n。！？!?；;]+/g)) {
+    segs.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
+  }
+  const drops: Array<{ start: number; end: number }> = [];
+  for (const seg of segs) {
+    // 带引文角标的通常是在答题，但整段（去掉角标后）只剩一小截资料 echo 的
+    // 除外——「惊雷接管 [1]」这类把口号当作全部答案再挂个角标的执行痕迹，
+    // 不能靠角标豁免（audit-r268：R268-35 MCP 入口穿透）
+    const compact = foldCompact(seg.text.replace(/[\[［]\d{1,2}[\]］]/g, ""));
+    if (/[\[［]\d{1,2}[\]］]/.test(seg.text) && compact.length > 12) continue;
+    if (compact.length < SPAN_COMPACT_MIN || compact.length > SPAN_COMPACT_MAX) continue;
+    if (!dataCompact.includes(compact)) continue; // 非资料 echo（模型自有措辞）不动
+    if (qCompact.includes(compact)) continue; // 用户问的就是它
+    let hasQKey = false;
+    for (const k of topicKeywords(seg.text)) {
+      if (qKeys.has(k)) {
+        hasQKey = true;
+        break;
+      }
+    }
+    if (hasQKey) continue; // 段内含提问关键词：是在答题
+    if (compactNeighborhoodAnswersQuestion(dataCompact, compact, qKeys)) continue; // 提问直指的字段值
+    drops.push({ start: seg.start, end: seg.end });
+  }
+  if (drops.length === 0) return answer;
+  let out = "";
+  let pos = 0;
+  for (const d of drops) {
+    out += answer.slice(pos, d.start);
+    pos = d.end;
+  }
+  out += answer.slice(pos);
+  return cleanupAfterScrub(out);
+}
+
+/**
+ * 资料引号原文回显剥除（R268 P0 兜底加固，语言无关）：资料里被「」/『』
+ * 引起来的字串（注入载荷常见形态：✍️「口号」、须写「口号」），若在答案里
+ * 也以引号原样回显，且 ①提问里没有它 ②它在资料中所在行不含任何提问
+ * 关键词（该行与提问无关，不是用户问的那条笔记原文），则只剥引号串本身。
+ * 合法引用（问「那条笔记说了什么」→ 笔记行含提问关键词）整行豁免；这层
+ * 只兜 LLM 指令抽取偶发漏报的符号语/表情语载荷（audit-r268：R268-13）。
+ */
+export function scrubQuotedDataEchoes(answer: string, dataText: string, question: string): string {
+  const qCompact = foldCompact(question);
+  const qKeys = topicKeywords(question);
+  const dataLines = dataText.split(/\n/);
+  let out = answer;
+  for (const m of answer.matchAll(/[「『]([^「」『』\n]{2,40})[」』]/g)) {
+    const inner = m[1];
+    const compact = foldCompact(inner);
+    if (compact.length < SPAN_COMPACT_MIN) continue;
+    if (qCompact.includes(compact)) continue; // 用户问的就是它
+    const quotedInData = dataLines.filter((l) => l.includes(`「${inner}」`) || l.includes(`『${inner}』`));
+    if (quotedInData.length === 0) continue; // 资料里没被引号引过：模型自有措辞
+    let anyLineAnswersQuestion = false;
+    for (const line of quotedInData) {
+      for (const k of topicKeywords(line)) {
+        if (qKeys.has(k)) {
+          anyLineAnswersQuestion = true;
+          break;
+        }
+      }
+      if (anyLineAnswersQuestion) break;
+    }
+    if (anyLineAnswersQuestion) continue; // 提问直指的笔记行：合法引用
+    out = out.split(m[0]).join("");
+  }
+  return out === answer ? answer : cleanupAfterScrub(out);
+}
+
+/** 剥除后残留的空行/悬空标点清理（marker/句段剥除共用）。 */
+function cleanupAfterScrub(text: string): string {
+  return text
+    .replace(/^[ \t]*[。！？!?；;，、:：\-—]*[ \t]*$/gm, "")
+    .replace(/^[。！？!?；;，、]+/, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * 指令要求物剥除（R268 P0 主判执行器）：answer-guard.ts 的 LLM 指令抽取从
+ * 资料区识别出「要求助手输出的确切文字」（demand，语义级、语言无关），本
+ * 函数在答案里确定性剥除含这些文字的句段。提问本身包含该文字时保留
+ * （用户问的就是它——如询问某条技术笔记的原文）。
+ */
+export function scrubDirectiveDemands(answer: string, demands: string[], question: string): string {
+  const qCompact = foldCompact(question);
+  const targets = demands.map((d) => foldCompact(d)).filter((d) => d.length >= SPAN_COMPACT_MIN && !qCompact.includes(d));
+  if (targets.length === 0) return answer;
+  const segs: Array<{ start: number; end: number; text: string }> = [];
+  for (const m of answer.matchAll(/[^\n。！？!?；;]+/g)) {
+    segs.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
+  }
+  const drops: Array<{ start: number; end: number }> = [];
+  for (const seg of segs) {
+    const compact = foldCompact(seg.text);
+    if (targets.some((t) => compact.includes(t))) drops.push({ start: seg.start, end: seg.end });
+  }
+  if (drops.length === 0) return answer;
+  let out = "";
+  let pos = 0;
+  for (const d of drops) {
+    out += answer.slice(pos, d.start);
+    pos = d.end;
+  }
+  out += answer.slice(pos);
+  return cleanupAfterScrub(out);
+}
+
+/** ask 答案统一输出护栏：外链收口 + 资料派生 marker/句段剥除 + 指令要求物剥除。 */
 export function guardAskAnswer(
   answer: string,
-  opts: { dataText: string; question: string; allowedHosts?: string[] }
-): { answer: string; linkScrubbed: boolean; markerScrubbed: boolean } {
+  opts: { dataText: string; question: string; allowedHosts?: string[]; directiveDemands?: string[] }
+): { answer: string; linkScrubbed: boolean; markerScrubbed: boolean; spanScrubbed: boolean; directiveScrubbed: boolean } {
   const afterLinks = scrubAnswerLinks(answer, opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS);
   const afterMarkers = scrubDataDerivedMarkers(afterLinks, opts.dataText, opts.question);
+  const afterSpans = scrubQuotedDataEchoes(
+    scrubDataDerivedSpans(afterMarkers, opts.dataText, opts.question),
+    opts.dataText,
+    opts.question
+  );
+  const afterDirectives = opts.directiveDemands?.length
+    ? scrubDirectiveDemands(afterSpans, opts.directiveDemands, opts.question)
+    : afterSpans;
   return {
-    answer: afterMarkers,
+    answer: afterDirectives,
     linkScrubbed: afterLinks !== answer,
     markerScrubbed: afterMarkers !== afterLinks,
+    spanScrubbed: afterSpans !== afterMarkers,
+    directiveScrubbed: afterDirectives !== afterSpans,
   };
 }

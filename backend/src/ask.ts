@@ -334,7 +334,9 @@ function applyStrips(text: string, res: RegExp[]): string {
 // 复合名词保护（R234 P3-3，audit-r233 §P3-3：「信用卡还了多少钱」被逐字
 // 剥成「信卡还」注入 LIKE 必零命中）：含财务动词字的常见复合名词先占位
 // 保护、剥离后还原，避免词中字被当作动词剥掉。
-const PROTECTED_COMPOUND_RE = /信用卡|花呗|日用品|公交|交通|住宿/g;
+// 「余额宝」是产品名（R268，audit-r267 §2.2：「从余额宝转出」被剥成
+// 「从宝转出」注入 LIKE 必零命中），与「余额」聚合词同形，先占位保护。
+const PROTECTED_COMPOUND_RE = /信用卡|花呗|余额宝|零钱通|日用品|公交|交通|住宿/g;
 
 /** 剥离财务/聚合/时间措辞（STRIP_RES），复合名词占位保护后再剥。 */
 function stripFinanceWording(text: string): string {
@@ -1616,7 +1618,7 @@ export function financeListIntent(question: string): FinanceListDirection | null
 }
 
 const FINANCE_LIST_STRIP_RE =
-  /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出来|列出|列举|列一下|列个?清单|罗列|拉个?清单|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|笔|记|账|的|所有|全部|我们?|你|咱|把|都|请|麻烦|帮我?|给我|收到|到账|款/g;
+  /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出来|列出|列举|列一下|列个?清单|罗列|拉个?清单|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|逐[笔条项个]?|一笔笔|一条条|挨个|笔|记|账|的|所有|全部|我们?|你|咱|把|都|请|麻烦|帮我?|给我|收到|到账|款/g;
 
 function financeListResidual(question: string): string {
   return applyStrips(question, [...STRIP_RES, FINANCE_LIST_STRIP_RE]);
@@ -2516,6 +2518,8 @@ export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null
       })
       .filter(Boolean);
     if (avgParts.length > 0) md += `\n按 ${avgDays} 天折算，平均每天${avgParts.join("；")}。`;
+    // R268（audit-r267 P3-2）：只覆盖 1 天时日均=单日总额，如实提示参考意义
+    if (avgParts.length > 0 && avgDays === 1) md += `（记录仅覆盖 1 天，日均参考意义有限。）`;
   }
   if (stats.unknownAmount > 0) md += `\n（另有 ${stats.unknownAmount} 笔未识别出金额，未计入合计。）`;
   if (stats.transferCount > 0) md += `\n（另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支合计。）`;
@@ -2680,6 +2684,14 @@ export function rerankBasisCandidates<T extends { id: string }>(
  * erodes trust when suggested.
  */
 export const ASK_SUGGESTION_MIN_SCORE = 0.4;
+
+/**
+ * 主题词单独向量 vs 笔记向量的建议门槛（R268）：问句整句向量会被「买过/
+ * 花了」这类动词带高（「买过汽车吗」擦到买书笔记 ≥0.5），主题词单独比对
+ * 才分得开——bge-m3 实测：汽车 vs 买书笔记 ≤0.418，读物/书上 vs 买书笔记
+ * ≥0.486，取中点 0.45。低于此线的笔记与问句主题无关，不当建议（宁缺毋滥）。
+ */
+export const ASK_SUGGESTION_TOPIC_MIN_SCORE = 0.45;
 
 const CITE_RE = /[\[［](\d{1,2})[\]］]/g;
 
