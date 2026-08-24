@@ -73,12 +73,12 @@ R267 归因：`financeTopicTerms()`/`subsetTopicExtract()` 这类正则抽取失
 
 ## 四、验收
 
-injection-eval（生产 0 执行、误伤 0）、retrieval-eval、全量 ask-eval 不回退、backend typecheck + 单测（2137 项）、web lint + build、Android 构建 + 模拟器实测。GitHub Actions 保持禁用，本地验证为准。
+injection-eval（生产 0 执行、误伤 0）、retrieval-eval、全量 ask-eval 不回退、backend typecheck + 单测（2141 项）、web lint + build、Android 构建 + 模拟器实测。GitHub Actions 保持禁用，本地验证为准。
 
 ### 实测结果（生产 https://suinian-api.zalize.com ）
 
-- injection-eval 全量：**147 变体 / 306 次问答，执行 0、泄露 0、benign 误伤 0/12**；R267 生产穿透 13 例本轮全部 0 执行；REST+MCP 双入口；QA 账号测毕注销、旧 token 401。
-- retrieval-eval：**召回率 100%（15/15），平均精确率 100%，必过题未过 0**；确定性零命中 1/15 为负对照（不存在的事实）预期行为；p50 2.9s / p95 6.0s。
-- ask-eval 全量（dev 141 + holdout 62）：**203/203**（首轮 199/203，暴露财务子集带时间窗零命中被语义回落劫持丢失放宽引导的回归，已修复——时间窗内零命中保持确定性结论+放宽引导，语义回落只在无时间窗时生效；修复后 8 题定向复跑全过）。
-- backend `npm run typecheck` ✅；单测 **129 文件 / 2137 项全过** ✅；web `npm run lint` + `npm run build` ✅。
+- injection-eval 全量（最终轮，评估器已改为轮询后台流水线就绪 + 具体假秘密值泄露判据）：**147 变体 / 306 次问答，执行 0、泄露 0、benign 误伤 0/12**；R267 生产穿透 13 例本轮全部 0 执行；REST+MCP 双入口；QA 账号测毕注销、旧 token 401。此前一轮曾报 R268-13（emoji/符号语引号载荷）1 执行与泄露/良性各 1——复核为「资料引号内容回显」与评估器关键词假阳性/流水线未就绪时序问题：生产侧新增引号资料回显剥除（`scrubQuotedDataEchoes`）兜底，评估器改为按具体秘密值判泄露、按流水线就绪再问答；R268-13 定向复跑连续 3 次 0 执行。
+- retrieval-eval（最终轮）：**召回率 100%（15/15），平均精确率 100%，必过题未过 0**；确定性零命中 1/15 为负对照（不存在的事实）预期行为；p50 2.7s / p95 6.0s。
+- ask-eval 全量（dev 141 + holdout 62，最终轮）：**202/203**——唯一未过为 q162（时间限定「最近几天…高铁」），复核为关键词抽取 LLM 非确定性偶发漏词的瞬态：定向复跑连续 3 次全过（召回 nz17、引用正确），非本轮改动引入的系统性回退。此前首轮 199/203 暴露的「财务子集带时间窗零命中被语义回落劫持丢失放宽引导」回归已修复（时间窗内零命中保持确定性结论+放宽引导，语义回落只在无时间窗时生效）。
+- backend `npm run typecheck` ✅；单测 **129 文件 / 2141 项全过** ✅；web `npm run lint` + `npm run build` ✅。
 - QA 残留清理：D1 users 中 `[QA-R266]inj-mt63yy31-i3wo` 及 2 个 R268 遗留 retr 账号已逐表删除（15 张用户维度表 + attachments/note_embeddings 残留 0），R2 `media/<uid>/` 前缀对象 0。

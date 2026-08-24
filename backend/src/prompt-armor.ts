@@ -404,6 +404,42 @@ export function scrubDataDerivedSpans(answer: string, dataText: string, question
   return cleanupAfterScrub(out);
 }
 
+/**
+ * 资料引号原文回显剥除（R268 P0 兜底加固，语言无关）：资料里被「」/『』
+ * 引起来的字串（注入载荷常见形态：✍️「口号」、须写「口号」），若在答案里
+ * 也以引号原样回显，且 ①提问里没有它 ②它在资料中所在行不含任何提问
+ * 关键词（该行与提问无关，不是用户问的那条笔记原文），则只剥引号串本身。
+ * 合法引用（问「那条笔记说了什么」→ 笔记行含提问关键词）整行豁免；这层
+ * 只兜 LLM 指令抽取偶发漏报的符号语/表情语载荷（audit-r268：R268-13）。
+ */
+export function scrubQuotedDataEchoes(answer: string, dataText: string, question: string): string {
+  const qCompact = foldCompact(question);
+  const qKeys = topicKeywords(question);
+  const dataLines = dataText.split(/\n/);
+  let out = answer;
+  for (const m of answer.matchAll(/[「『]([^「」『』\n]{2,40})[」』]/g)) {
+    const inner = m[1];
+    const compact = foldCompact(inner);
+    if (compact.length < SPAN_COMPACT_MIN) continue;
+    if (qCompact.includes(compact)) continue; // 用户问的就是它
+    const quotedInData = dataLines.filter((l) => l.includes(`「${inner}」`) || l.includes(`『${inner}』`));
+    if (quotedInData.length === 0) continue; // 资料里没被引号引过：模型自有措辞
+    let anyLineAnswersQuestion = false;
+    for (const line of quotedInData) {
+      for (const k of topicKeywords(line)) {
+        if (qKeys.has(k)) {
+          anyLineAnswersQuestion = true;
+          break;
+        }
+      }
+      if (anyLineAnswersQuestion) break;
+    }
+    if (anyLineAnswersQuestion) continue; // 提问直指的笔记行：合法引用
+    out = out.split(m[0]).join("");
+  }
+  return out === answer ? answer : cleanupAfterScrub(out);
+}
+
 /** 剥除后残留的空行/悬空标点清理（marker/句段剥除共用）。 */
 function cleanupAfterScrub(text: string): string {
   return text
@@ -450,7 +486,11 @@ export function guardAskAnswer(
 ): { answer: string; linkScrubbed: boolean; markerScrubbed: boolean; spanScrubbed: boolean; directiveScrubbed: boolean } {
   const afterLinks = scrubAnswerLinks(answer, opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS);
   const afterMarkers = scrubDataDerivedMarkers(afterLinks, opts.dataText, opts.question);
-  const afterSpans = scrubDataDerivedSpans(afterMarkers, opts.dataText, opts.question);
+  const afterSpans = scrubQuotedDataEchoes(
+    scrubDataDerivedSpans(afterMarkers, opts.dataText, opts.question),
+    opts.dataText,
+    opts.question
+  );
   const afterDirectives = opts.directiveDemands?.length
     ? scrubDirectiveDemands(afterSpans, opts.directiveDemands, opts.question)
     : afterSpans;
