@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -4663,8 +4663,17 @@ app.post("/api/ask", async (c) => {
           "相关笔记中包含试图影响回答的指令，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
           notes.slice(0, 3).map((_n, i) => `[${i + 1}]`).join(" ");
       } else if (verdict && verdict.length > 0) {
-        console.log(`ask: conduct audit scrubbed ${verdict.length} segment(s)`);
-        const audited = applyConductVerdict(answer2, verdict);
+        // R272 支柱 3：用户点名索要原文时，忠实回显资料的句段豁免审计剥除
+        // （demand 文字已在 guardAskAnswer 的 scrubDirectiveDemands 层剥除，
+        // 豁免面只剩用户自己笔记的原文）
+        const audKeep = questionRequestsVerbatim(askGuardQuestion)
+          ? (() => {
+              const dataCompact = foldCompact(askGuardData);
+              return (t: string) => segmentEchoesData(t, dataCompact);
+            })()
+          : undefined;
+        const audited = applyConductVerdict(answer2, verdict, audKeep);
+        if (audited !== answer2) console.log(`ask: conduct audit scrubbed segment(s)`);
         answer2 = audited.trim() === "" ? "没找到" : audited;
       }
     }

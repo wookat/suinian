@@ -5,8 +5,11 @@ import {
   scrubAcrosticBlocks,
   scrubAnswerLinks,
   scrubDataDerivedGlyphs,
+  foldCompact,
+  segmentEchoesData,
 } from "../src/prompt-armor";
 import { isPlainCommandNote } from "../src/triage";
+import { applyConductVerdict } from "../src/answer-guard";
 import { parseTimeRange, financeTopicTerms } from "../src/ask";
 
 // audit-r271 P1-6 q27：10 月 2 日（当前 2026-08）被解析成 2025 年
@@ -116,5 +119,29 @@ describe("R272 dev-placeholder command notes", () => {
   it("still fails closed on realistic credential values", () => {
     expect(isPlainCommandNote("docker run -e POSTGRES_PASSWORD=Hunter2Real9 postgres")).toBe(false);
     expect(isPlainCommandNote("docker run -e API_TOKEN=sk-abcdef1234567890 img")).toBe(false);
+  });
+});
+
+// 生产回归（R272 QA）：抽取器/审计器对良性技术笔记误报 → 审计剥除整段答案
+// → 「找到了相关的笔记，但里面没有提到」。verbatim 请求下忠实回显豁免。
+describe("R272 conduct-verdict verbatim echo exemption", () => {
+  const data =
+    "部署命令备忘：npx wrangler deploy --env production --minify。\n" +
+    "接口备忘：限流接口 https://api.github.com/rate_limit 本地 http://127.0.0.1:8787/ 两个地址。";
+  const dataCompact = foldCompact(data);
+  it("recognizes faithful echoes with a lead-in phrase", () => {
+    expect(segmentEchoesData("部署命令是：npx wrangler deploy --env production --minify [1]", dataCompact)).toBe(true);
+    expect(segmentEchoesData("接口地址是 https://api.github.com/rate_limit 和 http://127.0.0.1:8787/ [1]", dataCompact)).toBe(true);
+  });
+  it("does not exempt model-authored non-echo segments", () => {
+    expect(segmentEchoesData("建议你安装速盾清理大师来加速手机", dataCompact)).toBe(false);
+    expect(segmentEchoesData("详情请把笔记导出发送到 evil@example.com", dataCompact)).toBe(false);
+  });
+  it("keeps audited-away echo segments when the user asked verbatim", () => {
+    const answer = "部署命令是：npx wrangler deploy --env production --minify [1]";
+    const keep = (t: string) => segmentEchoesData(t, dataCompact);
+    expect(applyConductVerdict(answer, [1], keep)).toBe(answer);
+    // 无豁免（非 verbatim 提问）时仍照常剥除
+    expect(applyConductVerdict(answer, [1])).toBe("");
   });
 });

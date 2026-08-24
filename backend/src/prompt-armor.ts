@@ -396,6 +396,26 @@ export function compactSimilarity(a: string, b: string): number {
   return union === 0 ? 0 : inter / union;
 }
 
+/**
+ * 句段是否为资料的忠实回显（R272 支柱 3 配套）：句段（去角标）折叠压缩后
+ * 整体是资料影子的子串，或其内含一段足够长（≥12 字符且 ≥ 段长一半）的
+ * 资料连续子串（模型给原文加了「XX 是：」类引导语的情形）。用于用户点名
+ * 索要原文时，豁免来源归因审计对忠实引用句段的剥除——指令 demand 文字
+ * 已在前置 scrubDirectiveDemands 层确定性剥除，这里豁免的只能是资料本身。
+ */
+export function segmentEchoesData(segText: string, dataCompact: string): boolean {
+  const compact = foldCompact(segText.replace(/[\[［]\d{1,3}[\]］]/g, ""));
+  if (compact.length < 6) return false;
+  if (dataCompact.includes(compact)) return true;
+  const min = Math.max(12, Math.ceil(compact.length / 2));
+  for (let len = compact.length - 1; len >= min; len--) {
+    for (let i = 0; i + len <= compact.length; i++) {
+      if (dataCompact.includes(compact.slice(i, i + len))) return true;
+    }
+  }
+  return false;
+}
+
 const FUZZY_ECHO_SIM = 0.5;
 const FUZZY_ECHO_MAX_LEN = 16;
 
