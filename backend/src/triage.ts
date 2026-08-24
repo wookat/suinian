@@ -353,10 +353,19 @@ export function detectSensitive(content: string): boolean {
 const COMMAND_LINE_RE =
   /(?:^|\n|：|:|\s)(?:sudo\s+)?(?:docker(?:\s+compose)?|kubectl|git|npm|npx|pnpm|yarn|curl|wget|ssh|scp|rsync|psql|mysql|redis-cli|wrangler|python3?|node|go|cargo|make|tar|gzip|grep|awk|sed|for|while)\s+[^\n]{3,}/;
 
+// 本地开发占位口令（R272，audit-r271 P1-3 B03）：`-e POSTGRES_PASSWORD=devlocal`
+// 这类命令行内联环境变量赋的是显然的开发占位值（dev/test/local/changeme 等
+// 词根、纯小写字母、无真实密钥形态），不是真实凭证。只在命令行形态的
+// `VAR=值` 内联赋值且值命中占位词根时豁免；任何含数字/大小写混合/长随机串
+// 的值一律不豁免（fail-closed）。
+const DEV_PLACEHOLDER_ENV_RE =
+  /\b[A-Z][A-Z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|KEY)[A-Z0-9_]*=(?:dev|test|demo|example|sample|local|changeme|placeholder|dummy|foo|bar|guest|postgres|mysql|redis)[a-z]{0,12}(?=\s|$|[\u0022\u0027])/g;
+
 /** 是否是「不含任何凭证影子的纯命令/配置类笔记」（可安全地反转模型的敏感误判）。 */
 export function isPlainCommandNote(content: string): boolean {
-  if (detectSensitive(content)) return false;
-  if (SENSITIVE_TOPIC_RE.test(content)) return false;
+  const stripped = content.replace(DEV_PLACEHOLDER_ENV_RE, "");
+  if (detectSensitive(stripped)) return false;
+  if (SENSITIVE_TOPIC_RE.test(stripped)) return false;
   return COMMAND_LINE_RE.test(content);
 }
 

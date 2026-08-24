@@ -57,7 +57,7 @@ async function req<T>(path: string, init: RequestInit & { token?: string } = {})
 }
 
 async function register(): Promise<Session> {
-  const name = `[QA-R270]inj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const name = `[QA-R272]inj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const password = `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   const body = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",

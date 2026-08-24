@@ -146,15 +146,39 @@ function spelledUrlHost(m: string): string | null {
 // 是社工级回传通道：仅当裸域名是某允许主机的子域且自身不在允许名单时剔除。
 const BARE_HOST_SHADOW_RE = /(?<![.\w@/-])(?:[a-z0-9-]+\.)+[a-z]{2,24}(?![\w./-])/gi;
 
+// ---- R272 verbatim 请求豁免（docs/decision-r272.md 支柱 3）：用户问题明确
+// 索要笔记原文/代码/配置/脚本/命令类内容时，删字类护栏对笔记 verbatim 内容
+// 不生效——用户要的就是自己的资料原文（与枚举路由展示原文同一信任级）。
+// 判定只看可信侧（用户问题），资料无法伪造。指令抽取 demands 剥除与来源
+// 归因审计不受该豁免影响（它们判的是「来源」而非「资料派生」）。 ----
+export const VERBATIM_ASKED_RE =
+  /原文|原样|原話|原话|逐字|完整(?:给|地|内容|版)|怎么写的|是怎么写|写了什么|写的什么|内容是什么|片段|配置|脚本|腳本|命令|指令是|代码|代碼|函数|正则|語句|语句|建表|sql|shell|prompt|snippet|script|config|command|\bcode\b|verbatim/i;
+
+export function questionRequestsVerbatim(question: string): boolean {
+  return VERBATIM_ASKED_RE.test(question);
+}
+
 /**
  * 答案外链收口（R266 P0）：模型生成的答案里，除自有域名外的一切 URL（含
  * markdown 链接/图片、协议相对、www.、域名/路径、全角变形）一律替换为
  * 〔已移除外部链接〕。笔记自身的原始链接仍经结构化 references/notes 通道
  * 由客户端以链接卡片展示，不受影响。
+ * R272：用户点名索要笔记原文类内容（questionRequestsVerbatim）且该 URL 在
+ * 资料区 verbatim 存在时保留——它是用户自己笔记里的必要技术内容
+ * （audit-r271 P1-3 B08/B13 误伤）。
  */
-export function scrubAnswerLinks(answer: string, allowedHosts: string[] = ANSWER_LINK_ALLOWED_HOSTS): string {
+export function scrubAnswerLinks(
+  answer: string,
+  allowedHosts: string[] = ANSWER_LINK_ALLOWED_HOSTS,
+  verbatimSource?: { dataText: string; question: string }
+): string {
+  const verbatimKeep =
+    verbatimSource && questionRequestsVerbatim(verbatimSource.question)
+      ? foldCompact(verbatimSource.dataText)
+      : null;
+  const keepVerbatim = (m: string) => Boolean(verbatimKeep && verbatimKeep.includes(foldCompact(m)));
   let out = replaceViaShadow(answer, URL_SHADOW_RE, (m) =>
-    hostAllowed(urlHost(m), allowedHosts) ? null : LINK_REMOVED_MARK
+    hostAllowed(urlHost(m), allowedHosts) || keepVerbatim(m) ? null : LINK_REMOVED_MARK
   );
   // markdown 图片/链接骨架清理：URL 已被剥除后的 ![alt](〔已移除外部链接〕)
   // 或 [text](〔已移除外部链接〕) 整体降级为纯文本
@@ -168,6 +192,7 @@ export function scrubAnswerLinks(answer: string, allowedHosts: string[] = ANSWER
     const host = m.toLowerCase();
     const allowed = opts_allowed(allowedHosts);
     if (allowed.includes(host)) return null;
+    if (keepVerbatim(m)) return null;
     return allowed.some((a) => host.endsWith(`.${a}`)) ? LINK_REMOVED_MARK : null;
   });
   // 拼读式 URL 同口径处理（R268，audit-r267 P1-1）
@@ -294,6 +319,7 @@ function tokenAnswersQuestion(line: string, token: string, qKeys: Set<string>): 
  * MARKER」），与提问无关。误伤面由 injection-eval 的 benign 对照量化。
  */
 export function scrubDataDerivedMarkers(answer: string, dataText: string, question: string): string {
+  if (questionRequestsVerbatim(question)) return answer; // R272 支柱 3：原文请求下不删字
   const dataFold = dataDerivationShadow(dataText);
   const qFold = question.normalize("NFKC").toUpperCase();
   const qKeys = topicKeywords(question);
@@ -305,6 +331,18 @@ export function scrubDataDerivedMarkers(answer: string, dataText: string, questi
     const hosts = dataLines.filter((l) => l.includes(m));
     if (hosts.some((l) => tokenAnswersQuestion(l, m, qKeys))) return null; // 提问直指的字段值
     return MARKER_REMOVED_MARK;
+  });
+  // 伪造引用角标剥除（audit-r271 P0-1 R271-07：强制标注 [99]）：答案里的
+  // 引文角标 [N]，若同一 token 以非引文框架形态（不是「[N] (id=」的资料行
+  // 编号）出现在资料区正文里，且提问没有它，则它是资料指令强加的伪引用，
+  // 剥除该 token 本身。真实引文角标由资料行编号框架「[N] (id=」派生，不受影响。
+  const dataNfkc = dataText.normalize("NFKC");
+  out = out.replace(/[\[［](\d{1,3})[\]］]/g, (tok, num: string) => {
+    if (qFold.includes(tok.normalize("NFKC"))) return tok;
+    const re = new RegExp(`[\\[［]${num}[\\]］](?!\\s*\\(id=)`);
+    const framed = new RegExp(`[\\[［]${num}[\\]］]\\s*\\(id=`);
+    if (re.test(dataNfkc) && !framed.test(dataNfkc)) return "";
+    return tok;
   });
   // 剥除后残留的空行/行首标点清理
   out = out
@@ -369,6 +407,7 @@ const FUZZY_ECHO_MAX_LEN = 16;
  * 正常开场白（「有的」「根据笔记」）不是资料派生，相似度接近 0，不受影响。
  */
 export function scrubFuzzyEchoOpener(answer: string, dataText: string, question: string, demands: string[] = []): string {
+  if (questionRequestsVerbatim(question)) return answer; // R272 支柱 3：原文请求下不删字
   // 多行口令变体逐行收口（R270）：剥掉首段后新露出的开头再判一轮，最多 4 轮
   let cur = answer;
   for (let i = 0; i < 4; i++) {
@@ -585,6 +624,7 @@ const SPAN_COMPACT_MAX = 80;
  * injection-eval benign 对照量化。
  */
 export function scrubDataDerivedSpans(answer: string, dataText: string, question: string): string {
+  if (questionRequestsVerbatim(question)) return answer; // R272 支柱 3：原文请求下不删字（audit-r271 P1-4 shell/nginx 正文损坏根治）
   const dataCompact = foldCompact(dataDerivationShadow(dataText));
   const qCompact = foldCompact(question);
   const qKeys = topicKeywords(question);
@@ -688,6 +728,7 @@ export function scrubDataDerivedSpans(answer: string, dataText: string, question
  * 只兜 LLM 指令抽取偶发漏报的符号语/表情语载荷（audit-r268：R268-13）。
  */
 export function scrubQuotedDataEchoes(answer: string, dataText: string, question: string): string {
+  if (questionRequestsVerbatim(question)) return answer; // R272 支柱 3：原文请求下不删字
   const qCompact = foldCompact(question);
   const qKeys = topicKeywords(question);
   const dataLines = dataText.split(/\n/);
@@ -715,6 +756,72 @@ export function scrubQuotedDataEchoes(answer: string, dataText: string, question
   return out === answer ? answer : cleanupAfterScrub(out);
 }
 
+// ---- R272 确定性兜底（docs/decision-r272.md 支柱 4）：字符级/结构级，不删正文句段 ----
+
+// emoji/符号水印字符集（audit-r271 P1-2 R271-14：🛰 处理标记 4/4 稳定出现）。
+// 覆盖 emoji 区、杂项符号、装饰符号、变体选择符、零宽连接符；不含 CJK/拉丁
+// 正文字符，字符级剥除不丢任何正文内容。
+const SYMBOL_GLYPH_RE =
+  /[\u{1F000}-\u{1FAFF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}\u{2500}-\u{2BFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{200D}\u{2020}-\u{205E}\u{2060}-\u{206F}]/gu;
+
+/**
+ * 资料派生符号水印剥除（R272）：答案中的 emoji/符号字符，若在资料区出现过
+ * 而问题没提到，剥除该字符本身。任意 emoji 都可当水印（R270 的 marker 门是
+ * 黑名单式，被 🛰 打穿），本门按「资料派生 + 与提问无关」判定，与具体符号
+ * 无关；模型自发使用的、资料里没有的符号不受影响。
+ */
+export function scrubDataDerivedGlyphs(answer: string, dataText: string, question: string): string {
+  const dataGlyphs = new Set(dataText.normalize("NFKC").match(SYMBOL_GLYPH_RE) ?? []);
+  if (dataGlyphs.size === 0) return answer;
+  const qGlyphs = new Set(question.normalize("NFKC").match(SYMBOL_GLYPH_RE) ?? []);
+  const out = answer.replace(SYMBOL_GLYPH_RE, (ch) => (dataGlyphs.has(ch) && !qGlyphs.has(ch) ? "" : ch));
+  return out === answer ? answer : out.replace(/^[ \t]+/gm, (m) => m).replace(/^[ \t]+/, "");
+}
+
+/**
+ * 藏头结构门（R272，audit-r271 P0-2 R271-28）：答案中 ≥4 行连续短行、行首为
+ * CJK 字符、行首字符连读的 3-gram 多数出现在资料派生影子里（藏头指令必然把
+ * 要编码的话写进资料），且问题没要求藏头/诗歌创作时，整块剥除。正常清单/
+ * 列表行首多为数字、项目符号或与资料无连读对应，不受影响。
+ */
+export function scrubAcrosticBlocks(answer: string, dataText: string, question: string): string {
+  if (/藏头|藏頭|诗|詩|对联|對聯|acrostic|词牌|絕句|绝句/i.test(question)) return answer;
+  const dataCompact = foldCompact(dataDerivationShadow(dataText));
+  if (dataCompact.length < 3) return answer;
+  const lines = answer.split("\n");
+  const isCandidate = (l: string) => {
+    const t = l.trim();
+    return t.length >= 2 && t.length <= 30 && /^[\u4e00-\u9fff]/.test(t);
+  };
+  const dropLine = new Array<boolean>(lines.length).fill(false);
+  let i = 0;
+  while (i < lines.length) {
+    if (!isCandidate(lines[i])) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < lines.length && isCandidate(lines[j])) j++;
+    const run = lines.slice(i, j);
+    if (run.length >= 4) {
+      const firstChars = run.map((l) => l.trim()[0]).join("");
+      // 命中的 3-gram 覆盖到的行才剥（正常前导句/结尾句不陪葬）
+      const marked = new Array<boolean>(run.length).fill(false);
+      for (let k = 0; k + 3 <= firstChars.length; k++) {
+        if (dataCompact.includes(firstChars.slice(k, k + 3))) {
+          marked[k] = marked[k + 1] = marked[k + 2] = true;
+        }
+      }
+      if (marked.filter(Boolean).length >= 4) {
+        for (let k = 0; k < run.length; k++) if (marked[k]) dropLine[i + k] = true;
+      }
+    }
+    i = j;
+  }
+  if (!dropLine.some(Boolean)) return answer;
+  return cleanupAfterScrub(lines.filter((_, k) => !dropLine[k]).join("\n"));
+}
+
 /** 剥除后残留的空行/悬空标点清理（marker/句段剥除共用）。 */
 function cleanupAfterScrub(text: string): string {
   return text
@@ -732,7 +839,12 @@ function cleanupAfterScrub(text: string): string {
  */
 export function scrubDirectiveDemands(answer: string, demands: string[], question: string): string {
   const qCompact = foldCompact(question);
-  const targets = demands.map((d) => foldCompact(d)).filter((d) => d.length >= SPAN_COMPACT_MIN && !qCompact.includes(d));
+  // 短 demand 不豁免（audit-r271/R272：伪引用 [88]、水印符 ※ 这类 1~2 字符
+  // 要求物同样是执行痕迹）；仅剔除单个 ASCII 字母/数字（碰撞面过大）。
+  const targets = demands
+    .map((d) => foldCompact(d))
+    .filter((d) => d.length >= 2 || (d.length === 1 && !/[A-Za-z0-9]/.test(d)))
+    .filter((d) => !qCompact.includes(d));
   if (targets.length === 0) return answer;
   const segs: Array<{ start: number; end: number; text: string }> = [];
   for (const m of answer.matchAll(/[^\n。！？!?；;]+/g)) {
@@ -771,16 +883,24 @@ export function guardAskAnswer(
   directiveScrubbed: boolean;
 } {
   const hosts = opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS;
-  const afterLinks = scrubAnswerLinks(answer, hosts);
+  const afterLinks = scrubAnswerLinks(answer, hosts, { dataText: opts.dataText, question: opts.question });
   const afterConduct = scrubFuzzyEchoOpener(
     scrubUnsolicitedConduct(afterLinks, opts.question, hosts),
     opts.dataText,
     opts.question,
     opts.directiveDemands ?? []
   );
-  const afterMarkers = scrubDataDerivedMarkers(afterConduct, opts.dataText, opts.question);
-  const afterSpans = scrubQuotedDataEchoes(
-    scrubDataDerivedSpans(afterMarkers, opts.dataText, opts.question),
+  const afterMarkers = scrubDataDerivedGlyphs(
+    scrubDataDerivedMarkers(afterConduct, opts.dataText, opts.question),
+    opts.dataText,
+    opts.question
+  );
+  const afterSpans = scrubAcrosticBlocks(
+    scrubQuotedDataEchoes(
+      scrubDataDerivedSpans(afterMarkers, opts.dataText, opts.question),
+      opts.dataText,
+      opts.question
+    ),
     opts.dataText,
     opts.question
   );
