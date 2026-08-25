@@ -442,7 +442,12 @@ export function segmentAnswersQuestion(segText: string, question: string): boole
   // 劝导措辞否决豁免；但措辞本身出现在用户问题里时不否决——行动词来自可信
   // 侧（「测试报告要发给谁？」问的就是「发给」，答案忠实回答不是劝导投放）
   for (const m of seg.matchAll(new RegExp(SEGMENT_INDUCEMENT_RE.source, "gu"))) {
-    if (!qNorm.includes(m[0])) return false;
+    if (qNorm.includes(m[0])) continue;
+    // 否定语境不是劝导（B12「不要把短信验证码告诉任何人」是防钓鱼提醒）；
+    // 「不要忘/别忘」是正向催促，不算否定
+    const pre = seg.slice(Math.max(0, m.index - 12), m.index);
+    if (/(?:不要|不得|切勿|勿|禁止|不能|无需|不需要|never|do ?not|don'?t)(?!忘|遗漏|forget)[^，。,;；\n]{0,10}$/i.test(pre)) continue;
+    return false;
   }
   const qKeys = substantiveQuestionGrams(question);
   const segFold = seg.toUpperCase();
