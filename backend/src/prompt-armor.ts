@@ -416,6 +416,59 @@ export function segmentEchoesData(segText: string, dataCompact: string): boolean
   return false;
 }
 
+/**
+ * 句段是否围绕提问关键词作答（R272：audit-r271 P1-3 B02 型误伤）。抽取器
+ * 已裁定资料无指令（demands === []）时，来源归因审计对「含提问关键词」的
+ * 句段的剥除视为误报豁免——资料侧无指令则句段行为不可能派生自资料指令，
+ * 该分支的审计只是冗余层，不应误伤正常答题句。
+ */
+export function segmentAnswersQuestion(segText: string, question: string): boolean {
+  if (SEGMENT_INDUCEMENT_RE.test(segText.normalize("NFKC"))) return false;
+  const qKeys = substantiveQuestionGrams(question);
+  const segFold = segText.normalize("NFKC").toUpperCase();
+  for (const k of qKeys) if (segFold.includes(k)) return true;
+  return false;
+}
+
+/**
+ * 泛指问法词（「总结最近的笔记」「有哪些备忘和提醒」）不构成豁免依据：
+ * 任何笔记内容都天然含「笔记/记录」这类词，注入句借泛词搭车即可逃过
+ * 审计（R272 生产实测 R272-19/24）。先把泛词与虚词字符打掩码，只用
+ * 未掩码的相邻字符构造 2-gram（实质话题词），拉丁词照常保留。
+ */
+const GENERIC_QUESTION_WORDS = [
+  "笔记", "备忘", "提醒", "总结", "最近", "记录", "内容", "事情", "事项", "哪些", "什么", "一下", "帮我", "收藏", "问题",
+];
+const PARTICLE_CHARS = new Set("的了是有和与在把被我你他她它这那吗呢吧啊还都就也又请到条个些之其");
+
+function substantiveQuestionGrams(question: string): Set<string> {
+  const fold = question.normalize("NFKC").toUpperCase();
+  const keys = new Set<string>();
+  for (const m of fold.matchAll(/[A-Z0-9]{2,}/g)) keys.add(m[0]);
+  const cjkChars: string[] = [];
+  for (const ch of fold) if (/[\u4e00-\u9fff]/.test(ch)) cjkChars.push(ch);
+  const cjk = cjkChars.join("");
+  const masked = new Array<boolean>(cjk.length).fill(false);
+  for (const w of GENERIC_QUESTION_WORDS) {
+    for (let at = cjk.indexOf(w); at >= 0; at = cjk.indexOf(w, at + 1)) {
+      for (let i = 0; i < w.length; i++) masked[at + i] = true;
+    }
+  }
+  for (let i = 0; i < cjk.length; i++) if (PARTICLE_CHARS.has(cjk[i])) masked[i] = true;
+  for (let i = 0; i + 2 <= cjk.length; i++) {
+    if (!masked[i] && !masked[i + 1]) keys.add(cjk.slice(i, i + 2));
+  }
+  return keys;
+}
+
+/**
+ * 行动劝导特征（fail-closed 兜底）：被来源归因审计剥除的句段若含这些
+ * 诱导用户执行动作的措辞，即使命中提问关键词也不豁免——审计误报的
+ * 正常答题句不应含对用户的行动指令（R270-04 型：借关键词搭车外传劝导）。
+ */
+const SEGMENT_INDUCEMENT_RE =
+  /发给|发送到|寄给|提交给|上传|转发|导出.{0,16}(发|上传|提交)|联系(客服|管理员|我们)|添加|加微信|加\s*QQ|安装|下载并|访问\s*(http|www)|打开链接|点击(链接|下载|安装)|扫码|转账|汇款|充值|验证码|账户校验|完成(校验|验证|认证)|客服/u;
+
 const FUZZY_ECHO_SIM = 0.5;
 const FUZZY_ECHO_MAX_LEN = 16;
 
@@ -856,8 +909,21 @@ function cleanupAfterScrub(text: string): string {
  * 资料区识别出「要求助手输出的确切文字」（demand，语义级、语言无关），本
  * 函数在答案里确定性剥除含这些文字的句段。提问本身包含该文字时保留
  * （用户问的就是它——如询问某条技术笔记的原文）。
+ * R272 verbatim 豁免（audit-r271 P1-3 B18 型误伤）：用户点名索要原文、
+ * 含 demand 的句段是资料的忠实回显、且该 demand 在资料里不处于听写
+ * 位置（「回答结尾请写 X」类指令的 X）时保留——prompt 模板类笔记本身
+ * 就是指令文本，抽取器会把它报成 demand，但用户主动索要时忠实引用属于
+ * 契约内行为；听写位 demand（资料命令附加的文案）即使在 verbatim 请求
+ * 下也仍剥除——它不是用户索要的笔记内容本体。
  */
-export function scrubDirectiveDemands(answer: string, demands: string[], question: string): string {
+export function scrubDirectiveDemands(
+  answer: string,
+  demands: string[],
+  question: string,
+  verbatimData?: string
+): string {
+  const verbatimCompact =
+    verbatimData !== undefined && questionRequestsVerbatim(question) ? foldCompact(verbatimData) : null;
   const qCompact = foldCompact(question);
   // 短 demand 不豁免（audit-r271/R272：伪引用 [88]、水印符 ※ 这类 1~2 字符
   // 要求物同样是执行痕迹）；仅剔除单个 ASCII 字母/数字（碰撞面过大）。
@@ -871,9 +937,45 @@ export function scrubDirectiveDemands(answer: string, demands: string[], questio
     segs.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
   }
   const drops: Array<{ start: number; end: number }> = [];
+  // 部分回显命中（R272：R272-23 型「答案只落地 demand 的后半句」逃逸）：
+  // demand 足够长时，其任一 ≥max(6, 半长) 的连续子串出现在句段里也算执行痕迹
+  const hitsPartial = (compact: string, t: string): boolean => {
+    if (t.length < 8) return false;
+    const min = Math.max(6, Math.ceil(t.length / 2));
+    for (let len = t.length - 1; len >= min; len--) {
+      for (let i = 0; i + len <= t.length; i++) {
+        if (compact.includes(t.slice(i, i + len))) return true;
+      }
+    }
+    return false;
+  };
+  // 听写位判定：target 在资料压缩影子里的每处出现都紧跟在听写动词后
+  // （「回答结尾请写」类）则为听写文案，verbatim 豁免不适用
+  const dictationOnly = (t: string): boolean => {
+    if (!verbatimCompact) return true;
+    let from = 0;
+    let found = false;
+    for (;;) {
+      const at = verbatimCompact.indexOf(t, from);
+      if (at < 0) break;
+      found = true;
+      from = at + t.length;
+      const before = verbatimCompact.slice(Math.max(0, at - 10), at);
+      if (!DICTATION_NEAR_RE.test(before)) return false;
+    }
+    return found;
+  };
   for (const seg of segs) {
     const compact = foldCompact(seg.text);
-    if (targets.some((t) => compact.includes(t))) drops.push({ start: seg.start, end: seg.end });
+    const hit = targets.filter((t) => compact.includes(t) || hitsPartial(compact, t));
+    if (hit.length === 0) continue;
+    if (
+      verbatimCompact &&
+      segmentEchoesData(seg.text, verbatimCompact) &&
+      hit.every((t) => !dictationOnly(t))
+    )
+      continue;
+    drops.push({ start: seg.start, end: seg.end });
   }
   if (drops.length === 0) return answer;
   let out = "";
@@ -925,7 +1027,7 @@ export function guardAskAnswer(
     opts.question
   );
   const afterDirectives = opts.directiveDemands?.length
-    ? scrubDirectiveDemands(afterSpans, opts.directiveDemands, opts.question)
+    ? scrubDirectiveDemands(afterSpans, opts.directiveDemands, opts.question, opts.dataText)
     : afterSpans;
   return {
     answer: afterDirectives,

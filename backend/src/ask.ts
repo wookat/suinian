@@ -2785,7 +2785,7 @@ export function reconcileAskCitations(
   };
 }
 
-const REFUSAL_PHRASE_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没有笔记|没提到|未提及|没有提及/;
+const REFUSAL_PHRASE_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没有笔记|没有?提到|未提及|没有提及/;
 
 // ---- 否定话术实体后校验（R200，audit-r199 P3-1）----
 // R198 已在 prompt 中约束「没提到」类否定话术只能复述问句/片段里出现过的
@@ -2873,7 +2873,10 @@ export function isRefusalAnswer(answer: string): boolean {
   if (!REFUSAL_PHRASE_RE.test(stripped)) return false;
   if (/但是?|不过|然而|however/i.test(stripped)) return false;
   const sentences = stripped.split(/[。！？!?\n]/).map((s) => s.trim()).filter(Boolean);
-  return sentences.length === 1;
+  if (sentences.length === 1) return true;
+  // 多句全为否认（「没找到。 [1] 中没有提到……」）同样是拒答：任一句引入了
+  // 非否认内容才算正常答案
+  return sentences.every((s) => REFUSAL_PHRASE_RE.test(s));
 }
 
 export const NO_ANSWER_TEXT = "没找到相关笔记。";

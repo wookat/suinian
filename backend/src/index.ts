@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -4533,11 +4533,18 @@ app.post("/api/ask", async (c) => {
   void directivePromise.finally(() => {
     directiveSettled = true;
   });
+  // 模型偶发把逐行 datamarking 前缀「D<nonce>｜」或资料区片段元数据头
+  // 「(id=<uuid>, <时间戳>, <分类>…)」抄进回答（B15/R268-08 生产实测），
+  // 确定性剥除；nonce 随机、uuid 形态固定，正常正文不可能撞上
+  const stripDataMarks = (t: string) =>
+    t
+      .replace(new RegExp(`D${dataNonce}｜`, "gi"), "")
+      .replace(/[(（]\s*id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[^)）]*[)）]/gi, "");
   const flushDelta = onDelta
     ? () => {
         if (!directiveSettled) return; // 裁决前缓冲（fail-closed）
         if (directiveDemands === null || directiveDemands.length > 0) return; // 抽取失败/含指令：无增量
-        const safe = guardAskAnswer(deltaRaw, {
+        const safe = guardAskAnswer(stripDataMarks(deltaRaw), {
           dataText: askGuardData,
           question: askGuardQuestion,
           directiveDemands: [],
@@ -4620,7 +4627,7 @@ app.post("/api/ask", async (c) => {
   const scrubBodies = notes.map((n) => `${n.title ?? ""}\n${n.content}`).join("\n");
   const askScrubSource = `${question}\n${recallQuestion}\n${scrubBodies}\n${graphTriples.join("\n")}`;
   // 输出侧防执行护栏（R264 P1 层 4）：结构控制 token/不可见字符不外带
-  if (answer2) answer2 = scrubModelOutputInjectionArtifacts(answer2);
+  if (answer2) answer2 = scrubModelOutputInjectionArtifacts(stripDataMarks(answer2));
   // R266 输出侧收口：外链零输出（回传通道）+ 资料派生 marker 剥除（执行痕迹）。
   // 与变体形态无关：不猜哪句是注入，只封死攻击必需的外带通道。
   if (answer2) {
@@ -4665,13 +4672,24 @@ app.post("/api/ask", async (c) => {
       } else if (verdict && verdict.length > 0) {
         // R272 支柱 3：用户点名索要原文时，忠实回显资料的句段豁免审计剥除
         // （demand 文字已在 guardAskAnswer 的 scrubDirectiveDemands 层剥除，
-        // 豁免面只剩用户自己笔记的原文）
-        const audKeep = questionRequestsVerbatim(askGuardQuestion)
+        // 豁免面只剩用户自己笔记的原文）；另外抽取器已裁定资料无指令
+        // （demands === []）时，含提问关键词的正常答题句也豁免——资料无
+        // 指令则句段行为不可能派生自资料指令，该分支的审计只是冗余层
+        // （audit-r271 P1-3 B02 型误伤）
+        const verbatimKeep = questionRequestsVerbatim(askGuardQuestion)
           ? (() => {
               const dataCompact = foldCompact(askGuardData);
               return (t: string) => segmentEchoesData(t, dataCompact);
             })()
           : undefined;
+        const noDirectiveKeep =
+          demands !== null && demands.length === 0
+            ? (t: string) => segmentAnswersQuestion(t, askGuardQuestion)
+            : undefined;
+        const audKeep =
+          verbatimKeep || noDirectiveKeep
+            ? (t: string) => Boolean(verbatimKeep?.(t) || noDirectiveKeep?.(t))
+            : undefined;
         const audited = applyConductVerdict(answer2, verdict, audKeep);
         if (audited !== answer2) console.log(`ask: conduct audit scrubbed segment(s)`);
         answer2 = audited.trim() === "" ? "没找到" : audited;
