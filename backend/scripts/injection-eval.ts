@@ -57,7 +57,7 @@ async function req<T>(path: string, init: RequestInit & { token?: string } = {})
 }
 
 async function register(): Promise<Session> {
-  const name = `[QA-R270]inj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const name = `[QA-R272]inj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const password = `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   const body = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",
@@ -68,7 +68,16 @@ async function register(): Promise<Session> {
 
 /** 注销账号并验证旧 token 立刻失效（自清，与 testing-prod-ui 口径一致）。 */
 async function destroy(s: Session): Promise<void> {
-  await req("/api/auth/me", { method: "DELETE", token: s.token });
+  // 生产偶发瞬时 500（D1 高并发窗口）：重试而不是让整轮 eval 中途崩溃遗留账号
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await req("/api/auth/me", { method: "DELETE", token: s.token });
+      break;
+    } catch (err) {
+      if (attempt >= 4) throw err;
+      await new Promise((r) => setTimeout(r, attempt * 2000));
+    }
+  }
   const res = await fetch(`${API}/api/notes?limit=1`, { headers: { authorization: `Bearer ${s.token}` } });
   if (res.status !== 401) throw new Error(`账号 ${s.name} 注销后旧 token 未失效：${res.status}`);
 }
@@ -310,7 +319,14 @@ async function main() {
         for (const n of listed.notes ?? []) await req(`/api/notes/${n.id}`, { method: "DELETE", token: s.token });
         await saveNoteRest(s, b.note);
         await waitPipeline(s);
-        const answer = await ask(s, b.question);
+        let answer = await ask(s, b.question);
+        // 「没找到相关笔记」是检索索引未就绪的形态（waitPipeline 只等入库，
+        // 向量索引偶有额外延迟）；护栏剥空的形态是「没找到」两字，不重试——
+        // 只对检索未就绪重试，误伤判定口径不放松
+        for (let retry = 0; retry < 2 && answer.startsWith("没找到相关笔记"); retry++) {
+          await new Promise((r) => setTimeout(r, 10_000));
+          answer = await ask(s, b.question);
+        }
         const missing = b.expect.filter((e) => !answer.includes(e));
         if (b.expectAny && !b.expectAny.some((e) => answer.includes(e))) missing.push(b.expectAny.join("或"));
         benign.push({ id: b.id, question: b.question, answer, missing });

@@ -119,8 +119,14 @@ function useSwStatus(): SwStatus | null {
         const reg = await navigator.serviceWorker.getRegistration()
         let offlineReady = false
         if ("caches" in window) {
+          // 只看 key 存在会把「空 precache」当成健康（audit-r271 P1-8 假健康态）：
+          // 必须确认 precache 里确实有条目
           const keys = await caches.keys()
-          offlineReady = keys.some((k) => k.includes("precache"))
+          const precacheKey = keys.find((k) => k.includes("precache"))
+          if (precacheKey) {
+            const entries = await (await caches.open(precacheKey)).keys()
+            offlineReady = entries.length > 0
+          }
         }
         if (!cancelled)
           setStatus({
@@ -156,15 +162,20 @@ function SwStatusCard() {
   // 安装失败终态（R178 P1-1）：已注册但既无 active 也无 installing —— 新 SW
   // 安装失败后变 redundant，以前会永远显示「安装中」，无失败可见性也无出路
   const failed = status.registered && !status.active && !status.installing
+  // 假健康故障态（audit-r271 P1-8）：SW 已 active 但 Workbox precache 缺失/为空，
+  // 离线刷新必然 ERR_FAILED 且不能自愈——按故障处理，给出同一条修复出路
+  const degraded = status.active && !status.offlineReady && !status.installing && !status.waiting
   const text = !status.supported
     ? "当前浏览器不支持离线缓存（Service Worker）"
     : ok
       ? `离线可用：页面已缓存，断网也能打开${status.controlling ? "" : "（刷新后接管本页）"}${status.waiting ? "；新版本已就绪，刷新页面完成更新" : ""}`
       : failed
         ? "离线缓存安装失败（可能是网络问题），可点击重试"
-        : status.registered
-          ? "离线缓存正在安装中，稍后刷新可生效"
-          : "离线缓存未注册，刷新页面重试"
+        : degraded
+          ? "离线缓存不完整（页面预缓存缺失），断网将无法打开页面，可点击修复"
+          : status.registered
+            ? "离线缓存正在安装中，稍后刷新可生效"
+            : "离线缓存未注册，刷新页面重试"
   // 注销卡死的 registration 可能永远不返回（SW 组件 wedge），10s 超时给出
   // 失败原因与用户可自救的路径，而不是无限「重试中…」
   const retry = async () => {
@@ -210,10 +221,10 @@ function SwStatusCard() {
         {ok ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
         {text}
       </p>
-      {failed && (
+      {(failed || degraded) && (
         <>
           <Button size="sm" variant="outline" className="mt-2" disabled={retrying} onClick={() => void retry()}>
-            {retrying ? "重试中…" : "重试安装离线缓存"}
+            {retrying ? "重试中…" : failed ? "重试安装离线缓存" : "修复离线缓存"}
           </Button>
           {retryError && <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">{retryError}</p>}
         </>

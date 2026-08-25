@@ -75,6 +75,27 @@ export function ReloadPrompt() {
       setTimeout(() => {
         if (navigator.onLine && !r.active && !r.installing) void r.update().catch(() => {})
       }, INSTALL_RETRY_DELAY_MS)
+      // 假健康自愈（audit-r271 P1-8）：SW 已 active 但 Workbox precache 缺失/
+      // 为空——离线刷新必然 ERR_FAILED 且 update() 不会重装（脚本未变）。
+      // 检测到即做一次完整修复：注销全部 registration → 清空 caches →
+      // cache-busting 重新注册（不强刷页面，下次加载即恢复）
+      setTimeout(() => {
+        void (async () => {
+          try {
+            if (!navigator.onLine || !r.active || r.installing || r.waiting || !("caches" in window)) return
+            const keys = await caches.keys()
+            const precacheKey = keys.find((k) => k.includes("precache"))
+            const entries = precacheKey ? await (await caches.open(precacheKey)).keys() : []
+            if (entries.length > 0) return
+            const regs = await navigator.serviceWorker.getRegistrations()
+            await Promise.all(regs.map((reg) => reg.unregister().catch(() => false)))
+            await Promise.all(keys.map((k) => caches.delete(k).catch(() => false)))
+            await navigator.serviceWorker.register(`/sw.js?reinstall=${Date.now()}`, { scope: "/" })
+          } catch {
+            // 自愈失败不打扰用户；设置页仍有可见的手动修复出路
+          }
+        })()
+      }, INSTALL_RETRY_DELAY_MS)
     },
     // SW 注册失败意味着离线缓存/推送不可用：可见化降级提示而非静默失效
     // （R194 P2-3），同时上报失败原因并退避自动重试，成功即撤横幅

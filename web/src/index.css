@@ -116,4 +116,23 @@
       sans-serif;
     -webkit-font-smoothing: antialiased;
   }
+
+  /* 触屏设备上把小控件的命中区扩到 44×44px（WCAG 2.5.5 / Apple HIG），
+     视觉尺寸不变：用伪元素向外扩展命中区，不影响大于 44px 的控件 */
+  @media (pointer: coarse) {
+    button,
+    [role="button"],
+    [role="checkbox"],
+    [role="switch"] {
+      position: relative;
+    }
+    button::after,
+    [role="button"]::after,
+    [role="checkbox"]::after,
+    [role="switch"]::after {
+      content: "";
+      position: absolute;
+      inset: min(0px, calc((100% - 44px) / 2));
+    }
+  }
 }

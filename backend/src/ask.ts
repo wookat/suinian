@@ -240,7 +240,13 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
       day1 >= 1 && day1 <= 31 && (day2 === null || (day2 >= 1 && day2 <= 31))
     ) {
       const sh = new Date(now.getTime() + SH_OFFSET_MS);
-      const y = yAbs ?? (mon1 - 1 > sh.getUTCMonth() ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear());
+      // 具体到「M月D号」的问法多指最近一次该日期：未来 ≤60 天视为今年的
+      // 临近计划（如车票/预约），更远的未来月份才回退到去年（audit-r271 P1-6 q27）
+      let y = yAbs ?? sh.getUTCFullYear();
+      if (yAbs === null && mon1 - 1 > sh.getUTCMonth()) {
+        const aheadMs = Date.UTC(sh.getUTCFullYear(), mon1 - 1, day1) - Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), sh.getUTCDate());
+        if (aheadMs > 60 * 24 * 3600 * 1000) y = sh.getUTCFullYear() - 1;
+      }
       const start = new Date(Date.UTC(y, mon1 - 1, day1) - SH_OFFSET_MS);
       const end =
         day2 !== null
@@ -1216,6 +1222,10 @@ function subsetTopicExtract(question: string): string[] | null {
   // 疑问代词与「这个主题」类元话语是纯框架不是主题（R262 P2-3，audit-r261：
   // 「买过什么书」抽出「什么书」、「书这个主题上」整串注入 LIKE 必零命中）
   residual = residual.replace(/些?什么|啥/g, "").replace(/[这那]个?(?:主题|话题|方面|类型|类别)上?/g, "");
+  // 「在 X 上」介词框架先整体脱壳（audit-r271 P2-3 q11：「在吃喝上」经动词
+  // 剥离被误啃成「喝上」）：介词「在」与框架尾「上」都不是主题，X 才是
+  const frame = residual.match(/在([\u4e00-\u9fa5A-Za-z0-9]{1,8})上/);
+  if (frame && /在[^\s，。？?]{1,8}上/.test(question)) residual = residual.replace(frame[0], frame[1]);
   // 剥掉开头的购买/消费动词（「买咖啡」→「咖啡」），但不能把「吃喝」这类
   // 本身就是主题的词剥空；「买过/买了」的体貌助词一并剥（R262 P2-3）
   const stripped = residual.replace(/^[买在喝吃点逛去为给用出]{1,2}[了过]?/, "").replace(/^(?:你|您|咱)+/, "");
@@ -2775,7 +2785,7 @@ export function reconcileAskCitations(
   };
 }
 
-const REFUSAL_PHRASE_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没有笔记|没提到|未提及|没有提及/;
+const REFUSAL_PHRASE_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没有笔记|没有?提到|未提及|没有提及/;
 
 // ---- 否定话术实体后校验（R200，audit-r199 P3-1）----
 // R198 已在 prompt 中约束「没提到」类否定话术只能复述问句/片段里出现过的
@@ -2863,7 +2873,10 @@ export function isRefusalAnswer(answer: string): boolean {
   if (!REFUSAL_PHRASE_RE.test(stripped)) return false;
   if (/但是?|不过|然而|however/i.test(stripped)) return false;
   const sentences = stripped.split(/[。！？!?\n]/).map((s) => s.trim()).filter(Boolean);
-  return sentences.length === 1;
+  if (sentences.length === 1) return true;
+  // 多句全为否认（「没找到。 [1] 中没有提到……」）同样是拒答：任一句引入了
+  // 非否认内容才算正常答案
+  return sentences.every((s) => REFUSAL_PHRASE_RE.test(s));
 }
 
 export const NO_ANSWER_TEXT = "没找到相关笔记。";
