@@ -16,7 +16,7 @@
 // （scrubDataDerivedSpans：资料派生 verbatim 句段剥除，同样语言无关）。
 import type { Env } from "./types";
 import { chatComplete } from "./ai";
-import { makeDataNonce, buildDataBlock } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, splitSegmentsFenceAware } from "./prompt-armor";
 
 /** 判别器预算：与生成并行启动，不在关键路径上串行增加延迟。 */
 export const DIRECTIVE_EXTRACT_BUDGET_MS = 12_000;
@@ -54,14 +54,13 @@ export function parseDirectiveDemands(raw: string | null): string[] | null {
 /** 行为审计预算：串行在生成之后，预算收紧避免拖长尾。 */
 export const CONDUCT_AUDIT_BUDGET_MS = 8_000;
 
-/** 答案按句段切分（与 prompt-armor 各剥除层同一口径）。 */
+/** 答案按句段切分（与 prompt-armor 各剥除层同一口径）。
+ * R274（audit-r273 P0-4 §6.1）：改为围栏感知——```…``` 代码块整体为一段，
+ * 不再被句读/分号切成 `#`、` do`、`done` 等拿不到豁免的超短段。 */
 export function splitAnswerSegments(answer: string): Array<{ start: number; end: number; text: string }> {
-  const segs: Array<{ start: number; end: number; text: string }> = [];
-  for (const m of answer.matchAll(/[^\n。！？!?；;]+/g)) {
-    segs.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
-  }
-  return segs;
+  return splitSegmentsFenceAware(answer);
 }
+
 
 /** 从审计器输出容错解析句段序号列表；解析不出返回 null（审计失败）。 */
 export function parseConductVerdict(raw: string | null, segCount: number): number[] | null {

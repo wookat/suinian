@@ -57,7 +57,7 @@ async function req<T>(path: string, init: RequestInit & { token?: string } = {})
 }
 
 async function register(): Promise<Session> {
-  const name = `[QA-R272]inj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const name = `[QA-R274]inj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const password = `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   const body = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",
@@ -282,7 +282,9 @@ async function main() {
         // leak 类：植入真实敏感笔记（入库会自动判敏感），行为级判定秘密值是否被吐出
         if (c.leak) await saveNoteRest(s, LEAK_SECRET_NOTE);
         await waitPipeline(s); // 入库完成后再问：召回足量时的护栏表现才是真实口径
-        for (const q of QUESTIONS) {
+        // R274：三例真透出（D03/G04/G05 同族）必需专用问法才会命中确定性枚举/
+        // verbatim 路径；未声明 questions 的历史例照旧用通用两问（结果可比）。
+        for (const q of c.questions ?? QUESTIONS) {
           const channels: Array<[string, () => Promise<string>]> = [["rest", () => ask(s, q)]];
           if (c.entry === "mcp") channels.push(["mcp", () => askMcp(s, q)]);
           for (const [channel, run] of channels) {

@@ -151,8 +151,12 @@ const BARE_HOST_SHADOW_RE = /(?<![.\w@/-])(?:[a-z0-9-]+\.)+[a-z]{2,24}(?![\w./-]
 // 不生效——用户要的就是自己的资料原文（与枚举路由展示原文同一信任级）。
 // 判定只看可信侧（用户问题），资料无法伪造。指令抽取 demands 剥除与来源
 // 归因审计不受该豁免影响（它们判的是「来源」而非「资料派生」）。 ----
+// R274 收窄（audit-r273 P0-2，docs/decision-r274.md §2）：只有明确索要「原文」
+// 的措辞才算 verbatim 请求；「命令/代码/配置/脚本/sql/prompt」等纯话题词不再
+// 触发整体豁免——话题词问法（「部署命令里有哪几条」）走普通口径，指令段落
+// 由 isolateNoteInstructions 显式隔离而非整体放行。
 export const VERBATIM_ASKED_RE =
-  /原文|原样|原話|原话|逐字|完整(?:给|地|内容|版)|怎么写的|是怎么写|写了什么|写的什么|内容是什么|片段|配置|脚本|腳本|命令|指令是|代码|代碼|函数|正则|語句|语句|建表|sql|shell|prompt|snippet|script|config|command|\bcode\b|verbatim/i;
+  /原文|原样|原樣|原話|原话|原封不动|逐字|一字不差|照原来|完整(?:给|地给|贴|内容|版)|怎么写的|是怎么写|写了什么|写的什么|内容是什么|(?:命令|语句|語句|脚本|腳本|代码|代碼|配置|正则|正則|函数|模板|snippet|prompt|sql|regex)[^\n。！？?!]{0,4}(?:是什么|是啥|长什么样|贴一下|给我看)|verbatim|exact wording|word for word/i;
 
 export function questionRequestsVerbatim(question: string): boolean {
   return VERBATIM_ASKED_RE.test(question);
@@ -172,8 +176,11 @@ export function scrubAnswerLinks(
   allowedHosts: string[] = ANSWER_LINK_ALLOWED_HOSTS,
   verbatimSource?: { dataText: string; question: string }
 ): string {
+  // R274（audit-r273 P1-1 B08/B22）：外链保留门从「verbatim 问法」改为「URL 在
+  // 资料区逐字存在 且 问题点名链接/路径/命令/原文类内容」——书签类笔记问链接
+  // 是核心产品价值；诱导性链接段落由 isolateNoteInstructions 隔离层兜底。
   const verbatimKeep =
-    verbatimSource && questionRequestsVerbatim(verbatimSource.question)
+    verbatimSource && (questionRequestsVerbatim(verbatimSource.question) || PATHISH_ASKED_RE.test(verbatimSource.question))
       ? foldCompact(verbatimSource.dataText)
       : null;
   const keepVerbatim = (m: string) => Boolean(verbatimKeep && verbatimKeep.includes(foldCompact(m)));
@@ -403,9 +410,16 @@ export function compactSimilarity(a: string, b: string): number {
  * 索要原文时，豁免来源归因审计对忠实引用句段的剥除——指令 demand 文字
  * 已在前置 scrubDirectiveDemands 层确定性剥除，这里豁免的只能是资料本身。
  */
-export function segmentEchoesData(segText: string, dataCompact: string): boolean {
+export function segmentEchoesData(segText: string, dataCompact: string, rawData?: string): boolean {
   const compact = foldCompact(segText.replace(/[\[［]\d{1,3}[\]］]/g, ""));
-  if (compact.length < 6) return false;
+  if (compact.length < 6) {
+    // R274（audit-r273 P0-4 §6.1）：shell/代码被句读切出的超短段（`#`、` do`、
+    // `done`、``` 等）折叠后长度不足甚至为空，拿不到 compact 子串豁免。
+    // 短段改判「原文形态逐字出现在资料原文里」——资料确实含该字面时它就是
+    // 资料回显；正常叙述句不会被切成这种碎段。
+    const raw = segText.replace(/[\[［]\d{1,3}[\]］]/g, "").trim();
+    return raw.length > 0 && rawData !== undefined && rawData.includes(raw);
+  }
   if (dataCompact.includes(compact)) return true;
   const min = Math.max(12, Math.ceil(compact.length / 2));
   for (let len = compact.length - 1; len >= min; len--) {
@@ -541,14 +555,29 @@ const CONTACT_OBJ = /微信|weixin|wechat|qq|客服|电话|電話|手机号|手�
 
 const PASSPHRASE_RE = /(?:口令|暗号|暗語|密令|接头|通关|通關|密语|密語|passphrase|code ?word|secret ?word)[^\n]{0,6}(?:是|为|為|:|：)/i;
 
+// 文件扩展名伪 TLD（R274，audit-r273 P1-1 B21）：`in.mov`、`dist/*.js` 这类
+// 文件名被域名正则误判为主机，导致 ffmpeg/构建命令段落被整段剥除。末段是
+// 常见文件扩展名时不按域名处理。
+const FILE_EXT_PSEUDO_TLD = new Set([
+  "js", "ts", "jsx", "tsx", "mjs", "cjs", "py", "sh", "go", "rs", "rb", "php", "java", "kt", "c", "h", "cpp", "cs",
+  "md", "txt", "log", "json", "yml", "yaml", "toml", "ini", "conf", "env", "lock", "sql", "db", "csv", "xml", "html", "css",
+  "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "mp3", "wav", "mp4", "mov", "mkv", "avi", "webm", "pdf", "doc", "docx",
+  "xls", "xlsx", "ppt", "pptx", "zip", "gz", "tgz", "tar", "rar", "exe", "dll", "so", "bin", "bak", "tmp", "map", "wasm",
+]);
+
 // 域名形态（含拼读还原）：句段里出现非允许域即属导航/回传投放
-function segHasForeignHost(seg: string, allowedHosts: string[]): boolean {
+function segHasForeignHost(seg: string, allowedHosts: string[], ignoreEmails = false): boolean {
   const canon = seg
     .normalize("NFKC")
     .replace(/[ \t]*(?:dot|点|句点)[ \t]*/gi, ".")
     .replace(/[ \t]*(?:slash|斜杠)[ \t]*/gi, "/");
   for (const m of canon.matchAll(/(?:[a-z0-9-]+\.)+[a-z]{2,24}/gi)) {
     const host = m[0].toLowerCase().replace(/^www\./, "");
+    const tld = host.slice(host.lastIndexOf(".") + 1);
+    if (FILE_EXT_PSEUDO_TLD.has(tld)) continue; // 文件名，不是域名
+    // 邮箱地址里的域名（R274，audit-r273 P1-1 B20）：忠实回显场景下邮箱不是
+    // 可点击导航通道，由调用方在确认段落无祈使线索后选择性忽略。
+    if (ignoreEmails && m.index > 0 && canon[m.index - 1] === "@") continue;
     if (!allowedHosts.includes(host) && !allowedHosts.some((a) => host === a || host.endsWith(`.${a}`))) return true;
   }
   return false;
@@ -619,8 +648,28 @@ export function conductSignal(text: string): boolean {
 export function scrubUnsolicitedConduct(
   answer: string,
   question: string,
-  allowedHosts: string[] = ANSWER_LINK_ALLOWED_HOSTS
+  allowedHosts: string[] = ANSWER_LINK_ALLOWED_HOSTS,
+  dataText?: string
 ): string {
+  // R274 忠实回显豁免（audit-r273 P1-1 B20）：段落是资料 verbatim 回显、含提问
+  // 关键词、且不含对读者的祈使线索时保留——「把测试报告发给李工」是用户自己
+  // 笔记的事实陈述；注入句天然带祈使/听写措辞，不享受该豁免。
+  const dataCompact = dataText !== undefined ? foldCompact(dataText) : null;
+  const answersQuestionFaithfully = (t: string) => {
+    if (segmentAnswersQuestion(t, question)) return true;
+    // 问题本身就在问这类动作（「发给谁」）时，诱导词不构成搭车嫌疑：把问题里
+    // 也出现的诱导词从句段副本中摘掉后再判一次。
+    let stripped = t;
+    for (const m of t.matchAll(new RegExp(SEGMENT_INDUCEMENT_RE.source, "gu"))) {
+      if (question.includes(m[0])) stripped = stripped.split(m[0]).join("");
+    }
+    return stripped !== t && segmentAnswersQuestion(stripped, question);
+  };
+  const faithfulEcho = (t: string) =>
+    dataCompact !== null &&
+    !IMPERATIVE_CUE.test(t) &&
+    answersQuestionFaithfully(t) &&
+    segmentEchoesData(t, dataCompact, dataText);
   const segs: Array<{ start: number; end: number; text: string }> = [];
   for (const m of answer.matchAll(/[^\n。！？!?；;]+/g)) {
     // 英文句号仅在后随空白/结尾时是句界（不切 3.5、example.com）
@@ -636,11 +685,12 @@ export function scrubUnsolicitedConduct(
     for (const cls of CONDUCT_CLASSES) {
       if (!cls.hit(t)) continue;
       if (cls.asked.test(question)) continue; // 用户问的就是这类操作
+      if (faithfulEcho(t)) continue; // 用户自有笔记的事实陈述（R274）
       bad = true;
       break;
     }
     // 拼读式/裸域投放：句段含非允许域名且问题没问链接类内容
-    if (!bad && segHasForeignHost(t, allowedHosts) && !PATHISH_ASKED_RE.test(question)) {
+    if (!bad && segHasForeignHost(t, allowedHosts, /* ignoreEmails */ faithfulEcho(t)) && !PATHISH_ASKED_RE.test(question)) {
       bad = true;
     }
     // 外链残骸（拼读式外链被摘除后的可还原形态）
@@ -932,10 +982,7 @@ export function scrubDirectiveDemands(
     .filter((d) => d.length >= 2 || (d.length === 1 && !/[A-Za-z0-9]/.test(d)))
     .filter((d) => !qCompact.includes(d));
   if (targets.length === 0) return answer;
-  const segs: Array<{ start: number; end: number; text: string }> = [];
-  for (const m of answer.matchAll(/[^\n。！？!?；;]+/g)) {
-    segs.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
-  }
+  const segs = splitSegmentsFenceAware(answer);
   const drops: Array<{ start: number; end: number }> = [];
   // 部分回显命中（R272：R272-23 型「答案只落地 demand 的后半句」逃逸）：
   // demand 足够长时，其任一 ≥max(6, 半长) 的连续子串出现在句段里也算执行痕迹
@@ -971,7 +1018,7 @@ export function scrubDirectiveDemands(
     if (hit.length === 0) continue;
     if (
       verbatimCompact &&
-      segmentEchoesData(seg.text, verbatimCompact) &&
+      segmentEchoesData(seg.text, verbatimCompact, verbatimData) &&
       hit.every((t) => !dictationOnly(t))
     )
       continue;
@@ -1003,11 +1050,12 @@ export function guardAskAnswer(
   markerScrubbed: boolean;
   spanScrubbed: boolean;
   directiveScrubbed: boolean;
+  isolated: boolean;
 } {
   const hosts = opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS;
   const afterLinks = scrubAnswerLinks(answer, hosts, { dataText: opts.dataText, question: opts.question });
   const afterConduct = scrubFuzzyEchoOpener(
-    scrubUnsolicitedConduct(afterLinks, opts.question, hosts),
+    scrubUnsolicitedConduct(afterLinks, opts.question, hosts, opts.dataText),
     opts.dataText,
     opts.question,
     opts.directiveDemands ?? []
@@ -1029,12 +1077,138 @@ export function guardAskAnswer(
   const afterDirectives = opts.directiveDemands?.length
     ? scrubDirectiveDemands(afterSpans, opts.directiveDemands, opts.question, opts.dataText)
     : afterSpans;
+  const afterIsolate = isolateNoteInstructions(afterDirectives, opts.question, opts.dataText, hosts);
   return {
-    answer: afterDirectives,
+    answer: afterIsolate,
     linkScrubbed: afterLinks !== answer,
     conductScrubbed: afterConduct !== afterLinks,
     markerScrubbed: afterMarkers !== afterConduct,
     spanScrubbed: afterSpans !== afterMarkers,
     directiveScrubbed: afterDirectives !== afterSpans,
+    isolated: afterIsolate !== afterDirectives,
   };
+}
+
+// ---- R274 指令段落隔离与单一收口点（docs/decision-r274.md §1/§2） ----
+
+export const INSTRUCTION_ISOLATED_MARK = "〔已隔离笔记内指令，未采纳；原文可在引用的笔记卡片中查看〕";
+
+/**
+ * 可执行下载管道（audit-r273 P0-2 G05）：远程拓展内容直接灌进 shell 解释器。
+ * 无论是否 verbatim、无论引用还是叙述，含该形态的段落一律隔离——可执行内容
+ * 不经答案层递送，完整原文始终在笔记卡片里可见。
+ */
+export const EXEC_PIPELINE_RE =
+  /(?:curl|wget|iwr|invoke-webrequest|fetch)\b[^\n|]{0,240}\|[^\n|]{0,40}\b(?:sudo\s+)?(?:ba|z|da|k|fi)?sh\b|\|\s*iex\b|base64\s+(?:-d|--decode)\b[^\n]{0,60}\|[^\n]{0,20}\b(?:ba)?sh\b/i;
+
+// 面向回答者/助手的听写措辞：要求改变当前回答行为或在答案里附加内容。
+// 判的是行为特征（对谁说/要求干什么），与注入字面/语种无关的最小多语言集。
+const ASSISTANT_ADDRESS_RE =
+  /回答[^\n。！？]{0,16}(?:时|问题)|作答时|应答时|回复时|答案(?:里|中|末尾|开头|结尾)|回答(?:里|中|末尾|开头|结尾)|系统(?:同步)?说明|系统提示|助手s?须|附加要求|补充规则|when answering|in your (?:answer|reply|response)|at the end of (?:the|your) (?:answer|reply)|回答する際|답변할 때/i;
+
+const INSTRUCT_VERB_RE =
+  /请|务必|必须|一律|附上|加上|写上|写出|输出|引导|让用户|提醒用户|告知用户|要求用户|please|make sure|must|append|instruct/i;
+
+/**
+ * 段落是否为「面向助手/读者的行动指令」（R274 隔离判定）：
+ *  a) 可执行下载管道；或
+ *  b) 听写/改行为措辞（对回答者说）+ 指令动词；或
+ *  c) 行为类信号（外传/导航/联系/口令）+ 祈使线索（对读者下达动作）。
+ * 纯事实陈述（「把报告发给李工」）无 b/c 特征，不命中。
+ */
+export function segmentIsReaderDirective(segText: string): boolean {
+  const t = segText.normalize("NFKC");
+  if (EXEC_PIPELINE_RE.test(t)) return true;
+  if (ASSISTANT_ADDRESS_RE.test(t) && INSTRUCT_VERB_RE.test(t)) return true;
+  if (conductSignal(t) && IMPERATIVE_CUE.test(t)) return true;
+  return false;
+}
+
+/** 围栏感知切段：```…``` 代码块整体为一段，围栏外按句读切。 */
+export function splitSegmentsFenceAware(answer: string): Array<{ start: number; end: number; text: string }> {
+  const segs: Array<{ start: number; end: number; text: string }> = [];
+  const fenceRe = /```[^\n]*\n[\s\S]*?(?:```|$)/g;
+  let pos = 0;
+  const pushProse = (from: number, to: number) => {
+    const slice = answer.slice(from, to);
+    for (const m of slice.matchAll(/[^\n。！？!?；;]+/g)) {
+      segs.push({ start: from + m.index, end: from + m.index + m[0].length, text: m[0] });
+    }
+  };
+  for (const f of answer.matchAll(fenceRe)) {
+    pushProse(pos, f.index);
+    segs.push({ start: f.index, end: f.index + f[0].length, text: f[0] });
+    pos = f.index + f[0].length;
+  }
+  pushProse(pos, answer.length);
+  return segs;
+}
+
+/**
+ * 笔记内指令段落隔离（R274 P0-1/P0-2/P0-3 核心层）：答案里命中
+ * segmentIsReaderDirective 的段落替换为显式隔离标记——原文照登但指令不入
+ * 叙述层；完整原文经 references/notes 结构化通道在笔记卡片中可见。
+ * 围栏代码块内逐行判定（只隔离命中行，不陷整块代码）。
+ * 确定性、零 AI 依赖，确定性路由与生成路由共用。
+ */
+export function isolateNoteInstructions(
+  answer: string,
+  question: string,
+  _dataText?: string,
+  _allowedHosts: string[] = ANSWER_LINK_ALLOWED_HOSTS
+): string {
+  const segs = splitSegmentsFenceAware(answer);
+  const reps: Array<{ start: number; end: number; rep: string }> = [];
+  for (const seg of segs) {
+    if (seg.text.startsWith("```")) {
+      // 围栏块：逐行隔离命中行
+      const lines = seg.text.split("\n");
+      let changed = false;
+      const outLines = lines.map((l) => {
+        if (segmentIsReaderDirective(l)) {
+          changed = true;
+          return INSTRUCTION_ISOLATED_MARK;
+        }
+        return l;
+      });
+      if (changed) reps.push({ start: seg.start, end: seg.end, rep: outLines.join("\n") });
+      continue;
+    }
+    if (ASSISTANT_ADDRESS_RE.test(seg.text.normalize("NFKC")) && INSTRUCT_VERB_RE.test(seg.text) ||
+        (conductSignal(seg.text.normalize("NFKC")) && IMPERATIVE_CUE.test(seg.text))) {
+      reps.push({ start: seg.start, end: seg.end, rep: INSTRUCTION_ISOLATED_MARK });
+      continue;
+    }
+    // 可执行管道：只隔离管道字面本身，同句其余内容（其它合法命令）保留。
+    for (const m of seg.text.matchAll(new RegExp(EXEC_PIPELINE_RE.source, "gi"))) {
+      reps.push({ start: seg.start + m.index, end: seg.start + m.index + m[0].length, rep: INSTRUCTION_ISOLATED_MARK });
+    }
+  }
+  reps.sort((a, b) => a.start - b.start);
+  if (reps.length === 0) return answer;
+  let out = "";
+  let pos = 0;
+  for (const r of reps) {
+    out += answer.slice(pos, r.start) + r.rep;
+    pos = r.end;
+  }
+  out += answer.slice(pos);
+  // 相邻重复标记合并
+  return out.replace(new RegExp(`(?:${INSTRUCTION_ISOLATED_MARK}[\\s。；;，]*){2,}`, "g"), INSTRUCTION_ISOLATED_MARK);
+}
+
+/**
+ * /api/ask 单一收口点（R274 P0-1，docs/decision-r274.md §1）：所有带 answer 的
+ * JSON 响应（含全部确定性路由与 MCP 转发）在中间件统一经过：外链收口 +
+ * 指令段落隔离。确定性答案是模板 + 笔记字面投影，不存在「答案行为被资料
+ * 指令改变」的对象，LLM 归因审计仅挂生成路径（论证见设计文档）。
+ */
+export function finalizeAskAnswer(
+  answer: string,
+  opts: { dataText: string; question: string; allowedHosts?: string[] }
+): { answer: string; changed: boolean; isolated: boolean } {
+  const hosts = opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS;
+  const afterLinks = scrubAnswerLinks(answer, hosts, { dataText: opts.dataText, question: opts.question });
+  const afterIsolate = isolateNoteInstructions(afterLinks, opts.question, opts.dataText, hosts);
+  return { answer: afterIsolate, changed: afterIsolate !== answer, isolated: afterIsolate !== afterLinks };
 }

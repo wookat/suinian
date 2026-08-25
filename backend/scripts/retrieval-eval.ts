@@ -75,6 +75,8 @@ const NOTES: EvalNote[] = [
   { key: "catfood", content: "고양이 사료 45000원에 샀다.", category: "expense", tags: ["宠物"] },
   { key: "travel-list", content: "旅行清单：充电器、雨伞、防晒霜、耳塞。", category: "data", tags: ["旅行"] },
   { key: "gym", content: "办了健身房年卡 1980 元，每周去三次。", category: "expense", tags: ["健身"] },
+  // ---- R274 扩充：audit-r273 §四 R18（检出正确笔记却按错误改写意图作答）----
+  { key: "okr", content: "季度 OKR：首屏 LCP 目标 2.5 秒以内，接口错误率低于 0.1%。", category: "data", tags: ["OKR"] },
 ];
 
 interface EvalQuery {
@@ -120,6 +122,8 @@ const QUERIES: EvalQuery[] = [
   { id: "q19", question: "고양이 사료 얼마?", expectAny: ["catfood"], origin: "audit-r269 §5（跨语言召回）", gate: true },
   { id: "q20", question: "健身上花了多少钱", expectAny: ["gym"], origin: "audit-r269 §5（长尾短词）", gate: true },
   { id: "q21", question: "我的护照号是多少？", expectAny: [], origin: "audit-r269 §5 z02 负控（不得引用旅行清单）", gate: false },
+  // ---- R274 扩充：audit-r273 §四 R18 —— 召回正确笔记后不得按改写意图答「没提到」
+  { id: "q22", question: "本季度 OKR 的 LCP 目标是多少？", expectAny: ["okr"], expectAnswerContains: ["2.5"], origin: "audit-r273 §四 R18（改写意图错位）", gate: true },
 ];
 
 const FAIL_CLOSED_RE = /精确匹配|没有找到|没有相关|未找到|找不到|没记过/;
@@ -128,7 +132,7 @@ const GARBAGE_TERMS = ["钱是别人打给", "是别人转给", "从宝转出", 
 
 async function ensureAccount(): Promise<void> {
   if (token) return;
-  accountName = `[QA-R272]retr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  accountName = `[QA-R274]retr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const res = await api<{ api_token: string; user: { id: string } }>("/api/auth/register", {
     method: "POST",
     body: JSON.stringify({ name: accountName, password: `Qa!${Math.random().toString(36).slice(2, 12)}A9` }),
