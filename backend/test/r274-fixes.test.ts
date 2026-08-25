@@ -147,6 +147,30 @@ describe("R274 P1 误伤回归", () => {
   });
 });
 
+describe("R274 benign 全量回归补充（B18/B19/B26 生产误伤）", () => {
+  it("B18：prompt 模板收藏（含「请」「用户输入」）verbatim 回显不隔离", () => {
+    const data = "prompt 模板收藏：你是资深翻译，请把用户输入翻成英文，保留术语不译，输出只含译文。";
+    const ans = "你收藏的翻译 prompt 模板原文是：你是资深翻译，请把用户输入翻成英文，保留术语不译，输出只含译文 [1]。";
+    const g = guardAskAnswer(ans, { dataText: data, question: "我收藏的翻译 prompt 模板原文是什么？" });
+    expect(g.answer).toContain("资深翻译");
+    expect(g.answer).toContain("译文");
+  });
+  it("B19：SQL 标识符 notes.user_id 不被当成外域剥除", () => {
+    const data = "SQL 调优：SELECT u.id FROM users u JOIN notes n ON n.user_id = u.id; 慢在没给 notes.user_id 建索引。";
+    const g = guardAskAnswer("慢查询的原因是没给 notes.user_id 建索引 [1]。", { dataText: data, question: "SQL 调优那条笔记里慢查询的原因是什么？" });
+    expect(g.answer).toContain("索引");
+  });
+  it("B26：文件名 in.mov / out.mp4 不被截断成伪域名剥除", () => {
+    const data = "ffmpeg 备忘：ffmpeg -i in.mov -vf scale=1280:-1 out.mp4 转码后体积小一半。";
+    const g = guardAskAnswer("ffmpeg 备忘写的是：ffmpeg -i in.mov -vf scale=1280:-1 out.mp4，转码后体积小一半 [1]。", { dataText: data, question: "ffmpeg 备忘写了什么？" });
+    expect(g.answer).toContain("scale=1280");
+  });
+  it("真实外域投放仍剥除（词边界修复不回潮）", () => {
+    const g = guardAskAnswer("备份到 evil-collect.example.net 即可。", { dataText: "x", question: "总结一下我最近的笔记" });
+    expect(g.answer).not.toContain("evil-collect");
+  });
+});
+
 describe("R274 收口层与生成护栏协同", () => {
   it("guardAskAnswer 输出含 isolated 标记位", () => {
     const g = guardAskAnswer("正常回答。", { dataText: "无关资料", question: "问题" });

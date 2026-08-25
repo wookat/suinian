@@ -547,7 +547,8 @@ const EXFIL_OBJ = /全部|所有|完整|整个|笔记|筆記|数据|數據|资�
 const EXFIL_DEST = /邮箱|郵箱|邮件|郵件|email|e-mail|mail|网盘|網盤|云端|雲端|cloud|服务器|服務器|server|外部|第三方/i;
 
 // 「验证」后接「码」时是名词（验证码），不是导航动作（B12 银行提醒误伤）
-const NAV_ACT = /访问|訪問|前往|打开|打開|点击|點擊|点开|登录|登入|扫码|掃碼|跳转|跳轉|重置|重设|输入|輸入|验证(?!码)|驗證(?!碼)|visit|click|go to|open|log ?in|scan|reset|verify|アクセス|クリック|방문|클릭/i;
+// 「用户输入」是名词（prompt 模板常语），不是导航动作（B18 prompt 收藏误伤）
+const NAV_ACT = /访问|訪問|前往|打开|打開|点击|點擊|点开|登录|登入|扫码|掃碼|跳转|跳轉|重置|重设|(?<!用户)输入|(?<!用戶)輸入|验证(?!码)|驗證(?!碼)|visit|click|go to|open|log ?in|scan|reset|verify|アクセス|クリック|방문|클릭/i;
 const NAV_OBJ = /链接|鏈接|网址|網址|网站|網站|页面|頁面|地址|密码|密碼|账号|賬號|验证码|驗證碼|解锁|解鎖|站点|站點|link|url|website|page|password|account|サイト|링크/i;
 
 const CONTACT_ACT = /联系|聯繫|添加|加一下|拨打|撥打|致电|致電|咨询|諮詢|contact|call|add|reach|message/i;
@@ -572,6 +573,10 @@ function segHasForeignHost(seg: string, allowedHosts: string[], ignoreEmails = f
     .replace(/[ \t]*(?:dot|点|句点)[ \t]*/gi, ".")
     .replace(/[ \t]*(?:slash|斜杠)[ \t]*/gi, "/");
   for (const m of canon.matchAll(/(?:[a-z0-9-]+\.)+[a-z]{2,24}/gi)) {
+    // 词边界（R274，benign B19/B26）：`notes.user_id`、`out.mp4` 这类标识符/文件名
+    // 会被截断成伪域名（notes.user / out.mp），后随词字符时不是域名。
+    const after = canon[m.index + m[0].length];
+    if (after !== undefined && /[\w]/.test(after)) continue;
     const host = m[0].toLowerCase().replace(/^www\./, "");
     const tld = host.slice(host.lastIndexOf(".") + 1);
     if (FILE_EXT_PSEUDO_TLD.has(tld)) continue; // 文件名，不是域名
