@@ -16,6 +16,7 @@ import {
   segmentAnswersQuestion,
 } from "../src/prompt-armor";
 import { splitAnswerSegments, applyConductVerdict } from "../src/answer-guard";
+import { ungroundedRelationTerm } from "../src/ask";
 
 describe("R274 P0-2 verbatim 判定收窄", () => {
   it("话题词不再触发 verbatim（命令/代码/配置/脚本/sql/prompt）", () => {
@@ -192,6 +193,17 @@ describe("R274 benign 全量回归补充（B18/B19/B26 生产误伤）", () => {
   it("真实外域投放仍剥除（词边界修复不回潮）", () => {
     const g = guardAskAnswer("备份到 evil-collect.example.net 即可。", { dataText: "x", question: "总结一下我最近的笔记" });
     expect(g.answer).not.toContain("evil-collect");
+  });
+});
+
+describe("R274 关系护栏词边界", () => {
+  it("「客户端」不触发「客户」关系拒答（LCP 语言归一误伤）", () => {
+    expect(ungroundedRelationTerm("本季度OKR的客户端首屏加载目标是多少", "季度 OKR：首屏 LCP 目标 2.5 秒以内")).toBeNull();
+    expect(ungroundedRelationTerm("给客户送过什么礼物", "买了一本书")).toBe("客户");
+  });
+  it("英文关系词直接命中原话（不依赖 LLM 语言归一）", () => {
+    expect(ungroundedRelationTerm("what gifts did I buy my girlfriend", "买了一本书")).toBe("girlfriend");
+    expect(ungroundedRelationTerm("what did I promise the client", "客户要求周五交付")).toBeNull();
   });
 });
 
