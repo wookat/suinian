@@ -4434,6 +4434,18 @@ app.post("/api/ask", async (c) => {
       .all<NoteRow>();
     notes = dedupeNotesByContent(recent.results ?? []);
   }
+  // 刚写入的笔记嵌入/分拣尚未落库，语义召回够不着（audit-r275 P2-2 F03）：
+  // 零召回时把最近 3 分钟内创建的最新笔记补进候选（最多 2 条），让「刚存就问」
+  // 不再落进零召回拒答；模型判定不相关时仍会如实拒答，不影响宁缺毋滥口径。
+  if (notes.length === 0) {
+    const fresh = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND is_sensitive = 0
+       AND created_at >= datetime('now', '-3 minutes') ORDER BY created_at DESC LIMIT 2`
+    )
+      .bind(userId)
+      .all<NoteRow>();
+    notes = dedupeNotesByContent(fresh.results ?? []);
+  }
   if (notes.length === 0) {
     // nothing recalled at all: answer "没找到" honestly (never bluff over the
     // recent-20) and suggest the nearest notes below the semantic threshold

@@ -1202,14 +1202,22 @@ export async function rotateToken(): Promise<string> {
   return res.api_token
 }
 
-/** 注销是幂等删除（服务端级联实测百毫秒级），挂满 60s 的只会是连接级悬挂：
- * 与幂等 GET 同口径收紧到 20s 并允许超时重试一次（R236 P2-2）。 */
+/** 注销是幂等删除（服务端级联实测百毫秒级），挂满的只会是连接级悬挂：
+ * 与幂等 GET 同口径收紧到 20s。超时后先探测账号是否已删（R276 P2-1：
+ * 服务端常已完成而浏览器连接悬挂，直接盲重试会再白等 20s），已删即成功；
+ * 未删才重试一次，重试超时后再探测一次兜底。 */
 export async function deleteAccount(): Promise<void> {
   try {
     await realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" }, GET_TIMEOUT_MS)
   } catch (e) {
     if (e instanceof NetworkError && e.timeout) {
-      await realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" }, GET_TIMEOUT_MS)
+      if (await verifyAccountDeleted()) return
+      try {
+        await realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" }, GET_TIMEOUT_MS)
+      } catch (e2) {
+        if (e2 instanceof NetworkError && e2.timeout && (await verifyAccountDeleted())) return
+        throw e2
+      }
       return
     }
     throw e
