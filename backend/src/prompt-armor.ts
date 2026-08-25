@@ -437,9 +437,20 @@ export function segmentEchoesData(segText: string, dataCompact: string, rawData?
  * 该分支的审计只是冗余层，不应误伤正常答题句。
  */
 export function segmentAnswersQuestion(segText: string, question: string): boolean {
-  if (SEGMENT_INDUCEMENT_RE.test(segText.normalize("NFKC"))) return false;
+  const seg = segText.normalize("NFKC");
+  const qNorm = question.normalize("NFKC");
+  // 劝导措辞否决豁免；但措辞本身出现在用户问题里时不否决——行动词来自可信
+  // 侧（「测试报告要发给谁？」问的就是「发给」，答案忠实回答不是劝导投放）
+  for (const m of seg.matchAll(new RegExp(SEGMENT_INDUCEMENT_RE.source, "gu"))) {
+    if (qNorm.includes(m[0])) continue;
+    // 否定语境不是劝导（B12「不要把短信验证码告诉任何人」是防钓鱼提醒）；
+    // 「不要忘/别忘」是正向催促，不算否定
+    const pre = seg.slice(Math.max(0, m.index - 12), m.index);
+    if (/(?:不要|不得|切勿|勿|禁止|不能|无需|不需要|never|do ?not|don'?t)(?!忘|遗漏|forget)[^，。,;；\n]{0,10}$/i.test(pre)) continue;
+    return false;
+  }
   const qKeys = substantiveQuestionGrams(question);
-  const segFold = segText.normalize("NFKC").toUpperCase();
+  const segFold = seg.toUpperCase();
   for (const k of qKeys) if (segFold.includes(k)) return true;
   return false;
 }
@@ -547,7 +558,9 @@ const EXFIL_OBJ = /全部|所有|完整|整个|笔记|筆記|数据|數據|资�
 const EXFIL_DEST = /邮箱|郵箱|邮件|郵件|email|e-mail|mail|网盘|網盤|云端|雲端|cloud|服务器|服務器|server|外部|第三方/i;
 
 // 「验证」后接「码」时是名词（验证码），不是导航动作（B12 银行提醒误伤）
-const NAV_ACT = /访问|訪問|前往|打开|打開|点击|點擊|点开|登录|登入|扫码|掃碼|跳转|跳轉|重置|重设|输入|輸入|验证(?!码)|驗證(?!碼)|visit|click|go to|open|log ?in|scan|reset|verify|アクセス|クリック|방문|클릭/i;
+// 「把/将/对用户输入…」是名词性宾语（prompt 模板常语），不是导航动作（B18
+// prompt 收藏误伤）；「请用户输入验证码」仍是导航动作（R270-11 钓鱼指令）
+const NAV_ACT = /访问|訪問|前往|打开|打開|点击|點擊|点开|登录|登入|扫码|掃碼|跳转|跳轉|重置|重设|(?<![把将將对對]用户)输入|(?<![把将將对對]用戶)輸入|验证(?!码)|驗證(?!碼)|visit|click|go to|open|log ?in|scan|reset|verify|アクセス|クリック|방문|클릭/i;
 const NAV_OBJ = /链接|鏈接|网址|網址|网站|網站|页面|頁面|地址|密码|密碼|账号|賬號|验证码|驗證碼|解锁|解鎖|站点|站點|link|url|website|page|password|account|サイト|링크/i;
 
 const CONTACT_ACT = /联系|聯繫|添加|加一下|拨打|撥打|致电|致電|咨询|諮詢|contact|call|add|reach|message/i;
@@ -572,6 +585,10 @@ function segHasForeignHost(seg: string, allowedHosts: string[], ignoreEmails = f
     .replace(/[ \t]*(?:dot|点|句点)[ \t]*/gi, ".")
     .replace(/[ \t]*(?:slash|斜杠)[ \t]*/gi, "/");
   for (const m of canon.matchAll(/(?:[a-z0-9-]+\.)+[a-z]{2,24}/gi)) {
+    // 词边界（R274，benign B19/B26）：`notes.user_id`、`out.mp4` 这类标识符/文件名
+    // 会被截断成伪域名（notes.user / out.mp），后随词字符时不是域名。
+    const after = canon[m.index + m[0].length];
+    if (after !== undefined && /[\w]/.test(after)) continue;
     const host = m[0].toLowerCase().replace(/^www\./, "");
     const tld = host.slice(host.lastIndexOf(".") + 1);
     if (FILE_EXT_PSEUDO_TLD.has(tld)) continue; // 文件名，不是域名
