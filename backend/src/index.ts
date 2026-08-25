@@ -4720,9 +4720,17 @@ app.post("/api/ask", async (c) => {
               return (t: string) => segmentEchoesData(t, dataCompact, askGuardData);
             })()
           : undefined;
+        // R274 补充（benign B25 型误伤）：demands === [] 时忠实回显资料的句段
+        // 同样豁免——资料无指令则回显不可能是指令产物（联系人/邮箱类事实
+        // 会触发审计器的「联系投放」误报，尤其在降级模型上），确定性层
+        //（外链收口/指令隔离/未经要求行动剥除）仍全程生效。
         const noDirectiveKeep =
           demands !== null && demands.length === 0
-            ? (t: string) => segmentAnswersQuestion(t, askGuardQuestion)
+            ? (() => {
+                const dc = foldCompact(askGuardData);
+                return (t: string) =>
+                  segmentAnswersQuestion(t, askGuardQuestion) || segmentEchoesData(t, dc, askGuardData);
+              })()
             : undefined;
         const audKeep =
           verbatimKeep || noDirectiveKeep
