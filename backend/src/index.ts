@@ -3176,6 +3176,10 @@ app.post("/api/ask", async (c) => {
   // 无历史时改写器原样返回，intentQuestion 等于原问题，不影响单轮行为。
   const pronounFollowUp = !metaQuestion && history.length > 0 && ASK_PRONOUN_REF_RE.test(intentBase);
   const intentQuestion = pronounFollowUp ? recallQuestion : intentBase;
+  // 关系护栏问题源（R274 retrieval q22）：语言归一 normQuestion 也是 LLM 产物，
+  // 可能把技术缩写（LCP）翻出「客户」等关系词——关系拒答只认用户原话（英文
+  // 关系词由词典 q 侧英文同义直接覆盖原话）；代词追问仍用改写产物（R186）。
+  const relationQuestion = pronounFollowUp ? recallQuestion : question;
   // 财务/统计合计类问题走精确聚合（与周报/月报同一 financeStats 口径），
   // 绝不让 LLM 对被 LIMIT 截断的召回结果心算合计（R107 P1-2）。
   // 财务口径澄清追问（R130 P2-1）：上一轮是精确合计时，「包括报销的差旅费
@@ -4077,9 +4081,9 @@ app.post("/api/ask", async (c) => {
       // 记录当作答案呈现——命中文本零关系词族时走同一 not_in_notes 通道。
       if (!metaQuestion) {
         const tRelSource = tRows.map((n) => `${n.title ?? ""}\n${n.is_sensitive ? "" : n.content}\n${n.tags ?? ""}`).join("\n");
-        // R274（audit-r273 P1-2 R18）：只看可信侧问题——recallQuestion 是 LLM
-        // 改写产物，改写引入的关系词（「客户」）会让护栏对用户没问过的词拒答。
-        const tMissingRel = ungroundedRelationTerm(intentQuestion, tRelSource);
+        // R274（audit-r273 P1-2 R18）：只看可信侧问题——LLM 改写/归一引入的
+        // 关系词（「客户」）会让护栏对用户没问过的词拒答。
+        const tMissingRel = ungroundedRelationTerm(relationQuestion, tRelSource);
         if (tMissingRel) {
           const tSuggestions = tRows.filter((n) => !n.is_sensitive).slice(0, 3);
           const { answer, references } = buildNoAnswerResponse(tSuggestions, "not_in_notes", tMissingRel);
@@ -4461,7 +4465,7 @@ app.post("/api/ask", async (c) => {
   if (!metaQuestion) {
     const relSource = notes.map((n) => `${n.title ?? ""}\n${n.content}\n${n.tags ?? ""}`).join("\n");
     // R274（audit-r273 P1-2 R18）：同上，关系护栏只看可信侧问题。
-    const missingRel = ungroundedRelationTerm(intentQuestion, relSource);
+    const missingRel = ungroundedRelationTerm(relationQuestion, relSource);
     if (missingRel) {
       const relSuggestions = notes.filter((n) => !n.is_sensitive).slice(0, 3);
       const { answer, references } = buildNoAnswerResponse(relSuggestions, "not_in_notes", missingRel);

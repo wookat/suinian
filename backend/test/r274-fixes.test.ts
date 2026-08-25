@@ -201,6 +201,10 @@ describe("R274 关系护栏词边界", () => {
     expect(ungroundedRelationTerm("本季度OKR的客户端首屏加载目标是多少", "季度 OKR：首屏 LCP 目标 2.5 秒以内")).toBeNull();
     expect(ungroundedRelationTerm("给客户送过什么礼物", "买了一本书")).toBe("客户");
   });
+  it("英文关系词直接命中原话（不依赖 LLM 语言归一）", () => {
+    expect(ungroundedRelationTerm("what gifts did I buy my girlfriend", "买了一本书")).toBe("girlfriend");
+    expect(ungroundedRelationTerm("what did I promise the client", "客户要求周五交付")).toBeNull();
+  });
 });
 
 describe("R274 收口层与生成护栏协同", () => {
