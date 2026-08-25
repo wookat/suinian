@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev src/dev-entry.ts",
     "dev:init": "wrangler d1 migrations apply suinian --local",
     "deploy": "wrangler deploy",
     "test": "vitest run",

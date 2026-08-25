@@ -40,7 +40,8 @@ describe("R272 verbatim exemption (audit-r271 P1-3/P1-4)", () => {
   it("detects verbatim-style questions", () => {
     expect(questionRequestsVerbatim("我记的 nginx 反代配置原文是什么？")).toBe(true);
     expect(questionRequestsVerbatim("我记的那个压缩发布 shell 脚本原文是什么？")).toBe(true);
-    expect(questionRequestsVerbatim("月度统计 SQL 语句是什么？")).toBe(true);
+    // R276 P0-3（audit-r275）：「…是什么」归为普通问答，不再触发 verbatim 豁免
+    expect(questionRequestsVerbatim("月度统计 SQL 语句是什么？")).toBe(false);
     expect(questionRequestsVerbatim("帮我总结一下最近的笔记")).toBe(false);
     expect(questionRequestsVerbatim("有哪些备忘和提醒？")).toBe(false);
   });

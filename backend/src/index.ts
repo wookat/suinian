@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, finalizeAskAnswer } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -32,7 +32,7 @@ import {
   REBUILD_SLICE_BUDGET_MS,
   type ThreadJobRow,
 } from "./thread-jobs";
-import { chatComplete, chatCompleteStream, aiProbe, type ChatOptions } from "./ai";
+import { chatComplete, aiProbe, type ChatOptions } from "./ai";
 import {
   hashPassword,
   verifyPassword,
@@ -164,19 +164,26 @@ app.use("*", async (c, next) => {
   c.res.headers.set("Referrer-Policy", "no-referrer");
 });
 
-// R274 P0-1 单一收口点（docs/decision-r274.md §1，前身是 R266 的外链收口）：
+// R274/R276 P0-1 单一收口点（docs/decision-r274.md §1，audit-r275 §1/§5）：
 // /api/ask 所有带 answer 的 JSON 响应（全部确定性路由早返回 + LLM 生成分支 +
-// MCP ask 工具的内部转发）统一经过 finalizeAskAnswer：外链收口 + 笔记内指令
-// 段落隔离。任何新增答案路由不经这里就没有响应，漏挂在结构上不可能。
+// MCP ask 工具的内部转发）统一经过 finalizeAskAnswer：仿冒标注剥除 + 外链收口 +
+// 笔记内指令段落隔离。任何新增答案路由不经这里就没有响应，漏挂在结构上不可能。
+// R276：生成分支已在路由内用完整资料面（askGuardData，含全部召回笔记）跑过
+// 同一个 finalizeAskAnswer 并打上 guard_finalized 标记（服务端构造的 JSON 字段，
+// 笔记正文无法伪造）；未打标记的响应（确定性路由/未来新增路由）在这里强制
+// 补跑——两条路径物理上共用同一个安全出口函数，不存在第二条出答案的通道。
+// 确定性路径的 Server-Timing 同样暴露 conaud 阶段（确定性内容审计 = finalize）。
 // 另（audit-r273 P1-3）：带 Accept: text/event-stream 的请求若拿到的是 JSON
-// 答案（确定性路由），在这里统一包装为 meta→delta→done 的 SSE——流式口径
-// 对所有路由一致。
+// 答案，在这里统一包装为 meta→delta×n→done 的 SSE（R276：按句界分片，拼接
+// 恒等于非流式 body）——流式口径对所有路由一致。
 app.use("/api/ask", async (c, next) => {
   await next();
   if (!(c.res.headers.get("content-type") ?? "").includes("application/json")) return;
   const body = (await c.res.clone().json()) as Record<string, unknown>;
   const wantsSse = (c.req.header("accept") ?? "").includes("text/event-stream");
   if (typeof body.answer !== "string") return;
+  const preFinalized = body.guard_finalized === true;
+  if (preFinalized) delete body.guard_finalized;
   const reqBody = await c.req.json<{ question?: string }>().catch(() => null);
   const question = typeof reqBody?.question === "string" ? reqBody.question : "";
   const notesText = Array.isArray(body.notes)
@@ -185,28 +192,35 @@ app.use("/api/ask", async (c, next) => {
         .join("\n")
     : "";
   const t0 = Date.now();
-  const fin = finalizeAskAnswer(body.answer, { dataText: notesText, question });
-  if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
-  else if (fin.changed) console.log("ask: external link scrubbed from deterministic answer");
-  const outBody = fin.changed ? { ...body, answer: fin.answer } : body;
+  // 已在路由内经同一 finalize 收口的生成分支不重复执行（stripSpoofedControlMarks
+  // 会把本轮插入的真标注当仿冒剥掉，且路由内的资料面更完整）。
+  const fin = preFinalized
+    ? { answer: body.answer, changed: false, isolated: body.instruction_isolated === true }
+    : finalizeAskAnswer(body.answer, { dataText: notesText, question });
+  if (!preFinalized) {
+    if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
+    else if (fin.changed) console.log("ask: external link scrubbed from deterministic answer");
+  }
+  // P0-2：隔离语义同时由结构化字段承载，渲染层可据此区分真标注。
+  const outBody: Record<string, unknown> = { ...body, answer: fin.answer, ...(fin.isolated ? { instruction_isolated: true } : {}) };
   const headers = new Headers(c.res.headers);
   const prevTiming = headers.get("Server-Timing");
-  headers.set("Server-Timing", `${prevTiming ? `${prevTiming}, ` : ""}detguard;dur=${Date.now() - t0}`);
+  const finDur = Date.now() - t0;
+  const conaudPart = prevTiming?.includes("conaud") ? "" : `conaud;dur=${finDur}, `;
+  headers.set("Server-Timing", `${prevTiming ? `${prevTiming}, ` : ""}${conaudPart}detguard;dur=${finDur}`);
   if (wantsSse && c.res.status === 200) {
     const enc = new TextEncoder();
     const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     const refs = Array.isArray(outBody.references) ? outBody.references.length : 0;
+    // R276 P1-3：delta 分片只发生在 finalize 之后（fail-closed 先于 delta 生效），
+    // 全部 delta 拼接恒等于 done.answer，也恒等于非流式 body.answer。
     const payload =
-      sse("meta", { retrieved: refs, deterministic: true }) +
-      sse("delta", { text: outBody.answer }) +
+      sse("meta", { retrieved: refs }) +
+      sseAnswerChunks(String(outBody.answer)).map((t) => sse("delta", { text: t })).join("") +
       sse("done", outBody);
     headers.set("content-type", "text/event-stream; charset=utf-8");
     headers.set("cache-control", "no-cache");
     c.res = new Response(enc.encode(payload), { status: 200, headers });
-    return;
-  }
-  if (!fin.changed && !prevTiming) {
-    c.res.headers.set("Server-Timing", headers.get("Server-Timing")!);
     return;
   }
   c.res = new Response(JSON.stringify(outBody), { status: c.res.status, headers });
@@ -1241,10 +1255,13 @@ const CATEGORY_LABEL: Record<string, string> = {
 
 /**
  * Render enumeration answer lines, folding notes that display identically
- * (same category + same first line, e.g. re-saved duplicates or several
+ * (same category + same title, e.g. re-saved duplicates or several
  * encrypted rows) into one line with a ×N count.
+ * R276 P0-1（audit-r275 K01/K04/K05/X03）：枚举只输出结构化字段（分类/标题/
+ * 时间），不再回显任意正文首行；标题本身经 sanitizeEnumTitle 中和（剥仿冒
+ * 标注、隔离读者指令/伪授权、外链收口）；正文只能在笔记卡片（引用区）查看。
  */
-function enumNoteLines(rows: NoteRow[], withSnippet = false): string[] {
+function enumNoteLines(rows: NoteRow[]): string[] {
   const order: string[] = [];
   const counts = new Map<string, number>();
   for (const n of rows) {
@@ -1252,13 +1269,8 @@ function enumNoteLines(rows: NoteRow[], withSnippet = false): string[] {
     let text: string;
     if (n.is_sensitive) {
       text = "（加密的敏感笔记）";
-    } else if (withSnippet && n.title) {
-      // 主题枚举里标题常是概括词（「老人呼叫App功能」），补正文首行片段
-      // 才回答得了「都有哪些想法」这类看内容的问法
-      const body = (n.content.split("\n")[0] || "").slice(0, 60);
-      text = body && body !== n.title ? `${n.title}：${body}` : (n.title || "").slice(0, 40);
     } else {
-      text = (n.title || n.content.split("\n")[0] || "").slice(0, 40);
+      text = sanitizeEnumTitle(n.title) || `（无标题笔记，${(n.created_at || "").slice(0, 10)}）`;
     }
     const line = "- ［" + label + "］" + text;
     if (!counts.has(line)) order.push(line);
@@ -4092,7 +4104,7 @@ app.post("/api/ask", async (c) => {
           return c.json({ answer, references, notes: refNotes, no_answer: true, relation_guard: true });
         }
       }
-      const tLines = enumNoteLines(tRows, true);
+      const tLines = enumNoteLines(tRows);
       let answer = enumCategory
         ? `${timeRange?.phrase ?? ""}分类为「${enumTopic}」的记录共 ${tTotal} 条`
         : `${timeRange?.phrase ?? ""}和「${enumTopic}」相关的记录共 ${tTotal} 条`;
@@ -4530,10 +4542,8 @@ app.post("/api/ask", async (c) => {
   // 抽取（语言无关），与生成并行启动；判别失败退化为 guardAskAnswer 内的
   // 确定性资料派生句段剥除兜底，不阻断回答。
   const tDir = Date.now();
-  let directiveDemands: string[] | null = null;
   const directivePromise = extractDirectiveDemands(c.env, askGuardData)
     .then((d) => {
-      directiveDemands = d;
       askMarks.push(["dirext", Date.now() - tDir]);
       return d;
     })
@@ -4545,28 +4555,14 @@ app.post("/api/ask", async (c) => {
     `${context || "（无相关笔记）"}${graphTriples.length > 0 ? `\n\n实体关系：\n${graphTriples.join("\n")}` : ""}`,
     dataNonce
   );
-  const runGeneration = async (onDelta?: (text: string) => void): Promise<Record<string, unknown>> => {
+  // R276 P1-3（audit-r275 §5）：彻底移除「生成中途先行外发 delta」的通道。
+  // R275 实测到 delta 给实质答案而 done/非流式给拒答——中途 delta 只跑了部分
+  // 护栏，未经来源归因审计与 fail-closed 终审，是结构性泄洩面。改为：生成全程
+  // 缓冲，全部护栏/审计/finalize 完成后才把最终答案按句界分片为 delta 序列
+  //（分片在流式分支里做），拼接恒等于 done 与非流式 body，fail-closed 先于
+  // 任何 delta 生效。这是 docs/decision-r272.md §5「裁决前缓冲」的彻底形态。
+  const runGeneration = async (): Promise<Record<string, unknown>> => {
   const tGen = Date.now();
-  // 流式 fail-closed（R272，docs/decision-r272.md §5）：
-  //  - 抽取器裁决前一律缓冲不外发（R270 的 fail-open 窗口：裁决前 delta 直通）；
-  //  - 裁决为「无指令」（demands === []）才开始增量外发；demands>0 或抽取失败
-  //    整问无 delta，答案只在终审后随 done 下发；
-  //  - 稳定窗从 200 降到 48 字符（audit-r271 P2-1：生产答案普遍 <200 字符，
-  //    stable 恒为 0，一个 delta 都发不出）。done 事件仍以最终全文替换。
-  // R274（audit-r273 P1-3）：固定 48 字符 holdback 改为句界/行界推进——短答案
-  // 也能产生 delta；末尾未成句部分仍扣留到 done 全文替换。
-  const lastStableBoundary = (s: string) => {
-    for (let i = s.length - 1; i >= 0; i--) {
-      if ("\n。！？!?；;".includes(s[i])) return i + 1;
-    }
-    return 0;
-  };
-  let deltaRaw = "";
-  let deltaSent = 0;
-  let directiveSettled = false;
-  void directivePromise.finally(() => {
-    directiveSettled = true;
-  });
   // 模型偶发把逐行 datamarking 前缀「D<nonce>｜」或资料区片段元数据头
   // 「(id=<uuid>, <时间戳>, <分类>…)」抄进回答（B15/R268-08 生产实测），
   // 确定性剥除；nonce 随机、uuid 形态固定，正常正文不可能撞上
@@ -4574,30 +4570,6 @@ app.post("/api/ask", async (c) => {
     t
       .replace(new RegExp(`D${dataNonce}｜`, "gi"), "")
       .replace(/[(（]\s*id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[^)）]*[)）]/gi, "");
-  const flushDelta = onDelta
-    ? () => {
-        if (!directiveSettled) return; // 裁决前缓冲（fail-closed）
-        if (directiveDemands === null || directiveDemands.length > 0) return; // 抽取失败/含指令：无增量
-        const safe = guardAskAnswer(stripDataMarks(deltaRaw), {
-          dataText: askGuardData,
-          question: askGuardQuestion,
-          directiveDemands: [],
-        }).answer;
-        const stable = lastStableBoundary(safe);
-        if (stable > deltaSent) {
-          onDelta(safe.slice(deltaSent, stable));
-          deltaSent = stable;
-        }
-      }
-    : undefined;
-  const guardedDelta = flushDelta
-    ? (text: string) => {
-        deltaRaw += text;
-        flushDelta();
-      }
-    : undefined;
-  // 裁决落地时把已缓冲的增量补发（裁决通常早于生成完成，但短答案可能先到）
-  if (flushDelta) void directivePromise.then(() => flushDelta());
   const genOpts: ChatOptions = {
     temperature: 0.3,
     max_tokens: 800,
@@ -4622,9 +4594,7 @@ app.post("/api/ask", async (c) => {
       },
     ],
   };
-  const answer = guardedDelta
-    ? await chatCompleteStream(c.env, genOpts, guardedDelta)
-    : await chatComplete(c.env, genOpts);
+  const answer = await chatComplete(c.env, genOpts);
   // semantic-only hits (never keyword-matched) below the citation threshold
   const weakIds = new Set(extraIds.filter((id) => (semScore.get(id) ?? 0) < ASK_CITATION_MIN_SCORE));
   // 检索命中却误拒答（R113 P1）：强命中（关键词命中或语义分达标）存在时，
@@ -4669,10 +4639,20 @@ app.post("/api/ask", async (c) => {
   if (answer2) {
     // 等判别器收尾（与生成并行启动，通常已完成）；到预算仍未回按判别
     // 失败处理，确定性兜底照常生效
-    const demands = await Promise.race([
+    const demandsRaw = await Promise.race([
       directivePromise,
       new Promise<string[] | null>((resolve) => setTimeout(() => resolve(null), 8_000)),
     ]);
+    // R276 P1-2（audit-r275 §2 拒答问法 5/5 复现）：demand 接地校验。抽取器的
+    // 契约是「从资料原样摘取」，资料里不存在的 demand 是幻觉误报（benign 笔记
+    // 被报含指令 → 无增量 + fail-closed 拒答的主因），确定性剔除；真实跨笔记
+    // 拼接的 demand 最终文字同样存在于资料中，不受影响。
+    const askGuardDataCompact = foldCompact(askGuardData);
+    const demands = demandsRaw === null
+      ? null
+      : demandsRaw.filter((d) => askGuardData.includes(d) || askGuardDataCompact.includes(foldCompact(d)));
+    if (demandsRaw !== null && demands !== null && demands.length < demandsRaw.length)
+      console.log(`ask: ${demandsRaw.length - demands.length} ungrounded directive demand(s) dropped`);
     const g = guardAskAnswer(answer2, {
       dataText: askGuardData,
       question: askGuardQuestion,
@@ -4734,11 +4714,21 @@ app.post("/api/ask", async (c) => {
             : undefined;
         const audited = applyConductVerdict(answer2, verdict, audKeep);
         if (audited !== answer2) console.log(`ask: conduct audit scrubbed segment(s)`);
-        answer2 =
-          audited.trim() === ""
-            ? "相关笔记中包含试图影响回答的内容，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
-              notes.slice(0, 3).map((_n, i) => `[${i + 1}]`).join(" ")
-            : audited;
+        if (audited.trim() === "") {
+          // R276 P1-2（audit-r275 §2）：抽取器已裁定资料无指令（demands === []）时，
+          // 审计把全文剥空只能是误报（资料无指令则答案行为不可能派生自资料指令，
+          // docs/decision-r272.md 支柱 1 的定义前提不成立），保留原答案；否则仍
+          // fail-closed 降级为保守答案。
+          if (demands !== null && demands.length === 0) {
+            console.log("ask: conduct audit emptied answer but no directives in data; keeping answer");
+          } else {
+            answer2 =
+              "相关笔记中包含试图影响回答的内容，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
+              notes.slice(0, 3).map((_n, i) => `[${i + 1}]`).join(" ");
+          }
+        } else {
+          answer2 = audited;
+        }
       }
     }
   }
@@ -4759,7 +4749,7 @@ app.post("/api/ask", async (c) => {
   }
   askMarks.push(["gen", Date.now() - tGen]);
   // 流式分支的响应头已发出，Server-Timing 只在整段 JSON 分支可设
-  if (!onDelta) c.header("Server-Timing", serverTimingHeader([...askMarks, ["total", Date.now() - askT0]]));
+  if (!wantsStream) c.header("Server-Timing", serverTimingHeader([...askMarks, ["total", Date.now() - askT0]]));
   // the model itself concluded "没找到" over recalled topic notes: honest
   // wording is 「笔记里没提到」, not 「没找到相关笔记」 (R115 P2 拒答口径)；
   // suggestions prefer strong semantic hits, falling back to the top recall
@@ -4883,45 +4873,50 @@ app.post("/api/ask", async (c) => {
   return { answer: finalAnswer, references, notes: refNotes };
   };
 
+  // R276 P0-1：生成分支的唯一出口——与确定性路由共用同一个 finalizeAskAnswer
+  // 安全出口函数（资料面用完整的 askGuardData），并打上 guard_finalized 标记
+  //（服务端构造的 JSON 字段，中间件据此不重复收口）。REST 与 SSE 都只消费
+  // 本函数的产物，同源同出口。
+  const finalizeGenerationBody = (body: Record<string, unknown>): Record<string, unknown> => {
+    if (typeof body.answer !== "string") return { ...body, guard_finalized: true };
+    const fin = finalizeAskAnswer(body.answer, { dataText: askGuardData, question: askGuardQuestion });
+    if (fin.isolated) console.log("ask: note-embedded instruction isolated at generation exit");
+    return {
+      ...body,
+      answer: fin.answer,
+      guard_finalized: true,
+      ...(fin.isolated ? { instruction_isolated: true } : {}),
+    };
+  };
+
   if (wantsStream) {
-    const { readable, writable } = new TransformStream<Uint8Array>();
-    const writer = writable.getWriter();
-    const enc = new TextEncoder();
-    const send = (event: string, data: unknown) =>
-      writer.write(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)).catch(() => {});
-    c.executionCtx.waitUntil(
-      (async () => {
-        try {
-          await send("meta", { retrieved: notes.length });
-          const body = await runGeneration((text) => {
-            void send("delta", { text });
-          });
-          // SSE done 事件不经 JSON 中间件，这里走同一收口层（R274：外链 + 指令隔离）
-          if (typeof body.answer === "string")
-            body.answer = finalizeAskAnswer(body.answer, { dataText: askGuardData, question: askGuardQuestion }).answer;
-          await send("done", body);
-        } catch (err) {
-          console.error("ask: stream generation failed", err);
-          await send("error", { message: "生成失败，请重试" });
-        } finally {
-          try {
-            await writer.close();
-          } catch {
-            /* client disconnected */
-          }
-        }
-      })()
-    );
-    return new Response(readable, {
+    // R276 P1-3：全部护栏/审计/finalize 完成后才外发第一个 delta（fail-closed
+    // 先于 delta 生效）；delta 序列是最终答案的句界分片，拼接恒等于 done.answer，
+    // 也恒等于非流式 body.answer（同一个 finalizeGenerationBody 产物）。
+    // finalize 先于响应头完成，因此 SSE 通道同样暴露 conaud（与 REST 同口径）。
+    const raw = await runGeneration();
+    const tFin = Date.now();
+    const body = finalizeGenerationBody(raw);
+    const conaudDur = Date.now() - tFin;
+    delete body.guard_finalized;
+    const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    const payload =
+      sse("meta", { retrieved: notes.length }) +
+      (typeof body.answer === "string"
+        ? sseAnswerChunks(body.answer).map((t) => sse("delta", { text: t })).join("")
+        : "") +
+      sse("done", body);
+    return new Response(new TextEncoder().encode(payload), {
       headers: {
         "content-type": "text/event-stream; charset=utf-8",
         "cache-control": "no-cache",
         connection: "keep-alive",
+        "server-timing": `conaud;dur=${conaudDur}`,
       },
     });
   }
 
-  return c.json(await runGeneration());
+  return c.json(finalizeGenerationBody(await runGeneration()));
 });
 
 // ---- GET /api/threads ----
