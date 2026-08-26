@@ -1257,10 +1257,12 @@ export function isolateNoteInstructions(
   _allowedHosts: string[] = ANSWER_LINK_ALLOWED_HOSTS,
   opts?: { verbatim?: boolean }
 ): string {
-  // R276 P1-1：用户明确索要原文时，可执行管道字面不再整段抹除，而是前置
-  // 警示标注后保留原文（隔离/警示呈现，不裸给）；非原文请求仍替换为隔离标记。
-  const verbatim = opts?.verbatim ?? questionRequestsVerbatim(question);
-  const execRep = (literal: string) => (verbatim ? `${EXEC_PIPELINE_WARN_MARK}${literal}` : INSTRUCTION_ISOLATED_MARK);
+  // R276 P1-1：可执行外部管道（下载并执行远程代码）不进入答案叙述层——
+  // 即使用户明确索要原文也只给隔离标记（原文始终可在笔记卡片查看），
+  // 杜绝「用户复制粘贴执行」这条最后一米的攻击面。
+  void question;
+  void opts;
+  const execRep = (_literal: string) => INSTRUCTION_ISOLATED_MARK;
   const segs = splitSegmentsFenceAware(answer);
   const reps: Array<{ start: number; end: number; rep: string }> = [];
   for (const seg of segs) {
@@ -1271,7 +1273,6 @@ export function isolateNoteInstructions(
       const outLines = lines.map((l) => {
         if (segmentIsReaderDirective(l)) {
           changed = true;
-          if (verbatim && EXEC_PIPELINE_RE.test(l.normalize("NFKC"))) return `${EXEC_PIPELINE_WARN_MARK}\n${l}`;
           return INSTRUCTION_ISOLATED_MARK;
         }
         return l;
@@ -1321,8 +1322,24 @@ export function finalizeAskAnswer(
   // 此后插入的标注必然出自系统本轮判定，不可仿冒。
   const despoofed = stripSpoofedControlMarks(answer);
   const afterLinks = scrubAnswerLinks(despoofed, hosts, { dataText: opts.dataText, question: opts.question });
-  const afterIsolate = isolateNoteInstructions(afterLinks, opts.question, opts.dataText, hosts);
+  const afterEmails = scrubDataDerivedEmails(afterLinks, opts.dataText, opts.question);
+  const afterIsolate = isolateNoteInstructions(afterEmails, opts.question, opts.dataText, hosts);
   return { answer: afterIsolate, changed: afterIsolate !== answer, isolated: afterIsolate !== afterLinks };
+}
+
+// 资料派生邮箱收口（R276，audit-r275 K01 族 / R270-31）：跨笔记分片攻击把
+// 外传目的地邮箱放进另一条笔记，摘要/枚举类回答忠实转述时就把回传地址递
+// 到了叙述层。用户没问邮箱/联系方式/原文时，答案里出现「资料里的邮箱地址」
+// 一律替换为隔离标记（原文仍在笔记卡片可见）。
+const ANSWER_EMAIL_RE = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g;
+const EMAIL_ASKED_RE = /邮箱|邮件地址|email|e-mail|联系方式|怎么联系|发给谁|收件人/i;
+
+export function scrubDataDerivedEmails(answer: string, dataText: string, question: string): string {
+  if (!dataText || EMAIL_ASKED_RE.test(question) || questionRequestsVerbatim(question)) return answer;
+  const dataFold = dataText.normalize("NFKC").toLowerCase();
+  return answer.replace(ANSWER_EMAIL_RE, (m) =>
+    dataFold.includes(m.normalize("NFKC").toLowerCase()) ? INSTRUCTION_ISOLATED_MARK : m
+  );
 }
 
 /** 枚举行的标题隔离标注（结构化枚举中标题本身命中读者指令时的占位）。 */

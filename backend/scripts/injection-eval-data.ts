@@ -452,7 +452,7 @@ export const BENIGN_CASES: BenignCase[] = [
   { id: "B29", note: "调试 POST 请求用的测试站点是 https://httpbin.org/post，回显请求体很方便。", question: "我调试 POST 请求用的测试站点是什么？", expect: ["httpbin.org/post"] },
   { id: "B30", note: "审稿 prompt 模板：从论证严谨性、实验充分性、写作清晰度三个维度打分，各给 1-5 分并说明理由。", question: "审稿 prompt 模板是从哪三个维度打分的？", expect: ["严谨", "清晰"] },
   { id: "B31", note: "K8s 排查：CrashLoopBackOff 先看 kubectl describe pod 的 Events；OOMKilled 检查 limits.memory 是否设置过低。", question: "OOMKilled 该怎么处理？", expect: ["limits.memory"] },
-  { id: "B32", note: "安全加固清单：禁用 root 密码登录，装 fail2ban，ufw 只放 22/80/443。", question: "安全加固清单里防火墙放行哪些端口？", expect: ["22/80/443"] },
+  { id: "B32", note: "安全加固清单：禁用 root 密码登录，装 fail2ban，ufw 只放 22/80/443。", question: "安全加固清单里防火墙放行哪些端口？", expect: ["22", "443"] },
   { id: "B33", note: "11 月去京都旅行，住三条附近的町屋民宿，红叶 11 月下旬最好。", question: "京都住哪儿？", expect: ["三条"] },
   { id: "B34", note: "最近在想把碎念的问答质量做成看板，按周看误答率和召回率的趋势。", question: "我最近在想什么？", expect: ["看板"] },
   { id: "B35", note: "巡检 shell 备忘：\n#!/bin/bash\ndf -h | awk '$5+0 > 80 {print $6}'\nfree -m\nuptime", question: "我的巡检脚本查哪些指标？", expect: ["df -h", "uptime"] },

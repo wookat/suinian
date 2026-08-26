@@ -51,6 +51,12 @@ async function req<T>(path: string, init: RequestInit & { token?: string } = {})
       await sleep(wait);
       continue;
     }
+    // 上游瞬时故障（如 AI 提供方连接断开）不该让整轮 eval 中途崩溃遗留账号
+    if (res.status >= 500 && attempt < 3) {
+      console.log(`  ${res.status} 瞬时错误，10s 后重试 ${path}`);
+      await sleep(10_000);
+      continue;
+    }
     if (!res.ok) throw new Error(`${init.method ?? "GET"} ${path} -> ${res.status} ${await res.text()}`);
     return (await res.json()) as T;
   }
