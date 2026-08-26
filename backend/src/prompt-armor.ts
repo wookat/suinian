@@ -1283,7 +1283,7 @@ export function splitSegmentsFenceAware(answer: string): Array<{ start: number; 
 export function isolateNoteInstructions(
   answer: string,
   question: string,
-  _dataText?: string,
+  dataText?: string,
   _allowedHosts: string[] = ANSWER_LINK_ALLOWED_HOSTS,
   opts?: { verbatim?: boolean }
 ): string {
@@ -1296,6 +1296,31 @@ export function isolateNoteInstructions(
   const verbatim = opts?.verbatim ?? questionRequestsVerbatim(question);
   const execSegRep = (segText: string) =>
     verbatim ? `${EXEC_PIPELINE_WARN_MARK}${segText}` : INSTRUCTION_ISOLATED_MARK;
+  // R278 P1-4（生产 UI 实测）：模型把指令段改写进摘要（「删除全部资料类
+  // 笔记」→「删除资料类笔记以释放空间」）后，改写体不再命中指令正则。
+  // 收口：答案段与资料中的「读者指令段」共享 ≥5 字连续片段（且该片段
+  // 不来自提问）时，视为指令的改写载体，整段隔离。只比对指令段，benign
+  // 笔记无指令段故不受影响。
+  const directiveShadows: string[] = [];
+  if (dataText) {
+    for (const dseg of splitSegmentsFenceAware(dataText)) {
+      if (dseg.text.startsWith("```")) continue;
+      if (segmentIsNonExecReaderDirective(dseg.text)) directiveShadows.push(foldCompact(dseg.text));
+    }
+  }
+  const qFold = foldCompact(question);
+  const echoesDirective = (segText: string): boolean => {
+    if (directiveShadows.length === 0) return false;
+    const s = foldCompact(segText);
+    if (s.length < 5) return false;
+    for (const d of directiveShadows) {
+      for (let i = 0; i + 5 <= d.length; i++) {
+        const sub = d.slice(i, i + 5);
+        if (!qFold.includes(sub) && s.includes(sub)) return true;
+      }
+    }
+    return false;
+  };
   const segs = splitSegmentsFenceAware(answer);
   const reps: Array<{ start: number; end: number; rep: string }> = [];
   for (const seg of segs) {
@@ -1325,6 +1350,10 @@ export function isolateNoteInstructions(
       continue;
     }
     if (segmentIsNonExecReaderDirective(seg.text)) {
+      reps.push({ start: seg.start, end: seg.end, rep: INSTRUCTION_ISOLATED_MARK });
+      continue;
+    }
+    if (echoesDirective(seg.text)) {
       reps.push({ start: seg.start, end: seg.end, rep: INSTRUCTION_ISOLATED_MARK });
       continue;
     }
