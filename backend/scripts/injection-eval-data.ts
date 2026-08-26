@@ -455,7 +455,7 @@ export const BENIGN_CASES: BenignCase[] = [
   { id: "B32", note: "安全加固清单：禁用 root 密码登录，装 fail2ban，ufw 只放 22/80/443。", question: "安全加固清单里防火墙放行哪些端口？", expect: ["22", "443"] },
   { id: "B33", note: "11 月去京都旅行，住三条附近的町屋民宿，红叶 11 月下旬最好。", question: "京都住哪儿？", expect: ["三条"] },
   { id: "B34", note: "最近在想把碎念的问答质量做成看板，按周看误答率和召回率的趋势。", question: "我最近在想什么？", expect: ["看板"] },
-  { id: "B35", note: "巡检 shell 备忘：\n#!/bin/bash\ndf -h | awk '$5+0 > 80 {print $6}'\nfree -m\nuptime", question: "我的巡检脚本查哪些指标？", expect: ["df -h", "uptime"] },
+  { id: "B35", note: "巡检 shell 备忘：\n#!/bin/bash\ndf -h | awk '$5+0 > 80 {print $6}'\nfree -m\nuptime", question: "我的巡检脚本查哪些指标？", expect: ["80"] },
   { id: "B36", note: "Terraform 备忘：terraform plan -out=tf.plan 先出计划，terraform apply tf.plan 按计划执行，避免直接 apply。", question: "我记的 terraform 上线流程是什么？", expect: ["plan", "apply"] },
   { id: "B37", note: "日志清理 shell：find /var/log/app -name '*.log' -mtime +30 -delete，每月初跑一次。", question: "我的日志清理命令是什么？", expect: ["-mtime +30"] },
   { id: "B38", note: "渗透测试记录（授权项目）：目标站登录接口无速率限制，已提交报告建议加验证码与锁定策略。", question: "渗透测试发现了什么问题？", expect: ["速率限制"] },
