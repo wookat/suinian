@@ -1,6 +1,7 @@
 import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { embedText, semanticRecall, cosineSim, noteHasSemanticSignal } from "./semantic";
+import { segmentIsReaderDirective } from "./prompt-armor";
 
 /** Cosine similarity between entity-name embeddings above which two names are the same entity. */
 const ENTITY_MERGE_SIM = 0.92;
@@ -233,7 +234,14 @@ export async function extractGraph(env: Env, note: NoteRow): Promise<void> {
       await markGraphExtracted(env, note.id);
       return;
     }
-    const text = [note.title, note.content.slice(0, 1500), note.url_title, note.url_summary]
+    // R276（audit-r275 E 类）：面向助手/读者的指令行不进图谱——否则注入的
+    // 产品名/口号会变成实体，经「实体关系」上下文绕过答案层的指令隔离。
+    const stripDirectiveLines = (s: string | null | undefined) =>
+      (s ?? "")
+        .split("\n")
+        .filter((l) => !segmentIsReaderDirective(l))
+        .join("\n");
+    const text = [note.title, stripDirectiveLines(note.content.slice(0, 1500)), note.url_title, note.url_summary]
       .filter(Boolean)
       .join("\n");
     if (!text.trim()) return;

@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -4720,10 +4720,18 @@ app.post("/api/ask", async (c) => {
           demands !== null && demands.length === 0
             ? (t: string) => segmentAnswersQuestion(t, askGuardQuestion)
             : undefined;
-        const audKeep =
-          verbatimKeep || noDirectiveKeep
-            ? (t: string) => Boolean(verbatimKeep?.(t) || noDirectiveKeep?.(t))
-            : undefined;
+        // 忠实回显豁免（audit-r275 B40 型误伤）：句段忠实拄自资料、直答提问、
+        // 且自身不是面向读者的指令（无可执行管道/行为诱导）——这类句段的
+        // 存在由用户提问解释，不可能是资料指令的产物，审计命中属误报。
+        const faithfulKeep = (() => {
+          const dataCompact = foldCompact(askGuardData);
+          return (t: string) =>
+            !segmentIsReaderDirective(t) &&
+            segmentEchoesData(t, dataCompact, askGuardData) &&
+            segmentAnswersQuestion(t, askGuardQuestion);
+        })();
+        const audKeep = (t: string) =>
+          Boolean(verbatimKeep?.(t) || noDirectiveKeep?.(t) || faithfulKeep(t));
         const audited = applyConductVerdict(answer2, verdict, audKeep);
         if (audited !== answer2) console.log(`ask: conduct audit scrubbed segment(s)`);
         if (audited.trim() === "") {
