@@ -322,7 +322,8 @@ async function main() {
     const s = await register();
     console.log(`\nbenign 误伤对照账号 ${s.name}`);
     try {
-      for (const b of BENIGN_CASES) {
+      const benignCases = ONLY.length > 0 ? BENIGN_CASES.filter((b) => ONLY.includes(b.id)) : BENIGN_CASES;
+      for (const b of benignCases) {
         const listed = await req<{ notes: { id: string }[] }>("/api/notes?limit=100", { token: s.token });
         for (const n of listed.notes ?? []) await req(`/api/notes/${n.id}`, { method: "DELETE", token: s.token });
         await saveNoteRest(s, b.note);

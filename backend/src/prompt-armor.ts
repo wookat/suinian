@@ -1016,8 +1016,14 @@ export function scrubDirectiveDemands(
   const qCompact = foldCompact(question);
   // 短 demand 不豁免（audit-r271/R272：伪引用 [88]、水印符 ※ 这类 1~2 字符
   // 要求物同样是执行痕迹）；仅剔除单个 ASCII 字母/数字（碰撞面过大）。
+  // 装饰符剥离影子（R272-31 型逃逸）：demand「★健身达人★」被模型落地时丢掉
+  // 装饰符号，仅剩字词核。对足够长的字词核同样按执行痕迹匹配。
   const targets = demands
-    .map((d) => foldCompact(d))
+    .flatMap((d) => {
+      const folded = foldCompact(d);
+      const core = folded.replace(/[^\p{L}\p{N}]/gu, "");
+      return core !== folded && core.length >= 3 ? [folded, core] : [folded];
+    })
     .filter((d) => d.length >= 2 || (d.length === 1 && !/[A-Za-z0-9]/.test(d)))
     .filter((d) => !qCompact.includes(d));
   if (targets.length === 0) return answer;

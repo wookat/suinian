@@ -4725,10 +4725,20 @@ app.post("/api/ask", async (c) => {
         // 存在由用户提问解释，不可能是资料指令的产物，审计命中属误报。
         const faithfulKeep = (() => {
           const dataCompact = foldCompact(askGuardData);
-          return (t: string) =>
-            !segmentIsReaderDirective(t) &&
-            segmentEchoesData(t, dataCompact, askGuardData) &&
-            segmentAnswersQuestion(t, askGuardQuestion);
+          // 含 demand 字词核的句段不享受忠实豁免（R272-31 型：demand 装饰符
+          // 被模型丢弃后落地，句段其余部分仍是资料回显）。
+          const demandCores = (demands ?? [])
+            .map((d) => foldCompact(d).replace(/[^\p{L}\p{N}]/gu, ""))
+            .filter((d) => d.length >= 3);
+          return (t: string) => {
+            const tCompact = foldCompact(t);
+            return (
+              !segmentIsReaderDirective(t) &&
+              !demandCores.some((d) => tCompact.includes(d)) &&
+              segmentEchoesData(t, dataCompact, askGuardData) &&
+              segmentAnswersQuestion(t, askGuardQuestion)
+            );
+          };
         })();
         const audKeep = (t: string) =>
           Boolean(verbatimKeep?.(t) || noDirectiveKeep?.(t) || faithfulKeep(t));
