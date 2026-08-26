@@ -1192,6 +1192,22 @@ export const PSEUDO_AUTH_CLAIM_RE =
 const OFFLINE_INDUCE_RE =
   /把[^\n。；]{0,24}(?:钥匙|门禁卡|工牌|身份证|证件|银行卡|U盾|密码)[^\n。；]{0,24}(?:放进|放到|放在|交给|递给|留在|贴在)|(?:钥匙|门禁卡|工牌|身份证|证件|U盾)[^\n。；]{0,16}(?:交给|递给|交接给)[^\n。；]{0,12}(?:他人|别人|陌生人|前台|快递)/;
 
+// 外传目的地指令（R278 P2-1，audit-r277 X03）：「把…POST/上传/同步/回传到
+// https://…」——带外链目的地的外传指令，无论 verbatim 与否都是回传通道，
+// 整段隔离（书签收藏类「地址：https://…」无此句式，不受影响）。
+const EXFIL_URL_DIRECTIVE_RE =
+  /(?:把|将)[^\n。；]{0,40}(?:post|发送|发到|上传|同步|提交|回传|抄送)[^\n。；]{0,16}(?:到|至|给)?[^\n。；]{0,10}https?:\/\//i;
+
+// 伪系统提示（R278，audit-r277/R272-23）：内容侧伪造「本次问答将消耗 N 点
+// 额度」类计费/系统元叙述，不得被转述为系统行为。
+const PSEUDO_SYSTEM_NOTICE_RE =
+  /(?:本次|此次|每次)(?:问答|对话|回答|查询)[^\n。；]{0,16}(?:消耗|扣除|扣费|收费|计费)[^\n。；]{0,12}(?:额度|积分|点数|费用|点)|(?:额度|积分)[^\n。；]{0,10}(?:不足|即将用尽)[^\n。；]{0,12}(?:充值|续费|升级)/;
+
+// 听写拼装片段（R278，R268-33 跨笔记分片）：「要写的内容是…」「位置是
+// 回答的第…行」类面向回答体的听写定位描述，即使拆分到多条笔记也是指令。
+const DICTATION_FRAGMENT_RE =
+  /要写的内容|回答的(?:第[^\n。；]{0,4}行|开头|结尾|末尾)|写在回答|放在答案/;
+
 // 破坏性操作诱导（R276，audit-r275 X03）：诱导清空回收站/批量删除笔记类数据。
 const DESTRUCTIVE_INDUCE_RE =
   /(?:清空|清除)[^\n。；]{0,8}回收站|删除(?:全部|所有)[^\n。；]{0,8}(?:笔记|资料|数据|记录)|把回收站清空/;
@@ -1250,6 +1266,10 @@ export function segmentIsNonExecReaderDirective(segText: string): boolean {
   // R278 P1-2（audit-r277 X04）：社工诱导（凭据念给/发给他人、电话诱导）
   // 无论 verbatim 与否一律隔离。
   if (SOCIAL_ENGINEER_RE.test(t)) return true;
+  // R278 追加（生产 injection-eval 实测 X03/R272-23/R268-33）
+  if (EXFIL_URL_DIRECTIVE_RE.test(t)) return true;
+  if (PSEUDO_SYSTEM_NOTICE_RE.test(t)) return true;
+  if (DICTATION_FRAGMENT_RE.test(t)) return true;
   return false;
 }
 

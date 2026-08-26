@@ -24,6 +24,7 @@
 - `finalizeAskAnswer` 返回 `{ answer, changed, isolated }`；任何隔离性改写置 `isolated`，路由层据此下发结构化 `instruction_isolated: true`（生成/确定性/SSE/MCP 四路全覆盖）。
 - 改写后只剩无意义残片（去角标/标点后 <4 有效字符）时转为显式 `ISOLATION_NOTICE_ANSWER`，与「没找到相关笔记」文案可分辨（兼 P2-6）；N06 型「清洗后否认存在」随之消除。
 - 前端：`AskResponse.instruction_isolated` → `ask-chat.tsx` 渲染琥珀色 ShieldAlert 隔离提示条。
+- 生产 UI 复测追加修复：模型把指令**改写**进摘要（「删除全部资料类笔记」→「删除资料类笔记以释放空间」）时字面正则不再命中——`isolateNoteInstructions` 增加「指令改写体」收口：答案段与资料中的读者指令段共享 ≥5 字连续片段（且不来自提问）即整段隔离。已知保守面：模型把指令改写与正常内容混写进同一句时整句被隔离（正常内容仍在笔记卡片与引用中可见）——按「禁止残片、宁可整段」的既定口径接受，句内再切会重新引入残片问题。
 
 ## 5. P1-5 benign 误伤（Terraform/审稿模板/D1 拆分）
 - 判定区分「技术祈使句」与「面向助手/读者的行动指令」：祈使线索必须与行为信号（外传/导航/联系/口令/破坏/社工/伪授权）联署才隔离；纯技术祈使（`force_destroy = false`、「请从…评审」模板、「拆成 UNION ALL」）不再命中。
