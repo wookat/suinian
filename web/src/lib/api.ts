@@ -1202,32 +1202,40 @@ export async function rotateToken(): Promise<string> {
   return res.api_token
 }
 
-/** 注销是幂等删除（服务端级联实测百毫秒级），挂满的只会是连接级悬挂：
- * 与幂等 GET 同口径收紧到 20s。超时后先探测账号是否已删（R276 P2-1：
- * 服务端常已完成而浏览器连接悬挂，直接盲重试会再白等 20s），已删即成功；
- * 未删才重试一次，重试超时后再探测一次兜底。 */
+/** 注销是幂等删除（服务端级联实测百毫秒级），挂满的只会是连接级悬挂
+ * （R276 P2-1）：DELETE 发出后并行每 2s 探测一次 401，探到即成功，
+ * 不等 DELETE 响应挂满超时；探测/DELETE 双双失败才报错。 */
 export async function deleteAccount(): Promise<void> {
-  try {
-    await realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" }, GET_TIMEOUT_MS)
-  } catch (e) {
-    if (e instanceof NetworkError && e.timeout) {
-      if (await verifyAccountDeleted()) return
-      try {
-        await realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" }, GET_TIMEOUT_MS)
-      } catch (e2) {
-        if (e2 instanceof NetworkError && e2.timeout && (await verifyAccountDeleted())) return
-        throw e2
-      }
-      return
+  let deleteFailed: unknown = null
+  const del = realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" }, GET_TIMEOUT_MS)
+    .then(() => true)
+    .catch((e) => {
+      deleteFailed = e
+      return false
+    })
+  // 服务端级联亚秒完成，慢的只会是浏览器侧连接：DELETE 发出后并行短周期
+  // 探测 401，探到即成功返回，不陪连接悬挂等满超时。
+  const deadline = Date.now() + GET_TIMEOUT_MS + 10_000
+  for (;;) {
+    const won = await Promise.race([
+      del.then((ok) => (ok ? "done" : "failed")),
+      new Promise<"tick">((r) => setTimeout(() => r("tick"), 2_000)),
+    ])
+    if (won === "done") return
+    if (await verifyAccountDeleted()) return
+    if (won === "failed" && !(deleteFailed instanceof NetworkError && (deleteFailed as NetworkError).timeout))
+      throw deleteFailed
+    if (Date.now() > deadline) {
+      if (deleteFailed) throw deleteFailed
+      throw new NetworkError("注销请求超时", true)
     }
-    throw e
   }
 }
 
 /** 探测账号是否已被删除（token 失效 = 已删）；探测本身失败时保守返回 false。 */
 export async function verifyAccountDeleted(): Promise<boolean> {
   try {
-    await realFetch<{ name: string }>("/api/auth/me")
+    await realFetch<{ name: string }>("/api/auth/me", undefined, 4_000)
     return false
   } catch (e) {
     return e instanceof ApiError && e.status === 401
