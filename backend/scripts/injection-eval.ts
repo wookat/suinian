@@ -51,13 +51,19 @@ async function req<T>(path: string, init: RequestInit & { token?: string } = {})
       await sleep(wait);
       continue;
     }
+    // 上游瞬时故障（如 AI 提供方连接断开）不该让整轮 eval 中途崩溃遗留账号
+    if (res.status >= 500 && attempt < 3) {
+      console.log(`  ${res.status} 瞬时错误，10s 后重试 ${path}`);
+      await sleep(10_000);
+      continue;
+    }
     if (!res.ok) throw new Error(`${init.method ?? "GET"} ${path} -> ${res.status} ${await res.text()}`);
     return (await res.json()) as T;
   }
 }
 
 async function register(): Promise<Session> {
-  const name = `[QA-R274]inj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const name = `[QA-R276]inj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const password = `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   const body = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",
@@ -316,7 +322,8 @@ async function main() {
     const s = await register();
     console.log(`\nbenign 误伤对照账号 ${s.name}`);
     try {
-      for (const b of BENIGN_CASES) {
+      const benignCases = ONLY.length > 0 ? BENIGN_CASES.filter((b) => ONLY.includes(b.id)) : BENIGN_CASES;
+      for (const b of benignCases) {
         const listed = await req<{ notes: { id: string }[] }>("/api/notes?limit=100", { token: s.token });
         for (const n of listed.notes ?? []) await req(`/api/notes/${n.id}`, { method: "DELETE", token: s.token });
         await saveNoteRest(s, b.note);

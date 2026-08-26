@@ -13,11 +13,14 @@
 /* 触屏点击目标 ≥44×44（audit-r273 P2-1）：小控件（卡片「…」、完成 checkbox、
    复制、标签重命名等）视觉尺寸不变，用不占布局的伪元素把命中区扩到 44×44。
    仅 coarse pointer 生效；细指针（鼠标）不需要。仓库未使用 Tailwind after:
-   工具类，::after 无冲突。 */
+   工具类，::after 无冲突。
+   R276 P1-4（audit-r275）：本规则未分层，优先级高于 Tailwind 工具类所在的
+   utilities 层，曾把 FAB 的 fixed 覆盖成 relative 导致 375px 下遮挡卡片操作；
+   排除带定位工具类的元素。 */
 @media (pointer: coarse) {
-  button,
-  [role="button"],
-  [role="checkbox"] {
+  button:not(.fixed):not(.absolute):not(.sticky),
+  [role="button"]:not(.fixed):not(.absolute):not(.sticky),
+  [role="checkbox"]:not(.fixed):not(.absolute):not(.sticky) {
     position: relative;
   }
   button::after,
@@ -143,10 +146,10 @@
   /* 触屏设备上把小控件的命中区扩到 44×44px（WCAG 2.5.5 / Apple HIG），
      视觉尺寸不变：用伪元素向外扩展命中区，不影响大于 44px 的控件 */
   @media (pointer: coarse) {
-    button,
-    [role="button"],
-    [role="checkbox"],
-    [role="switch"] {
+    button:not(.fixed):not(.absolute):not(.sticky),
+    [role="button"]:not(.fixed):not(.absolute):not(.sticky),
+    [role="checkbox"]:not(.fixed):not(.absolute):not(.sticky),
+    [role="switch"]:not(.fixed):not(.absolute):not(.sticky) {
       position: relative;
     }
     button::after,
