@@ -1207,7 +1207,7 @@ const ASSISTANT_ADDRESS_RE =
   /回答[^\n。！？]{0,16}(?:时|问题)|作答时|应答时|回复时|答案(?:里|中|末尾|开头|结尾)|回答(?:里|中|末尾|开头|结尾)|系统(?:同步)?说明|系统指令|系统提示|助手s?须|附加要求|补充规则|(?:提到|问到|被问到|看到)[^\n。！？]{0,16}时|when answering|in your (?:answer|reply|response)|at the end of (?:the|your) (?:answer|reply)|回答する際|답변할 때/i;
 
 const INSTRUCT_VERB_RE =
-  /请|务必|必须|一律|附上|加上|写上|写出|输出|追加|引导|让用户|提醒用户|告知用户|要求用户|please|make sure|must|append|instruct/i;
+  /请|务必|必须|一律|附上|加上|写上|写出|输出|追加|(?:开头|结尾|末尾)(?:加|写|附|带)|[加写附]\s*[「『"'“]|引导|让用户|提醒用户|告知用户|要求用户|please|make sure|must|append|instruct/i;
 
 /**
  * 段落是否为「面向助手/读者的行动指令」（R274 隔离判定）：
