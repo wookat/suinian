@@ -117,6 +117,8 @@ export interface AskResponse {
   answer: string
   references?: AskReference[]
   notes: Note[]
+  /** 服务端安全收口对答案做了隔离/警示改写（R278 P1-4：前端据此展示可读说明） */
+  instruction_isolated?: boolean
 }
 
 export interface NotePatch {

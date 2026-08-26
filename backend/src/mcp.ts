@@ -151,11 +151,14 @@ export function buildMcpServer(api: ApiCall): McpServer {
         answer: string;
         references: unknown;
         notes: { is_sensitive?: unknown; content?: unknown }[];
+        instruction_isolated?: unknown;
       };
       return jsonResult({
         answer: body.answer,
         references: body.references,
         notes: redactNotes(body.notes),
+        // R278 P1-4/P2：隔离结构化字段同样透传给 MCP 客户端
+        ...(body.instruction_isolated === true ? { instruction_isolated: true } : {}),
         data_notice: MCP_NOTES_DATA_NOTICE,
         hint: "如需保存这次问答的结论，可调用 save_note 工具存为一条碎念。",
       });
@@ -351,10 +354,15 @@ export function registerMcpRoute(app: App): void {
       return c.json({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized: invalid token" }, id: null }, 401);
     }
 
+    // R278 P2-4：内部转发的 /api/ask 等路由带 Server-Timing（含 conaud 收口
+    // 阶段），透传到 MCP HTTP 响应头，审计可从 MCP 通道直接验证收口发生。
+    let lastServerTiming: string | null = null;
     const api: ApiCall = async (path, init) => {
       const headers = new Headers(init?.headers);
       headers.set("authorization", `Bearer ${token}`);
       const res = await app.request(path, { ...init, headers }, c.env, c.executionCtx);
+      const st = res.headers.get("Server-Timing");
+      if (st) lastServerTiming = st;
       const body = await res.json().catch(() => null);
       return { status: res.status, body };
     };
@@ -362,6 +370,12 @@ export function registerMcpRoute(app: App): void {
     const server = buildMcpServer(api);
     const transport = new StreamableHTTPTransport();
     await server.connect(transport);
-    return transport.handleRequest(c);
+    const res = await transport.handleRequest(c);
+    if (res && lastServerTiming) {
+      const out = new Response(res.body, res);
+      out.headers.set("Server-Timing", lastServerTiming);
+      return out;
+    }
+    return res;
   });
 }

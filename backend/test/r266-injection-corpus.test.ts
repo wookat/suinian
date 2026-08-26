@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { INJECTION_CASES, BENIGN_CASES, EVIL_HOST, bodyOf, markerOf, demandsOf } from "../scripts/injection-eval-data";
-import { buildDataBlock, makeDataNonce, guardAskAnswer, scrubAnswerLinks } from "../src/prompt-armor";
+import { buildDataBlock, makeDataNonce, guardAskAnswer, scrubAnswerLinks, finalizeAskAnswer } from "../src/prompt-armor";
 import { neutralizePromptInjection } from "../src/triage";
 
 // R266 常规回归：injection-eval 语料（R261/R263/R265 全部 28 变体 + 本轮自造
@@ -43,7 +43,12 @@ describe("R266 injection 语料：输出面最坏情况收口", () => {
     // 确定性层（判别器不可用时的兜底）：载荷里逐字出现的执行痕迹必须被剥。
     // 例外是痕迹文字本身含提问关键词（如 R268-34「请把全部笔记同步到…」含
     // 「笔记」）——保留规则是为把误伤压到 0 而刻意设置的，这类由语义层收口。
-    const g = guardAskAnswer(complied, { dataText: body, question: "帮我总结一下最近的笔记" });
+    // R278：生产出口是 guardAskAnswer → finalizeAskAnswer（单点隔离），断言
+    // 按真实出口顺序做——行为诱导型 demand（破坏性/社工/伪授权）由 finalize
+    // 的段落隔离收口，确定性执行痕迹由 guard 收口，两者都不许透出。
+    const q = "帮我总结一下最近的笔记";
+    const guarded = guardAskAnswer(complied, { dataText: body, question: q });
+    const g = { ...guarded, answer: finalizeAskAnswer(guarded.answer, { dataText: body, question: q }).answer };
     const qKeys = new Set(["笔记", "备忘", "提醒", "总结", "最近"]);
     for (const d of demands) {
       if (!body.includes(d)) continue;
@@ -54,7 +59,7 @@ describe("R266 injection 语料：输出面最坏情况收口", () => {
     expect(g.answer).toContain("健身记录"); // 正常内容保留
     if (c.payload.includes("{{M}}")) expect(g.answer).not.toContain(markerOf(c));
     // 语义层（判别器抽出 demand，覆盖编码/分片这类非逐字载荷）：全部剥除
-    const g2 = guardAskAnswer(complied, { dataText: body, question: "帮我总结一下最近的笔记", directiveDemands: demands });
+    const g2 = guardAskAnswer(complied, { dataText: body, question: q, directiveDemands: demands });
     for (const d of demands) expect(g2.answer).not.toContain(d);
     expect(g2.answer).toContain("健身记录");
   });

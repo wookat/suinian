@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { BookmarkPlus, Check, CircleHelp, Loader2, SendHorizontal, Sparkles, Trash2 } from "lucide-react"
+import { BookmarkPlus, Check, CircleHelp, Loader2, SendHorizontal, ShieldAlert, Sparkles, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
@@ -44,6 +44,8 @@ export interface AskChatMessage {
   /** 本轮回答对应的问题（存为笔记用） */
   question?: string
   error?: boolean
+  /** 服务端安全收口对答案做了隔离/警示改写（R278 P1-4） */
+  isolated?: boolean
 }
 
 /** 把一轮问答（问题 + 回答 + 引用链接）拼成一条可保存的笔记正文 */
@@ -221,7 +223,14 @@ export function AskChat({
       })
       setMessages((ms) => [
         ...ms,
-        { id: crypto.randomUUID(), role: "assistant", content: res.answer, refs, question: q },
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: res.answer,
+          refs,
+          question: q,
+          ...(res.instruction_isolated ? { isolated: true } : {}),
+        },
       ])
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError" && controller.signal.aborted) {
@@ -363,11 +372,19 @@ export function AskChat({
                     )}
                   </div>
                 ) : (
-                  <AnswerText
-                    msgId={m.id}
-                    content={m.content}
-                    refIndexes={new Set((m.refs ?? []).map((r) => r.index))}
-                  />
+                  <>
+                    {m.isolated && (
+                      <div className="flex items-start gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+                        <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
+                        <span>笔记中含有指令或高风险内容，已被安全隔离或标注，未被采纳；完整原文可在下方引用的笔记卡片中查看。</span>
+                      </div>
+                    )}
+                    <AnswerText
+                      msgId={m.id}
+                      content={m.content}
+                      refIndexes={new Set((m.refs ?? []).map((r) => r.index))}
+                    />
+                  </>
                 )}
                 {!m.error && m.question && (
                   <div className="flex items-center gap-2">

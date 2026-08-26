@@ -99,10 +99,11 @@ describe("parseTimeRange", () => {
     expect(q1.start).toBe("2025-12-31 16:00:00");
     const q2en = parseTimeRange("Q2 花了多少钱", NOW)!;
     expect(q2en.start).toBe("2026-03-31 16:00:00");
-    // Q4 尚未到 → 去年 Q4（与裸「X月」同口径）
+    // R278 P2-5（audit-r277）：绝对季度一律缺省当前年度，未到的 Q4 解为
+    // 本年 Q4（空窗口），不再回退去年
     const q4 = parseTimeRange("第四季度去哪玩了", NOW)!;
-    expect(q4.start).toBe("2025-09-30 16:00:00");
-    expect(q4.end).toBe("2025-12-31 16:00:00");
+    expect(q4.start).toBe("2026-09-30 16:00:00");
+    expect(q4.end).toBe("2026-12-31 16:00:00");
     const lyq2 = parseTimeRange("去年第二季度的支出", NOW)!;
     expect(lyq2.start).toBe("2025-03-31 16:00:00");
     expect(lyq2.end).toBe("2025-06-30 16:00:00");

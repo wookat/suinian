@@ -1202,24 +1202,25 @@ export async function rotateToken(): Promise<string> {
   return res.api_token
 }
 
-/** 注销是幂等删除（服务端级联实测百毫秒级），挂满的只会是连接级悬挂
- * （R276 P2-1）：DELETE 发出后并行每 2s 探测一次 401，探到即成功，
- * 不等 DELETE 响应挂满超时；探测/DELETE 双双失败才报错。 */
+/** 注销是幂等删除（服务端级联实测百毫秒级），挂满的只会是连接级悬挂。
+ * R278 P1-6（audit-r277 §5：浏览器 40–60s 悬挂需 2–3 次重试，API 直连
+ * 0.24s）：根因是 DELETE 与 401 探测复用同一条悬挂的 HTTP 连接——探测被
+ * 同连接队头阻塞，并行探测形同虚设。修复：DELETE 预算收紧到 5s，探测
+ * 加 cache-bust 查询参数迫使新请求（避开同 URL 合并/缓存），1.5s 一次，
+ * 整体 ≤15s 内出确定结果（成功或可重试的错误），不再陪悬挂连接等 40s+。 */
 export async function deleteAccount(): Promise<void> {
   let deleteFailed: unknown = null
-  const del = realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" }, GET_TIMEOUT_MS)
+  const del = realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" }, 5_000)
     .then(() => true)
     .catch((e) => {
       deleteFailed = e
       return false
     })
-  // 服务端级联亚秒完成，慢的只会是浏览器侧连接：DELETE 发出后并行短周期
-  // 探测 401，探到即成功返回，不陪连接悬挂等满超时。
-  const deadline = Date.now() + GET_TIMEOUT_MS + 10_000
+  const deadline = Date.now() + 15_000
   for (;;) {
     const won = await Promise.race([
       del.then((ok) => (ok ? "done" : "failed")),
-      new Promise<"tick">((r) => setTimeout(() => r("tick"), 2_000)),
+      new Promise<"tick">((r) => setTimeout(() => r("tick"), 1_500)),
     ])
     if (won === "done") return
     if (await verifyAccountDeleted()) return
@@ -1227,15 +1228,16 @@ export async function deleteAccount(): Promise<void> {
       throw deleteFailed
     if (Date.now() > deadline) {
       if (deleteFailed) throw deleteFailed
-      throw new NetworkError("注销请求超时", true)
+      throw new NetworkError("注销请求超时，请重试", true)
     }
   }
 }
 
-/** 探测账号是否已被删除（token 失效 = 已删）；探测本身失败时保守返回 false。 */
+/** 探测账号是否已被删除（token 失效 = 已删）；探测本身失败时保守返回 false。
+ * cache-bust 参数迫使每次探测都是独立新请求，不被悬挂的 DELETE 同连接阻塞。 */
 export async function verifyAccountDeleted(): Promise<boolean> {
   try {
-    await realFetch<{ name: string }>("/api/auth/me", undefined, 4_000)
+    await realFetch<{ name: string }>(`/api/auth/me?probe=${Date.now()}`, { cache: "no-store" }, 3_000)
     return false
   } catch (e) {
     return e instanceof ApiError && e.status === 401
