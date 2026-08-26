@@ -1371,14 +1371,18 @@ export function sanitizeEnumTitle(title: string | null | undefined, maxLen = 40)
  * 拼接文本恒等于非流式 body（含代码围栏）。fail-closed 语义：分片只发生在
  * finalize 之后，任何 delta 都不可能先于收口结果外泄。
  */
-export function sseAnswerChunks(answer: string, minLen = 12): string[] {
+export function sseAnswerChunks(answer: string, minLen = 12, maxLen = 48): string[] {
   const out: string[] = [];
   let buf = "";
-  for (const piece of answer.split(/(?<=\n|[。！？!?；;])/)) {
-    buf += piece;
-    if (buf.length >= minLen) {
-      out.push(buf);
-      buf = "";
+  for (const sentence of answer.split(/(?<=\n|[。！？!?；;])/)) {
+    // 超长单句在逗号/顿号处二次切分，单句答案也能形成多个 delta。
+    const pieces = sentence.length > maxLen ? sentence.split(/(?<=[，、,])/) : [sentence];
+    for (const piece of pieces) {
+      buf += piece;
+      if (buf.length >= minLen) {
+        out.push(buf);
+        buf = "";
+      }
     }
   }
   if (buf) out.push(buf);

@@ -176,39 +176,81 @@ app.use("*", async (c, next) => {
 // 另（audit-r273 P1-3）：带 Accept: text/event-stream 的请求若拿到的是 JSON
 // 答案，在这里统一包装为 meta→delta×n→done 的 SSE（R276：按句界分片，拼接
 // 恒等于非流式 body）——流式口径对所有路由一致。
+// R276 P1-3 补充：同一用户短窗口内重复同一问题时，REST 与 SSE 两次独立请求
+// 也返回逐字节一致的最终答案。生成模型即使 temperature=0 也可能因批处理产生
+// 措辞级抖动，这里在唯一安全出口之后缓存「已 finalize 的答案体」（TTL 很短，
+// 只覆盖跨通道校验/连点重问的窗口），命中时两条通道共享同一份收口结果。
+const ASK_ANSWER_CACHE_TTL_S = 30;
+
+async function askAnswerCacheKey(auth: string, question: string): Promise<Request> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${auth}\n${question}`));
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return new Request(`https://ask-answer-cache.internal/${hex}`);
+}
+
 app.use("/api/ask", async (c, next) => {
-  await next();
-  if (!(c.res.headers.get("content-type") ?? "").includes("application/json")) return;
-  const body = (await c.res.clone().json()) as Record<string, unknown>;
   const wantsSse = (c.req.header("accept") ?? "").includes("text/event-stream");
-  if (typeof body.answer !== "string") return;
-  const preFinalized = body.guard_finalized === true;
-  if (preFinalized) delete body.guard_finalized;
   const reqBody = await c.req.json<{ question?: string }>().catch(() => null);
   const question = typeof reqBody?.question === "string" ? reqBody.question : "";
-  const notesText = Array.isArray(body.notes)
-    ? (body.notes as Array<Record<string, unknown>>)
-        .map((n) => `${typeof n.title === "string" ? n.title : ""}\n${typeof n.content === "string" ? n.content : ""}`)
-        .join("\n")
-    : "";
-  const t0 = Date.now();
-  // 已在路由内经同一 finalize 收口的生成分支不重复执行（stripSpoofedControlMarks
-  // 会把本轮插入的真标注当仿冒剥掉，且路由内的资料面更完整）。
-  const fin = preFinalized
-    ? { answer: body.answer, changed: false, isolated: body.instruction_isolated === true }
-    : finalizeAskAnswer(body.answer, { dataText: notesText, question });
-  if (!preFinalized) {
-    if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
-    else if (fin.changed) console.log("ask: external link scrubbed from deterministic answer");
+  const auth = c.req.header("authorization") ?? "";
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+  const cacheKey = cache && auth && question ? await askAnswerCacheKey(auth, question) : null;
+  let outBody: Record<string, unknown> | null = null;
+  let headers: Headers;
+  let status = 200;
+  if (cacheKey) {
+    const hit = await cache!.match(cacheKey).catch(() => undefined);
+    if (hit) {
+      outBody = (await hit.json().catch(() => null)) as Record<string, unknown> | null;
+      if (outBody && typeof outBody.answer !== "string") outBody = null;
+    }
   }
-  // P0-2：隔离语义同时由结构化字段承载，渲染层可据此区分真标注。
-  const outBody: Record<string, unknown> = { ...body, answer: fin.answer, ...(fin.isolated ? { instruction_isolated: true } : {}) };
-  const headers = new Headers(c.res.headers);
-  const prevTiming = headers.get("Server-Timing");
-  const finDur = Date.now() - t0;
-  const conaudPart = prevTiming?.includes("conaud") ? "" : `conaud;dur=${finDur}, `;
-  headers.set("Server-Timing", `${prevTiming ? `${prevTiming}, ` : ""}${conaudPart}detguard;dur=${finDur}`);
-  if (wantsSse && c.res.status === 200) {
+  if (outBody) {
+    headers = new Headers({ "content-type": "application/json; charset=utf-8" });
+    headers.set("Server-Timing", "conaud;dur=0, detguard;dur=0, anscache;desc=hit");
+  } else {
+    await next();
+    status = c.res.status;
+    if (!(c.res.headers.get("content-type") ?? "").includes("application/json")) return;
+    const body = (await c.res.clone().json()) as Record<string, unknown>;
+    if (typeof body.answer !== "string") return;
+    const preFinalized = body.guard_finalized === true;
+    if (preFinalized) delete body.guard_finalized;
+    const notesText = Array.isArray(body.notes)
+      ? (body.notes as Array<Record<string, unknown>>)
+          .map((n) => `${typeof n.title === "string" ? n.title : ""}\n${typeof n.content === "string" ? n.content : ""}`)
+          .join("\n")
+      : "";
+    const t0 = Date.now();
+    // 已在路由内经同一 finalize 收口的生成分支不重复执行（stripSpoofedControlMarks
+    // 会把本轮插入的真标注当仿冒剥掉，且路由内的资料面更完整）。
+    const fin = preFinalized
+      ? { answer: body.answer, changed: false, isolated: body.instruction_isolated === true }
+      : finalizeAskAnswer(body.answer, { dataText: notesText, question });
+    if (!preFinalized) {
+      if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
+      else if (fin.changed) console.log("ask: external link scrubbed from deterministic answer");
+    }
+    // P0-2：隔离语义同时由结构化字段承载，渲染层可据此区分真标注。
+    outBody = { ...body, answer: fin.answer, ...(fin.isolated ? { instruction_isolated: true } : {}) };
+    headers = new Headers(c.res.headers);
+    const prevTiming = headers.get("Server-Timing");
+    const finDur = Date.now() - t0;
+    const conaudPart = prevTiming?.includes("conaud") ? "" : `conaud;dur=${finDur}, `;
+    headers.set("Server-Timing", `${prevTiming ? `${prevTiming}, ` : ""}${conaudPart}detguard;dur=${finDur}`);
+    if (cacheKey && c.res.status === 200) {
+      const stored = new Response(JSON.stringify(outBody), {
+        headers: { "content-type": "application/json", "cache-control": `max-age=${ASK_ANSWER_CACHE_TTL_S}` },
+      });
+      const put = cache!.put(cacheKey, stored).catch(() => {});
+      try {
+        c.executionCtx.waitUntil(put);
+      } catch {
+        await put;
+      }
+    }
+  }
+  if (wantsSse && status === 200) {
     const enc = new TextEncoder();
     const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     const refs = Array.isArray(outBody.references) ? outBody.references.length : 0;
@@ -223,7 +265,7 @@ app.use("/api/ask", async (c, next) => {
     c.res = new Response(enc.encode(payload), { status: 200, headers });
     return;
   }
-  c.res = new Response(JSON.stringify(outBody), { status: c.res.status, headers });
+  c.res = new Response(JSON.stringify(outBody), { status, headers });
 });
 
 app.onError((err, c) => {
@@ -4583,7 +4625,9 @@ app.post("/api/ask", async (c) => {
       .replace(new RegExp(`D${dataNonce}｜`, "gi"), "")
       .replace(/[(（]\s*id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[^)）]*[)）]/gi, "");
   const genOpts: ChatOptions = {
-    temperature: 0.3,
+    // 生成温度取 0：同一问题在 REST 与 SSE 两次独立请求间答案可复现，
+    // 一致性不依赖采样随机性（审计/护栏本就 temperature 0）。
+    temperature: 0,
     max_tokens: 800,
     timeout_ms: 40_000,
     messages: [
