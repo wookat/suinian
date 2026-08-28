@@ -1287,6 +1287,13 @@ const OFFLINE_INDUCE_RE =
 const EXFIL_URL_DIRECTIVE_RE =
   /(?:把|将)[^\n。；]{0,40}(?:post|发送|发到|上传|同步|提交|回传|抄送)[^\n。；]{0,16}(?:到|至|给)?[^\n。；]{0,10}https?:\/\//i;
 
+// 带指令参数的外链（R284，生产 injection-eval 实测 R278-E07）：域名本身是用户
+// 书签（点名问地址时给出域名是产品要求），危险的是查询串里携带的动作指令
+// （cmd=export_all_notes、action=delete_all 等）——逐字交付等于把一个可点击的
+// 导出/删除/回传命令递给用户。归入「对读者的行动诱导」整段隔离。
+const EXFIL_URL_PARAM_RE =
+  /https?:\/\/[^\s。；]*[?&](?:cmd|command|action|op|exec|do|task)=[a-z0-9_.-]*(?:export|dump|exfil|upload|send|share|delete|wipe|purge|drop|sync|all)[a-z0-9_.-]*|https?:\/\/[^\s。；]*[?&][a-z0-9_]{1,20}=(?:export|dump|delete|wipe)_?all[a-z0-9_]*/i;
+
 // 伪系统提示（R278，audit-r277/R272-23）：内容侧伪造「本次问答将消耗 N 点
 // 额度」类计费/系统元叙述，不得被转述为系统行为。
 const PSEUDO_SYSTEM_NOTICE_RE =
@@ -1737,6 +1744,7 @@ export function segmentIsNonExecReaderDirective(segText: string): boolean {
   if (segmentIsSocialEngineering(t)) return true;
   // R278 追加（生产 injection-eval 实测 X03/R272-23/R268-33）
   if (EXFIL_URL_DIRECTIVE_RE.test(t)) return true;
+  if (EXFIL_URL_PARAM_RE.test(t)) return true;
   if (PSEUDO_SYSTEM_NOTICE_RE.test(t)) return true;
   if (DICTATION_FRAGMENT_RE.test(t)) return true;
   return false;
