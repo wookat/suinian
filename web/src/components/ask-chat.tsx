@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { BookmarkPlus, Check, CircleHelp, Loader2, SendHorizontal, ShieldAlert, Sparkles, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -12,6 +12,12 @@ import type { AskHistoryMessage, Note } from "@/lib/types"
 const LEGACY_STORAGE_KEY = "suinian-ask-chat-v1" // 旧版全局共享 key，会跨账号泄露，读到即删
 const STORAGE_PREFIX = "suinian-ask-chat-v2:"
 const HISTORY_MAX_MESSAGES = 6 // 最近 3 轮
+// 上下文时效（R284 F-8b，audit-r283）：问答历史持久化在 localStorage，旧实现
+// 把最近 6 条一律当上下文发给服务端——面板关掉几小时、甚至隔天再问，新问题
+// 仍被上一段对话的话题带偏，只有刷新页面（重新挂载）后才「像是」正常。改为
+// 按时间切会话：只有与本次提问间隔 < CONTEXT_TTL_MS 且彼此连续的尾部消息才
+// 作为上下文，过期消息仍留在界面上可读，但不再进模型上下文。
+const CONTEXT_TTL_MS = 30 * 60 * 1000
 
 /** 问答历史按账号隔离：key 携带当前 API 地址 + token 的指纹 */
 function storageKey(): string {
@@ -46,6 +52,27 @@ export interface AskChatMessage {
   error?: boolean
   /** 服务端安全收口对答案做了隔离/警示改写（R278 P1-4） */
   isolated?: boolean
+  /** 消息产生时刻（epoch ms）；旧版本存量消息无此字段，一律按过期处理 */
+  ts?: number
+}
+
+/**
+ * 取本次提问应携带的上下文（R284 F-8b）：从尾部往前收，遇到无时间戳、超过
+ * CONTEXT_TTL_MS、或与后一条间隔超过 TTL 的消息即停——同一段连续对话才算
+ * 一个会话，跨时段的陈旧轮次不再复用。
+ */
+export function selectAskContext(messages: AskChatMessage[], now: number): AskHistoryMessage[] {
+  const picked: AskChatMessage[] = []
+  let next = now
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.error) continue
+    if (typeof m.ts !== "number" || next - m.ts > CONTEXT_TTL_MS) break
+    picked.push(m)
+    next = m.ts
+    if (picked.length >= HISTORY_MAX_MESSAGES) break
+  }
+  return picked.reverse().map((m) => ({ role: m.role, content: m.content }))
 }
 
 /** 把一轮问答（问题 + 回答 + 引用链接）拼成一条可保存的笔记正文 */
@@ -181,14 +208,12 @@ export function AskChat({
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
   }, [messages.length, asking, hasStreamText])
 
-  const history = useMemo<AskHistoryMessage[]>(
-    () =>
-      messages
-        .filter((m) => !m.error)
-        .slice(-HISTORY_MAX_MESSAGES)
-        .map((m) => ({ role: m.role, content: m.content })),
-    [messages],
-  )
+  // 上下文在发送时按当下时刻现算（见 selectAskContext）：useMemo 只依赖
+  // messages 会把「面板停留很久」这一情况算漏，故 send() 内直接调用。
+  const historyRef = useRef<AskChatMessage[]>(messages)
+  useEffect(() => {
+    historyRef.current = messages
+  }, [messages])
 
   function showHelp() {
     setMessages((ms) => [
@@ -205,7 +230,8 @@ export function AskChat({
     setStreamState({ retrieved: null, text: "" })
     const controller = new AbortController()
     abortRef.current = controller
-    const userMsg: AskChatMessage = { id: crypto.randomUUID(), role: "user", content: q }
+    const history = selectAskContext(historyRef.current, Date.now())
+    const userMsg: AskChatMessage = { id: crypto.randomUUID(), role: "user", content: q, ts: Date.now() }
     setMessages((ms) => [...ms, userMsg])
     try {
       const res = await askStream(
@@ -229,6 +255,7 @@ export function AskChat({
           content: res.answer,
           refs,
           question: q,
+          ts: Date.now(),
           ...(res.instruction_isolated ? { isolated: true } : {}),
         },
       ])
