@@ -101,7 +101,7 @@ async function askSse(token: string, question: string): Promise<{ deltas: string
 }
 
 async function main() {
-  const name = `[QA-R276]sse-${Date.now().toString(36)}`;
+  const name = `[QA-R278]sse-${Date.now().toString(36)}`;
   const password = `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   const reg = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",

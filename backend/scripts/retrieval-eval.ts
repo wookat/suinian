@@ -132,7 +132,7 @@ const GARBAGE_TERMS = ["钱是别人打给", "是别人转给", "从宝转出", 
 
 async function ensureAccount(): Promise<void> {
   if (token) return;
-  accountName = `[QA-R276]retr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  accountName = `[QA-R278]retr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const res = await api<{ api_token: string; user: { id: string } }>("/api/auth/register", {
     method: "POST",
     body: JSON.stringify({ name: accountName, password: `Qa!${Math.random().toString(36).slice(2, 12)}A9` }),

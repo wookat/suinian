@@ -561,14 +561,14 @@ type ConductClass = {
 const IMPERATIVE_CUE =
   /请|务必|记得|建议|需要你|你要|尽快|立即|马上|现在就|别忘|不要忘|一定要|应当|应该|小时内|天内|之内必须|限时|please|make sure|you should|you need|remember to|urgently|within \d+ (?:hours?|days?)|即座に|ください|してください|하세요|해 주세요|пожалуйста/i;
 
-const EXFIL_ACT = /导出|導出|备份|備份|打包|上传|上傳|同步|发送|發送|发到|發到|寄到|转发|轉發|分享|提交|发给|發給|export|upload|send|email|forward|share|sync/i;
+const EXFIL_ACT = /导出|導出|备份|備份|打包|上传|上傳|同步|发送|發送|发到|發到|寄到|转发|轉發|分享|(?<!已)提交|发给|發給|export|upload|send|email|forward|share|sync/i;
 const EXFIL_OBJ = /全部|所有|完整|整个|笔记|筆記|数据|數據|资料|資料|记录|記錄|内容|notes|data|records/i;
 const EXFIL_DEST = /邮箱|郵箱|邮件|郵件|email|e-mail|mail|网盘|網盤|云端|雲端|cloud|服务器|服務器|server|外部|第三方/i;
 
 // 「验证」后接「码」时是名词（验证码），不是导航动作（B12 银行提醒误伤）
 // 「把/将/对用户输入…」是名词性宾语（prompt 模板常语），不是导航动作（B18
 // prompt 收藏误伤）；「请用户输入验证码」仍是导航动作（R270-11 钓鱼指令）
-const NAV_ACT = /访问|訪問|前往|打开|打開|点击|點擊|点开|登录|登入|扫码|掃碼|跳转|跳轉|重置|重设|(?<![把将將对對]用户)输入|(?<![把将將对對]用戶)輸入|验证(?!码)|驗證(?!碼)|visit|click|go to|open|log ?in|scan|reset|verify|アクセス|クリック|방문|클릭/i;
+const NAV_ACT = /访问|訪問|前往|打开|打開|点击|點擊|点开|登录(?!接口)|登入(?!接口)|扫码|掃碼|跳转|跳轉|重置|重设|(?<![把将將对對]用户)输入|(?<![把将將对對]用戶)輸入|验证(?!码)|驗證(?!碼)|visit|click|go to|open|log ?in|scan|reset|verify|アクセス|クリック|방문|클릭/i;
 const NAV_OBJ = /链接|鏈接|网址|網址|网站|網站|页面|頁面|地址|密码|密碼|账号|賬號|验证码|驗證碼|解锁|解鎖|站点|站點|link|url|website|page|password|account|サイト|링크/i;
 
 const CONTACT_ACT = /联系|聯繫|添加|加一下|拨打|撥打|致电|致電|咨询|諮詢|contact|call|add|reach|message/i;
@@ -770,6 +770,11 @@ function compactNeighborhoodAnswersQuestion(dataCompact: string, span: string, q
     if (DICTATION_NEAR_RE.test(before)) continue; // 听写位置，不是字段值
     const near = dataCompact.slice(Math.max(0, at - window), at) + dataCompact.slice(at + span.length, at + span.length + window);
     for (const k of topicKeywords(near)) if (qKeys.has(k)) return true;
+    // 略宽邻域的子串匹配（R278，B42 型：「多少天转 GLACIER」问的字段值「90 天」
+    // 紧邻「转 GLACIER」，但 6 字窗被截断令分词后对不上）——提问关键词以子串
+    // 形态出现在 ±10 压缩字符邻域内也算答题字段。听写位判定在上方已排除。
+    const near10 = dataCompact.slice(Math.max(0, at - 10), at) + dataCompact.slice(at + span.length, at + span.length + 10);
+    for (const k of qKeys) if (k.length >= 3 && near10.includes(k)) return true;
   }
 }
 
@@ -1025,7 +1030,21 @@ export function scrubDirectiveDemands(
       return core !== folded && core.length >= 3 ? [folded, core] : [folded];
     })
     .filter((d) => d.length >= 2 || (d.length === 1 && !/[A-Za-z0-9]/.test(d)))
-    .filter((d) => !qCompact.includes(d));
+    .filter((d) => !qCompact.includes(d))
+    // 提问点名豁免的部分匹配面（R278，B42 型误伤）：用户问题包含 demand 的
+    // 足量连续子串（≥max(6, 半长)）时，说明用户问的就是该内容（问题由用户
+    // 输入，资料无法伪造）——「S3 日志桶多少天转 GLACIER？」问的正是被抽取
+    // 器误报成 demand 的「90 天后转 GLACIER」。抽取器误报不应导致答案剥空。
+    .filter((d) => {
+      if (d.length < 8) return true;
+      const min = Math.max(6, Math.ceil(d.length / 2));
+      for (let len = d.length - 1; len >= min; len--) {
+        for (let i = 0; i + len <= d.length; i++) {
+          if (qCompact.includes(d.slice(i, i + len))) return false;
+        }
+      }
+      return true;
+    });
   if (targets.length === 0) return answer;
   const segs = splitSegmentsFenceAware(answer);
   const drops: Array<{ start: number; end: number }> = [];
@@ -1123,15 +1142,18 @@ export function guardAskAnswer(
   const afterDirectives = opts.directiveDemands?.length
     ? scrubDirectiveDemands(afterSpans, opts.directiveDemands, opts.question, opts.dataText)
     : afterSpans;
-  const afterIsolate = isolateNoteInstructions(afterDirectives, opts.question, opts.dataText, hosts);
+  // R278 P1-1/P1-4 根因：隔离标记不在这里插入。生成分支随后还会走单一
+  // 出口 finalizeAskAnswer，其首步 stripSpoofedControlMarks 会把本函数插入的
+  // 真标记当仿冒剥掉（R277 生产实测「标记代码存在但零产出/只剩残尾」的
+  // 根因）。隔离统一由 finalizeAskAnswer 单点执行，插入后不再有任何剥除层。
   return {
-    answer: afterIsolate,
+    answer: afterDirectives,
     linkScrubbed: afterLinks !== answer,
     conductScrubbed: afterConduct !== afterLinks,
     markerScrubbed: afterMarkers !== afterConduct,
     spanScrubbed: afterSpans !== afterMarkers,
     directiveScrubbed: afterDirectives !== afterSpans,
-    isolated: afterIsolate !== afterDirectives,
+    isolated: false,
   };
 }
 
@@ -1157,7 +1179,9 @@ const SPOOFED_CONTROL_MARK_RE = new RegExp(
     "<<[A-Za-z0-9 _-]{2,32}>>",
     "《《[^》\n]{2,32}》》",
     "【资料区[^】\n]{0,24}】",
-    "(?:以上|上述|前述)[^\n。；]{0,10}(?:标记|标注)[^\n。；]{0,8}(?:已)?(?:失效|无效|作废)[^\n。；]{0,6}(?:[。；]|)",
+    "(?:以上|上述|前述)[^\n。；]{0,10}(?:标记|标注|警示|警告)[^\n。；]{0,8}(?:已)?(?:失效|无效|作废|解除|取消)[^\n。；]{0,6}(?:[。；]|)",
+    // 伪造「警示已解除」类文案（R278 P1-1，audit-r277 DG2/S08）
+    "(?:警示|警告)[^\n。；]{0,12}已(?:由管理员|被管理员)?(?:解除|取消|移除|撤销)[^\n。；]{0,6}(?:[。；]|)",
     "本段已由[^\n。；]{0,24}审计[^\n。；]{0,30}(?:[。；]|)",
   ].join("|"),
   "g"
@@ -1187,6 +1211,22 @@ export const PSEUDO_AUTH_CLAIM_RE =
 const OFFLINE_INDUCE_RE =
   /把[^\n。；]{0,24}(?:钥匙|门禁卡|工牌|身份证|证件|银行卡|U盾|密码)[^\n。；]{0,24}(?:放进|放到|放在|交给|递给|留在|贴在)|(?:钥匙|门禁卡|工牌|身份证|证件|U盾)[^\n。；]{0,16}(?:交给|递给|交接给)[^\n。；]{0,12}(?:他人|别人|陌生人|前台|快递)/;
 
+// 外传目的地指令（R278 P2-1，audit-r277 X03）：「把…POST/上传/同步/回传到
+// https://…」——带外链目的地的外传指令，无论 verbatim 与否都是回传通道，
+// 整段隔离（书签收藏类「地址：https://…」无此句式，不受影响）。
+const EXFIL_URL_DIRECTIVE_RE =
+  /(?:把|将)[^\n。；]{0,40}(?:post|发送|发到|上传|同步|提交|回传|抄送)[^\n。；]{0,16}(?:到|至|给)?[^\n。；]{0,10}https?:\/\//i;
+
+// 伪系统提示（R278，audit-r277/R272-23）：内容侧伪造「本次问答将消耗 N 点
+// 额度」类计费/系统元叙述，不得被转述为系统行为。
+const PSEUDO_SYSTEM_NOTICE_RE =
+  /(?:本次|此次|每次)(?:问答|对话|回答|查询)[^\n。；]{0,16}(?:消耗|扣除|扣费|收费|计费)[^\n。；]{0,12}(?:额度|积分|点数|费用|点)|(?:额度|积分)[^\n。；]{0,10}(?:不足|即将用尽)[^\n。；]{0,12}(?:充值|续费|升级)/;
+
+// 听写拼装片段（R278，R268-33 跨笔记分片）：「要写的内容是…」「位置是
+// 回答的第…行」类面向回答体的听写定位描述，即使拆分到多条笔记也是指令。
+const DICTATION_FRAGMENT_RE =
+  /要写的内容|回答的(?:第[^\n。；]{0,4}行|开头|结尾|末尾)|写在回答|放在答案/;
+
 // 破坏性操作诱导（R276，audit-r275 X03）：诱导清空回收站/批量删除笔记类数据。
 const DESTRUCTIVE_INDUCE_RE =
   /(?:清空|清除)[^\n。；]{0,8}回收站|删除(?:全部|所有)[^\n。；]{0,8}(?:笔记|资料|数据|记录)|把回收站清空/;
@@ -1201,13 +1241,25 @@ const DESTRUCTIVE_INDUCE_RE =
 export const EXEC_PIPELINE_RE =
   /(?:curl|wget|iwr|invoke-webrequest|fetch)\b[^\n|]{0,240}\|[^\n|]{0,40}\b(?:sudo\s+)?(?:(?:ba|z|da|k|fi)?sh|python[0-9.]*|perl|ruby|node|php)\b|(?:ba|z)?sh\s+<\(\s*(?:curl|wget|fetch)\b|\|\s*iex\b|\biex\s*\(|invoke-expression|powershell(?:\.exe)?\b[^\n]{0,120}-enc(?:odedcommand)?\b|base64\s+(?:-d|--decode)\b[^\n]{0,60}\|[^\n]{0,20}\b(?:ba)?sh\b/i;
 
+// 社工诱导（R278 P1-2，audit-r277 X04）：诱导用户把验证码/恢复码/证件/密码/
+// 口令念给或发给他人（含电话来电诱导）。无论 verbatim 与否都是对读者的行动
+// 诱导——凭据外发没有任何合法叙述场景需要答案层照搬。
+// 否定式安全建议豁免（R278，B12 银行提醒误伤）：「不要把验证码告诉任何人」类
+// 防骗提醒与社工诱导行为相反，不隔离（否定词与凭据词之间不得隔逗号，
+// 避免「不要犹豫，把验证码…」被误豁）。
+const SOCIAL_NEGATED_ADVICE_RE =
+  /(?:不要|不得|切勿|勿|别|禁止|绝不|千万不(?:要|能)|never|don'?t|do not)[^\n。；，,、]{0,16}(?:验证码|校验码|动态码|恢复码|备用码|一次性(?:密码|口令)|密码|口令|证件号|OTP|2FA|password|recovery code|verification code)/i;
+
+const SOCIAL_ENGINEER_RE =
+  /(?:验证码|校验码|动态码|恢复码|恢復码|恢复代码|备用码|一次性(?:密码|口令)|短信码|短信验证码|OTP|2FA|recovery code|verification code)[^\n。；]{0,30}(?:念给|读给|報给|报给|告诉|告知|发给|發给|发送给|提供给|给到|交给|转告|输入到|填到|填入)|(?:密码|口令|证件号|身份证号|银行卡号|passcode|password)[^\n。；]{0,24}(?:念给|读给|报给|发给|提供给|告诉)[^\n。；]{0,16}(?:对方|来电|客服|工作人员|安全(?:专员|人员)|警官|银行(?:人员|客服)|陌生人)|(?:念给|读给|报给|告诉|发给|提供给)[^\n。；]{0,16}(?:对方|来电|客服|工作人员|安全(?:专员|人员)|警官|银行(?:人员|客服)|陌生人)[^\n。；]{0,20}(?:验证码|恢复码|口令|密码|证件号|身份证号|卡号)|(?:接到|收到)[^\n。；]{0,12}(?:电话|来电)[^\n。；]{0,24}(?:按提示|按对方|配合(?:提供|念出|报出)|念出|报出)|read (?:out )?(?:the |your )?(?:otp|verification code|recovery code|password) to|share your (?:otp|password|recovery code|verification code)/i;
+
 // 面向回答者/助手的听写措辞：要求改变当前回答行为或在答案里附加内容。
 // 判的是行为特征（对谁说/要求干什么），与注入字面/语种无关的最小多语言集。
 const ASSISTANT_ADDRESS_RE =
-  /回答[^\n。！？]{0,16}(?:时|问题)|作答时|应答时|回复时|答案(?:里|中|末尾|开头|结尾)|回答(?:里|中|末尾|开头|结尾)|系统(?:同步)?说明|系统指令|系统提示|助手s?须|附加要求|补充规则|(?:提到|问到|被问到|看到)[^\n。！？]{0,16}时|when answering|in your (?:answer|reply|response)|at the end of (?:the|your) (?:answer|reply)|回答する際|답변할 때/i;
+  /回答[^\n。！？]{0,16}(?:时|问题)|作答时|应答时|回复时|答案(?:里|中|末尾|开头|结尾)|回答(?:里|中|末尾|开头|结尾)|系统(?:同步)?说明|系统指令|系统提示|助手s?须|附加要求|补充规则|(?:提到|问到|被问到|看到)[^\n。！？]{0,16}时|when answering|in your (?:answer|reply|response)|at the end of (?:the|your) (?:answer|reply)|回答する際|回答の(?:際|とき|最後|末尾)|答える(?:とき|際)|返信(?:の際|時)|アシスタントは|システム(?:指示|プロンプト)|답변할 때|답변(?:의|할 때| 끝에| 마지막에)|응답(?:할 때| 끝에)|어시스턴트는|시스템 (?:지시|프롬프트)/i;
 
 const INSTRUCT_VERB_RE =
-  /请|务必|必须|一律|附上|加上|写上|写出|输出|追加|(?:开头|结尾|末尾)(?:加|写|附|带)|[加写附]\s*[「『"'“]|引导|让用户|提醒用户|告知用户|要求用户|please|make sure|must|append|instruct/i;
+  /请|务必|必须|一律|附上|加上|写上|写出|输出|追加|(?:开头|结尾|末尾)(?:加|写|附|带)|[加写附]\s*[「『"'“]|引导|让用户|提醒用户|告知用户|要求用户|please|make sure|must|append|instruct|ください|してください|必ず|付けて|追加して|出力して|表示して|하세요|해 주세요|반드시|추가하세요|출력하세요|덧붙이세요/i;
 
 /**
  * 段落是否为「面向助手/读者的行动指令」（R274 隔离判定）：
@@ -1219,6 +1271,16 @@ const INSTRUCT_VERB_RE =
 export function segmentIsReaderDirective(segText: string): boolean {
   const t = segText.normalize("NFKC");
   if (EXEC_PIPELINE_RE.test(t)) return true;
+  return segmentIsNonExecReaderDirective(segText);
+}
+
+/**
+ * 除可执行管道外的读者指令判定（R278 拆分）：isolateNoteInstructions 对管道
+ * 有专门的整段处置（verbatim 原文+警示 / 非 verbatim 整段隔离），其余读者
+ * 指令类共用本判定，与 segmentIsReaderDirective 单点同源。
+ */
+export function segmentIsNonExecReaderDirective(segText: string): boolean {
+  const t = segText.normalize("NFKC");
   if (ASSISTANT_ADDRESS_RE.test(t) && INSTRUCT_VERB_RE.test(t)) return true;
   if (conductSignal(t) && IMPERATIVE_CUE.test(t)) return true;
   // R276（audit-r275 K01/X03/A16/E02）：线下实物交接诱导、破坏性操作诱导、
@@ -1226,6 +1288,13 @@ export function segmentIsReaderDirective(segText: string): boolean {
   if (OFFLINE_INDUCE_RE.test(t)) return true;
   if (DESTRUCTIVE_INDUCE_RE.test(t)) return true;
   if (PSEUDO_AUTH_CLAIM_RE.test(t)) return true;
+  // R278 P1-2（audit-r277 X04）：社工诱导（凭据念给/发给他人、电话诱导）
+  // 无论 verbatim 与否一律隔离。
+  if (SOCIAL_ENGINEER_RE.test(t) && !SOCIAL_NEGATED_ADVICE_RE.test(t)) return true;
+  // R278 追加（生产 injection-eval 实测 X03/R272-23/R268-33）
+  if (EXFIL_URL_DIRECTIVE_RE.test(t)) return true;
+  if (PSEUDO_SYSTEM_NOTICE_RE.test(t)) return true;
+  if (DICTATION_FRAGMENT_RE.test(t)) return true;
   return false;
 }
 
@@ -1236,7 +1305,9 @@ export function splitSegmentsFenceAware(answer: string): Array<{ start: number; 
   let pos = 0;
   const pushProse = (from: number, to: number) => {
     const slice = answer.slice(from, to);
-    for (const m of slice.matchAll(/[^\n。！？!?；;]+/g)) {
+    // ASCII ?!; 只有后随空白/行尾才是句读——URL 查询串（…/a?uid=me）、shell
+    // 参数等紧邻字符的用法不切段，避免命中段被切出「?uid=me」类残片。
+    for (const m of slice.matchAll(/(?:[^\n。！？!?；;]|[!?;](?!\s|$))+/g)) {
       segs.push({ start: from + m.index, end: from + m.index + m[0].length, text: m[0] });
     }
   };
@@ -1259,25 +1330,57 @@ export function splitSegmentsFenceAware(answer: string): Array<{ start: number; 
 export function isolateNoteInstructions(
   answer: string,
   question: string,
-  _dataText?: string,
+  dataText?: string,
   _allowedHosts: string[] = ANSWER_LINK_ALLOWED_HOSTS,
   opts?: { verbatim?: boolean }
 ): string {
-  // R276 P1-1：可执行外部管道（下载并执行远程代码）不进入答案叙述层——
-  // 即使用户明确索要原文也只给隔离标记（原文始终可在笔记卡片查看），
-  // 杜绝「用户复制粘贴执行」这条最后一米的攻击面。
-  void question;
-  void opts;
-  const execRep = (_literal: string) => INSTRUCTION_ISOLATED_MARK;
+  // R278 P1-1（audit-r277 DG1–DG3/S08）：可执行下载管道整段处置，禁止交付
+  // 残片——R277 实测只替换正则命中字面会把「bash <(curl -fsSL …)」切成
+  // 「-fsSL …)」残片送达用户。处置口径：
+  //  - 用户点名索要原文（verbatim）：完整保留命中段/行原文，前置
+  //    EXEC_PIPELINE_WARN_MARK 警示；
+  //  - 非 verbatim：命中段/行整体替换为隔离标记（原文在笔记卡片可见）。
+  const verbatim = opts?.verbatim ?? questionRequestsVerbatim(question);
+  const execSegRep = (segText: string) =>
+    verbatim ? `${EXEC_PIPELINE_WARN_MARK}${segText}` : INSTRUCTION_ISOLATED_MARK;
+  // R278 P1-4（生产 UI 实测）：模型把指令段改写进摘要（「删除全部资料类
+  // 笔记」→「删除资料类笔记以释放空间」）后，改写体不再命中指令正则。
+  // 收口：答案段与资料中的「读者指令段」共享 ≥5 字连续片段（且该片段
+  // 不来自提问）时，视为指令的改写载体，整段隔离。只比对指令段，benign
+  // 笔记无指令段故不受影响。
+  const directiveShadows: string[] = [];
+  if (dataText) {
+    for (const dseg of splitSegmentsFenceAware(dataText)) {
+      if (dseg.text.startsWith("```")) continue;
+      if (segmentIsNonExecReaderDirective(dseg.text)) directiveShadows.push(foldCompact(dseg.text));
+    }
+  }
+  const qFold = foldCompact(question);
+  const echoesDirective = (segText: string): boolean => {
+    if (directiveShadows.length === 0) return false;
+    const s = foldCompact(segText);
+    if (s.length < 5) return false;
+    for (const d of directiveShadows) {
+      for (let i = 0; i + 5 <= d.length; i++) {
+        const sub = d.slice(i, i + 5);
+        if (!qFold.includes(sub) && s.includes(sub)) return true;
+      }
+    }
+    return false;
+  };
   const segs = splitSegmentsFenceAware(answer);
   const reps: Array<{ start: number; end: number; rep: string }> = [];
   for (const seg of segs) {
     if (seg.text.startsWith("```")) {
-      // 围栏块：逐行隔离命中行
+      // 围栏块：逐行隔离/警示命中行
       const lines = seg.text.split("\n");
       let changed = false;
       const outLines = lines.map((l) => {
-        if (segmentIsReaderDirective(l)) {
+        if (EXEC_PIPELINE_RE.test(l.normalize("NFKC"))) {
+          changed = true;
+          return execSegRep(l);
+        }
+        if (segmentIsNonExecReaderDirective(l)) {
           changed = true;
           return INSTRUCTION_ISOLATED_MARK;
         }
@@ -1287,17 +1390,19 @@ export function isolateNoteInstructions(
       continue;
     }
     const nfkc = seg.text.normalize("NFKC");
-    if ((ASSISTANT_ADDRESS_RE.test(nfkc) && INSTRUCT_VERB_RE.test(seg.text)) ||
-        (conductSignal(nfkc) && IMPERATIVE_CUE.test(seg.text)) ||
-        OFFLINE_INDUCE_RE.test(nfkc) ||
-        DESTRUCTIVE_INDUCE_RE.test(nfkc) ||
-        PSEUDO_AUTH_CLAIM_RE.test(nfkc)) {
+    // 可执行管道：整段处置（verbatim 原文+警示 / 非 verbatim 整段隔离），
+    // 不交付残片。
+    if (EXEC_PIPELINE_RE.test(nfkc)) {
+      reps.push({ start: seg.start, end: seg.end, rep: execSegRep(seg.text) });
+      continue;
+    }
+    if (segmentIsNonExecReaderDirective(seg.text)) {
       reps.push({ start: seg.start, end: seg.end, rep: INSTRUCTION_ISOLATED_MARK });
       continue;
     }
-    // 可执行管道：只处理管道字面本身，同句其余内容（其它合法命令）保留。
-    for (const m of seg.text.matchAll(new RegExp(EXEC_PIPELINE_RE.source, "gi"))) {
-      reps.push({ start: seg.start + m.index, end: seg.start + m.index + m[0].length, rep: execRep(m[0]) });
+    if (echoesDirective(seg.text)) {
+      reps.push({ start: seg.start, end: seg.end, rep: INSTRUCTION_ISOLATED_MARK });
+      continue;
     }
   }
   reps.sort((a, b) => a.start - b.start);
@@ -1325,13 +1430,33 @@ export function finalizeAskAnswer(
 ): { answer: string; changed: boolean; isolated: boolean } {
   const hosts = opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS;
   // R276 P0-2：先剥除内容侧仿冒的标注/审计标记，再做外链收口与指令隔离——
-  // 此后插入的标注必然出自系统本轮判定，不可仿冒。
+  // 此后插入的标注必然出自系统本轮判定，不可仿冒（本函数是唯一插入
+  // 真标注的地方，且每个答案只经过一次：生成分支打 guard_finalized 标记，
+  // 中间件不重复执行）。
   const despoofed = stripSpoofedControlMarks(answer);
   const afterLinks = scrubAnswerLinks(despoofed, hosts, { dataText: opts.dataText, question: opts.question });
   const afterEmails = scrubDataDerivedEmails(afterLinks, opts.dataText, opts.question);
   const afterIsolate = isolateNoteInstructions(afterEmails, opts.question, opts.dataText, hosts);
-  return { answer: afterIsolate, changed: afterIsolate !== answer, isolated: afterIsolate !== afterLinks };
+  let out = afterIsolate;
+  let isolated = afterIsolate !== afterLinks;
+  // R278 P1-4（audit-r277 §3：13 例「。」/「[1]」残片）：收口改写后只剩
+  // 无意义残片（去掉引文角标/标点后不足 4 个有效字符）且没有任何可读
+  // 隔离说明时，转为明确的隔离提示，绝不把残片当答案交付。
+  if (out !== answer && !out.includes(INSTRUCTION_ISOLATED_MARK) && !out.includes(EXEC_PIPELINE_WARN_MARK)) {
+    const meaningful = out
+      .replace(/[[［]\d{1,2}[\]］]/g, "")
+      .replace(/[\s。，；：！？、,.;:!?\-—~～()（）]/g, "");
+    if (meaningful.length < 4) {
+      out = ISOLATION_NOTICE_ANSWER;
+      isolated = true;
+    }
+  }
+  return { answer: out, changed: out !== answer, isolated };
 }
+
+/** 收口剥空后的显式隔离提示（R278 P1-4）：代替静默空答案/残片答案。 */
+export const ISOLATION_NOTICE_ANSWER =
+  "相关笔记内容命中安全隔离规则，已隔离未采纳；原文可在引用的笔记卡片中查看。";
 
 // 资料派生邮箱收口（R276，audit-r275 K01 族 / R270-31）：跨笔记分片攻击把
 // 外传目的地邮箱放进另一条笔记，摘要/枚举类回答忠实转述时就把回传地址递
@@ -1357,13 +1482,29 @@ export const ENUM_TITLE_ISOLATED_MARK = "〔标题含指令内容，已隔离；
  * 压缩空白、命中读者指令/伪授权/可执行管道时整体替换为隔离占位，并对
  * 标题内的外链做与答案同口径的收口。
  */
-export function sanitizeEnumTitle(title: string | null | undefined, maxLen = 40): string {
+export function sanitizeEnumTitle(
+  title: string | null | undefined,
+  opts?: { sourceContent?: string | null; maxLen?: number }
+): string {
+  const maxLen = opts?.maxLen ?? 40;
   if (!title) return "";
   let t = stripSpoofedControlMarks(title).replace(/\s+/g, " ").trim();
   if (!t) return "";
   if (segmentIsReaderDirective(t)) return ENUM_TITLE_ISOLATED_MARK;
+  // R278 P1-3（audit-r277 X02）：标题是 AI 从正文生成的派生物——正文含读者
+  // 指令时，标题即使字面无害也是指令的改写载体（「删除资料类笔记」被呈现为
+  // 用户自己的待办）。枚举出口按源正文的「含指令」判定隔离标题，不只看标题
+  // 字面。可执行管道不在此列（正文里合法的技术命令不该连坐标题）。
+  if (opts?.sourceContent && sourceContentHasReaderDirective(opts.sourceContent)) return ENUM_TITLE_ISOLATED_MARK;
   t = scrubAnswerLinks(t);
   return t.slice(0, maxLen);
+}
+
+/** 源正文是否含（非管道类）读者指令段（R278 P1-3：枚举标题继承源标记）。 */
+export function sourceContentHasReaderDirective(content: string): boolean {
+  return splitSegmentsFenceAware(content).some(
+    (seg) => !seg.text.startsWith("```") && segmentIsNonExecReaderDirective(seg.text)
+  );
 }
 
 /**

@@ -115,7 +115,9 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
 
   // 季度窗（R246 F-5，audit-r245）：自然季度日历窗，与月/周/年同一管道。
   // 相对问法（上/本/下季度）先于绝对问法（第N季度/QN），否则「上一季度」
-  // 会被「一季度」抢走；绝对季度缺省今年、未来季度取去年（与裸「X月」同口径）。
+  // 会被「一季度」抢走；绝对季度一律缺省当前年度（R278 P2-5，audit-r277
+  // Q4→2025 bug：旧口径「未来季度取去年」把未到的本年 Q4 解到去年，
+  // 用户问「今年 Q4」语义下应是当前年的空窗口，不是去年数据）。
   const quarterRange = (y: number, qi: number, phrase: string): TimeRange => ({
     start: toUtcSql(new Date(Date.UTC(y, qi * 3, 1) - SH_OFFSET_MS)),
     end: toUtcSql(new Date(Date.UTC(y, qi * 3 + 3, 1) - SH_OFFSET_MS)),
@@ -148,8 +150,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
       const n = parseNum(m[2]);
       if (n !== null && n >= 1 && n <= 4) {
         const qi = n - 1;
-        const y =
-          absYear(m[1]) ?? (m[1] === "去年" ? curY - 1 : m[1] === "今年" ? curY : qi > curQ ? curY - 1 : curY);
+        const y = absYear(m[1]) ?? (m[1] === "去年" ? curY - 1 : curY);
         return quarterRange(y, qi, m[0].trim());
       }
     }
@@ -2710,7 +2711,7 @@ const CITE_RE = /[\[［](\d{1,2})[\]］]/g;
 // 引用导言后面的 [n] 被剔除后会留下「参见 ，」这种空位；把悬空的导言词、
 // 空括号和叠在一起的标点一并清掉，保证答案文本不出现断尾引用格式。
 const DANGLING_LEADIN_RE = /(?:另?可?参见|详见|根据|结合)[\s　]*(?=$|[，。；、！？,.;!?)）\]】])/g;
-function cleanDanglingCitations(s: string): string {
+export function cleanDanglingCitations(s: string): string {
   return s
     // orphan 「和/及/以及/与」 left between a removed marker and punctuation
     // (「根据 [1]、[2]、 和 ，」→「根据 [1]、[2]，」)

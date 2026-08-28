@@ -32,7 +32,7 @@ import {
   REBUILD_SLICE_BUDGET_MS,
   type ThreadJobRow,
 } from "./thread-jobs";
-import { chatComplete, aiProbe, type ChatOptions } from "./ai";
+import { chatComplete, chatCompleteStream, aiProbe, type ChatOptions } from "./ai";
 import {
   hashPassword,
   verifyPassword,
@@ -78,7 +78,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds } from "./ask";
+import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -180,7 +180,27 @@ app.use("*", async (c, next) => {
 // 也返回逐字节一致的最终答案。生成模型即使 temperature=0 也可能因批处理产生
 // 措辞级抖动，这里在唯一安全出口之后缓存「已 finalize 的答案体」（TTL 很短，
 // 只覆盖跨通道校验/连点重问的窗口），命中时两条通道共享同一份收口结果。
-const ASK_ANSWER_CACHE_TTL_S = 30;
+// R278 P1-7：TTL 30s → 180s，R277 实测跨请求间隔 36s+ 时同问题两次答案
+// 已落出缓存窗口，同源一致性 16/21。缓存体是已 finalize 的安全产物，延长
+// TTL 不改变安全口径，只扩大一致性窗口。
+const ASK_ANSWER_CACHE_TTL_S = 180;
+
+/** SSE 逐事件独立 flush（R278 P1-7）：每个事件单独 enqueue 并让出调度，
+ * 客户端观察到真实的多次传输增量，而非一次性字节串。 */
+function sseStreamResponse(events: Array<[string, unknown]>, headers: Headers): Response {
+  const enc = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(ctrl) {
+      for (const [event, data] of events) {
+        ctrl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        // 让出事件循环，保证逐块 flush 到传输层
+        await new Promise((r) => setTimeout(r, 15));
+      }
+      ctrl.close();
+    },
+  });
+  return new Response(stream, { status: 200, headers });
+}
 
 async function askAnswerCacheKey(auth: string, question: string): Promise<Request> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${auth}\n${question}`));
@@ -251,18 +271,20 @@ app.use("/api/ask", async (c, next) => {
     }
   }
   if (wantsSse && status === 200) {
-    const enc = new TextEncoder();
-    const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     const refs = Array.isArray(outBody.references) ? outBody.references.length : 0;
     // R276 P1-3：delta 分片只发生在 finalize 之后（fail-closed 先于 delta 生效），
     // 全部 delta 拼接恒等于 done.answer，也恒等于非流式 body.answer。
-    const payload =
-      sse("meta", { retrieved: refs }) +
-      sseAnswerChunks(String(outBody.answer)).map((t) => sse("delta", { text: t })).join("") +
-      sse("done", outBody);
+    // R278 P1-7：逐块独立 flush；确定性路由的答案是模板一次成型，如实标注。
     headers.set("content-type", "text/event-stream; charset=utf-8");
     headers.set("cache-control", "no-cache");
-    c.res = new Response(enc.encode(payload), { status: 200, headers });
+    c.res = sseStreamResponse(
+      [
+        ["meta", { retrieved: refs, stream_mode: "deterministic_complete" }],
+        ...sseAnswerChunks(String(outBody.answer)).map((t): [string, unknown] => ["delta", { text: t }]),
+        ["done", outBody],
+      ],
+      headers
+    );
     return;
   }
   c.res = new Response(JSON.stringify(outBody), { status, headers });
@@ -454,7 +476,11 @@ app.post("/api/auth/recover", async (c) => {
     .json<{ name?: unknown; recovery_code?: unknown; new_password?: unknown }>()
     .catch(() => null);
   const name = validateName(body?.name);
-  if (!(await checkRateLimit(c.env.DB, "recover", name ? [clientIp(c.req.raw), { key: `acct:${name}`, max: ACCT_RATE_LIMIT_MAX }] : [clientIp(c.req.raw)]))) {
+  // R278 P3-1：与 login 同口径——不存在的用户名不写账号维度明文 key。
+  const recoverNameExists = name
+    ? Boolean(await c.env.DB.prepare("SELECT 1 FROM users WHERE name = ?").bind(name).first())
+    : false;
+  if (!(await checkRateLimit(c.env.DB, "recover", recoverNameExists && name ? [clientIp(c.req.raw), { key: `acct:${name}`, max: ACCT_RATE_LIMIT_MAX }] : [clientIp(c.req.raw)]))) {
     return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
   }
   const code = normalizeRecoveryCode(body?.recovery_code);
@@ -490,7 +516,14 @@ app.post("/api/auth/recover", async (c) => {
 app.post("/api/auth/login", async (c) => {
   const body = await c.req.json<{ name?: unknown; password?: unknown }>().catch(() => null);
   const name = validateName(body?.name);
-  if (!(await checkRateLimit(c.env.DB, "login", name ? [clientIp(c.req.raw), { key: `acct:${name}`, max: ACCT_RATE_LIMIT_MAX }] : [clientIp(c.req.raw)]))) {
+  // R278 P3-1（audit-r277 §7 残留）：账号维度限流行只为存在的账号写入。
+  // 不存在的用户名（含已注销账号的后续探测）只走 IP 维度——否则任意
+  // 被探测的名字都会以明文 key 落库，注销级联后的 401 验证探测又把
+  // 账号名重新写回 auth_rate_limits，形成可枚举的信息残留。
+  const nameExists = name
+    ? Boolean(await c.env.DB.prepare("SELECT 1 FROM users WHERE name = ?").bind(name).first())
+    : false;
+  if (!(await checkRateLimit(c.env.DB, "login", nameExists && name ? [clientIp(c.req.raw), { key: `acct:${name}`, max: ACCT_RATE_LIMIT_MAX }] : [clientIp(c.req.raw)]))) {
     return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
   }
   const password = typeof body?.password === "string" ? body.password : "";
@@ -1312,7 +1345,10 @@ function enumNoteLines(rows: NoteRow[]): string[] {
     if (n.is_sensitive) {
       text = "（加密的敏感笔记）";
     } else {
-      text = sanitizeEnumTitle(n.title) || `（无标题笔记，${(n.created_at || "").slice(0, 10)}）`;
+      // R278 P1-3：标题隔离继承源正文的「含指令」判定（AI 生成标题是正文派生物）
+      text =
+        sanitizeEnumTitle(n.title, { sourceContent: n.content }) ||
+        `（无标题笔记，${(n.created_at || "").slice(0, 10)}）`;
     }
     const line = "- ［" + label + "］" + text;
     if (!counts.has(line)) order.push(line);
@@ -4615,7 +4651,7 @@ app.post("/api/ask", async (c) => {
   // 缓冲，全部护栏/审计/finalize 完成后才把最终答案按句界分片为 delta 序列
   //（分片在流式分支里做），拼接恒等于 done 与非流式 body，fail-closed 先于
   // 任何 delta 生效。这是 docs/decision-r272.md §5「裁决前缓冲」的彻底形态。
-  const runGeneration = async (): Promise<Record<string, unknown>> => {
+  const runGeneration = async (onRawDelta?: (t: string) => void): Promise<Record<string, unknown>> => {
   const tGen = Date.now();
   // 模型偶发把逐行 datamarking 前缀「D<nonce>｜」或资料区片段元数据头
   // 「(id=<uuid>, <时间戳>, <分类>…)」抄进回答（B15/R268-08 生产实测），
@@ -4650,7 +4686,11 @@ app.post("/api/ask", async (c) => {
       },
     ],
   };
-  const answer = await chatComplete(c.env, genOpts);
+  // R278 P1-7：流式请求走生成侧真流式（chatCompleteStream），模型增量经
+  // onRawDelta 逐段安全闸门后外发；非流式请求保持缓冲完整生成。
+  const answer = onRawDelta
+    ? await chatCompleteStream(c.env, genOpts, onRawDelta)
+    : await chatComplete(c.env, genOpts);
   // semantic-only hits (never keyword-matched) below the citation threshold
   const weakIds = new Set(extraIds.filter((id) => (semScore.get(id) ?? 0) < ASK_CITATION_MIN_SCORE));
   // 检索命中却误拒答（R113 P1）：强命中（关键词命中或语义分达标）存在时，
@@ -4681,6 +4721,8 @@ app.post("/api/ask", async (c) => {
       answer2 = retry;
     }
   }
+  // R278 P1-4：生成分支的实质性安全改写追踪（随最终 body 以结构化字段下发）
+  let genIsolated = false;
   // 无来源金额后校验（R200 生产 QA 实测）：肯定句编造金额整句剥除；全被
   // 剥空则按拒答处理，走下方诚实拒答通道给建议，绝不把编造金额递给用户
   // 副文本只取标题/正文，不含 context 的 [n]/id/时间戳元数据头（R236 P3-6，
@@ -4704,16 +4746,34 @@ app.post("/api/ask", async (c) => {
     // 被报含指令 → 无增量 + fail-closed 拒答的主因），确定性剔除；真实跨笔记
     // 拼接的 demand 最终文字同样存在于资料中，不受影响。
     const askGuardDataCompact = foldCompact(askGuardData);
-    const demands = demandsRaw === null
+    const grounded = demandsRaw === null
       ? null
       : demandsRaw.filter((d) => askGuardData.includes(d) || askGuardDataCompact.includes(foldCompact(d)));
-    if (demandsRaw !== null && demands !== null && demands.length < demandsRaw.length)
-      console.log(`ask: ${demandsRaw.length - demands.length} ungrounded directive demand(s) dropped`);
+    if (demandsRaw !== null && grounded !== null && grounded.length < demandsRaw.length)
+      console.log(`ask: ${demandsRaw.length - grounded.length} ungrounded directive demand(s) dropped`);
+    // R278 P1-5（audit-r277 §4：Terraform/审稿模板/D1 排障 benign 误伤）：技术
+    // 祈使句与「面向助手/读者的指令」确定性区分——demand 在资料中的完整
+    // 行都能定位且无一行命中 segmentIsReaderDirective 时，该 demand 只是技术
+    // 正文里的祈使措辞（prompt 模板/运维手册），不是对回答行为的指令，
+    // 确定性剔除；定位不到完整行（跨行/跨笔记拼接）时 fail-closed 保留。
+    const askGuardLines = askGuardData.split("\n");
+    const demandLineIsDirective = (d: string) => {
+      const dc = foldCompact(d);
+      const lines = askGuardLines.filter((l) => l.includes(d) || (dc.length >= 3 && foldCompact(l).includes(dc)));
+      if (lines.length === 0) return true; // 定位不到：fail-closed 保留
+      return lines.some((l) => segmentIsReaderDirective(l));
+    };
+    const demands = grounded === null ? null : grounded.filter(demandLineIsDirective);
+    if (grounded !== null && demands !== null && demands.length < grounded.length)
+      console.log(`ask: ${grounded.length - demands.length} non-directive technical demand(s) dropped`);
     const g = guardAskAnswer(answer2, {
       dataText: askGuardData,
       question: askGuardQuestion,
       directiveDemands: demands ?? [],
     });
+    // R278 P1-4：任何实质性安全改写（行为剥除/指令要求物剥除/保守降级/
+    // 审计剥除）都置结构化 instruction_isolated，用户可区分「答错」与「被隔离」。
+    if (g.conductScrubbed || g.markerScrubbed || g.spanScrubbed || g.directiveScrubbed) genIsolated = true;
     if (g.linkScrubbed) console.log("ask: external link scrubbed from answer");
     if (g.conductScrubbed) console.log("ask: unsolicited conduct scrubbed from answer");
     if (g.markerScrubbed) console.log("ask: data-derived marker scrubbed from answer");
@@ -4721,6 +4781,7 @@ app.post("/api/ask", async (c) => {
     if (g.directiveScrubbed) console.log("ask: directive-demanded text scrubbed from answer");
     // R274（audit-r273 P1-2）：护栏剥空不再谎称「没找到」（与检索空不可区分，
     // 误导用户以为笔记不存在），改走既有保守口径：只给来源引用。
+    if (g.answer.trim() === "") genIsolated = true;
     answer2 =
       g.answer.trim() === ""
         ? "相关笔记中包含试图影响回答的内容，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
@@ -4744,6 +4805,7 @@ app.post("/api/ask", async (c) => {
       askMarks.push(["conaud", Date.now() - tAud]);
       if (verdict === null && (demands?.length ?? 0) > 0) {
         console.log("ask: fail-closed conservative answer (demands present, audit unavailable)");
+        genIsolated = true;
         answer2 =
           "相关笔记中包含试图影响回答的指令，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
           notes.slice(0, 3).map((_n, i) => `[${i + 1}]`).join(" ");
@@ -4771,9 +4833,22 @@ app.post("/api/ask", async (c) => {
           const dataCompact = foldCompact(askGuardData);
           // 含 demand 字词核的句段不享受忠实豁免（R272-31 型：demand 装饰符
           // 被模型丢弃后落地，句段其余部分仍是资料回显）。
+          const qc = foldCompact(askGuardQuestion);
           const demandCores = (demands ?? [])
             .map((d) => foldCompact(d).replace(/[^\p{L}\p{N}]/gu, ""))
-            .filter((d) => d.length >= 3);
+            .filter((d) => d.length >= 3)
+            // 提问点名的 demand 不算执行痕迹（R278 B42 型：抽取器把用户正问
+            // 的资料内容误报成 demand），口径与 scrubDirectiveDemands 一致。
+            .filter((d) => {
+              if (d.length < 8) return true;
+              const min = Math.max(6, Math.ceil(d.length / 2));
+              for (let len = d.length - 1; len >= min; len--) {
+                for (let i = 0; i + len <= d.length; i++) {
+                  if (qc.includes(d.slice(i, i + len))) return false;
+                }
+              }
+              return true;
+            });
           return (t: string) => {
             const tCompact = foldCompact(t);
             return (
@@ -4787,7 +4862,10 @@ app.post("/api/ask", async (c) => {
         const audKeep = (t: string) =>
           Boolean(verbatimKeep?.(t) || noDirectiveKeep?.(t) || faithfulKeep(t));
         const audited = applyConductVerdict(answer2, verdict, audKeep);
-        if (audited !== answer2) console.log(`ask: conduct audit scrubbed segment(s)`);
+        if (audited !== answer2) {
+          console.log(`ask: conduct audit scrubbed segment(s)`);
+          genIsolated = true;
+        }
         if (audited.trim() === "") {
           // R276 P1-2（audit-r275 §2）：抽取器已裁定资料无指令（demands === []）时，
           // 审计把全文剥空只能是误报（资料无指令则答案行为不可能派生自资料指令，
@@ -4795,6 +4873,7 @@ app.post("/api/ask", async (c) => {
           // fail-closed 降级为保守答案。
           if (demands !== null && demands.length === 0) {
             console.log("ask: conduct audit emptied answer but no directives in data; keeping answer");
+            genIsolated = false;
           } else {
             answer2 =
               "相关笔记中包含试图影响回答的内容，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
@@ -4944,7 +5023,7 @@ app.post("/api/ask", async (c) => {
   if (!answer2) {
     return { answer: "（AI 暂不可用）已找到相关记录，见 references。", references, notes: refNotes };
   }
-  return { answer: finalAnswer, references, notes: refNotes };
+  return { answer: finalAnswer, references, notes: refNotes, ...(genIsolated ? { instruction_isolated: true } : {}) };
   };
 
   // R276 P0-1：生成分支的唯一出口——与确定性路由共用同一个 finalizeAskAnswer
@@ -4955,37 +5034,109 @@ app.post("/api/ask", async (c) => {
     if (typeof body.answer !== "string") return { ...body, guard_finalized: true };
     const fin = finalizeAskAnswer(body.answer, { dataText: askGuardData, question: askGuardQuestion });
     if (fin.isolated) console.log("ask: note-embedded instruction isolated at generation exit");
+    const isolated = fin.isolated || body.instruction_isolated === true;
     return {
       ...body,
       answer: fin.answer,
       guard_finalized: true,
-      ...(fin.isolated ? { instruction_isolated: true } : {}),
+      ...(isolated ? { instruction_isolated: true } : {}),
     };
   };
 
   if (wantsStream) {
-    // R276 P1-3：全部护栏/审计/finalize 完成后才外发第一个 delta（fail-closed
-    // 先于 delta 生效）；delta 序列是最终答案的句界分片，拼接恒等于 done.answer，
-    // 也恒等于非流式 body.answer（同一个 finalizeGenerationBody 产物）。
-    // finalize 先于响应头完成，因此 SSE 通道同样暴露 conaud（与 REST 同口径）。
-    const raw = await runGeneration();
-    const tFin = Date.now();
-    const body = finalizeGenerationBody(raw);
-    const conaudDur = Date.now() - tFin;
-    delete body.guard_finalized;
-    const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-    const payload =
-      sse("meta", { retrieved: notes.length }) +
-      (typeof body.answer === "string"
-        ? sseAnswerChunks(body.answer).map((t) => sse("delta", { text: t })).join("")
-        : "") +
-      sse("done", body);
-    return new Response(new TextEncoder().encode(payload), {
+    // R278 P1-7（audit-r277 §3）：生成侧真流式。模型 token 增量在服务端按句界
+    // 聚段，每段通过逐段安全闸门（数据标记/控制字符剥除 → 已接地 demand 命中
+    // 即丢弃 → finalizeAskAnswer 逐段终审，有任何改写/隔离即丢弃不外发）后才
+    // 作为 delta 外发；fail-closed 先于首 delta：首个 delta 外发前 demand 判别器
+    // 结果必须就绪（未就绪则缓冲不发）。done 为全量护栏/审计/finalize 后的
+    // 权威终稿，客户端以 done 整体替换（保证引证与收口确定性）；被闸门丢弃的
+    // 段落只会在 done 中以收口后形态出现，不存在先泄后收的窗口。
+    // Server-Timing 的 conaud 记首 delta 前的审计门耗时（响应头先于生成完成
+    // 外发，全量 conaud 耗时随 done 事件的 conaud_ms 字段下发）。
+    const tPre = Date.now();
+    const demandsRawS = await Promise.race([
+      directivePromise,
+      new Promise<string[] | null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+    ]);
+    const askGuardDataCompactS = foldCompact(askGuardData);
+    const groundedDemandsS = (demandsRawS ?? []).filter(
+      (d) => askGuardData.includes(d) || askGuardDataCompactS.includes(foldCompact(d))
+    );
+    const preGuardDur = Date.now() - tPre;
+    const stripDataMarksS = (t: string) =>
+      t
+        .replace(new RegExp(`D${dataNonce}｜`, "gi"), "")
+        .replace(/[(（]\s*id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[^)）]*[)）]/gi, "");
+    // delta 只外发「全量收口后必然原样保留」的内容：引证角标在 done 收口时
+    // 才全局重排定稿，delta 一律不携带；任何会被 demand 剥除/无源金额/无源
+    // 否定改写的句段整段扣下，只在 done 中以收口后形态出现——不存在先泄
+    // 后收的窗口（audit-r277 X05 两次不同残片的根因）。
+    const askScrubSourceS = `${askGuardQuestion}\n${askGuardData}`;
+    const gateSegment = (segRaw: string): string | null => {
+      // fail-closed：判别器超时/失败（demandsRawS 为 null）时 demand 集未知，
+      // done 收口时判别器可能已就绪并剥除句段——期间不外发任何 delta，全部
+      // 缓冲到 done 一次成型（audit-r277 X05「先泄后收」的另一形态）。
+      if (demandsRawS === null) return null;
+      const s0 = scrubModelOutputInjectionArtifacts(stripDataMarksS(segRaw));
+      const s = s0.replace(/\s*[[［]\d{1,2}[\]］]/g, "");
+      if (!s.trim()) return null;
+      // 剑指引证收口：done 剔除无效角标时连带清掉悬空导言词（「根据 ，」）；
+      // 去角标后会留悬空形态的句段扣下不外发，只在 done 中以收口后形态出现。
+      if (cleanDanglingCitations(s) !== s) return null;
+      const sc = foldCompact(s);
+      if (groundedDemandsS.some((d) => d && sc.includes(foldCompact(d)))) return null;
+      if (scrubDirectiveDemands(s, groundedDemandsS, askGuardQuestion) !== s) return null;
+      if (scrubUnsourcedAmounts(s, askScrubSourceS) !== s) return null;
+      if (scrubUnsourcedNegations(s, askScrubSourceS) !== s) return null;
+      const fin = finalizeAskAnswer(s, { dataText: askGuardData, question: askGuardQuestion });
+      if (fin.isolated || fin.changed || fin.answer !== s) return null;
+      if (scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) !== s) return null;
+      // 拒答形句段扣下不外发：整答为拒答时下游会走复问重试/诚实拒答通道整体
+      // 替换答案（isRefusalAnswer 分支），先发的拒答 delta 会被 done 撤回。
+      // 非拒答句段一旦存在，整答即非拒答，不受重试影响，照常外发。
+      if (isRefusalAnswer(s)) return null;
+      return s;
+    };
+    const enc = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(ctrl) {
+        const send = (event: string, data: unknown) =>
+          ctrl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        send("meta", { retrieved: notes.length, stream_mode: "generation_stream" });
+        let buf = "";
+        const flushSegments = (final: boolean) => {
+          const parts = buf.split(/(?<=\n|[。！？!?；;])/);
+          buf = final ? "" : (parts.pop() ?? "");
+          for (const p of parts) {
+            const s = gateSegment(p);
+            if (s) send("delta", { text: s });
+          }
+        };
+        try {
+          const raw = await runGeneration((t) => {
+            buf += t;
+            flushSegments(false);
+          });
+          flushSegments(true);
+          const tFin = Date.now();
+          const body = finalizeGenerationBody(raw);
+          body.conaud_ms = Date.now() - tFin;
+          delete body.guard_finalized;
+          send("done", body);
+        } catch (err) {
+          console.error("ask stream failed", err);
+          send("error", { message: "生成失败，请重试" });
+        }
+        ctrl.close();
+      },
+    });
+    return new Response(stream, {
+      status: 200,
       headers: {
         "content-type": "text/event-stream; charset=utf-8",
         "cache-control": "no-cache",
         connection: "keep-alive",
-        "server-timing": `conaud;dur=${conaudDur}`,
+        "server-timing": `conaud;dur=${preGuardDur};desc="pre-delta gate"`,
       },
     });
   }
