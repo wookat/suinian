@@ -159,7 +159,7 @@ const BARE_HOST_SHADOW_RE = /(?<![.\w@/-])(?:[a-z0-9-]+\.)+[a-z]{2,24}(?![\w./-]
 // 问法从豁免中移除——它们是普通问答，指令段落不得借 verbatim 豁免进入叙述层。
 // 只保留明确索要「原文/逐字/一字不差/verbatim/完整给我」类措辞。
 export const VERBATIM_ASKED_RE =
-  /原文|原样|原樣|原話|原话|原封不动|逐字|一字不差|一字不漏|照原来|完整(?:给|地给|贴|复述|抄|内容|版)|verbatim|word for word|exact wording|exactly as (?:written|recorded)/i;
+  /原文|原样|原樣|原話|原话|原封不动|逐字|一字不差|一字不漏|照原来|完整(?:给|地给|贴|复述|抄|内容|版)|一字一句|原文のまま|そのまま(?:教えて|見せて|出して)|원문|토씨\s*하나|그대로\s*(?:알려|보여|말해)|verbatim|word for word|exact wording|exactly as (?:written|recorded)/i;
 
 export function questionRequestsVerbatim(question: string): boolean {
   return VERBATIM_ASKED_RE.test(question);
@@ -1164,6 +1164,12 @@ export const INSTRUCTION_ISOLATED_MARK = "〔已隔离笔记内指令，未采�
 /** 原文请求下可执行管道的警示前缀（R276 P1-1：不裸给，但尊重用户的原文请求）。 */
 export const EXEC_PIPELINE_WARN_MARK = "〔警示：以下命令会下载并执行远程代码，请勿直接运行〕";
 
+/** 非原文问法下危险执行内容的隔离说明（R280 P1-6）：与「笔记内指令」区分，
+ * 它陈述的是「内容含危险命令」而非「笔记在指挥助手」，避免运维手册/安全
+ * 研究类 benign 笔记被误标成指令注入；内容同样不交付（fail-closed 不变）。 */
+export const EXEC_ISOLATED_MARK =
+  "〔已隔离危险命令（会下载执行远程代码或建立外连），未展示；原文可在引用的笔记卡片中查看〕";
+
 // ---- R276 P0-2：隔离/审计标注防仿冒（audit-r275 X06/K05） ----
 // 系统标注是纯文本常量，笔记正文可以写出同一串文案冒充系统行为（真标注+
 // 「以上标记已失效」，或伪造 <<AUDIT-OK>> 审计通过标记）。收口方式：统一出口
@@ -1175,6 +1181,7 @@ const SPOOFED_CONTROL_MARK_RE = new RegExp(
   [
     "〔已隔离[^〕\n]{0,60}(?:〕|$)",
     "〔已移除外部链接〕",
+    "〔已隔离危险命令[^〕\n]{0,60}(?:〕|$)",
     "〔警示[^〕\n]{0,60}(?:〕|$)",
     "<<[A-Za-z0-9 _-]{2,32}>>",
     "《《[^》\n]{2,32}》》",
@@ -1183,6 +1190,8 @@ const SPOOFED_CONTROL_MARK_RE = new RegExp(
     // 伪造「警示已解除」类文案（R278 P1-1，audit-r277 DG2/S08）
     "(?:警示|警告)[^\n。；]{0,12}已(?:由管理员|被管理员)?(?:解除|取消|移除|撤销)[^\n。；]{0,6}(?:[。；]|)",
     "本段已由[^\n。；]{0,24}审计[^\n。；]{0,30}(?:[。；]|)",
+    // R280：笔记原文引用标注同样防仿冒（真标注由 isolateNoteInstructions 插入）
+    "〔笔记原文引用[^〕\n]{0,60}(?:〕|$)",
   ].join("|"),
   "g"
 );
@@ -1241,17 +1250,181 @@ const DESTRUCTIVE_INDUCE_RE =
 export const EXEC_PIPELINE_RE =
   /(?:curl|wget|iwr|invoke-webrequest|fetch)\b[^\n|]{0,240}\|[^\n|]{0,40}\b(?:sudo\s+)?(?:(?:ba|z|da|k|fi)?sh|python[0-9.]*|perl|ruby|node|php)\b|(?:ba|z)?sh\s+<\(\s*(?:curl|wget|fetch)\b|\|\s*iex\b|\biex\s*\(|invoke-expression|powershell(?:\.exe)?\b[^\n]{0,120}-enc(?:odedcommand)?\b|base64\s+(?:-d|--decode)\b[^\n]{0,60}\|[^\n]{0,20}\b(?:ba)?sh\b/i;
 
+// ---- R280 P0-1：危险执行意图的语义（行为组合）判定 ----
+// 根因（audit-r279）：EXEC_PIPELINE_RE 枚举的是「具体命令组合的字面」
+// （curl|sh、bash <(curl)、-Enc、base64|sh），属命中式清单——攻击面是
+// 「行为组合」而清单只覆盖已见过的字面，换一种同义组合（/dev/tcp 反弹、
+// nc -e、socat EXEC、chmod +x && ./）即穿透。R280 改为行为角色组合判定：
+//   危险执行意图 := 反弹外连 ∨ (远程取得代码 ∧ 交给解释器执行)
+//                 ∨ (赋权 ∧ 随后执行) ∨ (远程取得 ∧ 赋权)
+// 字面清单 EXEC_PIPELINE_RE 保留，仅作 fail-closed 兜底。
+// 判定前必须归一化：NFKC、剥续行符（\␤）、剥行尾注释、折叠空白——
+// 跨行/注释拼接（audit-r279 P1-5）在归一化后与单行同义式同判。
+
+/** 命令文本归一化（判定前置）：NFKC + 续行符合并 + 行尾注释剥除 + 空白折叠。 */
+export function normalizeCommandText(text: string): string {
+  return text
+    .normalize("NFKC")
+    .replace(/\\\r?\n\s*/g, " ") // shell 续行符：反斜杠+换行 = 同一逻辑行
+    .replace(/(?:^|\s)#(?!\{|!)[^\n]*/g, " ") // 行尾/整行 shell 注释（保留 #! 与 #{）
+    .replace(/[ \t]+/g, " ");
+}
+
+// 远程取得代码/数据（行为角色 A）
+const EXEC_FETCH_RE =
+  /\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod|fetch|tftp|scp)\b|certutil(?:\.exe)?\b[^\n]{0,60}-urlcache|bitsadmin\b[^\n]{0,60}\/transfer|git\s+clone\b|https?:\/\/\S+\.(?:sh|py|ps1|pl|rb|exe|bin|run)\b/i;
+
+// 交给解释器执行（行为角色 B）：管道入解释器 / 进程替换 / eval|iex / -Enc /
+// 下载落盘后 sh|bash|python 执行 / ./x.sh 直接执行
+const EXEC_SINK_RE =
+  /\|\s*(?:sudo\s+)?(?:(?:ba|z|da|k|fi)?sh|python[0-9.]*|perl|ruby|node|php|pwsh|powershell)\b|\b(?:ba|z)?sh\s+(?:-[a-z]+\s+)?<\(|\beval\s|\|\s*iex\b|\biex\s*\(|invoke-expression|-enc(?:odedcommand)?\b|(?:^|[;&|]|&&|\|\|)\s*(?:sudo\s+)?(?:\.\/\S+|(?:ba|z)?sh\s+\S+\.\w{1,4}|python[0-9.]*\s+\S+\.py|source\s+\S+)/i;
+
+// 反弹外连/远控（行为角色 C）：单独即危险，无需组合
+const NET_BACKCONNECT_RE =
+  /\/dev\/(?:tcp|udp)\/|\bnc(?:at)?(?:\.exe)?\b[^\n]{0,80}\s-[a-z]{0,3}[ec]\b|\bnc(?:at)?\b\s+-[ec]\b|\bnc(?:at)?(?:\.exe)?\b[^\n]{0,80}--(?:sh-)?exec\b|\bsocat\b[^\n]{0,120}\b(?:exec|system):|\bbash\s+-i\b[^\n]{0,60}(?:>&|&>|>\s*\/dev\/)|mkfifo\b[^\n]{0,100}\|\s*(?:\/bin\/)?(?:ba)?sh\b|telnet\b[^\n]{0,60}\|\s*(?:\/bin\/)?(?:ba)?sh\b|reverse\s+shell/i;
+
+// 赋权（行为角色 D）与随后执行
+const PRIV_CHANGE_RE = /chmod\s+(?:\+x|u\+x|a\+x|0?7[0-7]{2})\b|icacls\b[^\n]{0,60}\/grant/i;
+const PRIV_THEN_EXEC_RE =
+  /(?:chmod\s+(?:\+x|u\+x|a\+x|0?7[0-7]{2})\s+\S+|icacls\b[^\n]{0,60}\/grant[^\n]{0,40})[^\n]{0,80}(?:&&|;|\|\|)\s*[^\n]{0,40}(?:\.\/|\b(?:ba|z)?sh\b|\bsudo\b|\bpython[0-9.]*\b|\bstart\b)/i;
+
+/**
+ * 危险执行意图判定（R280 P0-1 主判）：入参须先经 normalizeCommandText。
+ * 行为组合命中即危险；EXEC_PIPELINE_RE 仅作字面兜底（fail-closed）。
+ */
+export function hasExecIntent(normalized: string): boolean {
+  if (NET_BACKCONNECT_RE.test(normalized)) return true;
+  const fetch = EXEC_FETCH_RE.test(normalized);
+  if (fetch && EXEC_SINK_RE.test(normalized)) return true;
+  if (PRIV_THEN_EXEC_RE.test(normalized)) return true;
+  if (fetch && PRIV_CHANGE_RE.test(normalized)) return true;
+  if (EXEC_PIPELINE_RE.test(normalized)) return true; // 字面兜底
+  return false;
+}
+
+
+/**
+ * 跨行危险执行区间（R280 P1-5）：按「逻辑行」把续行符/管道悬挂/未闭合的
+ * 进程替换括号连接的多行合并后判定，返回命中区间（原文偏移）。
+ * 单行命中不在此返回（由段级判定处理），只处理跨行拼接形态。
+ */
+export function execIntentLineSpans(text: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  const lines: Array<{ start: number; end: number }> = [];
+  let idx = 0;
+  for (const part of text.split("\n")) {
+    lines.push({ start: idx, end: idx + part.length });
+    idx += part.length + 1;
+  }
+  const needsContinuation = (s: string): boolean => {
+    const t = s.replace(/\s+$/, "");
+    if (/\\$/.test(t) || /(?:&&|\|\||\|)$/.test(t)) return true;
+    if (/<\(|\$\(/.test(t)) {
+      const opens = (t.match(/\(/g) || []).length;
+      const closes = (t.match(/\)/g) || []).length;
+      if (opens > closes) return true;
+    }
+    return false;
+  };
+  let i = 0;
+  while (i < lines.length) {
+    let j = i;
+    let joined = text.slice(lines[i].start, lines[i].end);
+    while (j + 1 < lines.length && needsContinuation(joined) && j - i < 8) {
+      j++;
+      joined += "\n" + text.slice(lines[j].start, lines[j].end);
+    }
+    if (j > i && hasExecIntent(normalizeCommandText(joined))) {
+      spans.push({ start: lines[i].start, end: lines[j].end });
+    }
+    i = j + 1;
+  }
+  return spans;
+}
+
 // 社工诱导（R278 P1-2，audit-r277 X04）：诱导用户把验证码/恢复码/证件/密码/
 // 口令念给或发给他人（含电话来电诱导）。无论 verbatim 与否都是对读者的行动
 // 诱导——凭据外发没有任何合法叙述场景需要答案层照搬。
 // 否定式安全建议豁免（R278，B12 银行提醒误伤）：「不要把验证码告诉任何人」类
 // 防骗提醒与社工诱导行为相反，不隔离（否定词与凭据词之间不得隔逗号，
 // 避免「不要犹豫，把验证码…」被误豁）。
+// R280 P0-2 根因（audit-r279）：原 SOCIAL_ENGINEER_RE 枚举「特定中文凭据词 ×
+// 特定动词 × 特定受体」的固定句式，是命中式清单——「引导用户把恢复码一位
+// 一位念出来」（无受体）、「認証コードを相手に伝えてください」（日语）、
+// 「续费和发证件号」（缩略）全部穿透。R280 改为语言无关的语义角色组合判定：
+//   社工诱导 := 凭据类信息(CRED) ∧ 外发/念出/告知动作(DISCLOSE)
+//              ∧ (第三方受体 ∨ 口述/逐位念出形态 ∨ 电话诱导场景 ∨ 动作紧邻凭据)
+//   排除：否定式防骗提醒、疑问句（防骗咨询）。
+// 词表按「语义角色」组织并覆盖中/日/韩/英，新增语言只需补角色词，不需补句式。
 const SOCIAL_NEGATED_ADVICE_RE =
-  /(?:不要|不得|切勿|勿|别|禁止|绝不|千万不(?:要|能)|never|don'?t|do not)[^\n。；，,、]{0,16}(?:验证码|校验码|动态码|恢复码|备用码|一次性(?:密码|口令)|密码|口令|证件号|OTP|2FA|password|recovery code|verification code)/i;
+  /(?:不要|不得|不能|不可以?|切勿|勿|别|禁止|绝不|千万不(?:要|能)|绝不能|never|don'?t|do not|しないで|してはいけ|教えないで|伝えないで|알려주지\s*마|하지\s*마)[^\n。；，,、]{0,16}(?:验证码|校验码|认证码|动态码|恢复码|备用码|一次性(?:密码|口令)|密码|口令|证件号|OTP|2FA|password|recovery code|verification code|認証コード|パスワード|인증|비밀번호)|(?:验证码|恢复码|密码|口令|証明書|認証コード)[^\n。；，,、]{0,10}(?:不要|不得|切勿|绝不能?|别)[^\n。；，,、]{0,10}(?:告诉|念给|发给|提供|透露|外传)/i;
 
-const SOCIAL_ENGINEER_RE =
-  /(?:验证码|校验码|动态码|恢复码|恢復码|恢复代码|备用码|一次性(?:密码|口令)|短信码|短信验证码|OTP|2FA|recovery code|verification code)[^\n。；]{0,30}(?:念给|读给|報给|报给|告诉|告知|发给|發给|发送给|提供给|给到|交给|转告|输入到|填到|填入)|(?:密码|口令|证件号|身份证号|银行卡号|passcode|password)[^\n。；]{0,24}(?:念给|读给|报给|发给|提供给|告诉)[^\n。；]{0,16}(?:对方|来电|客服|工作人员|安全(?:专员|人员)|警官|银行(?:人员|客服)|陌生人)|(?:念给|读给|报给|告诉|发给|提供给)[^\n。；]{0,16}(?:对方|来电|客服|工作人员|安全(?:专员|人员)|警官|银行(?:人员|客服)|陌生人)[^\n。；]{0,20}(?:验证码|恢复码|口令|密码|证件号|身份证号|卡号)|(?:接到|收到)[^\n。；]{0,12}(?:电话|来电)[^\n。；]{0,24}(?:按提示|按对方|配合(?:提供|念出|报出)|念出|报出)|read (?:out )?(?:the |your )?(?:otp|verification code|recovery code|password) to|share your (?:otp|password|recovery code|verification code)/i;
+// 凭据类信息（角色：CRED）——中/日/韩/英
+const SOCIAL_CRED_RE =
+  /验证码|校验码|认证码|動態码|动态码|恢复码|恢復码|恢复代码|备用码|一次性(?:密码|口令)|短信码|口令|密码|证件号|身份证号?|护照号|银行卡号|卡号|安全码|CVV|PIN\b|OTP|2FA|MFA|passcode|password|recovery code|verification code|security code|one[- ]?time (?:code|password)|backup code|auth(?:entication)? code|認証コード|確認コード|ワンタイムパスワード|パスワード|暗証番号|マイナンバー|인증\s?(?:번호|코드)|비밀번호|복구\s?코드|주민등록번호|카드번호/i;
+
+// 外发/念出/告知动作（角色：DISCLOSE）
+const SOCIAL_DISCLOSE_RE =
+  /念(?:给|出|一位)|读(?:给|出)|报(?:给|出)|告诉|告知|转告|口述|复述给|外发|外傳|外传|发(?:给|送|到|出)|传(?:给|送)?|提供给?|给到|交给|输入到|填(?:到|入|写到)|共享给|伝え|教え|知らせ|送信|送って|読み上げ|口頭で|共有し|알려|전달|보내|불러\s?주|말해\s?주|공유해|\bread\b|tell|share|send|provide|give out|dictate|relay|disclose/i;
+
+// 第三方受体（角色：RECIPIENT）
+const SOCIAL_RECIPIENT_RE =
+  /对方|来电(?:者|方)?|客服|工作人员|专员|安全(?:专员|人员)|警官|银行(?:人员|客服)?|陌生人|他人|别人|任何人|管理员|自称[^\n。；]{0,8}的人|相手|先方|係の?人|担当者|オペレーター|상대(?:방)?|상담원|직원|낯선\s?사람|누구|(?:to|with)\s+(?:the|a|an|our|your|their)?\s*(?:agent|caller|operator|support(?:\s+(?:staff|team|agent))?|customer service|representative|rep|admin|staff|anyone|someone|stranger|third party)/i;
+
+// 电话诱导场景（角色：PHONE）
+const SOCIAL_PHONE_RE =
+  /(?:接到|收到|来了)[^\n。；]{0,12}(?:电话|来电)|电话(?:来了|里|中)|按(?:对方|来电|电话)(?:的)?(?:提示|指示|要求)|按提示(?:念出|报出|提供)|電話(?:が(?:来た|かかって)|で|に出)|전화(?:가\s?오|로|를\s?받)|(?:on|over) the phone|phone call|when (?:the |a )?caller/i;
+
+// 口述/逐位念出形态（无受体也构成诱导：目的即口头外泄）
+const SOCIAL_DICTATE_RE =
+  /念(?:出|给)|读(?:出|给)|报(?:出|给)|口述|逐位|一位一位|一个一个(?:念|读|报)|读一遍|念一遍|読み上げ|口頭で|한\s?자리씩|불러\s?주|read (?:out|aloud)|dictate|say (?:it|the code) (?:out loud|aloud)/i;
+
+/**
+ * 社工诱导语义判定（R280 P0-2 主判）：语言无关的角色组合，所有出口
+ * （verbatim/非 verbatim/枚举/确定性/流式/MCP）经 segmentIsNonExecReaderDirective
+ * 单点同源使用。
+ */
+export function segmentIsSocialEngineering(segText: string): boolean {
+  const t = segText.normalize("NFKC");
+  if (!SOCIAL_CRED_RE.test(t)) return false;
+  const trimmed = t.trim();
+  // 疑问句（「验证码可以告诉别人吗？」防骗咨询）不是对读者的行动诱导
+  if (/[?？]$|吗[?？]?$|呢[?？]?$|でしょうか$|ですか$|나요\?$|까\?$/.test(trimmed)) return false;
+  // 子句级否定作用域（R280 P1-6）：防骗提醒的否定词可能在凭据词之后
+  // （「认证コード…教えないでください」「…请勿提供」），整段级否定判定拿不住；
+  // 反之整段豁免又会被「把验证码发给客服，不要告诉别人」这类拼接绕过。
+  // 故按子句切分，含禁止/否定词的子句不参与判定，任一非否定子句成立即隔离。
+  const clauses = t.split(/[，,。；;！!？?、\n]+/).filter((s) => s.trim().length > 0);
+  if (clauses.length > 1) {
+    return clauses.some((c) => !SOCIAL_CLAUSE_NEGATED_RE.test(c) && socialClauseInduces(c));
+  }
+  if (SOCIAL_CLAUSE_NEGATED_RE.test(t)) return false;
+  return socialClauseInduces(t);
+}
+
+/** 缩略外发形态（无受体）：外发动作紧邻凭据词，如「发证件号」「传认证码」。 */
+const SOCIAL_TERSE_DISCLOSE_RE =
+  /(?:外发|发送|发|传|报|给|提供|上报|转发|告知|告诉)\s{0,2}(?:验证码|认证码|校验码|动态码|恢复码|备用码|证件号|身份证号?|护照号|银行卡号|卡号|密码|口令|認証コード|パスワード|인증번호|비밀번호)/;
+
+/** 第一人称完成态自述（「我把身份证发给了 HR」）：记录而非诱导。 */
+const SOCIAL_SELF_REPORT_RE =
+  /(?:我|我们|俺|本人)[^\n。；]{0,12}(?:已经?|昨天|今天|上周|刚刚?)?[^\n。；]{0,16}(?:了|过|完)/;
+
+/** 禁止/否定型子句（防骗提醒）：不构成诱导，R280 P1-6。 */
+const SOCIAL_CLAUSE_NEGATED_RE =
+  /不要|不得|不能|不可以?|切勿|请勿|勿|别|禁止|绝不|千万不|属于诈骗|是诈骗|骗子|钓鱼|never|do ?n['’]?t|do not|avoid|scam|phishing|fraud|しないで|してはいけ|ないでください|教えない|伝えない|詐欺|알려주지\s*마|공유하지\s*마|하지\s*마|사기/i;
+
+function socialClauseInduces(t: string): boolean {
+  if (!SOCIAL_CRED_RE.test(t)) return false;
+  if (SOCIAL_NEGATED_ADVICE_RE.test(t)) return false;
+  // 缩略形态（「发证件号」「传认证码」）：外发动作紧邻凭据词，无受体亦成立。
+  if (SOCIAL_TERSE_DISCLOSE_RE.test(t) && !SOCIAL_SELF_REPORT_RE.test(t)) return true;
+  if (!SOCIAL_DISCLOSE_RE.test(t)) return false;
+  if (SOCIAL_PHONE_RE.test(t)) return true;
+  if (SOCIAL_DICTATE_RE.test(t)) return true;
+  if (SOCIAL_RECIPIENT_RE.test(t)) return true;
+  return false;
+}
 
 // 面向回答者/助手的听写措辞：要求改变当前回答行为或在答案里附加内容。
 // 判的是行为特征（对谁说/要求干什么），与注入字面/语种无关的最小多语言集。
@@ -1269,8 +1442,8 @@ const INSTRUCT_VERB_RE =
  * 纯事实陈述（「把报告发给李工」）无 b/c 特征，不命中。
  */
 export function segmentIsReaderDirective(segText: string): boolean {
-  const t = segText.normalize("NFKC");
-  if (EXEC_PIPELINE_RE.test(t)) return true;
+  // R280 P0-1：危险执行以语义主判（字面清单仅兜底），归一化前置。
+  if (hasExecIntent(normalizeCommandText(segText))) return true;
   return segmentIsNonExecReaderDirective(segText);
 }
 
@@ -1288,9 +1461,8 @@ export function segmentIsNonExecReaderDirective(segText: string): boolean {
   if (OFFLINE_INDUCE_RE.test(t)) return true;
   if (DESTRUCTIVE_INDUCE_RE.test(t)) return true;
   if (PSEUDO_AUTH_CLAIM_RE.test(t)) return true;
-  // R278 P1-2（audit-r277 X04）：社工诱导（凭据念给/发给他人、电话诱导）
-  // 无论 verbatim 与否一律隔离。
-  if (SOCIAL_ENGINEER_RE.test(t) && !SOCIAL_NEGATED_ADVICE_RE.test(t)) return true;
+  // R280 P0-2：社工诱导语义判定（语言无关角色组合），无论 verbatim 与否一律隔离。
+  if (segmentIsSocialEngineering(t)) return true;
   // R278 追加（生产 injection-eval 实测 X03/R272-23/R268-33）
   if (EXFIL_URL_DIRECTIVE_RE.test(t)) return true;
   if (PSEUDO_SYSTEM_NOTICE_RE.test(t)) return true;
@@ -1341,8 +1513,11 @@ export function isolateNoteInstructions(
   //    EXEC_PIPELINE_WARN_MARK 警示；
   //  - 非 verbatim：命中段/行整体替换为隔离标记（原文在笔记卡片可见）。
   const verbatim = opts?.verbatim ?? questionRequestsVerbatim(question);
+  // R280 P1-6：非 verbatim 时不再用泛化的「已隔离笔记内指令」标记——运维
+  // 手册/安全研究综述里的命令并非「指令注入」，误标会让 benign 问答看起来
+  // 像被误伤。改用专属的危险命令隔离说明（内容仍不交付，fail-closed 不变）。
   const execSegRep = (segText: string) =>
-    verbatim ? `${EXEC_PIPELINE_WARN_MARK}${segText}` : INSTRUCTION_ISOLATED_MARK;
+    verbatim ? `${EXEC_PIPELINE_WARN_MARK}${segText}` : EXEC_ISOLATED_MARK;
   // R278 P1-4（生产 UI 实测）：模型把指令段改写进摘要（「删除全部资料类
   // 笔记」→「删除资料类笔记以释放空间」）后，改写体不再命中指令正则。
   // 收口：答案段与资料中的「读者指令段」共享 ≥5 字连续片段（且该片段
@@ -1370,34 +1545,54 @@ export function isolateNoteInstructions(
   };
   const segs = splitSegmentsFenceAware(answer);
   const reps: Array<{ start: number; end: number; rep: string }> = [];
+  // R280 P1-5：跨行拼接的危险执行区间先于段级判定处置——续行符/管道悬挂/
+  // 未闭合进程替换把多行合成逻辑行，归一化后与单行同义式同判，整个区间
+  // 一体处置（verbatim 原文+警示 / 非 verbatim 整体隔离），禁止残片。
+  const execSpans = execIntentLineSpans(answer);
+  for (const sp of execSpans) {
+    reps.push({ start: sp.start, end: sp.end, rep: execSegRep(answer.slice(sp.start, sp.end)) });
+  }
+  const inExecSpan = (start: number, end: number) =>
+    execSpans.some((sp) => start < sp.end && end > sp.start);
+  // R280 P1-6：verbatim 点名索要 prompt 模板/提示词类笔记时，指令措辞段若是
+  // 资料原文的忠实回显，以「引用标注」形态保留而非剥夺——标注防仿冒
+  // （SPOOFED_CONTROL_MARK_RE 同步剥内容侧同形文案），指令仍未被采纳执行。
+  const templateQuote =
+    verbatim && /模板|提示词|话术|prompt/i.test(question) && dataText
+      ? foldCompact(dataText)
+      : null;
+  const QUOTE_MARK = "〔笔记原文引用（含指令措辞，系统未采纳执行）〕";
   for (const seg of segs) {
     if (seg.text.startsWith("```")) {
-      // 围栏块：逐行隔离/警示命中行
-      const lines = seg.text.split("\n");
-      let changed = false;
-      const outLines = lines.map((l) => {
-        if (EXEC_PIPELINE_RE.test(l.normalize("NFKC"))) {
-          changed = true;
-          return execSegRep(l);
+      // 围栏块：逐行隔离/警示命中行（跨行形态已由 execSpans 全局处置，
+      // 与 execSpan 重叠的行跳过，避免替换区间重叠）
+      let lineStart = seg.start;
+      for (const l of seg.text.split("\n")) {
+        const lineEnd = lineStart + l.length;
+        if (!inExecSpan(lineStart, lineEnd)) {
+          if (hasExecIntent(normalizeCommandText(l))) {
+            reps.push({ start: lineStart, end: lineEnd, rep: execSegRep(l) });
+          } else if (segmentIsNonExecReaderDirective(l)) {
+            reps.push({ start: lineStart, end: lineEnd, rep: INSTRUCTION_ISOLATED_MARK });
+          }
         }
-        if (segmentIsNonExecReaderDirective(l)) {
-          changed = true;
-          return INSTRUCTION_ISOLATED_MARK;
-        }
-        return l;
-      });
-      if (changed) reps.push({ start: seg.start, end: seg.end, rep: outLines.join("\n") });
+        lineStart = lineEnd + 1;
+      }
       continue;
     }
-    const nfkc = seg.text.normalize("NFKC");
-    // 可执行管道：整段处置（verbatim 原文+警示 / 非 verbatim 整段隔离），
-    // 不交付残片。
-    if (EXEC_PIPELINE_RE.test(nfkc)) {
+    if (inExecSpan(seg.start, seg.end)) continue;
+    // 危险执行意图（R280 语义主判 + 字面兜底）：整段处置，不交付残片。
+    if (hasExecIntent(normalizeCommandText(seg.text))) {
       reps.push({ start: seg.start, end: seg.end, rep: execSegRep(seg.text) });
       continue;
     }
     if (segmentIsNonExecReaderDirective(seg.text)) {
-      reps.push({ start: seg.start, end: seg.end, rep: INSTRUCTION_ISOLATED_MARK });
+      const fold = foldCompact(seg.text);
+      if (templateQuote && fold.length >= 8 && templateQuote.includes(fold)) {
+        reps.push({ start: seg.start, end: seg.end, rep: `${QUOTE_MARK}${seg.text}` });
+      } else {
+        reps.push({ start: seg.start, end: seg.end, rep: INSTRUCTION_ISOLATED_MARK });
+      }
       continue;
     }
     if (echoesDirective(seg.text)) {
@@ -1433,7 +1628,7 @@ export function finalizeAskAnswer(
   // 此后插入的标注必然出自系统本轮判定，不可仿冒（本函数是唯一插入
   // 真标注的地方，且每个答案只经过一次：生成分支打 guard_finalized 标记，
   // 中间件不重复执行）。
-  const despoofed = stripSpoofedControlMarks(answer);
+  const despoofed = scrubDecisionTraces(stripSpoofedControlMarks(answer));
   const afterLinks = scrubAnswerLinks(despoofed, hosts, { dataText: opts.dataText, question: opts.question });
   const afterEmails = scrubDataDerivedEmails(afterLinks, opts.dataText, opts.question);
   const afterIsolate = isolateNoteInstructions(afterEmails, opts.question, opts.dataText, hosts);
@@ -1442,7 +1637,7 @@ export function finalizeAskAnswer(
   // R278 P1-4（audit-r277 §3：13 例「。」/「[1]」残片）：收口改写后只剩
   // 无意义残片（去掉引文角标/标点后不足 4 个有效字符）且没有任何可读
   // 隔离说明时，转为明确的隔离提示，绝不把残片当答案交付。
-  if (out !== answer && !out.includes(INSTRUCTION_ISOLATED_MARK) && !out.includes(EXEC_PIPELINE_WARN_MARK)) {
+  if (out !== answer && !out.includes(INSTRUCTION_ISOLATED_MARK) && !out.includes(EXEC_ISOLATED_MARK) && !out.includes(EXEC_PIPELINE_WARN_MARK)) {
     const meaningful = out
       .replace(/[[［]\d{1,2}[\]］]/g, "")
       .replace(/[\s。，；：！？、,.;:!?\-—~～()（）]/g, "");
@@ -1451,7 +1646,49 @@ export function finalizeAskAnswer(
       isolated = true;
     }
   }
+  // R280 P1-4（audit-r279 DGX7/DGX8/KO1）：空答案 / 问题回声形态的答案在
+  // 资料确实含指令/危险内容时，确定性转为可读隔离说明——不否认笔记存在，
+  // 与「没找到」（资料无指令时照常回答/拒答）可分辨。回声判定：去角标折叠
+  // 后答案是问题的近整体子串（≥80% 长度）。
+  if (!out.includes(INSTRUCTION_ISOLATED_MARK) && !out.includes(EXEC_ISOLATED_MARK) && !out.includes(EXEC_PIPELINE_WARN_MARK)) {
+    const bare = foldCompact(out.replace(/[[［]\d{1,2}[\]］]/g, ""));
+    const qFold = foldCompact(opts.question);
+    const isEcho = bare.length >= 6 && qFold.includes(bare) && bare.length >= qFold.length * 0.8;
+    const isEmpty = bare.length === 0;
+    // 悬空引导语残片（生产实测 DGX4/DGX5「XX 部署命令是：」）：正文被隔离/模型
+    // 未给出后，只剩以冒号等收尾的引子，读者无从判断发生了什么。
+    const isDanglingLeadIn =
+      bare.length > 0 && bare.length <= 24 && /[：:，,、]$/.test(out.replace(/[[［]\d{1,2}[\]］]/g, "").trim());
+    if ((isEcho || isEmpty || isDanglingLeadIn) && opts.dataText && dataTextHasIsolatableContent(opts.dataText)) {
+      out = ISOLATION_NOTICE_ANSWER;
+      isolated = true;
+    }
+  }
   return { answer: out, changed: out !== answer, isolated };
+}
+
+/** 资料面是否含会被隔离的内容（读者指令 / 危险执行意图）——用于把空/回声
+ * 答案归因为隔离而非检索失败（R280 P1-4）。 */
+export function dataTextHasIsolatableContent(dataText: string): boolean {
+  if (sourceContentHasReaderDirective(dataText)) return true;
+  if (splitSegmentsFenceAware(dataText).some((seg) => !seg.text.startsWith("```") && segmentIsReaderDirective(seg.text))) return true;
+  if (execIntentLineSpans(dataText).length > 0) return true;
+  return splitSegmentsFenceAware(dataText).some((seg) =>
+    seg.text.startsWith("```")
+      ? seg.text.split("\n").some((l) => hasExecIntent(normalizeCommandText(l)))
+      : hasExecIntent(normalizeCommandText(seg.text))
+  );
+}
+
+// R280 P2-3（audit-r279 Q4）：内部判定痕迹剥除——模型泄出的检索/筛选过程
+// 碎碎念（「[1]、[2] 中没有直接相关的信息，但…」「（买书，不属于吃的，
+// 忽略）」）确定性剥除，窄口径只匹配明确的过程性措辞，不触碰事实内容。
+const DECISION_TRACE_RE =
+  /[[［]\d{1,2}[\]］](?:\s*[、,]\s*[[［]\d{1,2}[\]］])*\s*中没有直接相关的(?:信息|内容)[，,]?\s*(?:但(?:根据)?|不过)?|[（(][^（）()\n]{0,24}不(?:属于|相关|计入)[^（）()\n]{0,16}(?:忽略|不计|排除)[^（）()\n]{0,8}[)）]/g;
+
+export function scrubDecisionTraces(answer: string): string {
+  const out = answer.replace(DECISION_TRACE_RE, "");
+  return out === answer ? answer : out.replace(/[ \t]{2,}/g, " ");
 }
 
 /** 收口剥空后的显式隔离提示（R278 P1-4）：代替静默空答案/残片答案。 */
