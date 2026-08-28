@@ -1305,7 +1305,9 @@ export function splitSegmentsFenceAware(answer: string): Array<{ start: number; 
   let pos = 0;
   const pushProse = (from: number, to: number) => {
     const slice = answer.slice(from, to);
-    for (const m of slice.matchAll(/[^\n。！？!?；;]+/g)) {
+    // ASCII ?!; 只有后随空白/行尾才是句读——URL 查询串（…/a?uid=me）、shell
+    // 参数等紧邻字符的用法不切段，避免命中段被切出「?uid=me」类残片。
+    for (const m of slice.matchAll(/(?:[^\n。！？!?；;]|[!?;](?!\s|$))+/g)) {
       segs.push({ start: from + m.index, end: from + m.index + m[0].length, text: m[0] });
     }
   };
