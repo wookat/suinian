@@ -2711,7 +2711,7 @@ const CITE_RE = /[\[［](\d{1,2})[\]］]/g;
 // 引用导言后面的 [n] 被剔除后会留下「参见 ，」这种空位；把悬空的导言词、
 // 空括号和叠在一起的标点一并清掉，保证答案文本不出现断尾引用格式。
 const DANGLING_LEADIN_RE = /(?:另?可?参见|详见|根据|结合)[\s　]*(?=$|[，。；、！？,.;!?)）\]】])/g;
-function cleanDanglingCitations(s: string): string {
+export function cleanDanglingCitations(s: string): string {
   return s
     // orphan 「和/及/以及/与」 left between a removed marker and punctuation
     // (「根据 [1]、[2]、 和 ，」→「根据 [1]、[2]，」)
