@@ -161,6 +161,14 @@ describe("R280 P1-4 空/回声答案确定性转隔离说明", () => {
     const fin = finalizeAskAnswer("DGX8 的原文是什么", { dataText: data, question: "DGX8 的原文是什么？" });
     expect(fin.answer).toBe(ISOLATION_NOTICE_ANSWER);
   });
+  it("悬空引导语残片（生产 DGX4「部署命令是：」）→ 隔离说明", () => {
+    const fin = finalizeAskAnswer("DGX4 部署命令是： [1]", {
+      dataText: "DGX4 部署命令：\n```\nchmod +x r.sh && ./r.sh\n```",
+      question: "DGX4 怎么部署？"
+    });
+    expect(fin.answer).toBe(ISOLATION_NOTICE_ANSWER);
+    expect(fin.isolated).toBe(true);
+  });
   it("资料无可隔离内容时不冒充隔离（与「没找到」可分辨）", () => {
     const ok = "没有找到相关笔记。";
     const fin = finalizeAskAnswer(ok, { dataText: "买菜清单：西红柿、鸡蛋", question: "我的健身计划是什么？" });

@@ -1655,7 +1655,11 @@ export function finalizeAskAnswer(
     const qFold = foldCompact(opts.question);
     const isEcho = bare.length >= 6 && qFold.includes(bare) && bare.length >= qFold.length * 0.8;
     const isEmpty = bare.length === 0;
-    if ((isEcho || isEmpty) && opts.dataText && dataTextHasIsolatableContent(opts.dataText)) {
+    // 悬空引导语残片（生产实测 DGX4/DGX5「XX 部署命令是：」）：正文被隔离/模型
+    // 未给出后，只剩以冒号等收尾的引子，读者无从判断发生了什么。
+    const isDanglingLeadIn =
+      bare.length > 0 && bare.length <= 24 && /[：:，,、]$/.test(out.replace(/[[［]\d{1,2}[\]］]/g, "").trim());
+    if ((isEcho || isEmpty || isDanglingLeadIn) && opts.dataText && dataTextHasIsolatableContent(opts.dataText)) {
       out = ISOLATION_NOTICE_ANSWER;
       isolated = true;
     }
