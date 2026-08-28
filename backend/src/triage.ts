@@ -288,7 +288,9 @@ const SENSITIVE_ASSIGN_RE =
 const SENSITIVE_KEY_LITERAL_RE =
   /\bsk-[A-Za-z0-9_\-]{16,}\b|\bAKIA[0-9A-Z]{16}\b|\bghp_[A-Za-z0-9]{20,}\b|\bxox[bap]-[A-Za-z0-9\-]{10,}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const ID_CARD_RE = /身份证[^\n]{0,10}\d{17}[\dXx]\b|\b\d{17}[Xx]\b/;
-const BANK_CARD_RE = /(银行卡|卡号|储蓄卡|信用卡)[^\n]{0,10}\d{12,19}\b/;
+// R284 F-2 fail-closed 补全：英文语境的卡号/证件号叙述同样是真实凭证值。
+const BANK_CARD_RE =
+  /(银行卡|卡号|储蓄卡|信用卡|(?:bank\s*)?card\s*(?:number|no\.?|#)|account\s*number|iban)[^\n]{0,10}\d{12,19}\b/i;
 const PHONE_RE = /(手机号?码?|电话号?码?|联系方式)[^\n]{0,10}(?:\+?86[\s-]?)?1[3-9]\d{9}\b/;
 
 // 数字类敏感值（卡号/证件号/手机号）的常见抄写格式是分组分隔（4-4-4-4 空格、
@@ -328,7 +330,11 @@ const SENSITIVE_TOPIC_RE =
  * export/list paths can never leak plaintext before the model has judged.
  */
 export function maybeSensitive(content: string): boolean {
-  return detectSensitive(content) || SENSITIVE_TOPIC_RE.test(content);
+  if (detectSensitive(content)) return true;
+  if (!SENSITIVE_TOPIC_RE.test(content)) return false;
+  // R284 F-2：防骗忠告只有主题词、没有凭证值，待分拣窗口也不必按疑似加密
+  //（detectSensitive 已在上面 fail-closed 兜底）。
+  return !isAntiFraudAdviceNote(content);
 }
 
 /** Regex fallback: does the content look like it contains a real credential value? */
@@ -367,6 +373,32 @@ export function isPlainCommandNote(content: string): boolean {
   if (detectSensitive(stripped)) return false;
   if (SENSITIVE_TOPIC_RE.test(stripped)) return false;
   return COMMAND_LINE_RE.test(content);
+}
+
+// 防骗忠告类笔记误判敏感的确定性纠偏（R284 F-2，audit-r283）：「任何人索要
+// 验证码都不要给」这类反诈忠告只出现凭证「主题词」而无任何凭证「值」，却常被
+// 模型判敏感 → 正文加密 → 从 ask() 问答面系统性消失，导致「四语防骗忠告不误
+// 伤」这一安全属性无法经真实问答路径验证。纠偏条件（全部满足才反转）：
+//   1) detectSensitive 不命中（没有任何真实凭证值/证件号/卡号/手机号）；
+//   2) 正文含四语（中/英/日/韩）「否定式保护」措辞（不要告诉/never share/
+//      教えないで/알려주지 마 等）——与 prompt-armor 的社工判定豁免同一语义面；
+//   3) 正文含凭证主题词（验证码/密码/OTP 等），即确实在谈防骗而非泛泛而谈。
+// 任何真实凭证形态一律不纠（fail-closed）。
+const ANTIFRAUD_NEGATION_RE =
+  /(?:不要|不得|不可|切勿|请勿|勿|别)[^\n]{0,12}(?:告诉|提供|转发|发给|念给|泄露|外泄|给)|(?:never|do\s*not|don['’]t|shouldn['’]t)\s+(?:ever\s+)?(?:share|give|tell|read\s*out|disclose|forward|send|provide)|(?:教えないで|伝えないで|知らせないで|渡さないで)|(?:알려주지\s*마|알려주면\s*안|알려주지\s*마세요|공유하지\s*마)|(?:是|多半是|就是)(?:诈骗|骗子)|\b(?:is|are)\s+(?:a\s+)?(?:scam|phishing)\b|(?:不会(?:向你)?(?:索要|索取|询问))|\b(?:never\s+asks?\s+for)\b/i;
+const CREDENTIAL_TOPIC_WORD_RE =
+  /验证码|认证码|認証コード|인증번호|恢复码|一次性(?:密码|口令)|动态码|短信码|密码|口令|passcode|password|one[\s-]?time\s*(?:password|code|passcode)|\botp\b|verification\s*code|security\s*code|ワンタイムパスワード|비밀번호/i;
+
+/** 是否是「不含任何凭证值的四语防骗忠告类笔记」（可安全地反转模型的敏感误判）。 */
+// 任何 ≥12 位连续数字串（卡号/证件号形态）或凭证赋值形态都不走纠偏。
+const LONG_DIGIT_RUN_RE = /\d{12,}/;
+
+export function isAntiFraudAdviceNote(content: string): boolean {
+  if (detectSensitive(content)) return false;
+  const normalized = normalizeDigitRuns(content);
+  if (LONG_DIGIT_RUN_RE.test(content) || LONG_DIGIT_RUN_RE.test(normalized)) return false;
+  if (!CREDENTIAL_TOPIC_WORD_RE.test(content)) return false;
+  return ANTIFRAUD_NEGATION_RE.test(content);
 }
 
 const TAG_SECRET_RE = /^(?=.*\d)[A-Za-z0-9_\-@#$%.]{6,}$|^\d{6,}$|^sk-/i;
@@ -1634,6 +1666,11 @@ export async function triageNoteDetailed(
   // 反向纠偏（R270，audit-r269 P2-2）：模型判敏感但正文只是普通命令/配置行，
   // 无任何凭证影子时取消敏感——否则开发者的命令类笔记会系统性退出问答。
   if (result?.is_sensitive && isPlainCommandNote(content)) {
+    result = { ...result, is_sensitive: false };
+  }
+  // R284 F-2（audit-r283）：四语防骗忠告无凭证值时同样反转，避免反诈内容被
+  // 加密后退出问答面（该属性必须能经 ask() 真实复现）。
+  if (result?.is_sensitive && isAntiFraudAdviceNote(content)) {
     result = { ...result, is_sensitive: false };
   }
   if (result) return { triage: result, failure: null };
