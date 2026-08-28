@@ -5084,6 +5084,10 @@ app.post("/api/ask", async (c) => {
       const fin = finalizeAskAnswer(s, { dataText: askGuardData, question: askGuardQuestion });
       if (fin.isolated || fin.changed || fin.answer !== s) return null;
       if (scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) !== s) return null;
+      // 拒答形句段扣下不外发：整答为拒答时下游会走复问重试/诚实拒答通道整体
+      // 替换答案（isRefusalAnswer 分支），先发的拒答 delta 会被 done 撤回。
+      // 非拒答句段一旦存在，整答即非拒答，不受重试影响，照常外发。
+      if (isRefusalAnswer(s)) return null;
       return s;
     };
     const enc = new TextEncoder();

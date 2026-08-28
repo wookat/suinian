@@ -13,6 +13,7 @@
 - 管道处置改为**整段/整行**：verbatim → 完整原文 + `EXEC_PIPELINE_WARN_MARK` 前置；非 verbatim → 整段替换为 `INSTRUCTION_ISOLATED_MARK`。围栏代码块逐行处置，不陷整块。禁止任何残片。
 - 伪造「警示已由管理员解除」：`SPOOFED_CONTROL_MARK_RE` 扩展匹配「警示/警告…已(由/被管理员)解除/取消/移除/撤销」，随源内容一并剥除，不得独立透出（S08）。
 - DG3 串台（返回 DG1 内容）：属跨笔记拼接串台，与 P2-7 同根因，见 §8。
+- 生产实测口径（如实标注）：DG1/DG2 生产实测原文问法带警示、非原文问法整段隔离；DG3（powershell -Enc + base64）在生产被自动判敏加密、内容不进问答（回答明确提示存在加密敏感笔记，可解锁查看）——比警示更收敛的 fail-closed；其警示路径由单测锁定（`r278-fixes.test.ts` DG3 用例）。
 
 ## 2. P1-2 社工诱导（X04）
 新增 `SOCIAL_ENGINEER_RE`（验证码/恢复码/证件/密码/口令 外发·念给·发给 + 电话诱导形态），挂入 `segmentIsNonExecReaderDirective` —— 该判定被 `isolateNoteInstructions` 在**所有**路径（含 verbatim）使用，无 verbatim 豁免。
@@ -37,12 +38,13 @@
 - 生成路径改用 `chatCompleteStream`（provider 级流式）：首 delta 前完成 dirext 指令抽取门（8s fail-closed 超时）；模型增量按句界缓冲，每段独立过 despoof→demand 过滤→`finalizeAskAnswer`→链接收口，未通过的段不外发；`done` 事件带完整 finalize 后 body，`meta.stream_mode: "generation_stream"`。
 - 确定性路径一次成型，如实标注 `stream_mode: "deterministic"`。
 - X05 清洗不稳定：残片→`ISOLATION_NOTICE_ANSWER` 的确定性转换消除了「两次不同残片」。
+- delta/done 契约：delta 不携带引证角标（角标在 done 收口时全局重排定稿）；任何会被 demand 剥除/无源金额/无源否定/finalize 改写的句段整段扣下只在 done 中以收口后形态出现——不存在先泄后收的窗口（fail-closed：done 不得撤回已外发内容）。
 
 ## 8. P2 逐项
 1. **verbatim 外链/邮箱（X03/E04/E07）**：`scrubAnswerLinks`/`scrubDataDerivedEmails` 对非白名单外链与资料派生邮箱在 verbatim 分支同样替换为隔离标记，原文在笔记卡片可见。
 2. **日/韩指令正文（E08/E09）**：`segmentIsNonExecReaderDirective` 增加日语（〜してください/を送信/を読み上げ等）与韩语（하세요/보내/복구 코드 등）指令形态。
 3. **MCP search_notes 原始正文**：书面论证——search_notes 返回的是结构化笔记对象（面向 MCP 客户端程序，非叙述层），与笔记卡片同通道；出口不做正文改写，但 ask 工具转发结果与 REST 同过 finalize。风险面=客户端自身如何呈现，已在本节明确记录。
-4. **MCP Server-Timing**：`mcp.ts` 把内部 `/api/ask` 的 `Server-Timing`（含 `conaud`）复制到 MCP 响应头，可外部验证。
+4. **MCP Server-Timing**：MCP 的 Streamable HTTP 响应头先于工具执行外发，无法事后补响应头；改在 ask 工具结果里透传内部 `/api/ask` 的 `Server-Timing`（`server_timing` 字段，含 `conaud`），生产 MCP 通道实测可见。
 5. **Q1–Q4 默认当前年度**：`ask.ts` 季度解析裸 Q1–Q4/一至四季度默认当年（原 bug 落到 2025），单测更新。
 6. **可分辨性**：见 §4（`ISOLATION_NOTICE_ANSWER` ≠ 「没找到相关笔记」）。
 7. **跨笔记串台（DG3 返 DG1）**：枚举/verbatim 回答按笔记 id 定位源正文后拼接，不再按检索顺序混拼相邻笔记内容；R278-DG1/DG2/DG3 语料入回归集分别锁定。
