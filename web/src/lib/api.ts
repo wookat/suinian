@@ -1236,13 +1236,21 @@ export async function rotateToken(): Promise<string> {
  * 加 cache-bust 查询参数迫使新请求（避开同 URL 合并/缓存），1.5s 一次，
  * 整体 ≤15s 内出确定结果（成功或可重试的错误），不再陪悬挂连接等 40s+。 */
 export async function deleteAccount(): Promise<void> {
+  // 幂等 DELETE 超时后换新请求重试（cache-bust 查询串迫使独立请求，避开
+  // 悬挂连接/请求合并）：连接级悬挂换一条连接即刻恢复，最多共 3 次尝试
   let deleteFailed: unknown = null
-  const del = realFetch<{ ok: boolean }>("/api/auth/me", { method: "DELETE" }, 5_000)
-    .then(() => true)
-    .catch((e) => {
-      deleteFailed = e
-      return false
-    })
+  let attempt = 0
+  const fireDelete = () => {
+    attempt++
+    deleteFailed = null
+    return realFetch<{ ok: boolean }>(`/api/auth/me?attempt=${Date.now()}`, { method: "DELETE", cache: "no-store" }, 5_000)
+      .then(() => true)
+      .catch((e) => {
+        deleteFailed = e
+        return false
+      })
+  }
+  let del = fireDelete()
   const deadline = Date.now() + 15_000
   for (;;) {
     const won = await Promise.race([
@@ -1251,8 +1259,14 @@ export async function deleteAccount(): Promise<void> {
     ])
     if (won === "done") return
     if (await verifyAccountDeleted()) return
-    if (won === "failed" && !(deleteFailed instanceof NetworkError && (deleteFailed as NetworkError).timeout))
-      throw deleteFailed
+    if (won === "failed") {
+      const timedOut = deleteFailed instanceof NetworkError && (deleteFailed as NetworkError).timeout
+      if (!timedOut) throw deleteFailed
+      if (attempt < 3 && Date.now() < deadline - 3_000) {
+        del = fireDelete()
+        continue
+      }
+    }
     if (Date.now() > deadline) {
       if (deleteFailed) throw deleteFailed
       throw new NetworkError("注销请求超时，请重试", true)
