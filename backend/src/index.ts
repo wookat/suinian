@@ -5067,11 +5067,20 @@ app.post("/api/ask", async (c) => {
       t
         .replace(new RegExp(`D${dataNonce}｜`, "gi"), "")
         .replace(/[(（]\s*id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[^)）]*[)）]/gi, "");
+    // delta 只外发「全量收口后必然原样保留」的内容：引证角标在 done 收口时
+    // 才全局重排定稿，delta 一律不携带；任何会被 demand 剥除/无源金额/无源
+    // 否定改写的句段整段扣下，只在 done 中以收口后形态出现——不存在先泄
+    // 后收的窗口（audit-r277 X05 两次不同残片的根因）。
+    const askScrubSourceS = `${askGuardQuestion}\n${askGuardData}`;
     const gateSegment = (segRaw: string): string | null => {
-      const s = scrubModelOutputInjectionArtifacts(stripDataMarksS(segRaw));
+      const s0 = scrubModelOutputInjectionArtifacts(stripDataMarksS(segRaw));
+      const s = s0.replace(/\s*[[［]\d{1,2}[\]］]/g, "");
       if (!s.trim()) return null;
       const sc = foldCompact(s);
       if (groundedDemandsS.some((d) => d && sc.includes(foldCompact(d)))) return null;
+      if (scrubDirectiveDemands(s, groundedDemandsS, askGuardQuestion) !== s) return null;
+      if (scrubUnsourcedAmounts(s, askScrubSourceS) !== s) return null;
+      if (scrubUnsourcedNegations(s, askScrubSourceS) !== s) return null;
       const fin = finalizeAskAnswer(s, { dataText: askGuardData, question: askGuardQuestion });
       if (fin.isolated || fin.changed || fin.answer !== s) return null;
       if (scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) !== s) return null;

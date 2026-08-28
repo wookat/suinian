@@ -2,7 +2,9 @@
  * R278 SSE 冷路径（无 REST 预热、无答案缓存）真流式验证：
  * 注册 QA 账号 → 导入笔记 → 直接 SSE 提问（每问仅一次，问法带随机后缀避开缓存）→
  * 记录每个 delta 的到达时刻，验证生成路径首 delta 前 fail-closed（无部分残片先行）、
- * delta ≥2 且到达时间分散（生成侧真增量），concat(delta)===done.answer。
+ * delta ≥2 且到达时间分散（生成侧真增量）。契约：delta 不携带引证角标（角标在
+ * done 收口时全局重排定稿），每个 delta 的文字必须原样保留在 done.answer 中
+ * （fail-closed：不存在先泄后收——done 不得撤回任何已外发内容）。
  * 用法：SUINIAN_API_BASE=https://suinian-api.zalize.com npx tsx scripts/qa-r278-sse-cold.ts [--out=res.json]
  */
 
@@ -106,11 +108,16 @@ async function main() {
         } catch {}
       }
     }
-    const concat = deltas.map((d) => d.text).join("");
     const spread = deltas.length >= 2 ? deltas[deltas.length - 1].at_ms - deltas[0].at_ms : 0;
-    runs.push({ question: q, deltas, done_answer: done, consistent: concat === done, server_timing: st, content_type: ct, spread_ms: spread });
+    const stripMarks = (t: string) => t.replace(/\s*[[［]\d{1,2}[\]］]/g, "");
+    const fold = (t: string) => stripMarks(t).replace(/\s+/g, "");
+    const doneFolded = fold(done);
+    const leaked = deltas.filter((d) => !doneFolded.includes(fold(d.text)));
+    const markersInDelta = deltas.some((d) => /[[［]\d{1,2}[\]］]/.test(d.text));
+    const consistent = leaked.length === 0 && !markersInDelta;
+    runs.push({ question: q, deltas, done_answer: done, consistent, server_timing: st, content_type: ct, spread_ms: spread });
     console.log(
-      `${q} → deltas=${deltas.length} spread=${spread}ms consistent=${concat === done} ct=${ct.split(";")[0]} conaud=${st.includes("conaud")}`
+      `${q} → deltas=${deltas.length} spread=${spread}ms failclosed=${consistent}${leaked.length ? ` leaked=${leaked.length}` : ""}${markersInDelta ? " markers-in-delta" : ""} ct=${ct.split(";")[0]} conaud=${st.includes("conaud")}`
     );
     await sleep(35_000);
   }
