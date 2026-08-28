@@ -387,6 +387,49 @@ export function foldCompact(text: string): string {
     .toUpperCase();
 }
 
+/**
+ * 逐字折叠映射：返回折叠串与「折叠串下标 → 原文下标」映射，口径与
+ * foldCompact 一致（NFKC 逐字 + 去空白/标点 + 大写）。用于把折叠等价的
+ * 片段还原成原文的精确切片。
+ */
+function foldIndexMap(src: string): { folded: string; map: number[] } {
+  let folded = "";
+  const map: number[] = [];
+  for (let i = 0; i < src.length; i++) {
+    const f = foldCompact(src[i]);
+    for (let k = 0; k < f.length; k++) {
+      folded += f[k];
+      map.push(i);
+    }
+  }
+  return { folded, map };
+}
+
+/**
+ * R282 F-1：把模型渲染的危险命令句段还原成资料原文的精确切片。
+ *
+ * 背景（生产实测）：verbatim 问法下模型会把 `s.socket()` 渲染成 `s.socket`、
+ * 把 `function()` 渲染成 `function`——折叠比对（foldCompact 去括号）判它仍是
+ * 「资料回显」故予保留，但交付给用户的是**被部分改写的命令文本**，即
+ * audit-r281 明令禁止的第三态/残片。收口：verbatim 交付必须用资料原文切片，
+ * 找不到折叠等价切片（模型自造/改写）时返回 null，调用方转整段隔离
+ * （fail-closed），绝不交付未经核对的命令。
+ */
+export function restoreVerbatimFromData(segText: string, dataText?: string): string | null {
+  if (!dataText) return null;
+  const target = foldCompact(segText);
+  if (target.length < 8) return null;
+  const { folded, map } = foldIndexMap(dataText);
+  const at = folded.indexOf(target);
+  if (at < 0) return null;
+  const start = map[at];
+  let end = map[at + target.length - 1] + 1;
+  // 折叠会吃掉标点，切片末端因此可能停在 `}`（丢掉紧随的 `)'`）——那又是残片。
+  // 向后吸收「折叠为空且非空白」的收尾字符（引号/括号/分号等），到空白即止。
+  while (end < dataText.length && !/\s/.test(dataText[end]) && foldCompact(dataText[end]).length === 0) end++;
+  return dataText.slice(start, end);
+}
+
 // ---- R270 近似回显（audit-r269 P0-1 R269-44：口令以近形字「翾」替代「翅」落地，
 // 精确子串判定失效）。不追近形字表（无界），改用字符 bigram 相似度：两个折叠
 // 压缩串的 bigram 集合 Jaccard ≥ 阈值即视为同一资料回显。单字替换/增删 1-2 字
@@ -1435,7 +1478,10 @@ export function execIntentLineSpans(text: string): Array<{ start: number; end: n
       j++;
       joined += "\n" + text.slice(lines[j].start, lines[j].end);
     }
-    if (j > i && hasExecIntent(normalizeCommandText(joined))) {
+    // R282 F-1（生产 EXEC-devtcp 实测）：单行命令也整行成区间。段级切分会在
+    // 命令内部的 `;` 处断开，逐段处置就出现「警示+片段」重复拼接的残片；
+    // 整行一体处置才守住两态。
+    if (hasExecIntent(normalizeCommandText(joined))) {
       spans.push({ start: lines[i].start, end: lines[j].end });
     }
     i = j + 1;
@@ -1617,8 +1663,20 @@ export function isolateNoteInstructions(
   // R280 P1-6：非 verbatim 时不再用泛化的「已隔离笔记内指令」标记——运维
   // 手册/安全研究综述里的命令并非「指令注入」，误标会让 benign 问答看起来
   // 像被误伤。改用专属的危险命令隔离说明（内容仍不交付，fail-closed 不变）。
-  const execSegRep = (segText: string) =>
-    verbatim ? `${EXEC_PIPELINE_WARN_MARK}${segText}` : EXEC_ISOLATED_MARK;
+  // R282 F-1（生产实测 EXEC-python/powershell/node/rundll32 verbatim）：模型渲染
+  // 的命令可能丢掉空括号等字符（`s.socket()` → `s.socket`），折叠判定仍认它是
+  // 资料回显，于是「部分改写的命令文本」被当原文交付——第三态。收口：verbatim
+  // 出口一律用资料原文的精确切片；对不上（模型自造/改写）就整段隔离。
+  const CITE_MARK_RE = /[[［]\d{1,2}[\]］]/g;
+  const execSegRep = (segText: string) => {
+    if (!verbatim) return EXEC_ISOLATED_MARK;
+    const cites = segText.match(CITE_MARK_RE)?.join("") ?? "";
+    const exact = restoreVerbatimFromData(segText.replace(CITE_MARK_RE, ""), dataText);
+    if (exact !== null) return `${EXEC_PIPELINE_WARN_MARK}${exact}${cites}`;
+    // 无资料可核对（确定性投影路径自造答案）时保持原有 verbatim 契约；
+    // 有资料但对不上 → 模型改写过命令，fail-closed 整段隔离。
+    return dataText ? EXEC_ISOLATED_MARK : `${EXEC_PIPELINE_WARN_MARK}${segText}`;
+  };
   // R282 F-1 语义主判（answer-guard.classifyDangerousCodeSegments）命中的句段：
   // 与确定性能力内核同一处置口径（两态无第三态）。
   const llmDanger = new Set((opts?.execDangerSegments ?? []).map((s) => foldCompact(s)).filter((s) => s.length > 0));
