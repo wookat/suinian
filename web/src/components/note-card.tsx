@@ -700,7 +700,7 @@ export function NoteCard({
                 <p className="font-medium text-amber-700 dark:text-amber-400">
                   这条笔记刚被更新（可能来自其他设备或后台自动整理），你的输入仍保留在上方编辑框，可对照最新版本合并后再保存
                 </p>
-                <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-muted-foreground">
+                <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">
                   最新版本：{conflictNote.content}
                 </p>
                 <button
@@ -952,14 +952,14 @@ export function NoteCard({
                   </div>
                 )}
                 {i === 0 && excerptOpen && note.meta?.link_excerpt && (
-                  <p className="mx-3 mb-3 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-2.5 text-xs leading-relaxed text-muted-foreground">
+                  <p className="mx-3 mb-3 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-2.5 text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
                     {note.meta.link_excerpt}
                   </p>
                 )}
               </div>
             ))}
             {note.content !== note.url && (
-              <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
+              <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]">
                 {note.content}
               </p>
             )}
@@ -977,7 +977,7 @@ export function NoteCard({
             {!bodySameAsTitle && (
               <p
                 className={cn(
-                  "whitespace-pre-wrap text-sm leading-relaxed",
+                  "whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]",
                   done && "text-muted-foreground line-through",
                   longContent && !expanded && "line-clamp-6",
                   bodyClickEdit && "cursor-pointer",
@@ -1067,7 +1067,7 @@ export function NoteCard({
                       {fileExcerptOpen ? "收起全文摘录" : "查看全文摘录"}
                     </button>
                     {fileExcerptOpen && (
-                      <p className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-2.5 text-xs leading-relaxed text-muted-foreground">
+                      <p className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-2.5 text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
                         {fileMeta.file_excerpt}
                       </p>
                     )}
@@ -1084,7 +1084,7 @@ export function NoteCard({
                   {metaOpen ? "收起图片描述" : "查看图片描述"}
                 </button>
                 {metaOpen && (
-                  <p className="mt-1 whitespace-pre-wrap rounded-lg bg-muted/50 p-2.5 text-xs leading-relaxed text-muted-foreground">
+                  <p className="mt-1 whitespace-pre-wrap rounded-lg bg-muted/50 p-2.5 text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
                     {imageDescription}
                   </p>
                 )}
