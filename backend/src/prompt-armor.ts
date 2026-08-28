@@ -561,14 +561,14 @@ type ConductClass = {
 const IMPERATIVE_CUE =
   /请|务必|记得|建议|需要你|你要|尽快|立即|马上|现在就|别忘|不要忘|一定要|应当|应该|小时内|天内|之内必须|限时|please|make sure|you should|you need|remember to|urgently|within \d+ (?:hours?|days?)|即座に|ください|してください|하세요|해 주세요|пожалуйста/i;
 
-const EXFIL_ACT = /导出|導出|备份|備份|打包|上传|上傳|同步|发送|發送|发到|發到|寄到|转发|轉發|分享|提交|发给|發給|export|upload|send|email|forward|share|sync/i;
+const EXFIL_ACT = /导出|導出|备份|備份|打包|上传|上傳|同步|发送|發送|发到|發到|寄到|转发|轉發|分享|(?<!已)提交|发给|發給|export|upload|send|email|forward|share|sync/i;
 const EXFIL_OBJ = /全部|所有|完整|整个|笔记|筆記|数据|數據|资料|資料|记录|記錄|内容|notes|data|records/i;
 const EXFIL_DEST = /邮箱|郵箱|邮件|郵件|email|e-mail|mail|网盘|網盤|云端|雲端|cloud|服务器|服務器|server|外部|第三方/i;
 
 // 「验证」后接「码」时是名词（验证码），不是导航动作（B12 银行提醒误伤）
 // 「把/将/对用户输入…」是名词性宾语（prompt 模板常语），不是导航动作（B18
 // prompt 收藏误伤）；「请用户输入验证码」仍是导航动作（R270-11 钓鱼指令）
-const NAV_ACT = /访问|訪問|前往|打开|打開|点击|點擊|点开|登录|登入|扫码|掃碼|跳转|跳轉|重置|重设|(?<![把将將对對]用户)输入|(?<![把将將对對]用戶)輸入|验证(?!码)|驗證(?!碼)|visit|click|go to|open|log ?in|scan|reset|verify|アクセス|クリック|방문|클릭/i;
+const NAV_ACT = /访问|訪問|前往|打开|打開|点击|點擊|点开|登录(?!接口)|登入(?!接口)|扫码|掃碼|跳转|跳轉|重置|重设|(?<![把将將对對]用户)输入|(?<![把将將对對]用戶)輸入|验证(?!码)|驗證(?!碼)|visit|click|go to|open|log ?in|scan|reset|verify|アクセス|クリック|방문|클릭/i;
 const NAV_OBJ = /链接|鏈接|网址|網址|网站|網站|页面|頁面|地址|密码|密碼|账号|賬號|验证码|驗證碼|解锁|解鎖|站点|站點|link|url|website|page|password|account|サイト|링크/i;
 
 const CONTACT_ACT = /联系|聯繫|添加|加一下|拨打|撥打|致电|致電|咨询|諮詢|contact|call|add|reach|message/i;
@@ -770,6 +770,11 @@ function compactNeighborhoodAnswersQuestion(dataCompact: string, span: string, q
     if (DICTATION_NEAR_RE.test(before)) continue; // 听写位置，不是字段值
     const near = dataCompact.slice(Math.max(0, at - window), at) + dataCompact.slice(at + span.length, at + span.length + window);
     for (const k of topicKeywords(near)) if (qKeys.has(k)) return true;
+    // 略宽邻域的子串匹配（R278，B42 型：「多少天转 GLACIER」问的字段值「90 天」
+    // 紧邻「转 GLACIER」，但 6 字窗被截断令分词后对不上）——提问关键词以子串
+    // 形态出现在 ±10 压缩字符邻域内也算答题字段。听写位判定在上方已排除。
+    const near10 = dataCompact.slice(Math.max(0, at - 10), at) + dataCompact.slice(at + span.length, at + span.length + 10);
+    for (const k of qKeys) if (k.length >= 3 && near10.includes(k)) return true;
   }
 }
 
@@ -1025,7 +1030,21 @@ export function scrubDirectiveDemands(
       return core !== folded && core.length >= 3 ? [folded, core] : [folded];
     })
     .filter((d) => d.length >= 2 || (d.length === 1 && !/[A-Za-z0-9]/.test(d)))
-    .filter((d) => !qCompact.includes(d));
+    .filter((d) => !qCompact.includes(d))
+    // 提问点名豁免的部分匹配面（R278，B42 型误伤）：用户问题包含 demand 的
+    // 足量连续子串（≥max(6, 半长)）时，说明用户问的就是该内容（问题由用户
+    // 输入，资料无法伪造）——「S3 日志桶多少天转 GLACIER？」问的正是被抽取
+    // 器误报成 demand 的「90 天后转 GLACIER」。抽取器误报不应导致答案剥空。
+    .filter((d) => {
+      if (d.length < 8) return true;
+      const min = Math.max(6, Math.ceil(d.length / 2));
+      for (let len = d.length - 1; len >= min; len--) {
+        for (let i = 0; i + len <= d.length; i++) {
+          if (qCompact.includes(d.slice(i, i + len))) return false;
+        }
+      }
+      return true;
+    });
   if (targets.length === 0) return answer;
   const segs = splitSegmentsFenceAware(answer);
   const drops: Array<{ start: number; end: number }> = [];
@@ -1225,6 +1244,12 @@ export const EXEC_PIPELINE_RE =
 // 社工诱导（R278 P1-2，audit-r277 X04）：诱导用户把验证码/恢复码/证件/密码/
 // 口令念给或发给他人（含电话来电诱导）。无论 verbatim 与否都是对读者的行动
 // 诱导——凭据外发没有任何合法叙述场景需要答案层照搬。
+// 否定式安全建议豁免（R278，B12 银行提醒误伤）：「不要把验证码告诉任何人」类
+// 防骗提醒与社工诱导行为相反，不隔离（否定词与凭据词之间不得隔逗号，
+// 避免「不要犹豫，把验证码…」被误豁）。
+const SOCIAL_NEGATED_ADVICE_RE =
+  /(?:不要|不得|切勿|勿|别|禁止|绝不|千万不(?:要|能)|never|don'?t|do not)[^\n。；，,、]{0,16}(?:验证码|校验码|动态码|恢复码|备用码|一次性(?:密码|口令)|密码|口令|证件号|OTP|2FA|password|recovery code|verification code)/i;
+
 const SOCIAL_ENGINEER_RE =
   /(?:验证码|校验码|动态码|恢复码|恢復码|恢复代码|备用码|一次性(?:密码|口令)|短信码|短信验证码|OTP|2FA|recovery code|verification code)[^\n。；]{0,30}(?:念给|读给|報给|报给|告诉|告知|发给|發给|发送给|提供给|给到|交给|转告|输入到|填到|填入)|(?:密码|口令|证件号|身份证号|银行卡号|passcode|password)[^\n。；]{0,24}(?:念给|读给|报给|发给|提供给|告诉)[^\n。；]{0,16}(?:对方|来电|客服|工作人员|安全(?:专员|人员)|警官|银行(?:人员|客服)|陌生人)|(?:念给|读给|报给|告诉|发给|提供给)[^\n。；]{0,16}(?:对方|来电|客服|工作人员|安全(?:专员|人员)|警官|银行(?:人员|客服)|陌生人)[^\n。；]{0,20}(?:验证码|恢复码|口令|密码|证件号|身份证号|卡号)|(?:接到|收到)[^\n。；]{0,12}(?:电话|来电)[^\n。；]{0,24}(?:按提示|按对方|配合(?:提供|念出|报出)|念出|报出)|read (?:out )?(?:the |your )?(?:otp|verification code|recovery code|password) to|share your (?:otp|password|recovery code|verification code)/i;
 
@@ -1265,7 +1290,7 @@ export function segmentIsNonExecReaderDirective(segText: string): boolean {
   if (PSEUDO_AUTH_CLAIM_RE.test(t)) return true;
   // R278 P1-2（audit-r277 X04）：社工诱导（凭据念给/发给他人、电话诱导）
   // 无论 verbatim 与否一律隔离。
-  if (SOCIAL_ENGINEER_RE.test(t)) return true;
+  if (SOCIAL_ENGINEER_RE.test(t) && !SOCIAL_NEGATED_ADVICE_RE.test(t)) return true;
   // R278 追加（生产 injection-eval 实测 X03/R272-23/R268-33）
   if (EXFIL_URL_DIRECTIVE_RE.test(t)) return true;
   if (PSEUDO_SYSTEM_NOTICE_RE.test(t)) return true;

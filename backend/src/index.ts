@@ -4833,9 +4833,22 @@ app.post("/api/ask", async (c) => {
           const dataCompact = foldCompact(askGuardData);
           // 含 demand 字词核的句段不享受忠实豁免（R272-31 型：demand 装饰符
           // 被模型丢弃后落地，句段其余部分仍是资料回显）。
+          const qc = foldCompact(askGuardQuestion);
           const demandCores = (demands ?? [])
             .map((d) => foldCompact(d).replace(/[^\p{L}\p{N}]/gu, ""))
-            .filter((d) => d.length >= 3);
+            .filter((d) => d.length >= 3)
+            // 提问点名的 demand 不算执行痕迹（R278 B42 型：抽取器把用户正问
+            // 的资料内容误报成 demand），口径与 scrubDirectiveDemands 一致。
+            .filter((d) => {
+              if (d.length < 8) return true;
+              const min = Math.max(6, Math.ceil(d.length / 2));
+              for (let len = d.length - 1; len >= min; len--) {
+                for (let i = 0; i + len <= d.length; i++) {
+                  if (qc.includes(d.slice(i, i + len))) return false;
+                }
+              }
+              return true;
+            });
           return (t: string) => {
             const tCompact = foldCompact(t);
             return (
