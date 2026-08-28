@@ -5107,14 +5107,18 @@ app.post("/api/ask", async (c) => {
         // R280 P2-7（audit-r279 §7）：生成路由的 delta 是「已通过安全闸门的
         // 预览子集」，done 才是权威终稿——闸门扣下的句段、引证角标全局重排
         // （finalize 才补 [n]）都只在 done 出现，故 concat(delta) ⊆ done.answer
-        // 而非恒等。可验证契约（delta_contract=preview_ordered_fragments）：每个
-        // delta 文本都是 done.answer 的连续片段，且按下发顺序在 done.answer 中
-        // 位置递增；缺失部分只可能是闸门扣下或 finalize 后补的内容。客户端一律
-        // 以 done 整体替换，不得据 delta 断言最终答案。
+        // 而非恒等。契约级定义（delta_contract=preview_ordered_fragments）：
+        //  1) 去除引证角标后，delta 按下发顺序是 done.answer 的连续片段（角标
+        //     只在 finalize 全局编号时排入，故 citation_markers="final_only"）；
+        //  2) delta 只是预览：finalize 可能丢弃/改写已下发片段，done.answer 是
+        //     唯一权威终稿，客户端一律整体替换，不得据 delta 断言最终答案；
+        //  3) 安全方向单调：危险执行/注入/社工内容不会先以 delta 外发再于 done
+        //     收回（闸门在首 delta 前 fail-closed）。
         send("meta", {
           retrieved: notes.length,
           stream_mode: "generation_stream",
-          delta_contract: "preview_ordered_fragments"
+          delta_contract: "preview_ordered_fragments",
+          citation_markers: "final_only"
         });
         let buf = "";
         const flushSegments = (final: boolean) => {
