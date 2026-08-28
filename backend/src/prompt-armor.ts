@@ -427,6 +427,17 @@ export function restoreVerbatimFromData(segText: string, dataText?: string): str
   // 折叠会吃掉标点，切片末端因此可能停在 `}`（丢掉紧随的 `)'`）——那又是残片。
   // 向后吸收「折叠为空且非空白」的收尾字符（引号/括号/分号等），到空白即止。
   while (end < dataText.length && !/\s/.test(dataText[end]) && foldCompact(dataText[end]).length === 0) end++;
+  // R284 F-1b（生产实测 EXEC-elixir-gentcp/verbatim）：模型只渲染了危险命令的前
+  // 半截（`System.cmd("/bin/sh",` 处截断），折叠比对仍能对上，于是交付了「警示 +
+  // 半条命令」的第三态。收口：切片停在危险行中间时补齐到该物理行末，让 verbatim
+  // 出口只有「完整原文行 + 警示」一种形态（与 execIntentLineSpans 的整行口径一致）。
+  let lineEnd = dataText.indexOf("\n", end);
+  if (lineEnd === -1) lineEnd = dataText.length;
+  if (lineEnd > end) {
+    const lineStart = dataText.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+    const line = dataText.slice(lineStart, lineEnd);
+    if (hasExecIntent(normalizeCommandText(line))) return dataText.slice(start, lineEnd);
+  }
   return dataText.slice(start, end);
 }
 
