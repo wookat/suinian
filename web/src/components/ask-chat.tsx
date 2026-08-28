@@ -92,7 +92,7 @@ function saveMessages(messages: AskChatMessage[]) {
 function AnswerText({ msgId, content, refIndexes }: { msgId: string; content: string; refIndexes: Set<number> }) {
   const parts = content.split(/([[［]\d{1,2}[\]］])/g)
   return (
-    <p className="whitespace-pre-wrap text-sm leading-relaxed">
+    <p className="whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]">
       {parts.map((part, i) => {
         const m = part.match(/^[[［](\d{1,2})[\]］]$/)
         const n = m ? parseInt(m[1], 10) : null
@@ -345,7 +345,7 @@ export function AskChat({
           m.role === "user" ? (
             <div key={m.id} className="flex justify-end">
               <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-primary px-3.5 py-2 text-sm leading-relaxed text-primary-foreground">
-                <p className="whitespace-pre-wrap">{m.content}</p>
+                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{m.content}</p>
               </div>
             </div>
           ) : (
@@ -440,7 +440,7 @@ export function AskChat({
           <div className="flex justify-start">
             <div className="max-w-[92%] space-y-2 rounded-2xl rounded-bl-sm bg-accent/60 px-3.5 py-2">
               {streamState.text ? (
-                <p className="whitespace-pre-wrap text-sm leading-relaxed">{streamState.text}</p>
+                <p className="whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]">{streamState.text}</p>
               ) : (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="size-4 animate-spin" />
