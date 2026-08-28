@@ -16,8 +16,8 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks } from "./prompt-armor";
-import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict } from "./answer-guard";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
+import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
 import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads, detachZeroSignalThreadMembers } from "./threads";
@@ -3234,6 +3234,11 @@ app.post("/api/ask", async (c) => {
   const body = await c.req.json<{ question?: string; history?: unknown; graph?: unknown }>().catch(() => null);
   const question = (body?.question ?? "").trim();
   if (!question) return c.json({ error: "question required" }, 400);
+  // R282 F-4（audit-r281）：无意义输入（纯标点/单字/只有请求动词）走确定性
+  // 引导文案，不进生成、不泄漏内部提示结构，也不自由发挥。
+  if (isMeaninglessQuestion(question)) {
+    return c.json({ answer: MEANINGLESS_QUESTION_ANSWER, references: [], notes: [] });
+  }
   const history = sanitizeAskHistory(body?.history);
   const useGraph = body?.graph !== false; // graph:false disables GraphRAG expansion (A/B comparison)
 
@@ -5032,9 +5037,33 @@ app.post("/api/ask", async (c) => {
   // 安全出口函数（资料面用完整的 askGuardData），并打上 guard_finalized 标记
   //（服务端构造的 JSON 字段，中间件据此不重复收口）。REST 与 SSE 都只消费
   // 本函数的产物，同源同出口。
-  const finalizeGenerationBody = (body: Record<string, unknown>): Record<string, unknown> => {
+  // R282 F-1 语义主判（docs/decision-r282.md）：能力内核未命中但答案含代码类
+  // 嫌疑（解释器调用/建连/执行/取码原语）时，调独立 LLM 判别器判「这段代码
+  // 运行后是否会建立外连或执行远程获取的代码」，命中句段与确定性内核同一
+  // 处置口径。判别器不可用（null）不改变行为——确定性能力内核仍是 fail-closed
+  // 兜底，不存在「判别器挂掉就放行」的窗口。
+  const classifyExecDanger = async (answer: string): Promise<string[]> => {
+    const segs = splitSegmentsFenceAware(answer);
+    const suspicious = segs.filter(
+      (s) => segmentExecSuspicious(s.text) && !hasExecIntent(normalizeCommandText(s.text))
+    );
+    if (suspicious.length === 0) return [];
+    const tCls = Date.now();
+    const hits = await classifyDangerousCodeSegments(c.env, answer).catch((err) => {
+      console.error("ask: exec-danger classify failed", err);
+      return null;
+    });
+    askMarks.push(["execcls", Date.now() - tCls]);
+    if (!hits || hits.length === 0) return [];
+    const out = hits.map((n) => segs[n - 1]?.text ?? "").filter((t) => t.length > 0);
+    if (out.length > 0) console.log(`ask: exec-danger classifier flagged ${out.length} segment(s)`);
+    return out;
+  };
+
+  const finalizeGenerationBody = async (body: Record<string, unknown>): Promise<Record<string, unknown>> => {
     if (typeof body.answer !== "string") return { ...body, guard_finalized: true };
-    const fin = finalizeAskAnswer(body.answer, { dataText: askGuardData, question: askGuardQuestion });
+    const execDangerSegments = await classifyExecDanger(body.answer);
+    const fin = finalizeAskAnswer(body.answer, { dataText: askGuardData, question: askGuardQuestion, execDangerSegments });
     if (fin.isolated) console.log("ask: note-embedded instruction isolated at generation exit");
     const isolated = fin.isolated || body.instruction_isolated === true;
     return {
@@ -5097,6 +5126,9 @@ app.post("/api/ask", async (c) => {
       // 替换答案（isRefusalAnswer 分支），先发的拒答 delta 会被 done 撤回。
       // 非拒答句段一旦存在，整答即非拒答，不受重试影响，照常外发。
       if (isRefusalAnswer(s)) return null;
+      // R282 F-1：代码类嫌疑句段（任一能力命中）一律扣到 done——语义主判在
+      // done 收口时才裁决，先发 delta 会构成「先泄后收」。
+      if (segmentExecSuspicious(s)) return null;
       return s;
     };
     const enc = new TextEncoder();
@@ -5136,7 +5168,7 @@ app.post("/api/ask", async (c) => {
           });
           flushSegments(true);
           const tFin = Date.now();
-          const body = finalizeGenerationBody(raw);
+          const body = await finalizeGenerationBody(raw);
           body.conaud_ms = Date.now() - tFin;
           delete body.guard_finalized;
           send("done", body);
@@ -5158,7 +5190,7 @@ app.post("/api/ask", async (c) => {
     });
   }
 
-  return c.json(finalizeGenerationBody(await runGeneration()));
+  return c.json(await finalizeGenerationBody(await runGeneration()));
 });
 
 // ---- GET /api/threads ----

@@ -382,11 +382,32 @@ export function registerMcpRoute(app: App): void {
     await server.connect(transport);
     const res = await transport.handleRequest(c);
     if (!res) return res;
+    // R282 F-7（audit-r281）根因：StreamableHTTPTransport 返回的响应体是流，
+    // 工具（内部 /api/ask）在响应体流出期间才执行——在此处直接读 header 时
+    // lastServerTiming 仍为 null，故生产实测头里只有 mcp;dur=0，conaud 只能在
+    // 内嵌 body 里看到。收口：先把响应体整体缓冲（JSON-RPC 单次请求/响应体量
+    // 很小），缓冲完成即意味着工具已执行完毕，此时 lastServerTiming 已就绪，
+    // 再构造带完整 Server-Timing（含 conaud）的响应。缓冲设上限预算，超时/
+    // 失败则退回流式透传（只带 mcp;dur），不因计时头影响可用性。
+    const MCP_BODY_BUFFER_BUDGET_MS = 25_000;
+    let passthrough: ReadableStream<Uint8Array> | null = null;
+    let buffered: ArrayBuffer | null = null;
+    if (res.body) {
+      // tee：一路整体缓冲用于等待工具执行完成，一路留作超时退路的流式透传，
+      // 保证任何分支都有可用的响应体（不会出现 body 已被消费的死路）。
+      const [forBuffer, forStream] = res.body.tee();
+      passthrough = forStream;
+      buffered = await Promise.race([
+        new Response(forBuffer).arrayBuffer().catch(() => null),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), MCP_BODY_BUFFER_BUDGET_MS)),
+      ]);
+    }
     const timing = [`mcp;dur=${Date.now() - tMcp};desc="mcp request"`, lastServerTiming]
       .filter(Boolean)
       .join(", ");
-    const out = new Response(res.body, res);
+    const out = new Response(buffered ?? passthrough, res);
     out.headers.set("Server-Timing", timing);
+    if (buffered) out.headers.delete("content-length");
     return out;
   });
 }

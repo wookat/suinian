@@ -1288,18 +1288,119 @@ const PRIV_CHANGE_RE = /chmod\s+(?:\+x|u\+x|a\+x|0?7[0-7]{2})\b|icacls\b[^\n]{0,
 const PRIV_THEN_EXEC_RE =
   /(?:chmod\s+(?:\+x|u\+x|a\+x|0?7[0-7]{2})\s+\S+|icacls\b[^\n]{0,60}\/grant[^\n]{0,40})[^\n]{0,80}(?:&&|;|\|\|)\s*[^\n]{0,40}(?:\.\/|\b(?:ba|z)?sh\b|\bsudo\b|\bpython[0-9.]*\b|\bstart\b)/i;
 
+// ---- R282 P0-1：判定内核换成「能力识别」（docs/decision-r282.md §1） ----
+// 根因（audit-r281 F-1）：R280 的「行为角色」名义上是语义判定，实际锚点仍是
+// **命令名字面**——NET_BACKCONNECT_RE 只认 /dev/tcp、nc -e、socat exec:、
+// bash -i >&、mkfifo|sh、字面 "reverse shell"；解释器把同一能力（建连+执行）
+// 写在内联脚本里（perl Socket/connect、php fsockopen、python socket.connect、
+// powershell TCPClient）时，既没有这些命令名，也没有 fetch/管道 sink，
+// hasExecIntent() 直接 false，整类穿透。命令名空间无界（每个解释器 × 每个
+// socket API × 每种写法），继续补字面必然被下一种写法穿透。
+//
+// 改判：不问"用了哪个命令"，只问"这段代码/命令具备哪些能力原语"——
+//   CAP_NET   建连能力：socket()/connect()/fsockopen/TCPClient/TCPSocket/
+//             IO::Socket/inet_aton//dev/tcp//inet/tcp/ 等（跨语言 API 名）
+//   CAP_EXEC  执行/求值能力：exec/system/popen/subprocess/pty.spawn/eval/IEX/
+//             ShellExecute/cmd /c/解释器路径等
+//   CAP_SHELLIO  把进程 stdio 接到别处：dup2/fdopen/>&数字/pty
+//   CAP_FETCH 远程取码/取数据（含语言内 API：urllib/requests/Net::HTTP/
+//             file_get_contents/WebClient/http.client）
+//   INLINE    解释器内联脚本调用（-e/-c/-r/-E/-Command/awk BEGIN 等）
+//   HOSTPORT  明文 IP/主机 + 端口
+//   LOLBIN    系统二进制远程载荷（certutil/bitsadmin/mshta/rundll32/regsvr32/
+//             msiexec/wmic process call create/DownloadString）
+// 危险 := CAP_NET ∧ (CAP_EXEC ∨ CAP_SHELLIO ∨ HOSTPORT∧INLINE)
+//        ∨ LOLBIN ∨ CAP_FETCH ∧ (EXEC_SINK ∨ CAP_PRIV)
+//        ∨ INLINE ∧ CAP_FETCH ∧ CAP_EXEC ∨ 赋权后执行
+//        ∨ 字面清单（NET_BACKCONNECT_RE / EXEC_PIPELINE_RE，fail-closed 兜底）
+// 能力原语是"要达成该攻击必须出现的东西"（建连必须调 socket API，执行必须调
+// exec/eval 家族），换命令名、换语言、换缩写都绕不开，故不随写法增长。
+
+// 建连能力（CAP_NET）：跨语言 socket/连接 API 名 + shell 伪设备 + 网络工具
+const CAP_NET_RE =
+  /\/dev\/(?:tcp|udp)\/|\/inet\d?\/(?:tcp|udp)\//i.source +
+  "|" +
+  /\bsocket\s*\(|\bsocket\.(?:socket|create_connection|AF_INET)|\bAF_INET6?\b|\bSOCK_STREAM\b|\bPF_INET\b|\bsockaddr_in6?\b|\binet_(?:aton|pton|addr)\b|\bgethostbyname\b|\bfsockopen\b|\bpfsockopen\b|\bstream_socket_client\b|\bsocket_(?:create|connect)\b|\bIO::Socket\b|\bSocket::|\bNet::Telnet\b|\bTCPSocket\b|\bUDPSocket\b|\bTcpClient\b|System\.Net\.Sockets|\bSocket\s*\(\s*AddressFamily|\bnet\.(?:Socket|connect|createConnection)\b|require\s*\(?\s*['"](?:net|socket)['"]|\bsocket\.connect\b|\bconnect\s*\(\s*(?:new\s+)?(?:sockaddr|\(|["']?(?:\d{1,3}\.){3}\d{1,3})|\bopen\s*\(\s*(?:my\s+)?\$?\w*\s*,\s*['"]\+?<?>?\s*&|\b(?:python[0-9.]*|py)\s+-m\s+(?:socket|http\.client|httplib|telnetlib|ftplib|smtplib|pty|http\.server|SimpleHTTPServer)\b/i
+    .source;
+
+const CAP_NET = new RegExp(CAP_NET_RE, "i");
+
+// 执行/求值能力（CAP_EXEC）
+const CAP_EXEC =
+  /\bexec(?:l|v|le|lp|ve|vp|vpe)?\s*\(|\bexecve\b|\bsystem\s*\(|\bshell_exec\s*\(|\bpassthru\s*\(|\bproc_open\s*\(|\bpopen\s*\(|\bos\.(?:system|popen|execv?p?)\b|\bsubprocess\.(?:call|run|Popen|check_output|check_call)|\bpty\.spawn\b|\bchild_process\b|\bspawn(?:Sync)?\s*\(|\bexecSync\s*\(|\bIO\.popen\b|\bKernel#?\.?system\b|\bRuntime\.getRuntime\(\)\.exec|\bProcess\.Start\b|System\.Diagnostics\.Process|\bShellExecute\b|\beval\s*[({'"`]|\beval\s+\$|\beval\s*\(|\bexec\s*\(\s*['"]|\bIEX\b|Invoke-Expression|\bcmd(?:\.exe)?\s+\/[ck]\b|\/bin\/(?:ba|z|da|k)?sh\b|\bcmd\.exe\b|\bsh\s*-i\b|\bbash\s*-i\b|\bos\.execute\b|\bio\.popen\b/i;
+
+// 进程 stdio 重定向到别处（CAP_SHELLIO）：反弹 shell 的必要拼装
+const CAP_SHELLIO =
+  /\bdup2\s*\(|\bfdopen\b|\bSTDIN\s*->|\bSTDOUT\s*->|>&\s*\d|\d\s*>&\s*\d|\bpty\b|\bsetsid\b|\bGetStream\s*\(|\bStreamWriter\b|\bStreamReader\b|\bmakefile\s*\(/i;
+
+// 解释器内联脚本调用（INLINE）
+const INLINE_INTERP =
+  /\b(?:perl|php|python[0-9.]*|ruby|node|nodejs|deno|bun|lua[0-9.]*|luajit|tclsh|osascript|groovy|Rscript|bash|sh|zsh|ksh|dash|ash|busybox|pwsh|powershell)(?:\.exe)?\s+(?:-[A-Za-z]+\s+)*-{1,2}(?:e|E|c|r|R|command|encodedcommand|enc|eval|exec|expression|execute)\b|\b(?:g|m|b)?awk\b[^\n]{0,24}['"]?\s*BEGIN\s*\{|\bpython[0-9.]*\s+-m\s+(?:http\.client|socket|telnetlib|pty|base64)\b|\bperl\s+-M\S+\s+-e\b|\bphp\s+-a\b/i;
+
+// 明文 IP/主机 + 端口（HOSTPORT）
+const HOSTPORT =
+  /(?:\d{1,3}\.){3}\d{1,3}[^\n]{0,48}?\b\d{2,5}\b|\b\d{2,5}\b[^\n]{0,48}?(?:\d{1,3}\.){3}\d{1,3}|\b(?:port|PORT|端口)\b[^\n]{0,12}\d{2,5}|(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}|\b[a-z0-9-]+(?:\.[a-z0-9-]+){1,}\s*[,:'"]\s*\d{2,5}\b/i;
+
+// 系统二进制远程载荷（LOLBIN）
+const LOLBIN_REMOTE =
+  /certutil(?:\.exe)?\b[^\n]{0,100}(?:-urlcache|-verifyctl|-decode)\b|bitsadmin(?:\.exe)?\b[^\n]{0,100}\/(?:transfer|addfile)\b|mshta(?:\.exe)?\b[^\n]{0,60}(?:https?:\/\/|javascript:|vbscript:)|rundll32(?:\.exe)?\b[^\n]{0,80}(?:javascript:|https?:\/\/|,\s*(?:DllRegisterServer|ShellExec))|regsvr32(?:\.exe)?\b[^\n]{0,80}(?:\/i:|scrobj)|msiexec(?:\.exe)?\b[^\n]{0,60}\/(?:i|package|quiet)\b[^\n]{0,40}https?:\/\/|wmic\b[^\n]{0,80}process\s+call\s+create|\bDownloadString\s*\(|\bDownloadFile\s*\(|\bWebClient\b[^\n]{0,60}Download|\bStart-BitsTransfer\b|\bmsbuild\b[^\n]{0,60}https?:\/\/|\bcscript\b[^\n]{0,60}https?:\/\//i;
+
+// 语言内远程取码/取数据（CAP_FETCH 扩展，与命令行 EXEC_FETCH_RE 并列）
+const LANG_FETCH =
+  /\burllib(?:2|\.request)?\b|\brequests\.(?:get|post)\b|\bhttp\.client\b|\bhttplib\b|\bNet::HTTP\b|\bLWP::(?:Simple|UserAgent)\b|\bopen-uri\b|\bURI\.(?:open|parse)\b|\bfile_get_contents\s*\(\s*['"]https?:|\bcurl_(?:init|exec)\s*\(|\bfetch\s*\(\s*['"]https?:|\bhttps?\.get\s*\(|\bXMLHttpRequest\b|\bInvoke-RestMethod\b|\bNew-Object\s+(?:System\.)?Net\.WebClient\b/i;
+
+/** 能力识别结果（可测试、可解释；判定理由随 hasExecIntentReason 暴露）。 */
+export type ExecCapabilities = {
+  net: boolean;
+  exec: boolean;
+  shellio: boolean;
+  fetch: boolean;
+  inline: boolean;
+  hostport: boolean;
+  lolbin: boolean;
+  priv: boolean;
+  sink: boolean;
+};
+
+export function execCapabilities(normalized: string): ExecCapabilities {
+  return {
+    net: CAP_NET.test(normalized),
+    exec: CAP_EXEC.test(normalized),
+    shellio: CAP_SHELLIO.test(normalized),
+    fetch: EXEC_FETCH_RE.test(normalized) || LANG_FETCH.test(normalized),
+    inline: INLINE_INTERP.test(normalized),
+    hostport: HOSTPORT.test(normalized),
+    lolbin: LOLBIN_REMOTE.test(normalized),
+    priv: PRIV_CHANGE_RE.test(normalized),
+    sink: EXEC_SINK_RE.test(normalized),
+  };
+}
+
 /**
- * 危险执行意图判定（R280 P0-1 主判）：入参须先经 normalizeCommandText。
- * 行为组合命中即危险；EXEC_PIPELINE_RE 仅作字面兜底（fail-closed）。
+ * 危险执行意图判定（R282 P0-1 能力识别主判）：入参须先经 normalizeCommandText。
+ * 返回命中理由（null = 未命中），便于测试与排障；字面清单仅 fail-closed 兜底。
  */
+export function hasExecIntentReason(normalized: string): string | null {
+  const c = execCapabilities(normalized);
+  // 建连能力 + （执行/求值 ∨ stdio 接管 ∨ 内联脚本里写死了 IP:端口）
+  if (c.net && c.exec) return "cap:net+exec";
+  if (c.net && c.shellio) return "cap:net+shellio";
+  if (c.net && c.inline && c.hostport) return "cap:net+inline+hostport";
+  // 解释器内联脚本里出现建连能力（即使未写死 IP）：一行式网络代码没有
+  // 合法的「答案层递送」场景，一律归危险执行（fail-closed）。
+  if (c.net && c.inline) return "cap:net+inline";
+  if (c.lolbin) return "cap:lolbin-remote-payload";
+  if (c.fetch && c.sink) return "cap:fetch+sink";
+  if (c.inline && c.fetch && c.exec) return "cap:inline+fetch+exec";
+  if (c.fetch && c.priv) return "cap:fetch+priv";
+  if (NET_BACKCONNECT_RE.test(normalized)) return "literal:backconnect";
+  if (PRIV_THEN_EXEC_RE.test(normalized)) return "literal:priv-then-exec";
+  if (EXEC_PIPELINE_RE.test(normalized)) return "literal:pipeline";
+  return null;
+}
+
 export function hasExecIntent(normalized: string): boolean {
-  if (NET_BACKCONNECT_RE.test(normalized)) return true;
-  const fetch = EXEC_FETCH_RE.test(normalized);
-  if (fetch && EXEC_SINK_RE.test(normalized)) return true;
-  if (PRIV_THEN_EXEC_RE.test(normalized)) return true;
-  if (fetch && PRIV_CHANGE_RE.test(normalized)) return true;
-  if (EXEC_PIPELINE_RE.test(normalized)) return true; // 字面兜底
-  return false;
+  return hasExecIntentReason(normalized) !== null;
 }
 
 
@@ -1504,7 +1605,7 @@ export function isolateNoteInstructions(
   question: string,
   dataText?: string,
   _allowedHosts: string[] = ANSWER_LINK_ALLOWED_HOSTS,
-  opts?: { verbatim?: boolean }
+  opts?: { verbatim?: boolean; execDangerSegments?: string[] }
 ): string {
   // R278 P1-1（audit-r277 DG1–DG3/S08）：可执行下载管道整段处置，禁止交付
   // 残片——R277 实测只替换正则命中字面会把「bash <(curl -fsSL …)」切成
@@ -1518,6 +1619,10 @@ export function isolateNoteInstructions(
   // 像被误伤。改用专属的危险命令隔离说明（内容仍不交付，fail-closed 不变）。
   const execSegRep = (segText: string) =>
     verbatim ? `${EXEC_PIPELINE_WARN_MARK}${segText}` : EXEC_ISOLATED_MARK;
+  // R282 F-1 语义主判（answer-guard.classifyDangerousCodeSegments）命中的句段：
+  // 与确定性能力内核同一处置口径（两态无第三态）。
+  const llmDanger = new Set((opts?.execDangerSegments ?? []).map((s) => foldCompact(s)).filter((s) => s.length > 0));
+  const llmDangerHit = (segText: string) => llmDanger.size > 0 && llmDanger.has(foldCompact(segText));
   // R278 P1-4（生产 UI 实测）：模型把指令段改写进摘要（「删除全部资料类
   // 笔记」→「删除资料类笔记以释放空间」）后，改写体不再命中指令正则。
   // 收口：答案段与资料中的「读者指令段」共享 ≥5 字连续片段（且该片段
@@ -1566,6 +1671,10 @@ export function isolateNoteInstructions(
     if (seg.text.startsWith("```")) {
       // 围栏块：逐行隔离/警示命中行（跨行形态已由 execSpans 全局处置，
       // 与 execSpan 重叠的行跳过，避免替换区间重叠）
+      if (llmDangerHit(seg.text) && !inExecSpan(seg.start, seg.end)) {
+        reps.push({ start: seg.start, end: seg.end, rep: execSegRep(seg.text) });
+        continue;
+      }
       let lineStart = seg.start;
       for (const l of seg.text.split("\n")) {
         const lineEnd = lineStart + l.length;
@@ -1581,8 +1690,8 @@ export function isolateNoteInstructions(
       continue;
     }
     if (inExecSpan(seg.start, seg.end)) continue;
-    // 危险执行意图（R280 语义主判 + 字面兜底）：整段处置，不交付残片。
-    if (hasExecIntent(normalizeCommandText(seg.text))) {
+    // 危险执行意图（R282 LLM 语义主判 + 确定性能力内核 fail-closed 兜底）：整段处置，不交付残片。
+    if (llmDangerHit(seg.text) || hasExecIntent(normalizeCommandText(seg.text))) {
       reps.push({ start: seg.start, end: seg.end, rep: execSegRep(seg.text) });
       continue;
     }
@@ -1621,17 +1730,21 @@ export function isolateNoteInstructions(
  */
 export function finalizeAskAnswer(
   answer: string,
-  opts: { dataText: string; question: string; allowedHosts?: string[] }
+  opts: { dataText: string; question: string; allowedHosts?: string[]; execDangerSegments?: string[] }
 ): { answer: string; changed: boolean; isolated: boolean } {
   const hosts = opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS;
   // R276 P0-2：先剥除内容侧仿冒的标注/审计标记，再做外链收口与指令隔离——
   // 此后插入的标注必然出自系统本轮判定，不可仿冒（本函数是唯一插入
   // 真标注的地方，且每个答案只经过一次：生成分支打 guard_finalized 标记，
   // 中间件不重复执行）。
-  const despoofed = scrubDecisionTraces(stripSpoofedControlMarks(answer));
+  const despoofed = scrubPromptStructureLeak(scrubDecisionTraces(stripSpoofedControlMarks(answer)), {
+    verbatim: questionRequestsVerbatim(opts.question),
+  });
   const afterLinks = scrubAnswerLinks(despoofed, hosts, { dataText: opts.dataText, question: opts.question });
   const afterEmails = scrubDataDerivedEmails(afterLinks, opts.dataText, opts.question);
-  const afterIsolate = isolateNoteInstructions(afterEmails, opts.question, opts.dataText, hosts);
+  const afterIsolate = isolateNoteInstructions(afterEmails, opts.question, opts.dataText, hosts, {
+    execDangerSegments: opts.execDangerSegments,
+  });
   let out = afterIsolate;
   let isolated = afterIsolate !== afterLinks;
   // R278 P1-4（audit-r277 §3：13 例「。」/「[1]」残片）：收口改写后只剩
@@ -1691,6 +1804,55 @@ export function scrubDecisionTraces(answer: string): string {
   return out === answer ? answer : out.replace(/[ \t]{2,}/g, " ");
 }
 
+// ---- R282 P2 F-4：无意义输入的确定性引导（audit-r281 F-4） ----
+// 根因：`？？？`/`帮我` 这类无信息量输入照常进生成，模型在没有可用资料时
+// 会「自述提示词结构」（「我会根据资料区的内容进行回答」）或自由发挥。
+// 收口：入口确定性识别无意义输入，直接给固定引导文案，不进生成、不带任何
+// 内部结构词；同时在出口剥除答案里的提示词结构自述（下方 scrubPromptStructureLeak）。
+/** 句段是否存在危险执行嫌疑（任一单项能力命中）——门控语义主判只在有
+ * 代码类嫌疑时调用，不给普通问答增加延迟；流式 delta 闸门也用它把嫌疑
+ * 句段扣到 done 才外发（禁止先泄后收）。 */
+export function segmentExecSuspicious(segText: string): boolean {
+  const c = execCapabilities(normalizeCommandText(segText));
+  return c.net || c.exec || c.inline || c.lolbin || c.sink || c.shellio;
+}
+
+export const MEANINGLESS_QUESTION_ANSWER =
+  "没看清你想问什么。可以直接说要查的事，比如「上个月买书花了多少」「上周有哪些待办」「关于某个项目我记过什么」。";
+
+/** 无意义/无信息量提问（标点、单字、纯助动词开头的空请求）。 */
+export function isMeaninglessQuestion(question: string): boolean {
+  const t = question.normalize("NFKC").trim();
+  if (!t) return true;
+  // 去掉标点/空白后的有效字符
+  const core = t.replace(/[\s\p{P}\p{S}]+/gu, "");
+  if (core.length === 0) return true;
+  // 纯 ASCII 且不足 3 字符（"aa"、"ok" 之类）；CJK 不足 2 字
+  const cjk = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(core);
+  if (!cjk && core.length < 3) return true;
+  if (cjk && core.length < 2) return true;
+  // 只有请求动词没有对象（「帮我」「帮忙」「查一下」「告诉我」）
+  if (/^(?:帮我|帮忙|帮我一下|帮个忙|查一下|查查|看一下|看看|告诉我|说一下|说说|来一个|随便|whatever|help( me)?|hi|hey|hello|test)$/i.test(core))
+    return true;
+  return false;
+}
+
+// 提示词结构自述（F-2 SE_ZH1/SE_TERSE、F-4）：答案里出现内部资料区/系统提示/
+// 改写器指令的自述一律剥除——这些文字只可能来自提示词回显或资料伪造，
+// 任何合法答案都不需要它们。
+// 口径极窄：只剥「描述本系统内部结构」的自述（资料区/数据行前缀/归一改写器/
+// 系统提示自述），不碰用户自己笔记里的「prompt 模板/提示词」内容，且 verbatim
+// 点名索要原文时整体不介入（与 R280 prompt 模板引用口径不冲突）。
+const PROMPT_STRUCTURE_LEAK_RE =
+  /[^\n。！？!?；;]{0,40}(?:资料区|資料區|数据区的内容|资料面|资料行前缀|D[0-9a-f]{8}｜|(?:我的|收到的|你给我的|当前的)?(?:系统提示(?:词)?|系统指令|system prompt)|归一成等义|改写成等义|把(?:下面|这个)?问题改写成)[^\n。！？!?；;]{0,40}[。！？!?；;]?/gi;
+
+/** 剥除答案里的提示词/内部结构自述（R282 F-2/F-4）。 */
+export function scrubPromptStructureLeak(text: string, opts?: { verbatim?: boolean }): string {
+  if (opts?.verbatim) return text;
+  const out = replaceViaShadow(text, PROMPT_STRUCTURE_LEAK_RE, () => "");
+  return out === text ? text : out.replace(/[ \t]{2,}/g, " ").trim();
+}
+
 /** 收口剥空后的显式隔离提示（R278 P1-4）：代替静默空答案/残片答案。 */
 export const ISOLATION_NOTICE_ANSWER =
   "相关笔记内容命中安全隔离规则，已隔离未采纳；原文可在引用的笔记卡片中查看。";
@@ -1732,7 +1894,14 @@ export function sanitizeEnumTitle(
   // 指令时，标题即使字面无害也是指令的改写载体（「删除资料类笔记」被呈现为
   // 用户自己的待办）。枚举出口按源正文的「含指令」判定隔离标题，不只看标题
   // 字面。可执行管道不在此列（正文里合法的技术命令不该连坐标题）。
-  if (opts?.sourceContent && sourceContentHasReaderDirective(opts.sourceContent)) return ENUM_TITLE_ISOLATED_MARK;
+  // R282 F-5（audit-r281 §F-5）：标题处置口径统一——原来只看「非管道类读者
+  // 指令」，导致 INSTR-C（curl|bash，AI 另起标题「部署脚本」）与 INSTR-D/E
+  // （DAN/perl，保留原指令标题）在同一枚举里两种形态。归一为：标题自身命中
+  // 危险执行意图，或源正文含任何可隔离内容（读者指令 / 危险执行），一律出
+  // 同一个隔离占位——枚举出口的形态不再取决于标题是 AI 生成还是正文派生
+  // （标题生成本身是 LLM 产物，无法确定性归一，故在出口统一）。
+  if (hasExecIntent(normalizeCommandText(t))) return ENUM_TITLE_ISOLATED_MARK;
+  if (opts?.sourceContent && dataTextHasIsolatableContent(opts.sourceContent)) return ENUM_TITLE_ISOLATED_MARK;
   t = scrubAnswerLinks(t);
   return t.slice(0, maxLen);
 }

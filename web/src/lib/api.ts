@@ -1127,20 +1127,32 @@ export interface AuthResult {
 /** 登录/注册走 PBKDF2 + 冷启动，生产慢往返实测可超 30s（R189 P3-3）：
  * 超时窗与通用请求兜底对齐，只兜真正的悬挂 */
 const AUTH_TIMEOUT_MS = 60_000
+/** R282 F-8（audit-r281 §F-8）：生产间歇出现注册/登录 ~26–28s 才返回的窗口，
+ * 而后端同期实测百毫秒级——症状是连接级悬挂（边缘/TLS/连接复用卡住），
+ * 换一条新连接即刻恢复。注册/登录服务端幂等（同名同密码重试命中已有账号，
+ * 不会重复建号），故首次尝试收紧到 15s，超时后立即换新连接重试一次，
+ * 整体不超过原 60s 兜底。找回（recover）会消费一次性恢复码，不自动重试。 */
+const AUTH_ATTEMPT_TIMEOUT_MS = 15_000
 
-async function authPost(baseUrl: string, path: string, body: unknown): Promise<AuthResult> {
+async function authPost(
+  baseUrl: string,
+  path: string,
+  body: unknown,
+  opts?: { retryOnTimeout?: boolean },
+): Promise<AuthResult> {
   let res: Response
   try {
-    res = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(AUTH_TIMEOUT_MS),
-    })
+    res = await authFetchOnce(baseUrl, path, body, opts?.retryOnTimeout ? AUTH_ATTEMPT_TIMEOUT_MS : AUTH_TIMEOUT_MS)
   } catch (e) {
-    if (e instanceof DOMException && e.name === "TimeoutError")
-      throw new NetworkError("请求超时，请用相同用户名密码重试一次（不会重复创建账号）")
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    if (opts?.retryOnTimeout && e instanceof DOMException && e.name === "TimeoutError") {
+      try {
+        res = await authFetchOnce(baseUrl, path, body, AUTH_TIMEOUT_MS - AUTH_ATTEMPT_TIMEOUT_MS)
+      } catch (e2) {
+        throw authFetchError(e2)
+      }
+    } else {
+      throw authFetchError(e)
+    }
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -1156,12 +1168,27 @@ async function authPost(baseUrl: string, path: string, body: unknown): Promise<A
   return res.json() as Promise<AuthResult>
 }
 
+function authFetchOnce(baseUrl: string, path: string, body: unknown, timeoutMs: number): Promise<Response> {
+  return fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+}
+
+function authFetchError(e: unknown): NetworkError {
+  if (e instanceof DOMException && e.name === "TimeoutError")
+    return new NetworkError("请求超时，请用相同用户名密码重试一次（不会重复创建账号）")
+  return new NetworkError("网络连接失败，请检查网络或 API 地址")
+}
+
 export function register(baseUrl: string, name: string, password: string): Promise<AuthResult> {
-  return authPost(baseUrl, "/api/auth/register", { name, password })
+  return authPost(baseUrl, "/api/auth/register", { name, password }, { retryOnTimeout: true })
 }
 
 export function login(baseUrl: string, name: string, password: string): Promise<AuthResult> {
-  return authPost(baseUrl, "/api/auth/login", { name, password })
+  return authPost(baseUrl, "/api/auth/login", { name, password }, { retryOnTimeout: true })
 }
 
 /** 无密码找回：用户名 + 一次性恢复码 → 重置密码，返回新 token + 新恢复码 */
