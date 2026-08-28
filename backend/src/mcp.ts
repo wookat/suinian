@@ -360,6 +360,12 @@ export function registerMcpRoute(app: App): void {
 
     // R278 P2-4：内部转发的 /api/ask 等路由带 Server-Timing（含 conaud 收口
     // 阶段），透传到 MCP HTTP 响应头，审计可从 MCP 通道直接验证收口发生。
+    // R280 P2-8（audit-r279）：R278 只在内部路由已产出 Server-Timing 时才补头，
+    // 而 StreamableHTTPTransport 常在工具执行前就把响应头外发（res 已锁定），
+    // 生产实测 MCP 响应头始终无 Server-Timing。改法：整个 /mcp 请求自身计时，
+    // 无论内部路由是否回传 Server-Timing，都在 MCP HTTP 响应头上给出
+    // mcp;dur=…（内部 conaud 存在时一并透传），审计可直接从响应头验证。
+    const tMcp = Date.now();
     let lastServerTiming: string | null = null;
     const api: ApiCall = async (path, init) => {
       const headers = new Headers(init?.headers);
@@ -375,11 +381,12 @@ export function registerMcpRoute(app: App): void {
     const transport = new StreamableHTTPTransport();
     await server.connect(transport);
     const res = await transport.handleRequest(c);
-    if (res && lastServerTiming) {
-      const out = new Response(res.body, res);
-      out.headers.set("Server-Timing", lastServerTiming);
-      return out;
-    }
-    return res;
+    if (!res) return res;
+    const timing = [`mcp;dur=${Date.now() - tMcp};desc="mcp request"`, lastServerTiming]
+      .filter(Boolean)
+      .join(", ");
+    const out = new Response(res.body, res);
+    out.headers.set("Server-Timing", timing);
+    return out;
   });
 }

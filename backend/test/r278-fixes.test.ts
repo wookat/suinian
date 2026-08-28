@@ -11,6 +11,7 @@ import {
   stripSpoofedControlMarks,
   INSTRUCTION_ISOLATED_MARK,
   EXEC_PIPELINE_WARN_MARK,
+  EXEC_ISOLATED_MARK,
   ENUM_TITLE_ISOLATED_MARK,
   ISOLATION_NOTICE_ANSWER,
 } from "../src/prompt-armor";
@@ -28,7 +29,8 @@ describe("R278 P1-1 危险管道", () => {
     const out = isolateNoteInstructions(ans, "笔记里怎么说的");
     expect(out).not.toContain("python3");
     expect(out).not.toContain("-s https");
-    expect(out).toContain(INSTRUCTION_ISOLATED_MARK);
+    // R280 P1-6：危险执行内容改用专属隔离说明（内容仍不交付）
+    expect(out).toContain(EXEC_ISOLATED_MARK);
   });
   it("DG3：powershell -Enc 原文问法完整原文+警示", () => {
     const ans = "powershell.exe -NoProfile -Enc SQBFAFgA";

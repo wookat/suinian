@@ -279,7 +279,9 @@ app.use("/api/ask", async (c, next) => {
     headers.set("cache-control", "no-cache");
     c.res = sseStreamResponse(
       [
-        ["meta", { retrieved: refs, stream_mode: "deterministic_complete" }],
+        // R280 P2-7：delta 契约随流下发（deterministic_complete 路由为
+        // exact_concat：concat(delta) ≡ done.answer）。
+        ["meta", { retrieved: refs, stream_mode: "deterministic_complete", delta_contract: "exact_concat" }],
         ...sseAnswerChunks(String(outBody.answer)).map((t): [string, unknown] => ["delta", { text: t }]),
         ["done", outBody],
       ],
@@ -5102,7 +5104,12 @@ app.post("/api/ask", async (c) => {
       async start(ctrl) {
         const send = (event: string, data: unknown) =>
           ctrl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-        send("meta", { retrieved: notes.length, stream_mode: "generation_stream" });
+        // R280 P2-7（audit-r279 §7）：生成路由的 delta 是「已通过安全闸门的
+        // 预览子集」，done 才是权威终稿——闸门扣下的句段、引证角标全局重排
+        // （finalize 才补 [n]）都只在 done 出现，故 concat(delta) ⊆ done.answer
+        // 而非恒等。契约随 meta 下发（delta_contract=preview_subset），客户端
+        // 一律以 done 整体替换；不得据 delta 断言最终答案。
+        send("meta", { retrieved: notes.length, stream_mode: "generation_stream", delta_contract: "preview_subset" });
         let buf = "";
         const flushSegments = (final: boolean) => {
           const parts = buf.split(/(?<=\n|[。！？!?；;])/);
