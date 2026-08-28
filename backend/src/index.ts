@@ -5107,9 +5107,15 @@ app.post("/api/ask", async (c) => {
         // R280 P2-7（audit-r279 §7）：生成路由的 delta 是「已通过安全闸门的
         // 预览子集」，done 才是权威终稿——闸门扣下的句段、引证角标全局重排
         // （finalize 才补 [n]）都只在 done 出现，故 concat(delta) ⊆ done.answer
-        // 而非恒等。契约随 meta 下发（delta_contract=preview_subset），客户端
-        // 一律以 done 整体替换；不得据 delta 断言最终答案。
-        send("meta", { retrieved: notes.length, stream_mode: "generation_stream", delta_contract: "preview_subset" });
+        // 而非恒等。可验证契约（delta_contract=preview_ordered_fragments）：每个
+        // delta 文本都是 done.answer 的连续片段，且按下发顺序在 done.answer 中
+        // 位置递增；缺失部分只可能是闸门扣下或 finalize 后补的内容。客户端一律
+        // 以 done 整体替换，不得据 delta 断言最终答案。
+        send("meta", {
+          retrieved: notes.length,
+          stream_mode: "generation_stream",
+          delta_contract: "preview_ordered_fragments"
+        });
         let buf = "";
         const flushSegments = (final: boolean) => {
           const parts = buf.split(/(?<=\n|[。！？!?；;])/);
