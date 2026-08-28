@@ -5073,6 +5073,10 @@ app.post("/api/ask", async (c) => {
     // 后收的窗口（audit-r277 X05 两次不同残片的根因）。
     const askScrubSourceS = `${askGuardQuestion}\n${askGuardData}`;
     const gateSegment = (segRaw: string): string | null => {
+      // fail-closed：判别器超时/失败（demandsRawS 为 null）时 demand 集未知，
+      // done 收口时判别器可能已就绪并剥除句段——期间不外发任何 delta，全部
+      // 缓冲到 done 一次成型（audit-r277 X05「先泄后收」的另一形态）。
+      if (demandsRawS === null) return null;
       const s0 = scrubModelOutputInjectionArtifacts(stripDataMarksS(segRaw));
       const s = s0.replace(/\s*[[［]\d{1,2}[\]］]/g, "");
       if (!s.trim()) return null;
