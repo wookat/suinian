@@ -16,8 +16,8 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, codeUnitSpans, execDegradedIsolationUnits, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
-import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments } from "./answer-guard";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execDegradedIsolationUnits, execClassifierGateReason, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
+import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
 import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads, detachZeroSignalThreadMembers } from "./threads";
@@ -5047,15 +5047,25 @@ app.post("/api/ask", async (c) => {
   // R286 P0-1：嫌疑门控与降级处置都改为「代码单元」口径——能力信号跨行/跨段
   // 聚合（反弹 shell 的建连与执行天然分布在不同物理行，逐句合取必然漏）。
   // null 窗口的具体单元隔离由 finalizeAskAnswer(execClassifierUnavailable) 单点执行。
+  // R288 P0-2（audit-r287 P0-2）：门控从「能否命中危险特征」改为「是否可能是
+  // 代码」（docs/decision-r288.md §3）。旧门控与确定性判据用同一套局部粒度，
+  // 局部粒度被绕过（插一行散文）时 LLM 主判与确定性兜底同时缺席，且响应不带
+  // exec_guard_degraded——这是「门控失败 = 直接放行」的 fail-open 结构。
+  // 现在：含任何代码区即必须调判别器；判别器 null 一律 unavailable=true
+  //（fail-closed，降级隔离 + exec_guard_degraded）。成本由代码面缓存 +
+  // 长度阈值 + 每请求 1 次调用上限控制；纯自然语言问答门控关闭，延迟不变。
   const classifyExecDanger = async (
     answer: string
   ): Promise<{ danger: string[]; unavailable: boolean }> => {
     const segs = splitSegmentsFenceAware(answer);
-    const segSuspicious = segs.some(
-      (s) => segmentExecSuspicious(s.text) && !hasExecIntent(normalizeCommandText(s.text))
-    );
-    const unitSuspicious = codeUnitSpans(answer).some((u) => segmentExecSuspicious(u.text));
-    if (!segSuspicious && !unitSuspicious) return { danger: [], unavailable: false };
+    const gate = execClassifierGateReason(answer);
+    if (!gate) return { danger: [], unavailable: false };
+    const cacheKey = execSurfaceCacheKey(answer);
+    const cached = execClassifyCacheGet(cacheKey);
+    if (cached !== undefined) {
+      askMarks.push(["execcls", 0]);
+      return { danger: cached, unavailable: false };
+    }
     const tCls = Date.now();
     const hits = await classifyDangerousCodeSegments(c.env, answer).catch((err) => {
       console.error("ask: exec-danger classify failed", err);
@@ -5068,8 +5078,9 @@ app.post("/api/ask", async (c) => {
         console.log(`ask: exec-danger classifier unavailable, ${degraded.length} code unit(s) conservatively isolated`);
       return { danger: [], unavailable: true };
     }
-    if (hits.length === 0) return { danger: [], unavailable: false };
+    // 只缓存确定结果（null = 不可用，属瞬时状态，不缓存，下次重新判别）
     const out = hits.map((n) => segs[n - 1]?.text ?? "").filter((t) => t.length > 0);
+    execClassifyCacheSet(cacheKey, out);
     if (out.length > 0) console.log(`ask: exec-danger classifier flagged ${out.length} segment(s)`);
     return { danger: out, unavailable: false };
   };

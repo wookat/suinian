@@ -1,5 +1,6 @@
 import { loadSettings } from "./settings"
 import { identityFingerprint, isCacheableApiPath, withIdentityParam } from "./api-cache"
+import { escapeSwWedgeForAuth } from "./sw-control"
 import {
   mockAsk,
   mockCreateNote,
@@ -1145,6 +1146,10 @@ async function authPost(
     res = await authFetchOnce(baseUrl, path, body, opts?.retryOnTimeout ? AUTH_ATTEMPT_TIMEOUT_MS : AUTH_TIMEOUT_MS)
   } catch (e) {
     if (opts?.retryOnTimeout && e instanceof DOMException && e.name === "TimeoutError") {
+      // R288 P1-3：认证请求悬挂的一手定论是浏览器 SW 组件级悬挂（R287），
+      // 原样重试只会再等一次。重试前先尝试脱开 SW 控制，让这一次 fetch 不再
+      // 排在卡死的 SW 启动后面；脱不开（同样悬挂）也不阻塞，仍走原样重试。
+      await escapeSwWedgeForAuth()
       try {
         res = await authFetchOnce(baseUrl, path, body, AUTH_TIMEOUT_MS - AUTH_ATTEMPT_TIMEOUT_MS)
       } catch (e2) {
@@ -1178,8 +1183,14 @@ function authFetchOnce(baseUrl: string, path: string, body: unknown, timeoutMs: 
 }
 
 function authFetchError(e: unknown): NetworkError {
-  if (e instanceof DOMException && e.name === "TimeoutError")
-    return new NetworkError("请求超时，请用相同用户名密码重试一次（不会重复创建账号）")
+  if (e instanceof DOMException && e.name === "TimeoutError") {
+    const wedged = typeof navigator !== "undefined" && !!navigator.serviceWorker?.controller
+    return new NetworkError(
+      wedged
+        ? "请求超时（浏览器离线缓存组件可能卡住）：请用相同用户名密码重试一次（不会重复创建账号）；仍失败可到设置页「关闭离线缓存」后重试"
+        : "请求超时，请用相同用户名密码重试一次（不会重复创建账号）",
+    )
+  }
   return new NetworkError("网络连接失败，请检查网络或 API 地址")
 }
 

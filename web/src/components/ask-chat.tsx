@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState } from "react"
-import { BookmarkPlus, Check, CircleHelp, Loader2, SendHorizontal, ShieldAlert, Sparkles, Trash2 } from "lucide-react"
+import {
+  BookmarkPlus,
+  Check,
+  CircleHelp,
+  Loader2,
+  RefreshCw,
+  SendHorizontal,
+  ShieldAlert,
+  ShieldQuestion,
+  Sparkles,
+  Trash2,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
@@ -52,6 +63,8 @@ export interface AskChatMessage {
   error?: boolean
   /** 服务端安全收口对答案做了隔离/警示改写（R278 P1-4） */
   isolated?: boolean
+  /** 危险代码判别器不可用，本轮为保守隔离（R288 P2-1：可重试拿到完整答案） */
+  guardDegraded?: boolean
   /** 消息产生时刻（epoch ms）；旧版本存量消息无此字段，一律按过期处理 */
   ts?: number
 }
@@ -257,6 +270,7 @@ export function AskChat({
           question: q,
           ts: Date.now(),
           ...(res.instruction_isolated ? { isolated: true } : {}),
+          ...(res.exec_guard_degraded ? { guardDegraded: true } : {}),
         },
       ])
     } catch (e) {
@@ -400,7 +414,29 @@ export function AskChat({
                   </div>
                 ) : (
                   <>
-                    {m.isolated && (
+                    {m.guardDegraded ? (
+                      <div className="space-y-1.5 rounded-lg bg-sky-500/10 px-2.5 py-1.5 text-xs leading-relaxed text-sky-700 dark:text-sky-400">
+                        <div className="flex items-start gap-1.5">
+                          <ShieldQuestion className="mt-0.5 size-3.5 shrink-0" />
+                          <span>
+                            安全判别服务暂时不可用，本轮回答中的代码/命令已按保守策略暂时隐去（并非已确认危险）。稍后重试通常即可看到完整内容。
+                          </span>
+                        </div>
+                        {m.question && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            disabled={asking}
+                            onClick={() => void send(m.question)}
+                          >
+                            <RefreshCw className="size-3.5" />
+                            重试本轮提问
+                          </Button>
+                        )}
+                      </div>
+                    ) : null}
+                    {m.isolated && !m.guardDegraded && (
                       <div className="flex items-start gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
                         <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
                         <span>笔记中含有指令或高风险内容，已被安全隔离或标注，未被采纳；完整原文可在下方引用的笔记卡片中查看。</span>

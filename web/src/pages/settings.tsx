@@ -54,6 +54,7 @@ import {
   type TestConnectionResult,
 } from "@/lib/api"
 import { detectPushSupport, currentSubscription, enablePush, disablePush } from "@/lib/push"
+import { disableSwAndReload, isSwDisabled, setSwDisabled } from "@/lib/sw-control"
 import { RecoveryCodeCard } from "@/pages/auth"
 import type { TagCount } from "@/lib/types"
 import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
@@ -157,6 +158,7 @@ function SwStatusCard() {
   const status = useSwStatus()
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState<string | null>(null)
+  const swOff = isSwDisabled()
   if (!status) return null
   const ok = status.active && status.offlineReady
   // 安装失败终态（R178 P1-1）：已注册但既无 active 也无 installing —— 新 SW
@@ -232,6 +234,37 @@ function SwStatusCard() {
       <p className="mt-1 text-xs text-muted-foreground">
         有新版本时页面会弹出「点击刷新」提示；离线时可浏览已缓存的笔记/线索/周报
       </p>
+      {/* R288 P1-2：SW 组件级悬挂时注销/重注册可能永不结算，修复按钮也救不回来。
+          这里给一条不依赖 SW 结算的出路：本浏览器此后不再注册 SW，在线功能立刻恢复。 */}
+      {status.supported && (
+        <div className="mt-3 border-t pt-3">
+          {swOff ? (
+            <>
+              <p className="text-xs text-muted-foreground">已在本浏览器关闭离线缓存：登录/注册等在线请求不再经过 Service Worker</p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="mt-2"
+                onClick={() => {
+                  setSwDisabled(false)
+                  window.location.reload()
+                }}
+              >
+                重新启用离线缓存
+              </Button>
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                如果登录/注册/注销长时间无反应（浏览器 Service Worker 卡住），可关闭离线缓存后重试：只影响离线可用与推送，笔记都在云端
+              </p>
+              <Button size="sm" variant="outline" className="mt-2" onClick={() => void disableSwAndReload()}>
+                关闭离线缓存并重载
+              </Button>
+            </>
+          )}
+        </div>
+      )}
     </Card>
   )
 }
