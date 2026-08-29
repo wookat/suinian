@@ -516,6 +516,7 @@ app.post("/api/auth/recover", async (c) => {
 });
 
 app.post("/api/auth/login", async (c) => {
+  const loginStarted = Date.now();
   const body = await c.req.json<{ name?: unknown; password?: unknown }>().catch(() => null);
   const name = validateName(body?.name);
   // R278 P3-1（audit-r277 §7 残留）：账号维度限流行只为存在的账号写入。
@@ -551,7 +552,9 @@ app.post("/api/auth/login", async (c) => {
     ]);
     return c.json({ user: { id: user.id, name: user.name }, api_token: legacyToken });
   }
-  return c.json({ user: { id: user.id, name: user.name }, api_token: await issueToken(c.env.DB, user.id) });
+  const loginToken = await issueToken(c.env.DB, user.id);
+  console.log(`login: ok for ${user.id} in ${Date.now() - loginStarted}ms`);
+  return c.json({ user: { id: user.id, name: user.name }, api_token: loginToken });
 });
 
 // ---- admin maintenance (guarded by ADMIN_TOKEN worker secret, not user tokens) ----

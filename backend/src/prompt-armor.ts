@@ -1011,6 +1011,7 @@ const SYMBOL_GLYPH_RE =
  * 无关；模型自发使用的、资料里没有的符号不受影响。
  */
 export function scrubDataDerivedGlyphs(answer: string, dataText: string, question: string): string {
+  if (questionRequestsVerbatim(question)) return answer; // R272 支柱 3：原文请求下不删字（emoji 也是正文）
   const dataGlyphs = new Set(dataText.normalize("NFKC").match(SYMBOL_GLYPH_RE) ?? []);
   if (dataGlyphs.size === 0) return answer;
   const qGlyphs = new Set(question.normalize("NFKC").match(SYMBOL_GLYPH_RE) ?? []);
@@ -1060,6 +1061,37 @@ export function scrubAcrosticBlocks(answer: string, dataText: string, question: 
   }
   if (!dropLine.some(Boolean)) return answer;
   return cleanupAfterScrub(lines.filter((_, k) => !dropLine[k]).join("\n"));
+}
+
+/**
+ * verbatim 逐字回复（R292 P2）：用户点名索要原文时，模型会把空参括号
+ * `run()` 渲染成 `run:`、吞掉软连字符/NBSP/emoji——折叠比对判它仍是忠实
+ * 回显，但字面已非逐字。逐行折叠匹配资料区原始行，折叠相等而字面不同
+ * 时用原始行字面回复。只回复存在于资料区的行，不会复活被整段剥除的内容。
+ */
+export function restoreVerbatimEchoes(answer: string, dataText: string): string {
+  // 逐字比对口径比 foldCompact 更宽一档：软连字符/零宽也折掉，否则原文里的
+  // `cu\u00adrl` 与模型落地的 `curl` 折叠不等，还原不了。
+  const fold = (s: string) => foldCompact(s.replace(ZERO_WIDTH_G, ""));
+  const byFold = new Map<string, string>();
+  for (const raw of dataText.split("\n")) {
+    const l = raw.trim();
+    if (l.length < 4) continue;
+    const f = fold(l);
+    if (f.length >= 4 && !byFold.has(f)) byFold.set(f, l);
+  }
+  if (byFold.size === 0) return answer;
+  return answer
+    .split("\n")
+    .map((line) => {
+      const t = line.trim();
+      if (t.length < 4) return line;
+      const orig = byFold.get(fold(t));
+      if (orig === undefined || orig === t) return line;
+      const at = line.indexOf(t);
+      return line.slice(0, at) + orig + line.slice(at + t.length);
+    })
+    .join("\n");
 }
 
 /** 剥除后残留的空行/悬空标点清理（marker/句段剥除共用）。 */
@@ -1212,9 +1244,12 @@ export function guardAskAnswer(
     opts.dataText,
     opts.question
   );
-  const afterDirectives = opts.directiveDemands?.length
+  let afterDirectives = opts.directiveDemands?.length
     ? scrubDirectiveDemands(afterSpans, opts.directiveDemands, opts.question, opts.dataText)
     : afterSpans;
+  if (questionRequestsVerbatim(opts.question)) {
+    afterDirectives = restoreVerbatimEchoes(afterDirectives, opts.dataText);
+  }
   // R278 P1-1/P1-4 根因：隔离标记不在这里插入。生成分支随后还会走单一
   // 出口 finalizeAskAnswer，其首步 stripSpoofedControlMarks 会把本函数插入的
   // 真标记当仿冒剥掉（R277 生产实测「标记代码存在但零产出/只剩残尾」的
