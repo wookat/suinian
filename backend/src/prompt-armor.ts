@@ -427,6 +427,17 @@ export function restoreVerbatimFromData(segText: string, dataText?: string): str
   // 折叠会吃掉标点，切片末端因此可能停在 `}`（丢掉紧随的 `)'`）——那又是残片。
   // 向后吸收「折叠为空且非空白」的收尾字符（引号/括号/分号等），到空白即止。
   while (end < dataText.length && !/\s/.test(dataText[end]) && foldCompact(dataText[end]).length === 0) end++;
+  // R284 F-1b（生产实测 EXEC-elixir-gentcp/verbatim）：模型只渲染了危险命令的前
+  // 半截（`System.cmd("/bin/sh",` 处截断），折叠比对仍能对上，于是交付了「警示 +
+  // 半条命令」的第三态。收口：切片停在危险行中间时补齐到该物理行末，让 verbatim
+  // 出口只有「完整原文行 + 警示」一种形态（与 execIntentLineSpans 的整行口径一致）。
+  let lineEnd = dataText.indexOf("\n", end);
+  if (lineEnd === -1) lineEnd = dataText.length;
+  if (lineEnd > end) {
+    const lineStart = dataText.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+    const line = dataText.slice(lineStart, lineEnd);
+    if (hasExecIntent(normalizeCommandText(line))) return dataText.slice(start, lineEnd);
+  }
   return dataText.slice(start, end);
 }
 
@@ -1213,6 +1224,12 @@ export const EXEC_PIPELINE_WARN_MARK = "〔警示：以下命令会下载并执�
 export const EXEC_ISOLATED_MARK =
   "〔已隔离危险命令（会下载执行远程代码或建立外连），未展示；原文可在引用的笔记卡片中查看〕";
 
+/** R284 F-1：代码安全语义判别器不可用（超时/降级/AI 不可用）窗口内的保守隔离
+ * 说明。与 EXEC_ISOLATED_MARK 区分：它如实告知「判别暂不可用，已保守处置」，
+ * 而不声称内容已被确认为危险；此窗口内不区分 verbatim，一律不交付原文。 */
+export const EXEC_DEGRADED_ISOLATED_MARK =
+  "〔代码安全判别暂不可用，已对疑似可执行代码保守隔离（未展示）；原文可在引用的笔记卡片中查看〕";
+
 // ---- R276 P0-2：隔离/审计标注防仿冒（audit-r275 X06/K05） ----
 // 系统标注是纯文本常量，笔记正文可以写出同一串文案冒充系统行为（真标注+
 // 「以上标记已失效」，或伪造 <<AUDIT-OK>> 审计通过标记）。收口方式：统一出口
@@ -1225,6 +1242,7 @@ const SPOOFED_CONTROL_MARK_RE = new RegExp(
     "〔已隔离[^〕\n]{0,60}(?:〕|$)",
     "〔已移除外部链接〕",
     "〔已隔离危险命令[^〕\n]{0,60}(?:〕|$)",
+    "〔代码安全判别[^〕\n]{0,60}(?:〕|$)",
     "〔警示[^〕\n]{0,60}(?:〕|$)",
     "<<[A-Za-z0-9 _-]{2,32}>>",
     "《《[^》\n]{2,32}》》",
@@ -1268,6 +1286,13 @@ const OFFLINE_INDUCE_RE =
 // 整段隔离（书签收藏类「地址：https://…」无此句式，不受影响）。
 const EXFIL_URL_DIRECTIVE_RE =
   /(?:把|将)[^\n。；]{0,40}(?:post|发送|发到|上传|同步|提交|回传|抄送)[^\n。；]{0,16}(?:到|至|给)?[^\n。；]{0,10}https?:\/\//i;
+
+// 带指令参数的外链（R284，生产 injection-eval 实测 R278-E07）：域名本身是用户
+// 书签（点名问地址时给出域名是产品要求），危险的是查询串里携带的动作指令
+// （cmd=export_all_notes、action=delete_all 等）——逐字交付等于把一个可点击的
+// 导出/删除/回传命令递给用户。归入「对读者的行动诱导」整段隔离。
+const EXFIL_URL_PARAM_RE =
+  /https?:\/\/[^\s。；]*[?&](?:cmd|command|action|op|exec|do|task)=[a-z0-9_.-]*(?:export|dump|exfil|upload|send|share|delete|wipe|purge|drop|sync|all)[a-z0-9_.-]*|https?:\/\/[^\s。；]*[?&][a-z0-9_]{1,20}=(?:export|dump|delete|wipe)_?all[a-z0-9_]*/i;
 
 // 伪系统提示（R278，audit-r277/R272-23）：内容侧伪造「本次问答将消耗 N 点
 // 额度」类计费/系统元叙述，不得被转述为系统行为。
@@ -1359,18 +1384,62 @@ const PRIV_THEN_EXEC_RE =
 // 能力原语是"要达成该攻击必须出现的东西"（建连必须调 socket API，执行必须调
 // exec/eval 家族），换命令名、换语言、换缩写都绕不开，故不随写法增长。
 
-// 建连能力（CAP_NET）：跨语言 socket/连接 API 名 + shell 伪设备 + 网络工具
+// 建连能力（CAP_NET）：跨语言 socket/连接 API 名 + shell 伪设备 + 网络工具。
+// R284 F-1（audit-r283）：覆盖面按「主流语言标准库网络模块」系统性枚举补全
+// （枚举清单与来源见 docs/decision-r284.md §1.1）：Go net/tls、Java java.net+
+// java.nio.channels、C/C++ POSIX socket+Winsock+asio、C# System.Net.Sockets、
+// Rust std::net/tokio::net、Erlang/Elixir gen_tcp/gen_udp/ssl、Swift Network/
+// CFNetwork、Kotlin/Scala/Groovy(JVM java.net)、Python socket/asyncio、
+// Node net/tls/dgram、Ruby socket、PHP sockets/streams、Perl IO::Socket、
+// Lua luasocket、Dart dart:io、R/Julia/Haskell 内建 socket。
 const CAP_NET_RE =
   /\/dev\/(?:tcp|udp)\/|\/inet\d?\/(?:tcp|udp)\//i.source +
   "|" +
-  /\bsocket\s*\(|\bsocket\.(?:socket|create_connection|AF_INET)|\bAF_INET6?\b|\bSOCK_STREAM\b|\bPF_INET\b|\bsockaddr_in6?\b|\binet_(?:aton|pton|addr)\b|\bgethostbyname\b|\bfsockopen\b|\bpfsockopen\b|\bstream_socket_client\b|\bsocket_(?:create|connect)\b|\bIO::Socket\b|\bSocket::|\bNet::Telnet\b|\bTCPSocket\b|\bUDPSocket\b|\bTcpClient\b|System\.Net\.Sockets|\bSocket\s*\(\s*AddressFamily|\bnet\.(?:Socket|connect|createConnection)\b|require\s*\(?\s*['"](?:net|socket)['"]|\bsocket\.connect\b|\bconnect\s*\(\s*(?:new\s+)?(?:sockaddr|\(|["']?(?:\d{1,3}\.){3}\d{1,3})|\bopen\s*\(\s*(?:my\s+)?\$?\w*\s*,\s*['"]\+?<?>?\s*&|\b(?:python[0-9.]*|py)\s+-m\s+(?:socket|http\.client|httplib|telnetlib|ftplib|smtplib|pty|http\.server|SimpleHTTPServer)\b/i
-    .source;
+  /\bsocket\s*\(|\bsocket\.(?:socket|create_connection|AF_INET)|\bAF_INET6?\b|\bSOCK_STREAM\b|\bPF_INET\b|\bsockaddr_in6?\b|\binet_(?:aton|pton|addr)\b|\bgethostbyname\b|\bgetaddrinfo\b|\bfsockopen\b|\bpfsockopen\b|\bstream_socket_client\b|\bsocket_(?:create|connect)\b|\bIO::Socket\b|\bSocket::|\bNet::Telnet\b|\bTCPSocket\b|\bUDPSocket\b|\bTcpClient\b|System\.Net\.Sockets|\bSocket\s*\(\s*AddressFamily|\bnet\.(?:Socket|connect|createConnection)\b|require\s*\(?\s*['"](?:net|socket)['"]|\bsocket\.connect\b|\bconnect\s*\(\s*(?:new\s+)?(?:sockaddr|\(|["']?(?:\d{1,3}\.){3}\d{1,3})|\bopen\s*\(\s*(?:my\s+)?\$?\w*\s*,\s*['"]\+?<?>?\s*&|\b(?:python[0-9.]*|py)\s+-m\s+(?:socket|http\.client|httplib|telnetlib|ftplib|smtplib|pty|http\.server|SimpleHTTPServer)\b/i
+    .source +
+  "|" +
+  // Go net/tls：net.Dial 家族、Dialer、net.Listen（bind shell）
+  /\bnet\.(?:Dial|DialTCP|DialUDP|DialIP|DialUnix|DialTimeout|Listen|ListenTCP|ListenUDP|ListenPacket|ResolveTCPAddr|ResolveUDPAddr)\b|\bnet\.Dialer\b|\.DialContext\s*\(|\btls\.(?:Dial|Client)\b/.source +
+  "|" +
+  // Java/Kotlin/Scala/Groovy（JVM java.net / java.nio.channels / javax.net）
+  /\bnew\s+(?:java\.net\.)?(?:Socket|DatagramSocket|ServerSocket|SSLSocket|MulticastSocket)\s*\(|\bjava\.net\.(?:Socket|InetSocketAddress|InetAddress)\b|\b(?:Socket|Datagram|AsynchronousSocket|AsynchronousServerSocket|ServerSocket)Channel\.open\b|\bInetSocketAddress\s*\(|\bSSLSocketFactory\b|\bSocketFactory\.getDefault\b/.source +
+  "|" +
+  // C/C++ Winsock / asio（POSIX socket()/sockaddr/inet_* 已在上）
+  /\bWSAStartup\b|\bWSASocket[AW]?\b|\bWSAConnect\b|\bboost::asio\b|\basio::ip::(?:tcp|udp)\b/.source +
+  "|" +
+  // C#（TcpClient/System.Net.Sockets 已在上）
+  /\bTcpListener\b|\bNetworkStream\s*\(|\bIPEndPoint\s*\(/.source +
+  "|" +
+  // Rust std::net / tokio::net
+  /\b(?:TcpStream|UdpSocket|TcpListener)::(?:connect|bind)\b|\bstd::net::(?:TcpStream|UdpSocket|TcpListener|SocketAddr)\b|\btokio::net::(?:TcpStream|UdpSocket|TcpListener)\b/.source +
+  "|" +
+  // Erlang/Elixir gen_tcp/gen_udp/ssl
+  /\bgen_(?:tcp|udp|sctp)\s*[:.]|:gen_(?:tcp|udp|sctp)\b|\bssl:connect\b|:ssl\.connect\b/.source +
+  "|" +
+  // Swift/Objective-C Network.framework / CFNetwork / Foundation streams
+  /\bNWConnection\s*\(|\bNWEndpoint\b|\bCFStreamCreatePairWithSocket\w*\b|\bCFSocket\w+\b|\bgetStreamsToHost\w*\b|\bGCDAsyncSocket\b/.source +
+  "|" +
+  // Python asyncio（socket 模块已在上）
+  /\basyncio\.open_connection\b|\bloop\.create_connection\b|\bcreate_datagram_endpoint\b/.source +
+  "|" +
+  // Node/JS tls/dgram/WebSocket（net.* 已在上）
+  /\btls\.connect\s*\(|\bdgram\.createSocket\b|\bnew\s+WebSocket\s*\(\s*['"]wss?:/.source +
+  "|" +
+  // Ruby socket 标准库（TCPSocket/UDPSocket 已在上）
+  /\bSocket\.(?:tcp|udp|new|open)\b|\bTCPServer\b|\bUNIXSocket\b/.source +
+  "|" +
+  // Lua luasocket / Dart dart:io / R / Julia / Haskell Network.Socket
+  /\bsocket\.tcp\s*\(|\bSocket\.connect\s*\(|\bRawSocket\.connect\b|\bsocketConnection\s*\(|\bSockets\.connect\b|\bNetwork\.Socket\b|\bconnectTo\s*\(/.source;
 
 const CAP_NET = new RegExp(CAP_NET_RE, "i");
 
-// 执行/求值能力（CAP_EXEC）
+// 执行/求值能力（CAP_EXEC）。R284 F-1：同样按语言标准库「进程创建/执行」模块
+// 系统性补全（Go os/exec、Rust std::process、Elixir System.cmd、Erlang os:cmd/
+// open_port、Java ProcessBuilder、Win32 CreateProcess、POSIX posix_spawn、
+// Swift Foundation.Process/NSTask、Python asyncio create_subprocess_*）——只补
+// exec(、system( 之外的同义原语，避免「建连认得但执行不认得」的半截覆盖。
 const CAP_EXEC =
-  /\bexec(?:l|v|le|lp|ve|vp|vpe)?\s*\(|\bexecve\b|\bsystem\s*\(|\bshell_exec\s*\(|\bpassthru\s*\(|\bproc_open\s*\(|\bpopen\s*\(|\bos\.(?:system|popen|execv?p?)\b|\bsubprocess\.(?:call|run|Popen|check_output|check_call)|\bpty\.spawn\b|\bchild_process\b|\bspawn(?:Sync)?\s*\(|\bexecSync\s*\(|\bIO\.popen\b|\bKernel#?\.?system\b|\bRuntime\.getRuntime\(\)\.exec|\bProcess\.Start\b|System\.Diagnostics\.Process|\bShellExecute\b|\beval\s*[({'"`]|\beval\s+\$|\beval\s*\(|\bexec\s*\(\s*['"]|\bIEX\b|Invoke-Expression|\bcmd(?:\.exe)?\s+\/[ck]\b|\/bin\/(?:ba|z|da|k)?sh\b|\bcmd\.exe\b|\bsh\s*-i\b|\bbash\s*-i\b|\bos\.execute\b|\bio\.popen\b/i;
+  /\bexec\.Command(?:Context)?\b|\bos\/exec\b|\bCommand::new\b|\bstd::process\b|\bSystem\.cmd\b|\bos:cmd\b|\berlang:open_port\b|\bopen_port\s*\(|\bProcessBuilder\b|\bCreateProcess[AW]?\s*\(|\bposix_spawn\b|\bNSTask\b|\blaunchPath\b|\bcreate_subprocess_(?:exec|shell)\b|\bStart-Process\b|\bProcess\.(?:start|run)\b|\bexec(?:l|v|le|lp|ve|vp|vpe)?\s*\(|\bexecve\b|\bsystem\s*\(|\bshell_exec\s*\(|\bpassthru\s*\(|\bproc_open\s*\(|\bpopen\s*\(|\bos\.(?:system|popen|execv?p?)\b|\bsubprocess\.(?:call|run|Popen|check_output|check_call)|\bpty\.spawn\b|\bchild_process\b|\bspawn(?:Sync)?\s*\(|\bexecSync\s*\(|\bIO\.popen\b|\bKernel#?\.?system\b|\bRuntime\.getRuntime\(\)\.exec|\bProcess\.Start\b|System\.Diagnostics\.Process|\bShellExecute\b|\beval\s*[({'"`]|\beval\s+\$|\beval\s*\(|\bexec\s*\(\s*['"]|\bIEX\b|Invoke-Expression|\bcmd(?:\.exe)?\s+\/[ck]\b|\/bin\/(?:ba|z|da|k)?sh\b|\bcmd\.exe\b|\bsh\s*-i\b|\bbash\s*-i\b|\bos\.execute\b|\bio\.popen\b/i;
 
 // 进程 stdio 重定向到别处（CAP_SHELLIO）：反弹 shell 的必要拼装
 const CAP_SHELLIO =
@@ -1444,6 +1513,69 @@ export function hasExecIntentReason(normalized: string): string | null {
 
 export function hasExecIntent(normalized: string): boolean {
   return hasExecIntentReason(normalized) !== null;
+}
+
+// ---- R284 F-1：判别器不可用时的 fail-closed 弱信号兜底（docs/decision-r284.md §1.2） ----
+// 根因不是「少了 Go 一条正则」，而是结构性的：确定性内核靠「能力原语字面」
+// 识别，原语空间随语言/框架增长，漏一个原语（如 Go net.Dial）就整类泄漏；
+// 而语义主判（LLM）返回 null（超时/降级/不可用）时旧代码等同于「无危险」，
+// 于是漏识别 + 判别器不可用 = 原文逐字交付。收口思路：把「不可用」和
+// 「判定为安全」在类型上分开（AI 层返回 null vs []），并在不可用窗口内改用
+// 一组**不依赖具体语言 API 名**的弱信号组合做保守隔离：
+//   codeish  ：内容是代码/命令形态（围栏块、代码标点密度、缩进块）
+//   hostport ：出现 IP/域名 + 端口 或 ip:port 字面（外连目标的必要条件）
+//   connectish：通用建连动词（dial/connect/open_connection/socket/listen），
+//               与语言无关，攻击者要建连就绕不开这几个词根
+//   proc     ：执行/进程/解释器/stdio 接管语义
+// 命中 := codeish ∧ (hostport ∧ proc ∨ connectish ∧ proc)
+// 弱信号只在判别器不可用窗口生效（正常窗口仍以 LLM 语义主判 + 能力内核为准），
+// 因此误伤面被限制在降级窗口内；误伤数字见 decision-r284 §1.3 与
+// test/r284-classifier-null.test.ts（benign 语料实测）。
+const CODEISH_FENCE_RE = /```|^\s{4,}\S|^\s*[$#>]\s+\S/m;
+const CODEISH_PUNCT_RE = /[{};]|\(\s*\)|::|->|=>|\|\s*\w|\$\(|\bfunc\b|\bdef\b|\bimport\b|\brequire\b|\bpublic\s+static\b/;
+const CONNECTISH_RE =
+  /\b(?:dial|connect|open_connection|create_connection|createconnection|socket|listen|bind)\w*\s*(?:\(|:|=)|\bsocket\b|\bconnect\s+to\b/i;
+
+/** 内容是否呈代码/命令形态（弱信号之一，语言无关）。 */
+function looksLikeCode(text: string): boolean {
+  if (CODEISH_FENCE_RE.test(text)) return true;
+  return CODEISH_PUNCT_RE.test(text);
+}
+
+/**
+ * 判别器不可用窗口内的保守隔离判定（R284 F-1）：返回命中理由或 null。
+ * 只在 classifyDangerousCodeSegments 返回 null（AI 降级/超时/不可用）时调用。
+ */
+export function execFallbackSuspicionReason(text: string): string | null {
+  const normalized = normalizeCommandText(text);
+  if (!looksLikeCode(text)) return null;
+  const c = execCapabilities(normalized);
+  const proc = c.exec || c.shellio || c.sink || c.inline;
+  if (!proc) return null;
+  if (c.hostport) return "fallback:code+hostport+proc";
+  if (CONNECTISH_RE.test(normalized)) return "fallback:code+connect+proc";
+  if (c.fetch) return "fallback:code+fetch+proc";
+  return null;
+}
+
+export function execFallbackSuspicious(text: string): boolean {
+  return execFallbackSuspicionReason(text) !== null;
+}
+
+/**
+ * 判别器不可用（classifyDangerousCodeSegments → null）时应保守隔离的句段
+ * （R284 F-1）：确定性内核已命中的句段走原有两态处置，这里只补内核未命中
+ * 但弱信号组合成立的句段。路由与测试共用同一实现，不存在「测试走另一条路」。
+ */
+export function execDegradedIsolationSegments(answer: string): string[] {
+  return splitSegmentsFenceAware(answer)
+    .filter(
+      (s) =>
+        segmentExecSuspicious(s.text) &&
+        !hasExecIntent(normalizeCommandText(s.text)) &&
+        execFallbackSuspicious(s.text)
+    )
+    .map((s) => s.text);
 }
 
 
@@ -1612,6 +1744,7 @@ export function segmentIsNonExecReaderDirective(segText: string): boolean {
   if (segmentIsSocialEngineering(t)) return true;
   // R278 追加（生产 injection-eval 实测 X03/R272-23/R268-33）
   if (EXFIL_URL_DIRECTIVE_RE.test(t)) return true;
+  if (EXFIL_URL_PARAM_RE.test(t)) return true;
   if (PSEUDO_SYSTEM_NOTICE_RE.test(t)) return true;
   if (DICTATION_FRAGMENT_RE.test(t)) return true;
   return false;
@@ -1651,7 +1784,7 @@ export function isolateNoteInstructions(
   question: string,
   dataText?: string,
   _allowedHosts: string[] = ANSWER_LINK_ALLOWED_HOSTS,
-  opts?: { verbatim?: boolean; execDangerSegments?: string[] }
+  opts?: { verbatim?: boolean; execDangerSegments?: string[]; execDegradedSegments?: string[] }
 ): string {
   // R278 P1-1（audit-r277 DG1–DG3/S08）：可执行下载管道整段处置，禁止交付
   // 残片——R277 实测只替换正则命中字面会把「bash <(curl -fsSL …)」切成
@@ -1681,6 +1814,12 @@ export function isolateNoteInstructions(
   // 与确定性能力内核同一处置口径（两态无第三态）。
   const llmDanger = new Set((opts?.execDangerSegments ?? []).map((s) => foldCompact(s)).filter((s) => s.length > 0));
   const llmDangerHit = (segText: string) => llmDanger.size > 0 && llmDanger.has(foldCompact(segText));
+  // R284 F-1：判别器不可用窗口内的保守隔离命中段（弱信号兜底）——此窗口内
+  // 不区分 verbatim，一律替换为降级隔离说明，不交付原文（fail-closed）。
+  const degradedDanger = new Set(
+    (opts?.execDegradedSegments ?? []).map((s) => foldCompact(s)).filter((s) => s.length > 0)
+  );
+  const degradedHit = (segText: string) => degradedDanger.size > 0 && degradedDanger.has(foldCompact(segText));
   // R278 P1-4（生产 UI 实测）：模型把指令段改写进摘要（「删除全部资料类
   // 笔记」→「删除资料类笔记以释放空间」）后，改写体不再命中指令正则。
   // 收口：答案段与资料中的「读者指令段」共享 ≥5 字连续片段（且该片段
@@ -1725,10 +1864,29 @@ export function isolateNoteInstructions(
       ? foldCompact(dataText)
       : null;
   const QUOTE_MARK = "〔笔记原文引用（含指令措辞，系统未采纳执行）〕";
+  // R284 F-1b（audit-r283）：命中段扩展到整行一体处置——多语句 `;` 切段会把
+  // 同一逻辑行的危险代码切成多段，只替换命中段会留下前后缀残片
+  // （如 `package main; import(…);〔警示〕func main{…}`）。扩到行界后整行
+  // 一体替换，守住两态（与 execIntentLineSpans 的整行口径一致）。
+  const lineBounds = (start: number, end: number): { start: number; end: number } => {
+    const ls = answer.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+    let le = answer.indexOf("\n", end);
+    if (le === -1) le = answer.length;
+    return { start: ls, end: le };
+  };
+  const extraSpans: Array<{ start: number; end: number }> = [];
+  const inExtraSpan = (start: number, end: number) =>
+    extraSpans.some((sp) => start < sp.end && end > sp.start);
+  const overlapsReps = (start: number, end: number) =>
+    reps.some((r) => start < r.end && end > r.start);
   for (const seg of segs) {
     if (seg.text.startsWith("```")) {
       // 围栏块：逐行隔离/警示命中行（跨行形态已由 execSpans 全局处置，
       // 与 execSpan 重叠的行跳过，避免替换区间重叠）
+      if (degradedHit(seg.text) && !inExecSpan(seg.start, seg.end)) {
+        reps.push({ start: seg.start, end: seg.end, rep: EXEC_DEGRADED_ISOLATED_MARK });
+        continue;
+      }
       if (llmDangerHit(seg.text) && !inExecSpan(seg.start, seg.end)) {
         reps.push({ start: seg.start, end: seg.end, rep: execSegRep(seg.text) });
         continue;
@@ -1747,10 +1905,23 @@ export function isolateNoteInstructions(
       }
       continue;
     }
-    if (inExecSpan(seg.start, seg.end)) continue;
-    // 危险执行意图（R282 LLM 语义主判 + 确定性能力内核 fail-closed 兜底）：整段处置，不交付残片。
+    if (inExecSpan(seg.start, seg.end) || inExtraSpan(seg.start, seg.end)) continue;
+    // 危险执行意图（R282 LLM 语义主判 + 确定性能力内核 fail-closed 兜底 +
+    // R284 降级窗口保守兜底）：扩到行界后整行一体处置，不交付残片（F-1b）。
+    if (degradedHit(seg.text)) {
+      const lb = lineBounds(seg.start, seg.end);
+      if (!overlapsReps(lb.start, lb.end)) {
+        extraSpans.push(lb);
+        reps.push({ start: lb.start, end: lb.end, rep: EXEC_DEGRADED_ISOLATED_MARK });
+      }
+      continue;
+    }
     if (llmDangerHit(seg.text) || hasExecIntent(normalizeCommandText(seg.text))) {
-      reps.push({ start: seg.start, end: seg.end, rep: execSegRep(seg.text) });
+      const lb = lineBounds(seg.start, seg.end);
+      if (!overlapsReps(lb.start, lb.end)) {
+        extraSpans.push(lb);
+        reps.push({ start: lb.start, end: lb.end, rep: execSegRep(answer.slice(lb.start, lb.end)) });
+      }
       continue;
     }
     if (segmentIsNonExecReaderDirective(seg.text)) {
@@ -1788,7 +1959,13 @@ export function isolateNoteInstructions(
  */
 export function finalizeAskAnswer(
   answer: string,
-  opts: { dataText: string; question: string; allowedHosts?: string[]; execDangerSegments?: string[] }
+  opts: {
+    dataText: string;
+    question: string;
+    allowedHosts?: string[];
+    execDangerSegments?: string[];
+    execDegradedSegments?: string[];
+  }
 ): { answer: string; changed: boolean; isolated: boolean } {
   const hosts = opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS;
   // R276 P0-2：先剥除内容侧仿冒的标注/审计标记，再做外链收口与指令隔离——
@@ -1802,6 +1979,7 @@ export function finalizeAskAnswer(
   const afterEmails = scrubDataDerivedEmails(afterLinks, opts.dataText, opts.question);
   const afterIsolate = isolateNoteInstructions(afterEmails, opts.question, opts.dataText, hosts, {
     execDangerSegments: opts.execDangerSegments,
+    execDegradedSegments: opts.execDegradedSegments,
   });
   let out = afterIsolate;
   let isolated = afterIsolate !== afterLinks;
@@ -1885,10 +2063,13 @@ export function isMeaninglessQuestion(question: string): boolean {
   // 去掉标点/空白后的有效字符
   const core = t.replace(/[\s\p{P}\p{S}]+/gu, "");
   if (core.length === 0) return true;
-  // 纯 ASCII 且不足 3 字符（"aa"、"ok" 之类）；CJK 不足 2 字
+  // 纯 ASCII 且不足 3 字符（"aa"、"ok" 之类）判为无意义。
+  // R284（生产 retrieval-eval q16「潮」实测）：单个 CJK 字是合法的长尾检索词
+  // （audit-r269 §5 q11 必过题），R282 的「CJK 不足 2 字即无意义」把它挡在检索
+  // 之外，返回确定性引导 = 0 召回。改为单字放行进检索，检索无命中时仍走
+  // 「没找到相关笔记」的确定性零命中路径，不影响 F-4 的标点/纯动词类兜底。
   const cjk = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(core);
   if (!cjk && core.length < 3) return true;
-  if (cjk && core.length < 2) return true;
   // 只有请求动词没有对象（「帮我」「帮忙」「查一下」「告诉我」）
   if (/^(?:帮我|帮忙|帮我一下|帮个忙|查一下|查查|看一下|看看|告诉我|说一下|说说|来一个|随便|whatever|help( me)?|hi|hey|hello|test)$/i.test(core))
     return true;

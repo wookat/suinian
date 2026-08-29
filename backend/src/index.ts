@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execDegradedIsolationSegments, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -5040,30 +5040,45 @@ app.post("/api/ask", async (c) => {
   // R282 F-1 语义主判（docs/decision-r282.md）：能力内核未命中但答案含代码类
   // 嫌疑（解释器调用/建连/执行/取码原语）时，调独立 LLM 判别器判「这段代码
   // 运行后是否会建立外连或执行远程获取的代码」，命中句段与确定性内核同一
-  // 处置口径。判别器不可用（null）不改变行为——确定性能力内核仍是 fail-closed
-  // 兜底，不存在「判别器挂掉就放行」的窗口。
-  const classifyExecDanger = async (answer: string): Promise<string[]> => {
+  // 处置口径。R284 F-1（audit-r283）：判别器不可用（null）不再等同于「无危险」——
+  // 旧逻辑在确定性内核漏识别某个原语（如 Go net.Dial）时会原文逐字泄漏。
+  // 改为：null 窗口内对嫌疑句段跑语言无关的弱信号兜底（execFallbackSuspicious），
+  // 命中则保守隔离并在答案里如实说明「判别暂不可用，已保守隔离」。
+  const classifyExecDanger = async (
+    answer: string
+  ): Promise<{ danger: string[]; degraded: string[] }> => {
     const segs = splitSegmentsFenceAware(answer);
     const suspicious = segs.filter(
       (s) => segmentExecSuspicious(s.text) && !hasExecIntent(normalizeCommandText(s.text))
     );
-    if (suspicious.length === 0) return [];
+    if (suspicious.length === 0) return { danger: [], degraded: [] };
     const tCls = Date.now();
     const hits = await classifyDangerousCodeSegments(c.env, answer).catch((err) => {
       console.error("ask: exec-danger classify failed", err);
       return null;
     });
     askMarks.push(["execcls", Date.now() - tCls]);
-    if (!hits || hits.length === 0) return [];
+    if (hits === null) {
+      const degraded = execDegradedIsolationSegments(answer);
+      if (degraded.length > 0)
+        console.log(`ask: exec-danger classifier unavailable, ${degraded.length} segment(s) conservatively isolated`);
+      return { danger: [], degraded };
+    }
+    if (hits.length === 0) return { danger: [], degraded: [] };
     const out = hits.map((n) => segs[n - 1]?.text ?? "").filter((t) => t.length > 0);
     if (out.length > 0) console.log(`ask: exec-danger classifier flagged ${out.length} segment(s)`);
-    return out;
+    return { danger: out, degraded: [] };
   };
 
   const finalizeGenerationBody = async (body: Record<string, unknown>): Promise<Record<string, unknown>> => {
     if (typeof body.answer !== "string") return { ...body, guard_finalized: true };
-    const execDangerSegments = await classifyExecDanger(body.answer);
-    const fin = finalizeAskAnswer(body.answer, { dataText: askGuardData, question: askGuardQuestion, execDangerSegments });
+    const cls = await classifyExecDanger(body.answer);
+    const fin = finalizeAskAnswer(body.answer, {
+      dataText: askGuardData,
+      question: askGuardQuestion,
+      execDangerSegments: cls.danger,
+      execDegradedSegments: cls.degraded,
+    });
     if (fin.isolated) console.log("ask: note-embedded instruction isolated at generation exit");
     const isolated = fin.isolated || body.instruction_isolated === true;
     return {
