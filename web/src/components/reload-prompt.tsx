@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { CloudOff, RefreshCw, X } from "lucide-react"
 import { useRegisterSW } from "virtual:pwa-register/react"
 import { Button } from "@/components/ui/button"
@@ -11,7 +11,18 @@ const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
 const INSTALL_RETRY_DELAY_MS = 45 * 1000
 // 注册失败绝大多数是浏览器侧间歇性网络失败：静默指数退避重试，成功即撤
 // 横幅；重试次数有限，避免对持续性故障无限打点
-const REGISTER_RETRY_DELAYS_MS = [30_000, 60_000, 120_000]
+const REGISTER_RETRY_DELAYS_MS = [30_000, 60_000, 120_000, 300_000, 600_000]
+// 「Timed out while trying to start the Service Worker」是浏览器 SW 组件
+// 启动超时：同一个 wedge 的 SW 实例上原样 register() 只会原样超时（生产
+// sw_error_reports 实测 retry 0→3 全部失败）。从第 2 次重试起先做完整
+// 重置（注销全部 registration + 清空 CacheStorage）再带 cache-busting
+// 查询串注册，让浏览器起一个全新的 SW 实例而不是复用卡死的那个。
+const HARD_RESET_FROM_ATTEMPT = 2
+const SW_START_TIMEOUT_RE = /timed out while trying to start the service worker/i
+// registration 存在但 active/installing/waiting 全空且无 controller：安装
+// 失败后 worker 变 redundant 被回收的卡死终态，不自查会永远停在这里
+const NO_WORKER_CHECK_DELAY_MS = 20_000
+const NO_WORKER_CHECK_INTERVAL_MS = 60_000
 
 /** 注册失败原因轻量上报：只带错误名称/消息与重试序号（不含任何用户内容
  * 或凭据），供运维统计真实用户侧的失败原因分布；上报失败静默。 */
@@ -31,9 +42,71 @@ function reportSwError(err: unknown, retry: number) {
   }
 }
 
+/** 自愈/卡死态观测事件：借用 sw-error 上报通道（只有 name/message/retry），
+ * 让生产侧能一手核对自愈是否真的发生、卡死态出现频率。 */
+class SwHealEvent extends Error {
+  constructor(name: string, message: string) {
+    super(message)
+    this.name = name
+  }
+}
+
+/** 完整重置后重注册：注销全部 registration → 清空全部 CacheStorage →
+ * 带 cache-busting 查询串重新注册。用于 SW 启动超时与「registration 存在
+ * 但无任何 worker」两类靠原样 register() 无法走出的卡死态。 */
+async function hardResetAndRegister(): Promise<ServiceWorkerRegistration> {
+  const regs = await navigator.serviceWorker.getRegistrations()
+  await Promise.all(regs.map((reg) => reg.unregister().catch(() => false)))
+  if ("caches" in window) {
+    const keys = await caches.keys()
+    await Promise.all(keys.map((k) => caches.delete(k).catch(() => false)))
+  }
+  return navigator.serviceWorker.register(`/sw.js?reinstall=${Date.now()}`, { scope: "/" })
+}
+
 export function ReloadPrompt() {
   const [registerError, setRegisterError] = useState(false)
   const retryAttempt = useRef(0)
+  const startTimeout = useRef(false)
+  const noWorkerStreak = useRef(0)
+  const noWorkerHealed = useRef(false)
+
+  // 无 worker 卡死态自愈（audit-r285 P2-3）：registration 存在但 active/
+  // installing/waiting 全空且无 controller —— 安装失败后 worker 变 redundant
+  // 被回收的终态，update()/原样 register() 都不会重装（脚本未变）。连续两次
+  // 检查（隔 60s）仍处此态才动手，避免把安装间隙的瞬态误判成卡死；自愈用
+  // 完整重置 + cache-busting 重注册，只做一次，失败则交给设置页的手动修复。
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return
+    let cancelled = false
+    const check = async () => {
+      try {
+        if (cancelled || !navigator.onLine || noWorkerHealed.current) return
+        const reg = await navigator.serviceWorker.getRegistration()
+        const stuck = !!reg && !reg.active && !reg.installing && !reg.waiting && !navigator.serviceWorker.controller
+        if (!stuck) {
+          noWorkerStreak.current = 0
+          return
+        }
+        noWorkerStreak.current += 1
+        if (noWorkerStreak.current < 2) return
+        noWorkerHealed.current = true
+        reportSwError(new SwHealEvent("SwNoWorkerStuck", "registration without any worker; hard reset"), 0)
+        await hardResetAndRegister()
+        reportSwError(new SwHealEvent("SwNoWorkerHealed", "hard reset register ok"), 0)
+        setRegisterError(false)
+      } catch {
+        // 自愈失败保持横幅/设置页出路，不打扰用户
+      }
+    }
+    const first = setTimeout(() => void check(), NO_WORKER_CHECK_DELAY_MS)
+    const timer = setInterval(() => void check(), NO_WORKER_CHECK_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(first)
+      clearInterval(timer)
+    }
+  }, [])
 
   const scheduleRegisterRetry = () => {
     const attempt = retryAttempt.current
@@ -46,10 +119,15 @@ export function ReloadPrompt() {
         scheduleRegisterRetry()
         return
       }
-      navigator.serviceWorker
-        .register("/sw.js")
-        .then(() => setRegisterError(false))
+      const hard = startTimeout.current && attempt + 1 >= HARD_RESET_FROM_ATTEMPT
+      const register = hard ? hardResetAndRegister() : navigator.serviceWorker.register("/sw.js")
+      register
+        .then(() => {
+          setRegisterError(false)
+          if (hard) reportSwError(new SwHealEvent("SwStartTimeoutHealed", "hard reset register ok"), retryAttempt.current)
+        })
         .catch((err) => {
+          if (err instanceof Error && SW_START_TIMEOUT_RE.test(err.message)) startTimeout.current = true
           reportSwError(err, retryAttempt.current)
           scheduleRegisterRetry()
         })
@@ -100,6 +178,7 @@ export function ReloadPrompt() {
     // SW 注册失败意味着离线缓存/推送不可用：可见化降级提示而非静默失效
     // （R194 P2-3），同时上报失败原因并退避自动重试，成功即撤横幅
     onRegisterError(err) {
+      if (err instanceof Error && SW_START_TIMEOUT_RE.test(err.message)) startTimeout.current = true
       setRegisterError(true)
       reportSwError(err, 0)
       scheduleRegisterRetry()
