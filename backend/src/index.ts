@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -4960,7 +4960,10 @@ app.post("/api/ask", async (c) => {
     answer: string
   ): Promise<{ danger: string[]; unavailable: boolean }> => {
     const segs = splitSegmentsFenceAware(answer);
-    const gate = execClassifierGateReason(answer);
+    // R294 P0-1（audit-r293 §2）：进入判别/降级链路的前置从「门控命中」改为
+    // 「本次答案含任一代码面/命令面痕迹」的宽判据：门控漏面时不得放行，仍需
+    // 走判别器（不可用则保守隔离）；只有完全无代码/命令痕迹的纯散文才跳过。
+    const gate = execClassifierGateReason(answer) ?? execCodeSurfaceTraceReason(answer);
     execGateMark = gate ?? "none";
     if (!gate) return { danger: [], unavailable: false };
     // R290 P0-3：键含用户维度且用 SHA-256（抗碰撞），命中还要逐字校验判定面
@@ -4989,6 +4992,17 @@ app.post("/api/ask", async (c) => {
     }
     // 只缓存确定结果（null = 不可用，属瞬时状态，不缓存，下次重新判别）
     const out = hits.map((n) => segs[n - 1]?.text ?? "").filter((t) => t.length > 0);
+    // R294 P0-1：「判别器可用但零命中」不得被无条件信任——确定性内核的高置信
+    // 命中（`| sh`、`/dev/tcp`、`<(curl`、同形异义/倒序还原后的 curl|sh 等）
+    // **否决**零命中：按判别器不可用处置（保守隔离），且不缓存该零命中。
+    if (out.length === 0) {
+      const veto = globalExecDangerReason(answer);
+      if (veto) {
+        console.log(`ask: deterministic kernel vetoed empty classifier result (${veto})`);
+        execGateMark = `${gate}|veto:${veto}`;
+        return { danger: [], unavailable: true };
+      }
+    }
     execClassifyCacheSet(cacheKey, answer, out);
     if (out.length > 0) console.log(`ask: exec-danger classifier flagged ${out.length} segment(s)`);
     return { danger: out, unavailable: false };
