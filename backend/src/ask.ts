@@ -2674,11 +2674,13 @@ export function noteEventTime(note: Pick<NoteRow, "title" | "content" | "created
   let mo: number | null = null;
   let d: number | null = null;
   let m: RegExpMatchArray | null;
-  if ((m = text.match(/(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})日?号?/))) {
+  // 中文正文里日期常带空格（「3 月 8 日」是仓库自身文案风格）：各段之间允许空白，
+  // 否则最自然的写法整条抽不出事件日期，时间窗又退回记录时间（R290 生产实测漏面）。
+  if ((m = text.match(/(20\d{2})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})\s*日?号?/))) {
     [y, mo, d] = [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
-  } else if ((m = text.match(/(?<![\d.])(\d{1,2})月(\d{1,2})[日号]/))) {
+  } else if ((m = text.match(/(?<![\d.])(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]/))) {
     [mo, d] = [parseInt(m[1], 10), parseInt(m[2], 10)];
-  } else if ((m = text.match(/(?<![\d.])(\d{1,2})月(上|中|下)旬/))) {
+  } else if ((m = text.match(/(?<![\d.])(\d{1,2})\s*月\s*(上|中|下)旬/))) {
     mo = parseInt(m[1], 10);
     d = m[2] === "上" ? 5 : m[2] === "中" ? 15 : 25;
   } else {
