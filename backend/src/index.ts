@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execDegradedIsolationUnits, execClassifierGateReason, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -78,7 +78,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, inEventTimeRange, widenTimeRangeForEvents, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations } from "./ask";
+import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -3299,38 +3299,25 @@ app.post("/api/ask", async (c) => {
       const like = likeContains(t);
       clBinds.push(like, like, like);
     }
-    if (clRange?.start) {
-      clConds.push("created_at >= ?");
-      clBinds.push(clRange.start);
-    }
-    if (clRange?.end) {
-      clConds.push("created_at < ?");
-      clBinds.push(clRange.end);
-    }
+    const clWin = eventTimeWindow(clRange);
+    clWin.applySql(clConds, clBinds);
     const clr = await c.env.DB.prepare(
-      `SELECT * FROM notes WHERE ${clConds.join(" AND ")} ORDER BY created_at DESC LIMIT 10`
+      `SELECT * FROM notes WHERE ${clConds.join(" AND ")} ORDER BY created_at DESC LIMIT 200`
     )
       .bind(...clBinds)
       .all<NoteRow>();
     // 敏感记账笔记绝不在澄清答案中露出内容/金额
-    const clRows = (clr.results ?? []).filter((n) => !n.is_sensitive);
+    const clRows = clWin.keep(clr.results ?? []).filter((n) => !n.is_sensitive).slice(0, 10);
     if (clRows.length > 0) {
       const fConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
       const fBinds: unknown[] = [userId];
-      if (clRange?.start) {
-        fConds.push("created_at >= ?");
-        fBinds.push(clRange.start);
-      }
-      if (clRange?.end) {
-        fConds.push("created_at < ?");
-        fBinds.push(clRange.end);
-      }
+      clWin.applySql(fConds, fBinds);
       const fr = await c.env.DB.prepare(
         `SELECT * FROM notes WHERE ${fConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
       )
         .bind(...fBinds)
         .all<NoteRow>();
-      const stats = financeStats(fr.results ?? []);
+      const stats = financeStats(clWin.keep(fr.results ?? []));
       const answer = buildFinanceClarifyAnswer(clarifyTerms, clRows, stats, clRange?.phrase ?? null);
       return c.json({
         answer,
@@ -3377,16 +3364,8 @@ app.post("/api/ask", async (c) => {
       xConds.push(`(${likeOrs})`);
       xBinds.push(...xTerms.flatMap((t) => Array(3).fill(likeContains(t)) as string[]));
     }
-    // R290 P1：时间窗按正文事件时间（无则记录时间）——SQL 侧放宽窗粗取，TS 侧精筛。
-    const xWide = xRange ? widenTimeRangeForEvents(xRange) : null;
-    if (xWide?.start) {
-      xConds.push("created_at >= ?");
-      xBinds.push(xWide.start);
-    }
-    if (xWide?.end) {
-      xConds.push("created_at < ?");
-      xBinds.push(xWide.end);
-    }
+    const xWin = eventTimeWindow(xRange);
+    xWin.applySql(xConds, xBinds);
     const xWhere = xConds.join(" AND ");
     const order = finExtreme.kind === "max" ? "DESC" : "ASC";
     // 按金额排序取全部候选后在应用层剔除台账聚合行（R180 P2-1：多行台账的
@@ -3400,10 +3379,8 @@ app.post("/api/ask", async (c) => {
         .bind(...xBinds)
         .all<Pick<NoteRow, "title" | "content" | "created_at">>(),
     ]);
-    const xAll = xRange ? (xr.results ?? []).filter((n) => inEventTimeRange(n, xRange)) : (xr.results ?? []);
-    const unknownRow = {
-      cnt: (unknownR.results ?? []).filter((n) => !xRange || inEventTimeRange(n, xRange)).length,
-    };
+    const xAll = xWin.keep(xr.results ?? []);
+    const unknownRow = { cnt: xWin.count(unknownR.results ?? []) };
     const xSingles = xAll.filter((n) => !isLedgerAggregateNote(n));
     const ledgerExcluded = xAll.length - xSingles.length;
     // 每币种按序取第 rank 名（R182 P1-2：「第二贵/排名第二/倒数第二」与极值
@@ -3471,14 +3448,16 @@ app.post("/api/ask", async (c) => {
   if (finMom) {
     const curRange = parseTimeRange(finMom === "month" ? "本月" : "本周")!;
     const prevRange = parseTimeRange(finMom === "month" ? "上个月" : "上周")!;
+    const curWin = eventTimeWindow(curRange);
+    const prevWin = eventTimeWindow(prevRange);
     const mr = await c.env.DB.prepare(
       "SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND category IN ('expense','income','transfer') AND created_at >= ? ORDER BY created_at DESC LIMIT 4000"
     )
-      .bind(userId, prevRange.start)
+      .bind(userId, prevWin.sql?.start ?? prevRange.start)
       .all<NoteRow>();
     const mrows = mr.results ?? [];
-    const curStats = financeStats(mrows.filter((n) => inTimeRange(n.created_at, curRange)));
-    const prevStats = financeStats(mrows.filter((n) => inTimeRange(n.created_at, prevRange)));
+    const curStats = financeStats(curWin.keep(mrows));
+    const prevStats = financeStats(prevWin.keep(mrows));
     const answer = buildFinanceMomAnswer(curStats, prevStats, curRange.phrase, prevRange.phrase);
     const mRefRows = mrows.filter((n) => !n.is_sensitive).slice(0, 10);
     return c.json({
@@ -3495,7 +3474,9 @@ app.post("/api/ask", async (c) => {
     ? null
     : (financeDualWindowIntent(intentQuestion) ?? (FINANCE_WORD_RE.test(intentQuestion) ? null : financeDualWindowIntent(recallQuestion)));
   if (finDual) {
-    const starts = [finDual.a.start, finDual.b.start].filter((s): s is string => !!s).sort();
+    const aWin = eventTimeWindow(finDual.a);
+    const bWin = eventTimeWindow(finDual.b);
+    const starts = [aWin.sql?.start, bWin.sql?.start].filter((s): s is string => !!s).sort();
     const dConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
     const dBinds: unknown[] = [userId];
     if (starts.length === 2) {
@@ -3515,8 +3496,8 @@ app.post("/api/ask", async (c) => {
     );
     let drows = dr.results ?? [];
     if (dTerms) drows = filterSingleCharTopicRows(drows.filter((n) => noteHitsTopic(n, dTerms)), dTerms);
-    const aRows = drows.filter((n) => inTimeRange(n.created_at, finDual.a));
-    const bRows = drows.filter((n) => inTimeRange(n.created_at, finDual.b));
+    const aRows = aWin.keep(drows);
+    const bRows = bWin.keep(drows);
     const answer = buildFinanceMomAnswer(financeStats(aRows), financeStats(bRows), finDual.a.phrase, finDual.b.phrase, dTerms);
     const dRefRows = [...aRows, ...bRows].filter((n) => !n.is_sensitive).slice(0, 10);
     return c.json({
@@ -3531,20 +3512,14 @@ app.post("/api/ask", async (c) => {
     const cmpRange = (financeCompareIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const cmpConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
     const cmpBinds: unknown[] = [userId];
-    if (cmpRange?.start) {
-      cmpConds.push("created_at >= ?");
-      cmpBinds.push(cmpRange.start);
-    }
-    if (cmpRange?.end) {
-      cmpConds.push("created_at < ?");
-      cmpBinds.push(cmpRange.end);
-    }
+    const cmpWin = eventTimeWindow(cmpRange);
+    cmpWin.applySql(cmpConds, cmpBinds);
     const cr = await c.env.DB.prepare(
       `SELECT * FROM notes WHERE ${cmpConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
     )
       .bind(...cmpBinds)
       .all<NoteRow>();
-    const crows = cr.results ?? [];
+    const crows = cmpWin.keep(cr.results ?? []);
     const answer = buildFinanceCompareAnswer(financeStats(crows), cmpRange?.phrase ?? null);
     const cRefRows = crows.filter((n) => !n.is_sensitive).slice(0, 10);
     return c.json({
@@ -3567,14 +3542,8 @@ app.post("/api/ask", async (c) => {
     const thRange = (origThresholdQ ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const thConds = ["user_id = ?", "deleted_at IS NULL", "category = ?"];
     const thBinds: unknown[] = [userId, finThreshold.direction];
-    if (thRange?.start) {
-      thConds.push("created_at >= ?");
-      thBinds.push(thRange.start);
-    }
-    if (thRange?.end) {
-      thConds.push("created_at < ?");
-      thBinds.push(thRange.end);
-    }
+    const thWin = eventTimeWindow(thRange);
+    thWin.applySql(thConds, thBinds);
     if (finThresholdTerms) {
       thConds.push(`(${finThresholdTerms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ")})`);
       for (const t of finThresholdTerms) thBinds.push(...(Array(3).fill(likeContains(t)) as string[]));
@@ -3588,20 +3557,20 @@ app.post("/api/ask", async (c) => {
       )
         .bind(...thBinds, finThreshold.currency, finThreshold.amount)
         .all<NoteRow>(),
-      c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM notes WHERE ${thBase} AND amount IS NULL`)
+      c.env.DB.prepare(`SELECT title, content, created_at FROM notes WHERE ${thBase} AND amount IS NULL LIMIT 2000`)
         .bind(...thBinds)
-        .first<{ cnt: number }>(),
-      c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM notes WHERE ${thBase} AND amount IS NOT NULL AND COALESCE(currency,'CNY') != ?`)
+        .all<Pick<NoteRow, "title" | "content" | "created_at">>(),
+      c.env.DB.prepare(`SELECT title, content, created_at FROM notes WHERE ${thBase} AND amount IS NOT NULL AND COALESCE(currency,'CNY') != ? LIMIT 2000`)
         .bind(...thBinds, finThreshold.currency)
-        .first<{ cnt: number }>(),
+        .all<Pick<NoteRow, "title" | "content" | "created_at">>(),
     ]);
-    const thAll = thRows.results ?? [];
+    const thAll = thWin.keep(thRows.results ?? []);
     // 台账合计笔记的金额是列合计非单笔，不参与单笔阈值比较（口径同极值）
     const thKept = thAll.filter((n) => !isLedgerAggregateNote(n));
     const answer = buildFinanceThresholdAnswer(
       finThreshold,
       thKept,
-      { unknownAmount: thUnknown?.cnt ?? 0, otherCurrency: thOtherCur?.cnt ?? 0, ledgerExcluded: thAll.length - thKept.length },
+      { unknownAmount: thWin.count(thUnknown.results ?? []), otherCurrency: thWin.count(thOtherCur.results ?? []), ledgerExcluded: thAll.length - thKept.length },
       thRange?.phrase ?? null,
       finThresholdTerms
     );
@@ -3623,20 +3592,14 @@ app.post("/api/ask", async (c) => {
     const eRange = expenseFacetIntent(intentQuestion) ? parseTimeRange(intentQuestion) : timeRange;
     const eConds = ["user_id = ?", "deleted_at IS NULL", "category = 'expense'"];
     const eBinds: unknown[] = [userId];
-    if (eRange?.start) {
-      eConds.push("created_at >= ?");
-      eBinds.push(eRange.start);
-    }
-    if (eRange?.end) {
-      eConds.push("created_at < ?");
-      eBinds.push(eRange.end);
-    }
+    const eWin = eventTimeWindow(eRange);
+    eWin.applySql(eConds, eBinds);
     const er = await c.env.DB.prepare(
       `SELECT * FROM notes WHERE ${eConds.join(" AND ")} ORDER BY created_at DESC LIMIT 4000`
     )
       .bind(...eBinds)
       .all<NoteRow>();
-    const erows = er.results ?? [];
+    const erows = eWin.keep(er.results ?? []);
     const answer = buildExpenseFacetAnswer(erows, eRange?.phrase ?? null);
     return c.json({ answer, references: [], notes: [], expense_facet: true, ...(erows.length === 0 ? { finance_fail_closed: true } : {}) });
   }
@@ -3676,24 +3639,14 @@ app.post("/api/ask", async (c) => {
         iConds.push("category = ?");
         iBinds.push(finList);
       }
-      const iWide = lRange ? widenTimeRangeForEvents(lRange) : null;
-      if (iWide?.start) {
-        iConds.push("created_at >= ?");
-        iBinds.push(iWide.start);
-      }
-      if (iWide?.end) {
-        iConds.push("created_at < ?");
-        iBinds.push(iWide.end);
-      }
+      const iWin = eventTimeWindow(lRange);
+      iWin.applySql(iConds, iBinds);
       const ir = await c.env.DB.prepare(
         `SELECT * FROM notes WHERE ${iConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
       )
         .bind(...iBinds)
         .all<NoteRow>();
-      const irows = filterSingleCharTopicRows(
-        (ir.results ?? []).filter((n) => !lRange || inEventTimeRange(n, lRange)),
-        inheritedTerms
-      );
+      const irows = filterSingleCharTopicRows(iWin.keep(ir.results ?? []), inheritedTerms);
       if (irows.length > 0) {
         const answer = buildFinanceSubsetAnswer(inheritedTerms, irows, lRange?.phrase ?? null);
         const iFinance = irows.filter((n) => n.category === "expense" || n.category === "income");
@@ -3717,40 +3670,25 @@ app.post("/api/ask", async (c) => {
       lConds.push("category = ?");
       lBinds.push(finList);
     }
-    // R290 P1：时间窗按正文事件时间（无则记录时间）——SQL 侧放宽窗粗取，TS 侧精筛。
-    const lWide = lRange ? widenTimeRangeForEvents(lRange) : null;
-    if (lWide?.start) {
-      lConds.push("created_at >= ?");
-      lBinds.push(lWide.start);
-    }
-    if (lWide?.end) {
-      lConds.push("created_at < ?");
-      lBinds.push(lWide.end);
-    }
+    const lWin = eventTimeWindow(lRange);
+    lWin.applySql(lConds, lBinds);
     const lr = await c.env.DB.prepare(
       `SELECT * FROM notes WHERE ${lConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
     )
       .bind(...lBinds)
       .all<NoteRow>();
-    const lrows = (lr.results ?? []).filter((n) => !lRange || inEventTimeRange(n, lRange));
+    const lrows = lWin.keep(lr.results ?? []);
     // 资金往来同窗计数（R266 落 R265 P3-3）：笔数问法与合计问法同口径带
     // 「另有 X 笔资金往来不计入收支」说明，避免用户以为少记了一笔。
     const tConds = ["user_id = ?", "deleted_at IS NULL", "category = 'transfer'"];
     const tBinds: unknown[] = [userId];
-    if (lWide?.start) {
-      tConds.push("created_at >= ?");
-      tBinds.push(lWide.start);
-    }
-    if (lWide?.end) {
-      tConds.push("created_at < ?");
-      tBinds.push(lWide.end);
-    }
+    lWin.applySql(tConds, tBinds);
     const tR = await c.env.DB.prepare(
       `SELECT title, content, created_at FROM notes WHERE ${tConds.join(" AND ")} LIMIT 2000`
     )
       .bind(...tBinds)
       .all<Pick<NoteRow, "title" | "content" | "created_at">>();
-    const tCnt = { cnt: (tR.results ?? []).filter((n) => !lRange || inEventTimeRange(n, lRange)).length };
+    const tCnt = { cnt: lWin.count(tR.results ?? []) };
     const answer = buildFinanceListAnswer(finList, lrows, lRange?.phrase ?? null, tCnt?.cnt ?? 0) + (await pendingTriageHint());
     // references 与逐笔明细同集合同顺序（敏感记账计入合计但不露出）
     const lRefRows = lrows.filter((n) => !n.is_sensitive).slice(0, 20);
@@ -3798,21 +3736,15 @@ app.post("/api/ask", async (c) => {
       const likeOrs = terms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ");
       const sConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')", `(${likeOrs})`];
       const sBinds: unknown[] = [userId, ...terms.flatMap((t) => Array(3).fill(likeContains(t)) as string[])];
-      if (sRange?.start) {
-        sConds.push("created_at >= ?");
-        sBinds.push(sRange.start);
-      }
-      if (sRange?.end) {
-        sConds.push("created_at < ?");
-        sBinds.push(sRange.end);
-      }
+      const sWin = eventTimeWindow(sRange);
+      sWin.applySql(sConds, sBinds);
       const sr = await c.env.DB.prepare(
         `SELECT * FROM notes WHERE ${sConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
       )
         .bind(...sBinds)
         .all<NoteRow>();
       // 单字主题（R256 P3-1）：LIKE '%书%' 会连「书房」一起命中，按邻字上下文过滤
-      srows = filterSingleCharTopicRows(sr.results ?? [], terms);
+      srows = filterSingleCharTopicRows(sWin.keep(sr.results ?? []), terms);
       if (srows.length > 0) {
         usedTerms = terms;
         break;
@@ -3885,20 +3817,14 @@ app.post("/api/ask", async (c) => {
     const likeOrs = shortTerms.map(() => `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`).join(" OR ");
     const shConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')", `(${likeOrs})`];
     const shBinds: unknown[] = [userId, ...shortTerms.flatMap((t) => Array(3).fill(likeContains(t)) as string[])];
-    if (shRange?.start) {
-      shConds.push("created_at >= ?");
-      shBinds.push(shRange.start);
-    }
-    if (shRange?.end) {
-      shConds.push("created_at < ?");
-      shBinds.push(shRange.end);
-    }
+    const shWin = eventTimeWindow(shRange);
+    shWin.applySql(shConds, shBinds);
     const shr = await c.env.DB.prepare(
       `SELECT * FROM notes WHERE ${shConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
     )
       .bind(...shBinds)
       .all<NoteRow>();
-    const shRows = shr.results ?? [];
+    const shRows = shWin.keep(shr.results ?? []);
     // 门控：至少一笔非敏感收/支笔记的标题或正文明文命中（敏感笔记正文
     // 加密无法核验、仅标签命中信号太弱，都不作为短问法收口依据）
     const shGated = shRows.some(
@@ -3927,22 +3853,14 @@ app.post("/api/ask", async (c) => {
     const fRange = (origFinanceIntent ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const fConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
     const fBinds: unknown[] = [userId];
-    // R290 P1：时间窗按正文事件时间（无则记录时间）——SQL 侧放宽窗粗取，TS 侧精筛。
-    const fWide = fRange ? widenTimeRangeForEvents(fRange) : null;
-    if (fWide?.start) {
-      fConds.push("created_at >= ?");
-      fBinds.push(fWide.start);
-    }
-    if (fWide?.end) {
-      fConds.push("created_at < ?");
-      fBinds.push(fWide.end);
-    }
+    const fWin = eventTimeWindow(fRange);
+    fWin.applySql(fConds, fBinds);
     const fr = await c.env.DB.prepare(
       `SELECT * FROM notes WHERE ${fConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
     )
       .bind(...fBinds)
       .all<NoteRow>();
-    const frows = (fr.results ?? []).filter((n) => !fRange || inEventTimeRange(n, fRange));
+    const frows = fWin.keep(fr.results ?? []);
     const stats = financeStats(frows);
     // fail-closed (R109 P1): aggregate wording we can't scope exactly — never
     // let the LLM mental-math truncated recall (multi-currency mixing risk)
@@ -4013,37 +3931,29 @@ app.post("/api/ask", async (c) => {
     const tcRange = (topicCountIntent(intentQuestion) ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const tcConds = ["user_id = ?", "deleted_at IS NULL", `(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE})`];
     const tcBinds: unknown[] = [userId, ...(Array(3).fill(likeContains(topicCnt)) as string[])];
-    if (tcRange?.start) {
-      tcConds.push("created_at >= ?");
-      tcBinds.push(tcRange.start);
-    }
-    if (tcRange?.end) {
-      tcConds.push("created_at < ?");
-      tcBinds.push(tcRange.end);
-    }
+    const tcWin = eventTimeWindow(tcRange);
+    tcWin.applySql(tcConds, tcBinds);
     const tcWhere = tcConds.join(" AND ");
-    const [tcRow, tcRows] = await Promise.all([
-      c.env.DB.prepare(`SELECT COUNT(*) AS cnt, COALESCE(SUM(is_sensitive), 0) AS sens FROM notes WHERE ${tcWhere}`)
-        .bind(...tcBinds)
-        .first<{ cnt: number; sens: number }>(),
-      c.env.DB.prepare(`SELECT * FROM notes WHERE ${tcWhere} ORDER BY created_at DESC LIMIT 10`)
-        .bind(...tcBinds)
-        .all<NoteRow>(),
-    ]);
+    const tcr = await c.env.DB.prepare(`SELECT * FROM notes WHERE ${tcWhere} ORDER BY created_at DESC LIMIT 4000`)
+      .bind(...tcBinds)
+      .all<NoteRow>();
+    const tcAll = tcWin.keep(tcr.results ?? []);
+    const tcCnt = tcAll.length;
+    const tcSens = tcAll.reduce((s, n) => s + (n.is_sensitive ? 1 : 0), 0);
     // 语义为主、规则兜底（R268 P1）：关键词计数零命中时先问语义召回，有相关
     // 笔记则回落普通召回作答，避免抽词残片直接下「没有匹配」确定性结论
-    if ((tcRow?.cnt ?? 0) === 0) {
+    if (tcCnt === 0) {
       const tcSemHits = await semanticRecall(c.env, userId, recallQuestion, 10, undefined, undefined, false);
       if (tcSemHits.length > 0) {
         console.log("ask: topic count LIKE zero-hit, semantic recall fallthrough", tcSemHits.length);
       }
       if (tcSemHits.length === 0) {
-        const answer = buildTopicCountAnswer(topicCnt, 0, tcRow?.sens ?? 0, tcRange?.phrase ?? null);
+        const answer = buildTopicCountAnswer(topicCnt, 0, tcSens, tcRange?.phrase ?? null);
         return c.json({ answer, references: [], notes: [], count_aggregate: true, topic_count: true });
       }
     } else {
-    const answer = buildTopicCountAnswer(topicCnt, tcRow?.cnt ?? 0, tcRow?.sens ?? 0, tcRange?.phrase ?? null);
-    const tcRefRows = (tcRows.results ?? []).filter((n) => !n.is_sensitive);
+    const answer = buildTopicCountAnswer(topicCnt, tcCnt, tcSens, tcRange?.phrase ?? null);
+    const tcRefRows = tcAll.slice(0, 10).filter((n) => !n.is_sensitive);
     return c.json({
       answer,
       references: tcRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
@@ -4059,25 +3969,19 @@ app.post("/api/ask", async (c) => {
     const cRange = (origCountQuery ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const cConds = ["user_id = ?", "deleted_at IS NULL"];
     const cBinds: unknown[] = [userId];
-    if (cRange?.start) {
-      cConds.push("created_at >= ?");
-      cBinds.push(cRange.start);
-    }
-    if (cRange?.end) {
-      cConds.push("created_at < ?");
-      cBinds.push(cRange.end);
-    }
+    const cWin = eventTimeWindow(cRange);
+    cWin.applySql(cConds, cBinds);
     // 分类/敏感限定计数：单条 WHERE 精确回答（R125 Q9/Q10/Q12/Q15）
     if (countQuery.intent === "exact" && (countQuery.category || countQuery.sensitiveOnly)) {
       const scoped = [...cConds, countQuery.category ? "category = ?" : "is_sensitive = 1"];
       const scopedBinds = countQuery.category ? [...cBinds, countQuery.category] : cBinds;
-      const r = await c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM notes WHERE ${scoped.join(" AND ")}`)
+      const r = await c.env.DB.prepare(`SELECT title, content, created_at FROM notes WHERE ${scoped.join(" AND ")} LIMIT 4000`)
         .bind(...scopedBinds)
-        .first<{ cnt: number }>();
+        .all<Pick<NoteRow, "title" | "content" | "created_at">>();
       const label = countQuery.category
         ? (COUNT_SCOPE_LABELS[countQuery.category] ?? countQuery.category)
         : "加密的敏感笔记";
-      const answer = buildScopedCountAnswer(r?.cnt ?? 0, label, cRange?.phrase ?? null);
+      const answer = buildScopedCountAnswer(cWin.count(r.results ?? []), label, cRange?.phrase ?? null);
       return c.json({ answer, references: [], notes: [], count_aggregate: true });
     }
     // 日均计数（R125 Q4）：总数 ÷ 首条笔记至今天数，纯 SQL 可得
@@ -4091,17 +3995,19 @@ app.post("/api/ask", async (c) => {
       return c.json({ answer, references: [], notes: [], count_aggregate: true });
     }
     const where = cConds.join(" AND ");
-    const [totalRow, catRows] = await Promise.all([
-      c.env.DB.prepare(`SELECT COUNT(*) AS cnt, SUM(is_sensitive) AS sens FROM notes WHERE ${where}`)
-        .bind(...cBinds)
-        .first<{ cnt: number; sens: number | null }>(),
-      c.env.DB.prepare(`SELECT category, COUNT(*) AS cnt FROM notes WHERE ${where} GROUP BY category ORDER BY cnt DESC`)
-        .bind(...cBinds)
-        .all<{ category: string | null; cnt: number }>(),
-    ]);
-    const total = totalRow?.cnt ?? 0;
-    const sens = totalRow?.sens ?? 0;
-    const byCat = catRows.results ?? [];
+    const cr = await c.env.DB.prepare(
+      `SELECT title, content, created_at, is_sensitive, category FROM notes WHERE ${where} LIMIT 4000`
+    )
+      .bind(...cBinds)
+      .all<Pick<NoteRow, "title" | "content" | "created_at" | "is_sensitive" | "category">>();
+    const cKept = cWin.keep(cr.results ?? []);
+    const total = cKept.length;
+    const sens = cKept.reduce((s, n) => s + (n.is_sensitive ? 1 : 0), 0);
+    const byCatMap = new Map<string | null, number>();
+    for (const n of cKept) byCatMap.set(n.category ?? null, (byCatMap.get(n.category ?? null) ?? 0) + 1);
+    const byCat = [...byCatMap.entries()]
+      .map(([category, cnt]) => ({ category, cnt }))
+      .sort((a, b) => b.cnt - a.cnt);
     const answer =
       countQuery.intent === "exact"
         ? buildCountAnswer(total, byCat, sens, cRange?.phrase ?? null)
@@ -4114,18 +4020,14 @@ app.post("/api/ask", async (c) => {
     const tsRange = parseTimeRange(intentQuestion) ?? timeRange;
     const tsConds = ["user_id = ?", "deleted_at IS NULL"];
     const tsBinds: unknown[] = [userId];
-    if (tsRange?.start) {
-      tsConds.push("created_at >= ?");
-      tsBinds.push(tsRange.start);
-    }
-    if (tsRange?.end) {
-      tsConds.push("created_at < ?");
-      tsBinds.push(tsRange.end);
-    }
-    const tsr = await c.env.DB.prepare(`SELECT tags, is_sensitive FROM notes WHERE ${tsConds.join(" AND ")}`)
+    const tsWin = eventTimeWindow(tsRange);
+    tsWin.applySql(tsConds, tsBinds);
+    const tsr = await c.env.DB.prepare(
+      `SELECT tags, is_sensitive, title, content, created_at FROM notes WHERE ${tsConds.join(" AND ")}`
+    )
       .bind(...tsBinds)
-      .all<{ tags: string; is_sensitive: number }>();
-    const answer = buildTopicSummaryAnswer(tsr.results ?? [], tsRange?.phrase ?? null, topicSummaryTopN(intentQuestion));
+      .all<{ tags: string; is_sensitive: number } & Pick<NoteRow, "title" | "content" | "created_at">>();
+    const answer = buildTopicSummaryAnswer(tsWin.keep(tsr.results ?? []), tsRange?.phrase ?? null, topicSummaryTopN(intentQuestion));
     return c.json({ answer, references: [], notes: [], topic_summary: true });
   }
   // 主题枚举（R130 P1-1）：「我看过什么书/存过哪些菜谱」先走关键词/标签
@@ -4157,27 +4059,17 @@ app.post("/api/ask", async (c) => {
       tConds.push(`(content LIKE ? ${LIKE_ESCAPE} OR title LIKE ? ${LIKE_ESCAPE} OR tags LIKE ? ${LIKE_ESCAPE} OR url_title LIKE ? ${LIKE_ESCAPE})`);
       tBinds.push(like, like, like, like);
     }
-    if (timeRange?.start) {
-      tConds.push("created_at >= ?");
-      tBinds.push(timeRange.start);
-    }
-    if (timeRange?.end) {
-      tConds.push("created_at < ?");
-      tBinds.push(timeRange.end);
-    }
+    const tWin = eventTimeWindow(timeRange);
+    tWin.applySql(tConds, tBinds);
     const tWhere = tConds.join(" AND ");
     const TOPIC_ENUM_MAX = 50;
-    const [tTotalRow, tListRows] = await Promise.all([
-      c.env.DB.prepare(`SELECT COUNT(*) AS cnt, SUM(is_sensitive) AS sens FROM notes WHERE ${tWhere}`)
-        .bind(...tBinds)
-        .first<{ cnt: number; sens: number | null }>(),
-      c.env.DB.prepare(`SELECT * FROM notes WHERE ${tWhere} ORDER BY created_at DESC LIMIT ${TOPIC_ENUM_MAX}`)
-        .bind(...tBinds)
-        .all<NoteRow>(),
-    ]);
-    let tTotal = tTotalRow?.cnt ?? 0;
-    let tRows = tListRows.results ?? [];
-    let tSens = tTotalRow?.sens ?? 0;
+    const tListRows = await c.env.DB.prepare(`SELECT * FROM notes WHERE ${tWhere} ORDER BY created_at DESC LIMIT 4000`)
+      .bind(...tBinds)
+      .all<NoteRow>();
+    const tKept = tWin.keep(tListRows.results ?? []);
+    let tTotal = tKept.length;
+    let tRows = tKept.slice(0, TOPIC_ENUM_MAX);
+    let tSens = tKept.reduce((s, n) => s + (n.is_sensitive ? 1 : 0), 0);
     // 单字主题（「书」）LIKE 会把「书房」这类无关复合词也命中（R240 P3-2）：
     // 按邻字上下文过滤出独立成词的命中；只在拿到全量命中（未截断）时过滤以
     // 保证总数口径精确，过滤后全空则回落原始命中（绝不把有命中变成零命中）
@@ -4238,27 +4130,17 @@ app.post("/api/ask", async (c) => {
   if (enumList) {
     const eConds = ["user_id = ?", "deleted_at IS NULL"];
     const eBinds: unknown[] = [userId];
-    if (timeRange?.start) {
-      eConds.push("created_at >= ?");
-      eBinds.push(timeRange.start);
-    }
-    if (timeRange?.end) {
-      eConds.push("created_at < ?");
-      eBinds.push(timeRange.end);
-    }
+    const eWin = eventTimeWindow(timeRange);
+    eWin.applySql(eConds, eBinds);
     const where = eConds.join(" AND ");
     const ENUM_LIST_MAX = 50;
-    const [totalRow, listRows] = await Promise.all([
-      c.env.DB.prepare(`SELECT COUNT(*) AS cnt, SUM(is_sensitive) AS sens FROM notes WHERE ${where}`)
-        .bind(...eBinds)
-        .first<{ cnt: number; sens: number | null }>(),
-      c.env.DB.prepare(`SELECT * FROM notes WHERE ${where} ORDER BY created_at DESC LIMIT ${ENUM_LIST_MAX + 1}`)
-        .bind(...eBinds)
-        .all<NoteRow>(),
-    ]);
-    const total = totalRow?.cnt ?? 0;
-    const sens = totalRow?.sens ?? 0;
-    const rows = (listRows.results ?? []).slice(0, ENUM_LIST_MAX);
+    const listRows = await c.env.DB.prepare(`SELECT * FROM notes WHERE ${where} ORDER BY created_at DESC LIMIT 4000`)
+      .bind(...eBinds)
+      .all<NoteRow>();
+    const eKept = eWin.keep(listRows.results ?? []);
+    const total = eKept.length;
+    const sens = eKept.reduce((s, n) => s + (n.is_sensitive ? 1 : 0), 0);
+    const rows = eKept.slice(0, ENUM_LIST_MAX);
     const phrase = timeRange?.start ? timeRange.phrase : "";
     if (total === 0) {
       return c.json({ answer: `${phrase}你没有记录任何笔记。`, references: [], notes: [], enum_aggregate: true });
@@ -4334,14 +4216,8 @@ app.post("/api/ask", async (c) => {
         binds.push(like, like, like, like);
       }
     }
-    if (timeRange?.start) {
-      conds.push("created_at >= ?");
-      binds.push(timeRange.start);
-    }
-    if (timeRange?.end) {
-      conds.push("created_at < ?");
-      binds.push(timeRange.end);
-    }
+    const kwWin = eventTimeWindow(timeRange);
+    kwWin.applySql(conds, binds);
     // ORDER BY 的占位符位于 WHERE 之后，其绑定值也必须排在最后
     if (qTerms.length > 1) {
       const score = qTerms
@@ -4354,11 +4230,11 @@ app.post("/api/ask", async (c) => {
       }
     }
     const { results } = await c.env.DB.prepare(
-      `SELECT * FROM notes WHERE ${conds.join(" AND ")} AND deleted_at IS NULL ORDER BY ${orderBy} LIMIT 20`
+      `SELECT * FROM notes WHERE ${conds.join(" AND ")} AND deleted_at IS NULL ORDER BY ${orderBy} LIMIT 40`
     )
       .bind(...binds)
       .all<NoteRow>();
-    return results ?? [];
+    return kwWin.keep(results ?? []).slice(0, 20);
   };
   const tKwSql = Date.now();
   let notes = await keywordRecall(terms);
@@ -4380,21 +4256,15 @@ app.post("/api/ask", async (c) => {
   if (mediaType) {
     const mConds = ["user_id = ?", "is_sensitive = 0", "deleted_at IS NULL", "raw_type = ?"];
     const mBinds: unknown[] = [userId, mediaType];
-    if (timeRange?.start) {
-      mConds.push("created_at >= ?");
-      mBinds.push(timeRange.start);
-    }
-    if (timeRange?.end) {
-      mConds.push("created_at < ?");
-      mBinds.push(timeRange.end);
-    }
+    const mWin = eventTimeWindow(timeRange);
+    mWin.applySql(mConds, mBinds);
     const mr = await c.env.DB.prepare(
-      `SELECT * FROM notes WHERE ${mConds.join(" AND ")} ORDER BY created_at DESC LIMIT 10`
+      `SELECT * FROM notes WHERE ${mConds.join(" AND ")} ORDER BY created_at DESC LIMIT 40`
     )
       .bind(...mBinds)
       .all<NoteRow>();
     const haveIds = new Set(notes.map((n) => n.id));
-    const mediaExtras = (mr.results ?? []).filter((n) => !haveIds.has(n.id));
+    const mediaExtras = mWin.keep(mr.results ?? []).slice(0, 10).filter((n) => !haveIds.has(n.id));
     // 形态命中排在前面，与关键词命中共享 20 条上限
     if (mediaExtras.length > 0) notes = [...mediaExtras, ...notes].slice(0, 20);
   }
@@ -4417,8 +4287,8 @@ app.post("/api/ask", async (c) => {
     const byId = new Map((r.results ?? []).map((n) => [n.id, n]));
     let extras = extraIds.map((id) => byId.get(id)).filter((n): n is NoteRow => !!n);
     if (timeRange) {
-      outOfRange = extras.filter((n) => !inTimeRange(n.created_at, timeRange));
-      extras = extras.filter((n) => inTimeRange(n.created_at, timeRange));
+      outOfRange = extras.filter((n) => !inEventTimeRange(n, timeRange));
+      extras = extras.filter((n) => inEventTimeRange(n, timeRange));
     }
     // semantic hits go first in score order so they survive the 20-note cap
     notes = [...extras, ...notes].slice(0, 20);
@@ -4621,7 +4491,7 @@ app.post("/api/ask", async (c) => {
       const graphTag = graphNoteIds.has(n.id) ? ", 图谱关联" : multiHopIds.has(n.id) ? ", 二跳关联" : "";
       // 时间窗忠实性（R244 P2 F-1）：范围外片段在元数据头里显式打标，
       // 不再只靠模型自己比对日期
-      const outTag = timeRange && !inTimeRange(n.created_at, timeRange) ? `, 不在${timeRange.phrase}范围内` : "";
+      const outTag = timeRange && !inEventTimeRange(n, timeRange) ? `, 不在${timeRange.phrase}范围内` : "";
       // 正文开头的 [xxx]/【xxx】前缀标记是元数据（R212 P3-5）：送进生成上下文
       // 前剔除，避免模型把它们复制进回答充当引文号（引文只认 [数字]）
       // 召回片段是不可信数据（R262 P1-2，audit-r261 §P1-2）：送进生成上下文前
@@ -5107,9 +4977,11 @@ app.post("/api/ask", async (c) => {
     execClsMark = Date.now() - tCls;
     askMarks.push(["execcls", execClsMark]);
     if (hits === null) {
-      const degraded = execDegradedIsolationUnits(answer);
-      if (degraded.length > 0)
-        console.log(`ask: exec-danger classifier unavailable, ${degraded.length} code unit(s) conservatively isolated`);
+      // R292 P0-1：「要不要降级」只看判别器状态，与能不能识别出载体无关；
+      // 具体隔离定位（精确 / 代码区 / 整答）在 finalizeAskAnswer 单点执行。
+      console.log(
+        `ask: exec-danger classifier unavailable (gate=${gate}), degraded isolation enforced`
+      );
       return { danger: [], unavailable: true };
     }
     // 只缓存确定结果（null = 不可用，属瞬时状态，不缓存，下次重新判别）
@@ -5135,7 +5007,8 @@ app.post("/api/ask", async (c) => {
       answer: fin.answer,
       guard_finalized: true,
       ...(isolated ? { instruction_isolated: true } : {}),
-      ...(fin.degraded ? { exec_guard_degraded: true } : {}),
+      // R292 P0-1：降级标记以判别器状态为权威源（不从答案文本反推）。
+      ...(fin.degraded || cls.unavailable ? { exec_guard_degraded: true } : {}),
       ...(execGateMark !== null ? { exec_gate: execGateMark } : {}),
       ...(execClsMark !== null ? { execcls_ms: execClsMark } : {}),
     };
