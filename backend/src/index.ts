@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execDegradedIsolationSegments, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, codeUnitSpans, execDegradedIsolationUnits, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -5044,14 +5044,18 @@ app.post("/api/ask", async (c) => {
   // 旧逻辑在确定性内核漏识别某个原语（如 Go net.Dial）时会原文逐字泄漏。
   // 改为：null 窗口内对嫌疑句段跑语言无关的弱信号兜底（execFallbackSuspicious），
   // 命中则保守隔离并在答案里如实说明「判别暂不可用，已保守隔离」。
+  // R286 P0-1：嫌疑门控与降级处置都改为「代码单元」口径——能力信号跨行/跨段
+  // 聚合（反弹 shell 的建连与执行天然分布在不同物理行，逐句合取必然漏）。
+  // null 窗口的具体单元隔离由 finalizeAskAnswer(execClassifierUnavailable) 单点执行。
   const classifyExecDanger = async (
     answer: string
-  ): Promise<{ danger: string[]; degraded: string[] }> => {
+  ): Promise<{ danger: string[]; unavailable: boolean }> => {
     const segs = splitSegmentsFenceAware(answer);
-    const suspicious = segs.filter(
+    const segSuspicious = segs.some(
       (s) => segmentExecSuspicious(s.text) && !hasExecIntent(normalizeCommandText(s.text))
     );
-    if (suspicious.length === 0) return { danger: [], degraded: [] };
+    const unitSuspicious = codeUnitSpans(answer).some((u) => segmentExecSuspicious(u.text));
+    if (!segSuspicious && !unitSuspicious) return { danger: [], unavailable: false };
     const tCls = Date.now();
     const hits = await classifyDangerousCodeSegments(c.env, answer).catch((err) => {
       console.error("ask: exec-danger classify failed", err);
@@ -5059,15 +5063,15 @@ app.post("/api/ask", async (c) => {
     });
     askMarks.push(["execcls", Date.now() - tCls]);
     if (hits === null) {
-      const degraded = execDegradedIsolationSegments(answer);
+      const degraded = execDegradedIsolationUnits(answer);
       if (degraded.length > 0)
-        console.log(`ask: exec-danger classifier unavailable, ${degraded.length} segment(s) conservatively isolated`);
-      return { danger: [], degraded };
+        console.log(`ask: exec-danger classifier unavailable, ${degraded.length} code unit(s) conservatively isolated`);
+      return { danger: [], unavailable: true };
     }
-    if (hits.length === 0) return { danger: [], degraded: [] };
+    if (hits.length === 0) return { danger: [], unavailable: false };
     const out = hits.map((n) => segs[n - 1]?.text ?? "").filter((t) => t.length > 0);
     if (out.length > 0) console.log(`ask: exec-danger classifier flagged ${out.length} segment(s)`);
-    return { danger: out, degraded: [] };
+    return { danger: out, unavailable: false };
   };
 
   const finalizeGenerationBody = async (body: Record<string, unknown>): Promise<Record<string, unknown>> => {
@@ -5077,7 +5081,7 @@ app.post("/api/ask", async (c) => {
       dataText: askGuardData,
       question: askGuardQuestion,
       execDangerSegments: cls.danger,
-      execDegradedSegments: cls.degraded,
+      execClassifierUnavailable: cls.unavailable,
     });
     if (fin.isolated) console.log("ask: note-embedded instruction isolated at generation exit");
     const isolated = fin.isolated || body.instruction_isolated === true;
@@ -5086,6 +5090,7 @@ app.post("/api/ask", async (c) => {
       answer: fin.answer,
       guard_finalized: true,
       ...(isolated ? { instruction_isolated: true } : {}),
+      ...(fin.degraded ? { exec_guard_degraded: true } : {}),
     };
   };
 
