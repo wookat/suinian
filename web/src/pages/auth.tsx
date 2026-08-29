@@ -173,7 +173,9 @@ export function AuthPage() {
   const [password, setPassword] = useState("")
   const [password2, setPassword2] = useState("")
   const [busy, setBusy] = useState(false)
-  const [slow, setSlow] = useState(false)
+  // 慢请求分阶段提示：0=正常，1=超 4s（服务端加密/冷启动），2=超 16s（首次
+  // 尝试已超时，客户端正自动换新连接重试），给出预期时长而非无限 spinner
+  const [slowStage, setSlowStage] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [mismatch, setMismatch] = useState(false)
   const [demoNotes, setDemoNotes] = useState<Note[] | null>(null)
@@ -197,7 +199,7 @@ export function AuthPage() {
     if (busy) return
     setError(null)
     setMismatch(false)
-    setSlow(false)
+    setSlowStage(0)
     const base = apiBaseUrl.trim()
     if (!base) return setError("请填写 API 地址")
     if (name.trim().length < 2) return setError("用户名至少 2 个字符")
@@ -209,7 +211,8 @@ export function AuthPage() {
       return
     }
     setBusy(true)
-    const slowTimer = window.setTimeout(() => setSlow(true), 4000)
+    const slowTimer = window.setTimeout(() => setSlowStage(1), 4000)
+    const slowTimer2 = window.setTimeout(() => setSlowStage(2), 16000)
     try {
       const res =
         mode === "register"
@@ -246,7 +249,8 @@ export function AuthPage() {
       setError(mode === "register" ? `${msg}。可直接用相同用户名密码重试，不会重复创建账号。` : msg)
     } finally {
       window.clearTimeout(slowTimer)
-      setSlow(false)
+      window.clearTimeout(slowTimer2)
+      setSlowStage(0)
       setBusy(false)
     }
   }
@@ -450,9 +454,17 @@ export function AuthPage() {
           </p>
         )}
 
-        {busy && slow && (
+        {busy && slowStage === 1 && (
           <p className="text-xs text-muted-foreground">
-            {mode === "register" ? "正在创建账号（密码加密需几秒），请保持页面打开…" : "正在验证，请稍候…"}
+            {mode === "register"
+              ? "正在创建账号（密码加密与首次启动通常需 3–10 秒），请保持页面打开…"
+              : "正在验证（通常 10 秒内完成），请稍候…"}
+          </p>
+        )}
+        {busy && slowStage >= 2 && (
+          <p className="text-xs text-muted-foreground">
+            首次尝试未在 15 秒内返回，已自动换新连接重试（最长再等约 45 秒）。
+            {mode === "register" ? "重试不会重复创建账号。" : ""}
           </p>
         )}
 

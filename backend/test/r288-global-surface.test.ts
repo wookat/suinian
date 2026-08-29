@@ -18,6 +18,7 @@ import {
   crossLineExecUnits,
   EXEC_ISOLATED_MARK,
   EXEC_DEGRADED_ISOLATED_MARK,
+  EXEC_DEGRADED_NOTICE,
   EXEC_INSTALLER_WARN_MARK,
 } from "../src/prompt-armor";
 import { BENIGN_CASES } from "../scripts/injection-eval-data";
@@ -201,23 +202,36 @@ describe("R288 P1-1：善意语料误伤量化（权威 54 + 官方安装/CI 20 
     expect(stripped).toEqual([]);
   });
 
-  it("降级窗口：0 例善意语料被剥夺原文", () => {
-    const stripped: string[] = [];
+  // R292 契约变更（docs/decision-r292.md §1.2，audit-r291 22/38 fail-open）：降级
+  // 窗口内判别器无法判定代码安全性，非官方安装源白名单的代码区一律保守隔离
+  // （带降级说明与重试入口）——宁可暂时不给，不能原样放行。因此不再断言
+  // 「0 例被剥夺原文」，改为：不得误标为危险（EXEC_ISOLATED_MARK）；凡保守
+  // 隔离必须带降级说明与 degraded 标记；并输出误伤率供 PR 报数。
+  it("降级窗口：善意语料不被误标危险；保守隔离必带降级说明与标记（R292 §1）", () => {
+    const bad: string[] = [];
+    let conservative = 0;
+    let total = 0;
     for (const b of ALL_BENIGN) {
       for (const { kind, q } of QUESTIONS) {
+        total++;
         const fin = finalizeAskAnswer(b.text, {
           dataText: b.text,
           question: q,
           execClassifierUnavailable: true,
         });
-        if (fin.answer.includes(EXEC_ISOLATED_MARK) || fin.answer.includes(EXEC_DEGRADED_ISOLATED_MARK))
-          stripped.push(`${b.id}/${kind}`);
+        if (fin.answer.includes(EXEC_ISOLATED_MARK)) bad.push(`${b.id}/${kind}: 误标为危险`);
+        if (fin.degraded !== true) bad.push(`${b.id}/${kind}: degraded 未置位`);
+        if (fin.answer.includes(EXEC_DEGRADED_ISOLATED_MARK)) {
+          conservative++;
+          if (!fin.answer.includes(EXEC_DEGRADED_NOTICE)) bad.push(`${b.id}/${kind}: 保守隔离无降级说明`);
+        }
       }
     }
-    expect(stripped).toEqual([]);
+    expect(bad).toEqual([]);
+    console.log(`R292 降级窗口善意保守隔离率：${conservative}/${total}`);
   });
 
-  it("R287 §2 明细的 7 条误伤项在两态下都拿得到原文（可带警示）", () => {
+  it("R287 §2 明细的 7 条误伤项（官方安装源白名单）在两态下都拿得到原文（可带警示）", () => {
     const ids = ["o01-docker", "o02-rustup", "o03-poetry", "o04-nvm", "o05-helm", "o06-k3s", "o20-powershell-download"];
     for (const id of ids) {
       const c = OFFICIAL_INSTALL.find((x) => x.id === id)!;

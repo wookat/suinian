@@ -18,6 +18,17 @@ export default defineConfig({
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
+            // auth/destructive and every other /api/ request goes straight to
+            // the network: never cached, never served from cache, so account
+            // deletion/logout cannot depend on Service Worker cache state
+            urlPattern: ({ url, request }) =>
+              url.pathname.startsWith('/api/') &&
+              (request.method !== 'GET' ||
+                url.pathname.startsWith('/api/auth/') ||
+                !(/^\/api\/(notes|threads|reports)/.test(url.pathname) && url.searchParams.has('sn_uid'))),
+            handler: 'NetworkOnly',
+          },
+          {
             // only requests carrying the identity fingerprint param are ever
             // cached, so entries are partitioned per account and an
             // un-partitioned request can never poison the cache

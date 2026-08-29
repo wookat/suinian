@@ -244,6 +244,26 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     }
   }
 
+  // 「M月D日之后/以后/以来/起」：起点为该日零点（含当日）、终点开放。
+  if (
+    (m = q.match(
+      /(?:((?:19|20)\d{2})\s*年\s*)?(\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日]\s*(?:之后|以后|以来|起)/
+    ))
+  ) {
+    const yAbs = m[1] ? parseInt(m[1], 10) : null;
+    const mon = parseNum(m[2]);
+    const day = parseNum(m[3]);
+    if (mon !== null && day !== null && mon >= 1 && mon <= 12 && day >= 1 && day <= 31) {
+      const sh = new Date(now.getTime() + SH_OFFSET_MS);
+      const y = yAbs ?? (mon - 1 > sh.getUTCMonth() ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear());
+      return {
+        start: toUtcSql(new Date(Date.UTC(y, mon - 1, day) - SH_OFFSET_MS)),
+        end: null,
+        phrase: m[0].trim(),
+      };
+    }
+  }
+
   // 「M月上/中/下旬」（R290 P1）：上旬 1–10、中旬 11–20、下旬 21–月末；
   // 年份与裸「X月」同口径。
   if (
@@ -2711,6 +2731,49 @@ export function widenTimeRangeForEvents(range: TimeRange): TimeRange {
 /** 有效时间（正文事件时间，无则记录时间）∈ 窗口。 */
 export function inEventTimeRange(note: Pick<NoteRow, "title" | "content" | "created_at">, range: TimeRange): boolean {
   return inTimeRange(noteEventTime(note) ?? note.created_at, range);
+}
+
+export type EventTimeNote = Pick<NoteRow, "title" | "content" | "created_at">;
+
+export interface EventTimeWindow {
+  /** SQL 侧粗取窗（放宽 ±400 天）；null 表示问题不带时间限定。 */
+  readonly sql: TimeRange | null;
+  /** SQL 条件统一拼装：调用点不得再手写 created_at 边界。 */
+  applySql(conds: string[], binds: unknown[]): void;
+  /** TS 侧精筛：有效时间（正文事件时间，无则记录时间）∈ 原窗。 */
+  keep<T extends EventTimeNote>(rows: T[]): T[];
+  /** 精筛后的条数（计数口径与 keep 完全一致）。 */
+  count(rows: EventTimeNote[]): number;
+}
+
+/**
+ * 时间窗筛选的唯一接入点（R292 P1-2，audit-r291 §财务时间窗）：所有
+ * 时间窗/财务/枚举/关键词路径必须经由本函数取「SQL 粗取窗 + TS 精筛」
+ * 成对使用，事件时间口径只在这里接入一次，禁止调用点再散点组合
+ * widenTimeRangeForEvents / inEventTimeRange / inTimeRange(created_at)。
+ */
+export function eventTimeWindow(range: TimeRange | null | undefined): EventTimeWindow {
+  const r = range ?? null;
+  const wide = r ? widenTimeRangeForEvents(r) : null;
+  return {
+    sql: wide,
+    applySql(conds: string[], binds: unknown[]) {
+      if (wide?.start) {
+        conds.push("created_at >= ?");
+        binds.push(wide.start);
+      }
+      if (wide?.end) {
+        conds.push("created_at < ?");
+        binds.push(wide.end);
+      }
+    },
+    keep<T extends EventTimeNote>(rows: T[]): T[] {
+      return r ? rows.filter((n) => inEventTimeRange(n, r)) : rows;
+    },
+    count(rows: EventTimeNote[]): number {
+      return this.keep(rows).length;
+    },
+  };
 }
 
 /** UTC sql 串 → 上海本地日期 YYYY-MM-DD（endExclusive 时取前一刻所在日）。 */

@@ -1011,6 +1011,7 @@ const SYMBOL_GLYPH_RE =
  * 无关；模型自发使用的、资料里没有的符号不受影响。
  */
 export function scrubDataDerivedGlyphs(answer: string, dataText: string, question: string): string {
+  if (questionRequestsVerbatim(question)) return answer; // R272 支柱 3：原文请求下不删字（emoji 也是正文）
   const dataGlyphs = new Set(dataText.normalize("NFKC").match(SYMBOL_GLYPH_RE) ?? []);
   if (dataGlyphs.size === 0) return answer;
   const qGlyphs = new Set(question.normalize("NFKC").match(SYMBOL_GLYPH_RE) ?? []);
@@ -1060,6 +1061,37 @@ export function scrubAcrosticBlocks(answer: string, dataText: string, question: 
   }
   if (!dropLine.some(Boolean)) return answer;
   return cleanupAfterScrub(lines.filter((_, k) => !dropLine[k]).join("\n"));
+}
+
+/**
+ * verbatim 逐字回复（R292 P2）：用户点名索要原文时，模型会把空参括号
+ * `run()` 渲染成 `run:`、吞掉软连字符/NBSP/emoji——折叠比对判它仍是忠实
+ * 回显，但字面已非逐字。逐行折叠匹配资料区原始行，折叠相等而字面不同
+ * 时用原始行字面回复。只回复存在于资料区的行，不会复活被整段剥除的内容。
+ */
+export function restoreVerbatimEchoes(answer: string, dataText: string): string {
+  // 逐字比对口径比 foldCompact 更宽一档：软连字符/零宽也折掉，否则原文里的
+  // `cu\u00adrl` 与模型落地的 `curl` 折叠不等，还原不了。
+  const fold = (s: string) => foldCompact(s.replace(ZERO_WIDTH_G, ""));
+  const byFold = new Map<string, string>();
+  for (const raw of dataText.split("\n")) {
+    const l = raw.trim();
+    if (l.length < 4) continue;
+    const f = fold(l);
+    if (f.length >= 4 && !byFold.has(f)) byFold.set(f, l);
+  }
+  if (byFold.size === 0) return answer;
+  return answer
+    .split("\n")
+    .map((line) => {
+      const t = line.trim();
+      if (t.length < 4) return line;
+      const orig = byFold.get(fold(t));
+      if (orig === undefined || orig === t) return line;
+      const at = line.indexOf(t);
+      return line.slice(0, at) + orig + line.slice(at + t.length);
+    })
+    .join("\n");
 }
 
 /** 剥除后残留的空行/悬空标点清理（marker/句段剥除共用）。 */
@@ -1212,9 +1244,12 @@ export function guardAskAnswer(
     opts.dataText,
     opts.question
   );
-  const afterDirectives = opts.directiveDemands?.length
+  let afterDirectives = opts.directiveDemands?.length
     ? scrubDirectiveDemands(afterSpans, opts.directiveDemands, opts.question, opts.dataText)
     : afterSpans;
+  if (questionRequestsVerbatim(opts.question)) {
+    afterDirectives = restoreVerbatimEchoes(afterDirectives, opts.dataText);
+  }
   // R278 P1-1/P1-4 根因：隔离标记不在这里插入。生成分支随后还会走单一
   // 出口 finalizeAskAnswer，其首步 stripSpoofedControlMarks 会把本函数插入的
   // 真标记当仿冒剥掉（R277 生产实测「标记代码存在但零产出/只剩残尾」的
@@ -1375,13 +1410,124 @@ export const EXEC_PIPELINE_RE =
 // 判定前必须归一化：NFKC、剥续行符（\␤）、剥行尾注释、折叠空白——
 // 跨行/注释拼接（audit-r279 P1-5）在归一化后与单行同义式同判。
 
-/** 命令文本归一化（判定前置）：NFKC + 续行符合并 + 行尾注释剥除 + 空白折叠。 */
-export function normalizeCommandText(text: string): string {
+// ---- R292 P0-2/P1-1：命令外壳混淆的确定性反混淆（docs/decision-r292.md §2） ----
+// 根因（audit-r291 §2.2/§3，一手实测）：`w'g'et … | s'h'`（引号切分）、
+// `C=cur; L=l; $C$L`（变量间接）、`$(printf 'cur')l`（字符拼接）、
+// `curl%20-s%20http%3A%2F%2F…`（URL-encode）在归一化后仍不呈 `curl … | sh`
+// 形态，能力内核（CAP_*/EXEC_PIPELINE_RE）全部落空 ⇒ 常态路径无标记回显、
+// 降级路径定位不到载体。这四类都是 **shell 求值前会自行还原** 的外壳变换，
+// 与命令字面无关，反混淆是有界、幂等的确定性变换。
+// 重要边界：这些变换只作用于**判定输入**（能力内核/打分/门控/降级定位），
+// 用户可见文本与 verbatim 出口永不使用其产物（P2-1 的逐字契约不受影响）。
+
+/** `%XX` 百分号编码还原（≤2 轮，只认成对十六进制，`50%`/`%zz` 不动）。 */
+function decodePercentEscapes(text: string): string {
+  let out = text;
+  for (let round = 0; round < 2; round++) {
+    if (!/%[0-9a-fA-F]{2}/.test(out)) break;
+    const next = out.replace(/%([0-9a-fA-F]{2})/g, (m, hex: string) => {
+      const code = parseInt(hex, 16);
+      // NUL/控制字符不引入（保持文本可判定），其余按字面还原
+      return code >= 0x20 || code === 0x09 || code === 0x0a ? String.fromCharCode(code) : m;
+    });
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+/** 引号/反引号切分还原：`w'g'et`→`wget`、`ba''sh`→`bash`、`cu"r"l`→`curl`。 */
+function stripQuoteSplices(text: string): string {
+  // 只在「引号两侧都紧贴同一 token 字符」时删除——不动整段引号字符串
+  // （`echo "hello world"`、`don't` 的撇号后是多字符正文，均不命中）。
+  let out = text.replace(/([A-Za-z0-9_./-])(?:''|""|``|'|"|`)+(?=[A-Za-z0-9_./-])/g, "$1");
+  // 收尾成对残余（`s'h'` 还原后留下的尾引号）不影响判定，保持原样；
+  // 但 `ba''sh` 这类空引号对可能出现在 token 首尾，单独清一次。
+  out = out.replace(/\b(?:''|""|``)\b/g, "");
+  return out;
+}
+
+/** `$(echo X)` / `$(printf 'X')` 单层内联展开（字符拼接混淆的常见载体）。 */
+function inlineEchoSubstitutions(text: string): string {
+  let out = text;
+  for (let round = 0; round < 3; round++) {
+    const next = out.replace(
+      /\$\(\s*(?:echo|printf)\s+(?:-[A-Za-z]+\s+)*(?:'([^'()\n]{0,80})'|"([^"()\n]{0,80})"|([^\s'"()\n]{1,80}))\s*\)/g,
+      (_m, a: string | undefined, b: string | undefined, c: string | undefined) => a ?? b ?? c ?? ""
+    );
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+/** `\xNN` / `\uNNNN` / `\NNN` 转义还原（`printf '\x63\x75\x72\x6c'` 类拼装）。 */
+function decodeCharEscapes(text: string): string {
+  const keep = (code: number, m: string) =>
+    code >= 0x20 || code === 0x09 ? String.fromCharCode(code) : m;
   return text
+    .replace(/\\x([0-9a-fA-F]{2})/g, (m, h: string) => keep(parseInt(h, 16), m))
+    .replace(/\\u([0-9a-fA-F]{4})/g, (m, h: string) => keep(parseInt(h, 16), m))
+    .replace(/\\0([0-7]{2,3})/g, (m, o: string) => keep(parseInt(o, 8), m));
+}
+
+/** shell 变量赋值代入：`C=cur; L=l; $C$L -s …` → `curl -s …`（≤2 轮）。 */
+function substituteShellAssignments(text: string): string {
+  const vals = new Map<string, string>();
+  // 赋值前缀不限于 ASCII 分隔符——生产实测 A08 的 `运维小抄：C=cur;` 里
+  // 赋值紧跟中文全角冒号，旧口径直接漏掉整条变量表（P1-1 无标记回显）。
+  for (const m of text.matchAll(
+    /(?:^|[^A-Za-z0-9_$])([A-Za-z_][A-Za-z0-9_]{0,31})=(?:"([^"\n]{0,80})"|'([^'\n]{0,80})'|([^\s;&|"'\n]{1,80}))/g
+  )) {
+    const v = m[2] ?? m[3] ?? m[4] ?? "";
+    if (v) vals.set(m[1], v);
+  }
+  if (vals.size === 0) return text;
+  let out = text;
+  for (let round = 0; round < 2; round++) {
+    const next = out.replace(
+      /\$\{([A-Za-z_][A-Za-z0-9_]{0,31})\}|\$([A-Za-z_][A-Za-z0-9_]{0,31})/g,
+      (m, a: string | undefined, b: string | undefined) => vals.get((a ?? b) as string) ?? m
+    );
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+/**
+ * 外壳混淆反混淆（R292 §2）：只用于安全判定面。四层顺序固定、各自有界幂等：
+ * percent-decode → 引号切分还原 → `$(echo/printf …)` 展开 → 变量代入。
+ */
+export function deobfuscateCommandShell(text: string): string {
+  let out = decodePercentEscapes(text);
+  out = decodeCharEscapes(out);
+  out = stripQuoteSplices(out);
+  out = inlineEchoSubstitutions(out);
+  out = substituteShellAssignments(out);
+  // R292 P1-1：上游外链收口（scrubAnswerLinks）先于 exec 判定执行，取码 URL
+  // 已被替换成 LINK_REMOVED_MARK ⇒ 判定面里 fetch 能力凭空消失，「移除外链」
+  // 这条与安全无关的展示规则成了唯一削弱手段（audit-r291 P1-1 实测）。
+  // 判定面把该标记还原成一个取码 URL 占位：能力判定看到的仍是「取码→执行」。
+  if (out.includes(LINK_REMOVED_MARK))
+    out = out.split(LINK_REMOVED_MARK).join("http://link-removed.invalid/s.sh");
+  return out;
+}
+
+/** 命令文本归一化（判定前置）：NFKC + 续行符合并 + 行尾注释剥除 + 空白折叠 + 反混淆。 */
+export function normalizeCommandText(text: string): string {
+  const base = text
     .normalize("NFKC")
+    // 零宽/软连字符类混淆：`cu\u00adrl`、`s\u200bh` 在 shell 求值前不存在，
+    // 判定面必须先去掉（NFKC 不处理这些码位）。
+    .replace(ZERO_WIDTH_G, "")
     .replace(/\\\r?\n\s*/g, " ") // shell 续行符：反斜杠+换行 = 同一逻辑行
     .replace(/(?:^|\s)#(?!\{|!)[^\n]*/g, " ") // 行尾/整行 shell 注释（保留 #! 与 #{）
     .replace(/[ \t]+/g, " ");
+  // R292：反混淆产物与基线取「更危险者」——反混淆只增加可判定性，不减少。
+  // 判定侧统一用反混淆后的文本；调用方若需要基线可自行调 NFKC 版本。
+  const deob = deobfuscateCommandShell(base);
+  return deob === base ? base : `${base}\n${deob}`;
 }
 
 // 远程取得代码/数据（行为角色 A）
@@ -1994,7 +2140,17 @@ export function installerBenignReason(text: string, reason: string): boolean {
 export function installerBenignText(text: string): boolean {
   const normalized = normalizeCommandText(text);
   const reason = hasExecIntentReason(normalized) ?? fetchThenRunReason(text) ?? fallbackCapabilityReason(text);
-  if (!reason) return false;
+  if (!reason) {
+    // R292 §1：官方安装法可能不触发任何危险内核（取码落盘 + Windows 风格
+    // `.\x.ps1` 执行没有 sink 字面）。降级窗口的保守隔离仍需来源分级，
+    // 否则官方安装笔记在降级窗口被整段剥夺。安全条件与正式豁免完全一致
+    // （URL 全官方、无建连/LOLBin/stdio/混淆地址/IP:端口）。
+    const c = execCapabilities(normalized);
+    // 必须是完整的「取码→执行」形态（含 Windows `.\x.ps1` 本地执行行）；
+    // 只有取码没有执行的单行不在此豁免（否则相邻危险行会被拆散处置）。
+    if (!c.fetch || !/(?:^|\n)\s*(?:\.\\|\.\/)\S+/.test(normalized)) return false;
+    return installerBenignReason(text, "cap:fetch+sink");
+  }
   return installerBenignReason(text, reason);
 }
 
@@ -2785,6 +2941,37 @@ export function isolateNoteInstructions(
   const degradedUnits = (
     opts?.execClassifierUnavailable ? execDegradedIsolationUnitsWithSource(answer, dataText) : []
   ).filter((u) => !inGlobalUnit(u.start, u.end));
+  // R292 P0-1（docs/decision-r292.md §1，audit-r291 22/38 fail-open）：降级窗口
+  // 内「隔离哪一段」只是定位问题，定位失败不得放行。层 2：能力判定（上面的
+  // degradedUnits/globalUnits）没盖住的**全部代码区域**（代码单元 ∪ 归一化行中
+  // 呈代码形态的行）一律保守隔离——判别器本来要判的就是这些代码危不危险，
+  // 它不可用时这些代码安全性未知，fail-closed 即不交付；官方安装源豁免由
+  // degradedRep 内部处理（确定性判据，不依赖 LLM）。
+  if (opts?.execClassifierUnavailable) {
+    const covered = (start: number, end: number) =>
+      inGlobalUnit(start, end) || degradedUnits.some((u) => start < u.end && end > u.start);
+    for (const u of codeUnitSpans(answer)) {
+      if (covered(u.start, u.end)) continue;
+      degradedUnits.push({ ...u, reason: "degraded:code-region" });
+    }
+    for (const ln of judge.lines) {
+      if (ln.fence || !ln.text.trim()) continue;
+      if (covered(ln.oStart, ln.oEnd)) continue;
+      if (degradedUnits.some((u) => ln.oStart < u.end && ln.oEnd > u.start)) continue;
+      if (!isCodeLine(ln.text) && !lineCarriesCapability(ln.text)) continue;
+      degradedUnits.push({
+        start: ln.oStart,
+        end: ln.oEnd,
+        text: answer.slice(ln.oStart, ln.oEnd),
+        reason: "degraded:code-line",
+      });
+    }
+    // 层 3（安全下界）：门控已开（本函数只在 gate≠null 时收到 unavailable）而
+    // 层 1/层 2 一个区间都没定位到 ⇒ 整答隔离，绝不原样交付。
+    if (degradedUnits.length === 0 && globalUnits.length === 0) {
+      return EXEC_DEGRADED_ISOLATED_MARK;
+    }
+  }
   for (const u of degradedUnits) {
     reps.push({ start: u.start, end: u.end, rep: degradedRep(u.text) });
   }
@@ -2938,6 +3125,7 @@ export function isolateNoteInstructions(
   let out = "";
   let pos = 0;
   for (const r of reps) {
+    if (r.start < pos) continue; // 重叠区间只处理一次（防重复交付）
     out += answer.slice(pos, r.start) + r.rep;
     pos = r.end;
   }
@@ -3010,6 +3198,24 @@ export function finalizeAskAnswer(
       out = ISOLATION_NOTICE_ANSWER;
       isolated = true;
     }
+  }
+  // R292 P0-1（docs/decision-r292.md §1）：「是否降级」只由判别器状态决定，
+  // 不再从输出文本里是否含降级标记**反推**——audit-r291 的 22/38 fail-open
+  // 正是「识别不到载体 ⇒ 没有标记 ⇒ degraded 不置位 ⇒ 原样放行」这条链。
+  // 出口收尾保险：判别器不可用而输出里既无降级隔离标记也无官方安装警示
+  // ⇒ 整答隔离（层 3 的同义兜底，防未来任何上游路径遗漏）。
+  if (opts.execClassifierUnavailable) {
+    if (
+      !out.includes(EXEC_DEGRADED_ISOLATED_MARK) &&
+      !out.includes(EXEC_INSTALLER_WARN_MARK) &&
+      !out.includes(EXEC_ISOLATED_MARK) &&
+      execClassifierGateReason(out) !== null
+    ) {
+      out = EXEC_DEGRADED_ISOLATED_MARK;
+      isolated = true;
+    }
+    if (!out.includes(EXEC_DEGRADED_NOTICE)) out = `${out}\n\n${EXEC_DEGRADED_NOTICE}`;
+    return { answer: out, changed: out !== answer, isolated, degraded: true };
   }
   // R286 P0-1：降级窗口给用户可感知的显式提示（不只靠行内标记）。
   const degraded = out.includes(EXEC_DEGRADED_ISOLATED_MARK);

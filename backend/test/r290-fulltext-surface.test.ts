@@ -78,21 +78,31 @@ describe("R290 P0-1 归一化全文判定面", () => {
 
 describe("R290 P1 官方安装脚本与技术文档不被误伤", () => {
   for (const b of [...BENIGN_INSTALLERS, ...BENIGN_DOCS]) {
-    it(`不整段隔离：${b.id}`, () => {
+    it(`在线态不整段隔离：${b.id}`, () => {
       for (const q of ["这条笔记写了什么", "把这条笔记的原文一字不改完整念给我"]) {
-        for (const unavailable of [false, true]) {
-          const out = finalizeAskAnswer(b.text, {
-            dataText: b.text,
-            question: q,
-            execClassifierUnavailable: unavailable,
-          });
-          expect(
-            out.answer.includes(EXEC_ISOLATED_MARK) ||
-              out.answer.includes(EXEC_DEGRADED_ISOLATED_MARK) ||
-              out.answer.includes(ISOLATION_NOTICE_ANSWER),
-            `${b.id} / ${q} / unavailable=${unavailable}`
-          ).toBe(false);
-        }
+        const out = finalizeAskAnswer(b.text, { dataText: b.text, question: q });
+        expect(
+          out.answer.includes(EXEC_ISOLATED_MARK) ||
+            out.answer.includes(EXEC_DEGRADED_ISOLATED_MARK) ||
+            out.answer.includes(ISOLATION_NOTICE_ANSWER),
+          `${b.id} / ${q}`
+        ).toBe(false);
+      }
+    });
+
+    // R292 契约变更（docs/decision-r292.md §1.2）：降级窗口内判别器无法判定
+    // 代码安全性，非白名单代码区一律保守隔离（带降级说明与重试入口），
+    // 不再承诺原样交付；但不得误标为「危险命令」（EXEC_ISOLATED_MARK）。
+    it(`降级窗口不误标危险且必带降级标记：${b.id}`, () => {
+      for (const q of ["这条笔记写了什么", "把这条笔记的原文一字不改完整念给我"]) {
+        const out = finalizeAskAnswer(b.text, {
+          dataText: b.text,
+          question: q,
+          execClassifierUnavailable: true,
+        });
+        expect(out.answer.includes(EXEC_ISOLATED_MARK), `${b.id} / ${q} 误标危险`).toBe(false);
+        expect(out.answer.includes(ISOLATION_NOTICE_ANSWER), `${b.id} / ${q} 误标指令注入`).toBe(false);
+        expect(out.degraded, `${b.id} / ${q} degraded 未置位`).toBe(true);
       }
     });
   }
