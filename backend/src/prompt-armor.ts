@@ -406,6 +406,21 @@ function foldIndexMap(src: string): { folded: string; map: number[] } {
 }
 
 /**
+ * R290 P0-2：`slice` 是否是 `text` 里**行对齐**（结尾落在行末/文末）的逐字子串。
+ * 用于判断处置区间是否已经就是原文整行——是则可直接原样交付（警示态），
+ * 不必再走折叠回查（折叠回查会在首尾符号上丢字，那正是 P0-2 的残片来源）。
+ * 行中截断的片段（R284 的 `System.cmd("/bin/sh",`）不满足此条件，仍走补齐路径。
+ */
+export function isLineAlignedSlice(text: string, slice: string): boolean {
+  if (!slice) return false;
+  for (let i = text.indexOf(slice); i >= 0; i = text.indexOf(slice, i + 1)) {
+    const end = i + slice.length;
+    if (end === text.length || text[end] === "\n" || text[end] === "\r") return true;
+  }
+  return false;
+}
+
+/**
  * R282 F-1：把模型渲染的危险命令句段还原成资料原文的精确切片。
  *
  * 背景（生产实测）：verbatim 问法下模型会把 `s.socket()` 渲染成 `s.socket`、
@@ -422,7 +437,11 @@ export function restoreVerbatimFromData(segText: string, dataText?: string): str
   const { folded, map } = foldIndexMap(dataText);
   const at = folded.indexOf(target);
   if (at < 0) return null;
-  const start = map[at];
+  let start = map[at];
+  // R290 P0-2：折叠会吃掉开头的符号（`<div …` 的 `<`），切片因此会从
+  // 第二个字符开始——那也是残片。只向前吸收**开括号/引号类 ASCII 符号**，
+  // 不吸收 CJK 标点（`周末计划：` 的 `：` 属于上下文而非切片内容）。
+  while (start > 0 && /[<([{"'`$\\/@#&~*+|!-]/.test(dataText[start - 1])) start--;
   let end = map[at + target.length - 1] + 1;
   // 折叠会吃掉标点，切片末端因此可能停在 `}`（丢掉紧随的 `)'`）——那又是残片。
   // 向后吸收「折叠为空且非空白」的收尾字符（引号/括号/分号等），到空白即止。
@@ -1732,6 +1751,18 @@ export function execDegradedIsolationUnits(
       : (fallbackCapabilityReason(u.text) ?? fetchThenRunReason(u.text));
     if (reason) out.push({ ...u, reason });
   }
+  // R290 P0-1：降级窗口同样不依赖代码区抽取——归一化全文的每一行独立判一次
+  // （载体无关），与代码单元结果取并集（区间重叠的行由调用方去重）。
+  for (const ln of normalizeJudgeSurface(answer).lines) {
+    if (ln.fence || !ln.text.trim()) continue;
+    if (out.some((u) => ln.oStart < u.end && ln.oEnd > u.start)) continue;
+    const n = normalizeCommandText(ln.text);
+    const kernel = hasExecIntentReason(n);
+    const reason = kernel
+      ? `line-${kernel}`
+      : (fallbackCapabilityReason(ln.text) ?? fetchThenRunReason(ln.text));
+    if (reason) out.push({ start: ln.oStart, end: ln.oEnd, text: answer.slice(ln.oStart, ln.oEnd), reason });
+  }
   return out;
 }
 
@@ -1929,7 +1960,13 @@ function allFetchUrlsOfficial(text: string): boolean {
 
 /** 「取码 → 执行」家族的理由（唯一可降级处置的理由家族）。 */
 function isFetchRunFamily(reason: string): boolean {
-  return /fetch\+sink|fetch\+priv|fetch\+run-downloaded|literal:pipeline|code\+fetch\+proc/.test(reason);
+  // R290 P1（audit-r289 §Rust/Homebrew 2/30）：`\/bin\/bash -c "$(curl …)"`（Homebrew
+  // 官方安装法）命中的是 cap:inline+fetch+exec，语义上同属「取码→执行」，
+  // 旧清单没包含它 ⇒ 整段隔离。安全下界不变：豁免仍要求取码 URL 全部在官方
+  // 清单内、且无建连/混淆地址/stdio 接管/反弹 shell/LOLBin（见 installerBenignReason）。
+  return /fetch\+sink|fetch\+priv|fetch\+run-downloaded|literal:pipeline|code\+fetch\+proc|inline\+fetch\+exec/.test(
+    reason
+  );
 }
 
 /**
@@ -1961,8 +1998,218 @@ export function installerBenignText(text: string): boolean {
   return installerBenignReason(text, reason);
 }
 
+// ---- R290 P0-1：判定面 = 归一化全文（docs/decision-r290.md §1–§3） ----
+// 根因（audit-r289 P0-1）：R284→R288 的判定链条第一步都是「先识别出哪一块是
+// 代码」（isCodeLine/codeUnitSpans），这一步是 AND 门最前项——它漏一次，全局
+// 合取、fetchThenRunReason、连续量打分、LLM 门控、降级隔离同时空转，且因为
+// 没有单元被隔离，exec_guard_degraded 也不置位（无声 fail-open）。
+// 改判：不再问「这块是不是代码」，只问「将要交付的这段文本里是否存在危险
+// 能力组合」。判定面 = 整篇待交付答案经**载体归一化**后的全文。归一化只做
+// 减法（剥壳/去混淆/全角转半角/实体与转义还原），剥不掉的部分仍留在判定面里
+// ——载体不被认识时最坏是「壳没剥掉」，而不是「这段文本从判定面消失」。
+// 归一化按**行对齐**构造（归一化行数 = 原文行数），因此偏移映射是行级双射，
+// 处置一律落在原始行边界上（不产生残片，见 §5）。
+
+/** 零宽/软连字符类混淆字符。 */
+const ZERO_WIDTH_G = /[\u200B-\u200D\u2060\uFEFF\u00AD\u180E\u034F]/g;
+
+// 只剥白名单 HTML 标签，绝不用 `<[^>]+>` 通配——通配会吃掉 shell 的 `<(curl …)`。
+const HTML_TAG_AT_RE =
+  /^<\/?(?:code|pre|p|div|span|li|ol|ul|dl|dt|dd|table|thead|tbody|tfoot|tr|td|th|br|hr|b|i|u|s|em|strong|small|kbd|samp|var|mark|blockquote|h[1-6]|a|section|article|main|header|footer|figure|figcaption|script|style|font|tt|caption)(?:\s[^<>]{0,300})?\/?>/i;
+
+const HTML_ENTITY_MAP: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  sol: "/",
+  bsol: "\\",
+  verbar: "|",
+  vert: "|",
+  grave: "`",
+  dollar: "$",
+  lpar: "(",
+  rpar: ")",
+  lbrack: "[",
+  rbrack: "]",
+  colon: ":",
+  semi: ";",
+  period: ".",
+  commat: "@",
+  num: "#",
+  ast: "*",
+  excl: "!",
+  quest: "?",
+  equals: "=",
+  plus: "+",
+  minus: "-",
+  lowbar: "_",
+  tilde: "~",
+  hyphen: "-",
+};
+
+/** 行首载体壳（可重复剥除）：引用块、列表编号、shell 提示符、日志时间戳前缀。 */
+const LINE_PREFIX_SHELLS: RegExp[] = [
+  /^[ \t]+/,
+  /^[>＞｜]+[ \t]*/,
+  /^[-*+•・‣▪◦]+[ \t]+/,
+  /^\d{1,3}[.)、）][ \t]*/,
+  /^[（(]\d{1,3}[)）][ \t]*/,
+  /^第?[一二三四五六七八九十]{1,3}[、.)）][ \t]*/,
+  /^[$#%>][ \t]+/,
+  /^PS[^>\n]{0,60}>[ \t]*/i,
+  /^\[?\d{4}[-/]\d{2}[-/]\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?\]?[ \t]*/,
+  /^\[?\d{2}:\d{2}:\d{2}(?:[.,]\d{1,9})?\]?[ \t]*/,
+  /^[[［](?:INFO|WARN|WARNING|ERROR|DEBUG|TRACE|FATAL|NOTICE)[\]］][ \t]*/i,
+  /^(?:INFO|WARN|WARNING|ERROR|DEBUG|TRACE|FATAL|NOTICE)[ \t]*[:：][ \t]*/i,
+  /^[\w.-]{1,40}\[\d{1,7}\]:[ \t]*/,
+  /^[\w.-]{1,40}[ \t]+[\w.-]{1,40}\[\d{1,7}\]:[ \t]*/,
+];
+
+export type JudgeSurfaceLine = {
+  /** 原文行区间（处置落点，行级双射）。 */
+  oStart: number;
+  oEnd: number;
+  /** 归一化后的行文本。 */
+  text: string;
+  /** text[i] 在原文中的起始偏移（保留供细粒度定位/测试）。 */
+  map: number[];
+  /** 原文行是否是 markdown 围栏标记行（无能力，处置时跳过）。 */
+  fence: boolean;
+};
+
+export type JudgeSurface = { text: string; lines: JudgeSurfaceLine[] };
+
+function isFenceMarkerLine(line: string): boolean {
+  return /^\s*(?:```|~~~)/.test(line);
+}
+
+/**
+ * 载体归一化（R290 §2）。算子清单与「明确不做」的两项（不删表格竖线、
+ * 不做通配 HTML 标签剥除）见 docs/decision-r290.md §2。
+ */
+export function normalizeJudgeSurface(text: string): JudgeSurface {
+  const lines: JudgeSurfaceLine[] = [];
+  let lineStart = 0;
+  for (const rawLine of text.split("\n")) {
+    const oStart = lineStart;
+    const oEnd = lineStart + rawLine.length;
+    lineStart = oEnd + 1;
+    const fence = isFenceMarkerLine(rawLine);
+    if (fence) {
+      lines.push({ oStart, oEnd, text: "", map: [], fence: true });
+      continue;
+    }
+    // 1) 行首壳剥除（只剥行首，行内 `2>&1`/`>&`/`#!` 不受影响）
+    let body = rawLine;
+    let consumed = 0;
+    for (let round = 0; round < 8; round++) {
+      let stripped = false;
+      for (const re of LINE_PREFIX_SHELLS) {
+        const m = re.exec(body);
+        if (m && m[0].length > 0) {
+          consumed += m[0].length;
+          body = body.slice(m[0].length);
+          stripped = true;
+        }
+      }
+      if (!stripped) break;
+    }
+    // 2) 逐字符归一化（零宽剔除 / NFKC / HTML 标签与实体 / JSON-YAML 转义 / 行内码反引号）
+    const out: string[] = [];
+    const map: number[] = [];
+    const push = (s: string, at: number) => {
+      for (const ch of s) {
+        out.push(ch);
+        map.push(at);
+      }
+    };
+    let i = 0;
+    while (i < body.length) {
+      const abs = oStart + consumed + i;
+      const rest = body.slice(i);
+      const ch = body[i];
+      if (ZERO_WIDTH_G.test(ch)) {
+        ZERO_WIDTH_G.lastIndex = 0;
+        i += 1;
+        continue;
+      }
+      ZERO_WIDTH_G.lastIndex = 0;
+      if (ch === "`") {
+        i += 1;
+        continue;
+      }
+      if (ch === "<") {
+        const tag = HTML_TAG_AT_RE.exec(rest);
+        if (tag) {
+          push(" ", abs);
+          i += tag[0].length;
+          continue;
+        }
+      }
+      if (ch === "&") {
+        const ent = /^&(#x?[0-9a-f]{1,6}|[a-z]{2,10});/i.exec(rest);
+        if (ent) {
+          const body2 = ent[1];
+          let dec: string | undefined;
+          if (body2.startsWith("#")) {
+            const code = body2[1] === "x" || body2[1] === "X" ? parseInt(body2.slice(2), 16) : parseInt(body2.slice(1), 10);
+            if (Number.isFinite(code) && code > 0 && code <= 0x10ffff) dec = String.fromCodePoint(code);
+          } else {
+            dec = HTML_ENTITY_MAP[body2.toLowerCase()];
+          }
+          if (dec !== undefined) {
+            push(dec, abs);
+            i += ent[0].length;
+            continue;
+          }
+        }
+      }
+      if (ch === "\\" && i + 1 < body.length) {
+        const nx = body[i + 1];
+        if (nx === "n" || nx === "t" || nx === "r") {
+          // JSON 字符串里的换行/制表：还原为空格（保持「一行 = 一处置单位」）
+          push(" ", abs);
+          i += 2;
+          continue;
+        }
+        if (nx === '"' || nx === "'" || nx === "\\" || nx === "/") {
+          push(nx, abs);
+          i += 2;
+          continue;
+        }
+        const u = /^\\u([0-9a-f]{4})/i.exec(rest);
+        if (u) {
+          push(String.fromCharCode(parseInt(u[1], 16)), abs);
+          i += u[0].length;
+          continue;
+        }
+      }
+      // 3) 逐字符 NFKC（全角命令/全角标点 → 半角）
+      const nk = ch.normalize("NFKC");
+      push(nk, abs);
+      i += ch.length;
+    }
+    lines.push({ oStart, oEnd, text: out.join(""), map, fence: false });
+  }
+  return { text: lines.map((l) => l.text).join("\n"), lines };
+}
+
+/** 判定面文本（归一化全文）——门控、能力聚合、缓存键统一用它。 */
+export function judgeSurfaceText(answer: string): string {
+  return normalizeJudgeSurface(answer).text;
+}
+
+/**
+ * 全局危险判定（R290 §3）：能力聚合在「归一化全文」与「未经任何处理的原始
+ * 全文」上各跑一遍取并——后者是**载体无关下界**（不含任何抽取步骤，任何不改
+ * 危险字面的载体包装都绕不过），前者补上「改字面」的四类载体（全角/零宽/
+ * JSON 转义/HTML 实体）。
+ */
 export function globalExecDangerReason(answer: string): string | null {
-  return globalExecDangerReasonForSurface(codeSurface(answer).surface);
+  return globalExecDangerReasonForSurface(judgeSurfaceText(answer)) ?? globalExecDangerReasonForSurface(answer);
 }
 
 export function globalExecDangerReasonForSurface(surface: string): string | null {
@@ -1995,16 +2242,36 @@ export function globalExecDangerUnits(
  */
 export function execClassifierGateReason(answer: string): string | null {
   try {
-    const { units, surface } = codeSurface(answer);
-    if (foldCompact(surface).length >= 24 && units.length > 0) return "gate:code-unit";
+    // R290 P0-1（audit-r289）：门控改到「归一化全文」上——旧门控的前两个判据
+    // 依赖代码区抽取，抽取漏面时门控与确定性兜底同时缺席（fail-open）。
+    // 现在只要归一化全文里出现任何命令/网络/执行原语迹象即开门。
+    const surface = judgeSurfaceText(answer);
+    const prim = execPrimitiveTraceReason(surface) ?? execPrimitiveTraceReason(answer);
+    if (prim) return `gate:${prim}`;
     if (CODEISH_FENCE_RE.test(answer)) return "gate:codeish-block";
-    const { score, signals } = execRiskScore(answer);
+    const { score, signals } = execRiskScoreSurface(surface);
     if (score >= EXEC_RISK_GATE_THRESHOLD) return `gate:score:${score}:${signals.join("+")}`;
     return null;
   } catch {
     // 门控自身出错 ⇒ 开门（fail-closed：宁可多判一次，绝不静默放行）
     return "gate:error";
   }
+}
+
+/** 任何命令/网络/执行原语迹象（R290 §4 门控判据 1）。 */
+export function execPrimitiveTraceReason(text: string): string | null {
+  if (!text.trim()) return null;
+  const n = normalizeCommandText(text);
+  const c = execCapabilities(n);
+  const hits = Object.entries(c)
+    .filter(([, v]) => v)
+    .map(([k]) => k);
+  if (hits.length > 0) return `primitive:${hits.join("+")}`;
+  if (hasObfuscatedAddress(n)) return "primitive:obfaddr";
+  if (EXECISH_RE.test(n)) return "primitive:execish";
+  if (STDIO_RE.test(n)) return "primitive:stdio";
+  if (CONNECTISH_WIDE_RE.test(n) || CONNECTISH_RE.test(n)) return "primitive:connectish";
+  return null;
 }
 
 /**
@@ -2347,10 +2614,15 @@ export function isolateNoteInstructions(
   // （只允许 source ⊇ answer 方向，fail-closed）。
   const stripUrlsFold = (s: string) =>
     foldCompact(s.replace(/https?:\/\/[^\s"'`)<>\]]+/g, "").replace(LINK_REMOVED_MARK, ""));
+  // R290 P1：来源证据也不再依赖代码区抽取——代码单元 ∪ 归一化行（官方安装命令
+  // 写在散文/编号列表里时，旧路径拿不到源证据 ⇒ 官方安装法被误伤整段隔离）。
   const dataInstallerFolds = dataText
-    ? codeUnitSpans(dataText)
-        .filter((u) => installerBenignText(u.text))
-        .map((u) => stripUrlsFold(u.text))
+    ? [
+        ...codeUnitSpans(dataText).map((u) => u.text),
+        ...normalizeJudgeSurface(dataText).lines.filter((l) => !l.fence).map((l) => l.text),
+      ]
+        .filter((t) => installerBenignText(t))
+        .map((t) => stripUrlsFold(t))
         .filter((f) => f.length >= 8)
     : [];
   const installerBenignHere = (segText: string): boolean => {
@@ -2359,16 +2631,29 @@ export function isolateNoteInstructions(
     const af = stripUrlsFold(segText);
     return af.length >= 8 && dataInstallerFolds.some((f) => f.includes(af));
   };
+  // R290 P0-4（audit-r289 P0-4，R274-G05 复发）：处置区间可能横跨多行（rsync/
+  // systemctl/curl|bash 同段），警示只放段首会让危险行落在警示行之外。收口：
+  // 警示标记逐行前置到每个非空行——危险命令与警示永远同行，无逸出面。
+  const warnEveryLine = (text: string): string =>
+    text
+      .split("\n")
+      .map((l) => (l.trim() ? `${EXEC_PIPELINE_WARN_MARK}${l}` : l))
+      .join("\n");
   const execSegRep = (segText: string) => {
     // R288 P1-1：来源全部可核的官方安装法 → 警示 + 保留原文（处置分级，非判据放宽）。
     if (installerBenignHere(segText)) return `${EXEC_INSTALLER_WARN_MARK}${segText}`;
     if (!verbatim) return EXEC_ISOLATED_MARK;
+    // R290 P0-2：处置区间本身就是资料原文的逐字子串时直接用它（行级双射的
+    // 常见情形）——折叠回查会在开头/结尾符号上丢字，那是残片。
+    const segBody = segText.replace(CITE_MARK_RE, "");
+    if (dataText && segBody.trim().length >= 8 && isLineAlignedSlice(dataText, segBody))
+      return warnEveryLine(segText);
     const cites = segText.match(CITE_MARK_RE)?.join("") ?? "";
     const exact = restoreVerbatimFromData(segText.replace(CITE_MARK_RE, ""), dataText);
-    if (exact !== null) return `${EXEC_PIPELINE_WARN_MARK}${exact}${cites}`;
+    if (exact !== null) return `${warnEveryLine(exact)}${cites}`;
     // 无资料可核对（确定性投影路径自造答案）时保持原有 verbatim 契约；
     // 有资料但对不上 → 模型改写过命令，fail-closed 整段隔离。
-    return dataText ? EXEC_ISOLATED_MARK : `${EXEC_PIPELINE_WARN_MARK}${segText}`;
+    return dataText ? EXEC_ISOLATED_MARK : warnEveryLine(segText);
   };
   // R282 F-1 语义主判（answer-guard.classifyDangerousCodeSegments）命中的句段：
   // 与确定性能力内核同一处置口径（两态无第三态）。
@@ -2420,8 +2705,14 @@ export function isolateNoteInstructions(
   // 原文核对+警示、行级隔离邻行保留），不被全局路径吞掉；残余面仍危险 ⇒
   // 载荷是分布式的，残余单元全部隔离——只隔离一块等于把另一半逐字交付。
   // 与判别器是否可用无关，两态同判，只有标记文案不同。
-  const globalSurface = codeSurface(answer).surface;
-  const globalReason = globalExecDangerReasonForSurface(globalSurface);
+  // R290 P0-1（audit-r289 P0-1，docs/decision-r290.md §1–§3）：判定面从「代码区
+  // 抽取」改为「归一化全文 ∪ 原始全文」。抽取步骤从 AND 门里删除——载体不被
+  // 认识时最坏是「壳没剥掉」，而不是「这段文本从判定面消失」；原始全文那一路
+  // 是载体无关下界（不含任何抽取）。
+  const judge = normalizeJudgeSurface(answer);
+  const globalSurface = judge.text;
+  const globalReason =
+    globalExecDangerReasonForSurface(globalSurface) ?? globalExecDangerReasonForSurface(answer);
   const globalHit =
     globalReason !== null &&
     !installerBenignReason(globalSurface, globalReason) &&
@@ -2447,29 +2738,47 @@ export function isolateNoteInstructions(
     return false;
   };
   const globalUnits: Array<{ start: number; end: number }> = [];
-  if (globalHit && verbatim && !opts?.execClassifierUnavailable) {
-    // verbatim 出口沿用 R286 的单元级契约：整单元「警示 + 资料原文精确切片」，
-    // 对不上就整单元隔离——行级还原会把模型丢字的语法行（`func main{`）当原文交付。
-    for (const u of codeUnitSpans(answer).map((x) => fenceInnerSpan(answer, x))) {
-      globalUnits.push({ start: u.start, end: u.end });
-      reps.push({ start: u.start, end: u.end, rep: execSegRep(u.text) });
+  // 下界 2（§3）：命中但一个原始区间都没定位到 ⇒ 整篇隔离，绝不原样交付。
+  let wholeAnswerIsolate = false;
+  if (globalHit) {
+    const capSpans: Array<{ start: number; end: number; text: string }> = [];
+    // verbatim 在线态沿用 R286 的「代码单元整体」契约：整单元「警示 + 资料原文
+    // 精确切片」，对不上就整单元隔离——行级还原会把模型丢字的语法行
+    // （`func main{`）当原文交付。围栏之外的载体由下面的归一化行覆盖。
+    if (verbatim && !opts?.execClassifierUnavailable) {
+      for (const u of codeUnitSpans(answer).map((x) => fenceInnerSpan(answer, x))) capSpans.push(u);
     }
-  } else if (globalHit) {
-    for (const u of codeUnitSpans(answer).map((x) => fenceInnerSpan(answer, x))) {
-      let lineStart = u.start;
-      for (const line of answer.slice(u.start, u.end).split("\n")) {
-        const lineEnd = lineStart + line.length;
-        if (line.trim() && !line.trim().startsWith("```") && lineCarriesCapability(line)) {
-          globalUnits.push({ start: lineStart, end: lineEnd });
-          reps.push({
-            start: lineStart,
-            end: lineEnd,
-            rep: opts?.execClassifierUnavailable ? degradedRep(line) : execSegRep(line),
-          });
-        }
-        lineStart = lineEnd + 1;
-      }
+    // 载体无关的处置粒度：归一化后携带能力信号的**原文行**（行级双射，§5）。
+    // 覆盖中文散文逐行包裹 / 编号列表 / Markdown 表格 / HTML `<code>` /
+    // JSON 字符串 / 日志粘贴 / 全角命令 / 零宽字符，以及围栏内的代码行。
+    // 无能力信号的邻行（注释、`tail -f`、打印语句）保留可读。
+    for (const ln of judge.lines) {
+      if (ln.fence || !ln.text.trim()) continue;
+      if (capSpans.some((s) => ln.oStart < s.end && ln.oEnd > s.start)) continue;
+      if (!lineCarriesCapability(ln.text)) continue;
+      capSpans.push({ start: ln.oStart, end: ln.oEnd, text: answer.slice(ln.oStart, ln.oEnd) });
     }
+    // 两态原子化（§5，修 P0-2）：verbatim 在线态下任一非豁免区间还原失败 ⇒
+    // 本次答案的全部非豁免区间统一整段隔离，绝不出现「几行原文 + 几行被挖掉」。
+    const planned = capSpans.map((s) => ({
+      start: s.start,
+      end: s.end,
+      installer: installerBenignHere(s.text),
+      rep: opts?.execClassifierUnavailable ? degradedRep(s.text) : execSegRep(s.text),
+    }));
+    const anyIsolated = planned.some((p) => !p.installer && p.rep === EXEC_ISOLATED_MARK);
+    for (const p of planned) {
+      const rep =
+        verbatim && !opts?.execClassifierUnavailable && anyIsolated && !p.installer
+          ? EXEC_ISOLATED_MARK
+          : p.rep;
+      globalUnits.push({ start: p.start, end: p.end });
+      reps.push({ start: p.start, end: p.end, rep });
+    }
+    if (planned.length === 0) wholeAnswerIsolate = true;
+  }
+  if (wholeAnswerIsolate) {
+    return opts?.execClassifierUnavailable ? EXEC_DEGRADED_ISOLATED_MARK : ISOLATION_NOTICE_ANSWER;
   }
   const inGlobalUnit = (start: number, end: number) =>
     globalUnits.some((u) => start < u.end && end > u.start);
