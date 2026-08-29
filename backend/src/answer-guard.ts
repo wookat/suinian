@@ -16,7 +16,7 @@
 // （scrubDataDerivedSpans：资料派生 verbatim 句段剥除，同样语言无关）。
 import type { Env } from "./types";
 import { chatComplete } from "./ai";
-import { makeDataNonce, buildDataBlock, splitSegmentsFenceAware, codeSurface } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, splitSegmentsFenceAware, judgeSurfaceText } from "./prompt-armor";
 
 /** 判别器预算：与生成并行启动，不在关键路径上串行增加延迟。 */
 export const DIRECTIVE_EXTRACT_BUDGET_MS = 12_000;
@@ -200,39 +200,56 @@ const EXEC_CLASSIFY_CACHE_MAX = 200;
 const EXEC_CLASSIFY_CACHE_TTL_MS = 10 * 60_000;
 // 缓存内容是命中句段的**文本**而非编号：同一代码面配不同散文时句段编号会变，
 // 文本不变；命中时由调用方按文本回映射到当前答案。
-const execClassifyCache = new Map<string, { danger: string[]; at: number }>();
+const execClassifyCache = new Map<string, { danger: string[]; surface: string; at: number }>();
 
-/** 代码面哈希（FNV-1a 32bit，十六进制）。 */
-export function execSurfaceCacheKey(answer: string): string {
-  const { surface } = codeSurface(answer);
-  let h = 0x811c9dc5;
-  for (let i = 0; i < surface.length; i++) {
-    h ^= surface.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return `${(h >>> 0).toString(16)}:${surface.length}`;
+// ---- R290 P0-3：缓存键与缓存语义重做（docs/decision-r290.md §6） ----
+// 旧键 = FNV-1a 32bit(codeSurface) + 长度，无用户维度：audit-r289 用 6 字节
+// meet-in-the-middle 秒级构造同键良性面，先写入 danger=[]，危险面命中同键即
+// 放行（isolated=false）。三条独立的收口（任一条成立即攻击不成立）：
+//   1. 键 = SHA-256("r290v1" ‖ userId ‖ 0x00 ‖ 归一化判定面) 全长十六进制
+//      （抗碰撞，且带用户维度，跨用户不复用）；
+//   2. 命中时**逐字符比对判定面全文**，不等即视为未命中（碰撞无收益）；
+//   3. **只缓存「危险」结论**，danger=[] 不入缓存——「先良性写入放行条目」
+//      这条攻击路径在设计上不存在（缓存只可能让处置更严，不可能更松）。
+// 另：命中不再做 LRU 续期，条目寿命被 TTL 硬性封顶，不可长期保活。
+const EXEC_CACHE_KEY_VERSION = "r290v1";
+
+async function sha256Hex(input: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export function execClassifyCacheGet(key: string): string[] | undefined {
+/** 判定面缓存键：SHA-256 全长十六进制，含版本与用户维度。 */
+export async function execSurfaceCacheKey(answer: string, userId: string): Promise<string> {
+  return sha256Hex(`${EXEC_CACHE_KEY_VERSION}\u0000${userId}\u0000${judgeSurfaceText(answer)}`);
+}
+
+/** 命中需同时满足：键相同、未过期、判定面全文逐字相同。 */
+export function execClassifyCacheGet(key: string, answer: string): string[] | undefined {
   const e = execClassifyCache.get(key);
   if (!e) return undefined;
   if (Date.now() - e.at > EXEC_CLASSIFY_CACHE_TTL_MS) {
     execClassifyCache.delete(key);
     return undefined;
   }
-  // LRU：命中即移到尾部
-  execClassifyCache.delete(key);
-  execClassifyCache.set(key, e);
+  if (e.surface !== judgeSurfaceText(answer)) return undefined;
   return e.danger;
 }
 
-export function execClassifyCacheSet(key: string, danger: string[]): void {
-  execClassifyCache.set(key, { danger, at: Date.now() });
+export function execClassifyCacheSet(key: string, answer: string, danger: string[]): void {
+  // 只缓存危险结论：安全结论不入缓存，杜绝「先良性后恶意」的缓存污染放行。
+  if (danger.length === 0) return;
+  execClassifyCache.set(key, { danger, surface: judgeSurfaceText(answer), at: Date.now() });
   while (execClassifyCache.size > EXEC_CLASSIFY_CACHE_MAX) {
     const oldest = execClassifyCache.keys().next().value;
     if (oldest === undefined) break;
     execClassifyCache.delete(oldest);
   }
+}
+
+/** 测试用：清空实例内缓存。 */
+export function execClassifyCacheReset(): void {
+  execClassifyCache.clear();
 }
 
 /**

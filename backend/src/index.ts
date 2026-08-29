@@ -78,7 +78,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inTimeRange, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations } from "./ask";
+import { parseTimeRange, inTimeRange, inEventTimeRange, widenTimeRangeForEvents, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -3282,6 +3282,12 @@ app.post("/api/ask", async (c) => {
   // 财务口径澄清追问（R130 P2-1）：上一轮是精确合计时，「包括报销的差旅费
   // 吗」应直答是/否+口径解释（按 category 判定计入与否），绝不复读合计（R129 R14）。
   const lastAssistant = [...history].reverse().find((m) => m.role === "assistant")?.content ?? null;
+  // R290 P2（audit-r289 §8）：「退款算收入还是支出的冲减」是本产品自己的记账
+  // 口径，由代码确定性作答（LLM 曾答「退款算收入」，与实际入账口径相反）。
+  if (!metaQuestion) {
+    const caliber = financeCaliberAnswer(question);
+    if (caliber) return c.json({ answer: caliber, references: [], notes: [], finance_caliber: true });
+  }
   const clarifyTerms = financeClarifyTerms(intentBase, lastAssistant);
   if (clarifyTerms) {
     // 时间范围优先取本轮问题，否则沿用上一轮合计答案里的时间短语（口径一致）
@@ -3371,28 +3377,33 @@ app.post("/api/ask", async (c) => {
       xConds.push(`(${likeOrs})`);
       xBinds.push(...xTerms.flatMap((t) => Array(3).fill(likeContains(t)) as string[]));
     }
-    if (xRange?.start) {
+    // R290 P1：时间窗按正文事件时间（无则记录时间）——SQL 侧放宽窗粗取，TS 侧精筛。
+    const xWide = xRange ? widenTimeRangeForEvents(xRange) : null;
+    if (xWide?.start) {
       xConds.push("created_at >= ?");
-      xBinds.push(xRange.start);
+      xBinds.push(xWide.start);
     }
-    if (xRange?.end) {
+    if (xWide?.end) {
       xConds.push("created_at < ?");
-      xBinds.push(xRange.end);
+      xBinds.push(xWide.end);
     }
     const xWhere = xConds.join(" AND ");
     const order = finExtreme.kind === "max" ? "DESC" : "ASC";
     // 按金额排序取全部候选后在应用层剔除台账聚合行（R180 P2-1：多行台账的
     // 金额是列合计而非单笔，参与极值比较会冒充「最便宜的一把」），再每币种
     // 取一条极值；未识别金额的笔数单独如实说明
-    const [xr, unknownRow] = await Promise.all([
+    const [xr, unknownR] = await Promise.all([
       c.env.DB.prepare(`SELECT * FROM notes WHERE ${xWhere} AND amount IS NOT NULL ORDER BY amount ${order}, id ASC LIMIT 2000`)
         .bind(...xBinds)
         .all<NoteRow>(),
-      c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM notes WHERE ${xWhere} AND amount IS NULL`)
+      c.env.DB.prepare(`SELECT title, content, created_at FROM notes WHERE ${xWhere} AND amount IS NULL LIMIT 2000`)
         .bind(...xBinds)
-        .first<{ cnt: number }>(),
+        .all<Pick<NoteRow, "title" | "content" | "created_at">>(),
     ]);
-    const xAll = xr.results ?? [];
+    const xAll = xRange ? (xr.results ?? []).filter((n) => inEventTimeRange(n, xRange)) : (xr.results ?? []);
+    const unknownRow = {
+      cnt: (unknownR.results ?? []).filter((n) => !xRange || inEventTimeRange(n, xRange)).length,
+    };
     const xSingles = xAll.filter((n) => !isLedgerAggregateNote(n));
     const ledgerExcluded = xAll.length - xSingles.length;
     // 每币种按序取第 rank 名（R182 P1-2：「第二贵/排名第二/倒数第二」与极值
@@ -3665,20 +3676,24 @@ app.post("/api/ask", async (c) => {
         iConds.push("category = ?");
         iBinds.push(finList);
       }
-      if (lRange?.start) {
+      const iWide = lRange ? widenTimeRangeForEvents(lRange) : null;
+      if (iWide?.start) {
         iConds.push("created_at >= ?");
-        iBinds.push(lRange.start);
+        iBinds.push(iWide.start);
       }
-      if (lRange?.end) {
+      if (iWide?.end) {
         iConds.push("created_at < ?");
-        iBinds.push(lRange.end);
+        iBinds.push(iWide.end);
       }
       const ir = await c.env.DB.prepare(
         `SELECT * FROM notes WHERE ${iConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
       )
         .bind(...iBinds)
         .all<NoteRow>();
-      const irows = filterSingleCharTopicRows(ir.results ?? [], inheritedTerms);
+      const irows = filterSingleCharTopicRows(
+        (ir.results ?? []).filter((n) => !lRange || inEventTimeRange(n, lRange)),
+        inheritedTerms
+      );
       if (irows.length > 0) {
         const answer = buildFinanceSubsetAnswer(inheritedTerms, irows, lRange?.phrase ?? null);
         const iFinance = irows.filter((n) => n.category === "expense" || n.category === "income");
@@ -3702,35 +3717,40 @@ app.post("/api/ask", async (c) => {
       lConds.push("category = ?");
       lBinds.push(finList);
     }
-    if (lRange?.start) {
+    // R290 P1：时间窗按正文事件时间（无则记录时间）——SQL 侧放宽窗粗取，TS 侧精筛。
+    const lWide = lRange ? widenTimeRangeForEvents(lRange) : null;
+    if (lWide?.start) {
       lConds.push("created_at >= ?");
-      lBinds.push(lRange.start);
+      lBinds.push(lWide.start);
     }
-    if (lRange?.end) {
+    if (lWide?.end) {
       lConds.push("created_at < ?");
-      lBinds.push(lRange.end);
+      lBinds.push(lWide.end);
     }
     const lr = await c.env.DB.prepare(
       `SELECT * FROM notes WHERE ${lConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
     )
       .bind(...lBinds)
       .all<NoteRow>();
-    const lrows = lr.results ?? [];
+    const lrows = (lr.results ?? []).filter((n) => !lRange || inEventTimeRange(n, lRange));
     // 资金往来同窗计数（R266 落 R265 P3-3）：笔数问法与合计问法同口径带
     // 「另有 X 笔资金往来不计入收支」说明，避免用户以为少记了一笔。
     const tConds = ["user_id = ?", "deleted_at IS NULL", "category = 'transfer'"];
     const tBinds: unknown[] = [userId];
-    if (lRange?.start) {
+    if (lWide?.start) {
       tConds.push("created_at >= ?");
-      tBinds.push(lRange.start);
+      tBinds.push(lWide.start);
     }
-    if (lRange?.end) {
+    if (lWide?.end) {
       tConds.push("created_at < ?");
-      tBinds.push(lRange.end);
+      tBinds.push(lWide.end);
     }
-    const tCnt = await c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM notes WHERE ${tConds.join(" AND ")}`)
+    const tR = await c.env.DB.prepare(
+      `SELECT title, content, created_at FROM notes WHERE ${tConds.join(" AND ")} LIMIT 2000`
+    )
       .bind(...tBinds)
-      .first<{ cnt: number }>();
+      .all<Pick<NoteRow, "title" | "content" | "created_at">>();
+    const tCnt = { cnt: (tR.results ?? []).filter((n) => !lRange || inEventTimeRange(n, lRange)).length };
     const answer = buildFinanceListAnswer(finList, lrows, lRange?.phrase ?? null, tCnt?.cnt ?? 0) + (await pendingTriageHint());
     // references 与逐笔明细同集合同顺序（敏感记账计入合计但不露出）
     const lRefRows = lrows.filter((n) => !n.is_sensitive).slice(0, 20);
@@ -3907,20 +3927,22 @@ app.post("/api/ask", async (c) => {
     const fRange = (origFinanceIntent ? parseTimeRange(intentQuestion) : null) ?? timeRange;
     const fConds = ["user_id = ?", "deleted_at IS NULL", "category IN ('expense','income','transfer')"];
     const fBinds: unknown[] = [userId];
-    if (fRange?.start) {
+    // R290 P1：时间窗按正文事件时间（无则记录时间）——SQL 侧放宽窗粗取，TS 侧精筛。
+    const fWide = fRange ? widenTimeRangeForEvents(fRange) : null;
+    if (fWide?.start) {
       fConds.push("created_at >= ?");
-      fBinds.push(fRange.start);
+      fBinds.push(fWide.start);
     }
-    if (fRange?.end) {
+    if (fWide?.end) {
       fConds.push("created_at < ?");
-      fBinds.push(fRange.end);
+      fBinds.push(fWide.end);
     }
     const fr = await c.env.DB.prepare(
       `SELECT * FROM notes WHERE ${fConds.join(" AND ")} ORDER BY created_at DESC LIMIT 2000`
     )
       .bind(...fBinds)
       .all<NoteRow>();
-    const frows = fr.results ?? [];
+    const frows = (fr.results ?? []).filter((n) => !fRange || inEventTimeRange(n, fRange));
     const stats = financeStats(frows);
     // fail-closed (R109 P1): aggregate wording we can't scope exactly — never
     // let the LLM mental-math truncated recall (multi-currency mixing risk)
@@ -5054,15 +5076,26 @@ app.post("/api/ask", async (c) => {
   // 现在：含任何代码区即必须调判别器；判别器 null 一律 unavailable=true
   //（fail-closed，降级隔离 + exec_guard_degraded）。成本由代码面缓存 +
   // 长度阈值 + 每请求 1 次调用上限控制；纯自然语言问答门控关闭，延迟不变。
+  // R290 P1（audit-r289 §execcls 永不出现在 Server-Timing）：判别器是在生成之后
+  // 的收口阶段调用的，而 Server-Timing 头在生成刚结束时就已写好（流式分支更是
+  // 早已外发），于是这一相的耗时与触发率对外完全不可观测。收口：耗时记在
+  // execClsMark 上，整段 JSON 分支在 finalize 之后**重写** Server-Timing，
+  // 流式分支随 done 事件下发 execcls_ms / exec_gate 字段。
+  let execClsMark: number | null = null;
+  let execGateMark: string | null = null;
   const classifyExecDanger = async (
     answer: string
   ): Promise<{ danger: string[]; unavailable: boolean }> => {
     const segs = splitSegmentsFenceAware(answer);
     const gate = execClassifierGateReason(answer);
+    execGateMark = gate ?? "none";
     if (!gate) return { danger: [], unavailable: false };
-    const cacheKey = execSurfaceCacheKey(answer);
-    const cached = execClassifyCacheGet(cacheKey);
+    // R290 P0-3：键含用户维度且用 SHA-256（抗碰撞），命中还要逐字校验判定面
+    // 全文；只缓存危险结论（见 answer-guard.ts §R290 P0-3）。
+    const cacheKey = await execSurfaceCacheKey(answer, c.get("userId"));
+    const cached = execClassifyCacheGet(cacheKey, answer);
     if (cached !== undefined) {
+      execClsMark = 0;
       askMarks.push(["execcls", 0]);
       return { danger: cached, unavailable: false };
     }
@@ -5071,7 +5104,8 @@ app.post("/api/ask", async (c) => {
       console.error("ask: exec-danger classify failed", err);
       return null;
     });
-    askMarks.push(["execcls", Date.now() - tCls]);
+    execClsMark = Date.now() - tCls;
+    askMarks.push(["execcls", execClsMark]);
     if (hits === null) {
       const degraded = execDegradedIsolationUnits(answer);
       if (degraded.length > 0)
@@ -5080,7 +5114,7 @@ app.post("/api/ask", async (c) => {
     }
     // 只缓存确定结果（null = 不可用，属瞬时状态，不缓存，下次重新判别）
     const out = hits.map((n) => segs[n - 1]?.text ?? "").filter((t) => t.length > 0);
-    execClassifyCacheSet(cacheKey, out);
+    execClassifyCacheSet(cacheKey, answer, out);
     if (out.length > 0) console.log(`ask: exec-danger classifier flagged ${out.length} segment(s)`);
     return { danger: out, unavailable: false };
   };
@@ -5102,6 +5136,8 @@ app.post("/api/ask", async (c) => {
       guard_finalized: true,
       ...(isolated ? { instruction_isolated: true } : {}),
       ...(fin.degraded ? { exec_guard_degraded: true } : {}),
+      ...(execGateMark !== null ? { exec_gate: execGateMark } : {}),
+      ...(execClsMark !== null ? { execcls_ms: execClsMark } : {}),
     };
   };
 
@@ -5134,32 +5170,39 @@ app.post("/api/ask", async (c) => {
     // 否定改写的句段整段扣下，只在 done 中以收口后形态出现——不存在先泄
     // 后收的窗口（audit-r277 X05 两次不同残片的根因）。
     const askScrubSourceS = `${askGuardQuestion}\n${askGuardData}`;
+    // 各闸门扣段计数（R290 P1 可观测性）：随 done 事件以 sse_held 下发，
+    // 让「delta 少/无」在生产可归因到具体闸门，而不是黑盒。
+    const heldCounts: Record<string, number> = {};
+    const hold = (reason: string): null => {
+      heldCounts[reason] = (heldCounts[reason] ?? 0) + 1;
+      return null;
+    };
     const gateSegment = (segRaw: string): string | null => {
       // fail-closed：判别器超时/失败（demandsRawS 为 null）时 demand 集未知，
       // done 收口时判别器可能已就绪并剥除句段——期间不外发任何 delta，全部
       // 缓冲到 done 一次成型（audit-r277 X05「先泄后收」的另一形态）。
-      if (demandsRawS === null) return null;
+      if (demandsRawS === null) return hold("demand_unavailable");
       const s0 = scrubModelOutputInjectionArtifacts(stripDataMarksS(segRaw));
       const s = s0.replace(/\s*[[［]\d{1,2}[\]］]/g, "");
       if (!s.trim()) return null;
       // 剑指引证收口：done 剔除无效角标时连带清掉悬空导言词（「根据 ，」）；
       // 去角标后会留悬空形态的句段扣下不外发，只在 done 中以收口后形态出现。
-      if (cleanDanglingCitations(s) !== s) return null;
+      if (cleanDanglingCitations(s) !== s) return hold("dangling_citation");
       const sc = foldCompact(s);
-      if (groundedDemandsS.some((d) => d && sc.includes(foldCompact(d)))) return null;
-      if (scrubDirectiveDemands(s, groundedDemandsS, askGuardQuestion) !== s) return null;
-      if (scrubUnsourcedAmounts(s, askScrubSourceS) !== s) return null;
-      if (scrubUnsourcedNegations(s, askScrubSourceS) !== s) return null;
+      if (groundedDemandsS.some((d) => d && sc.includes(foldCompact(d)))) return hold("demand_hit");
+      if (scrubDirectiveDemands(s, groundedDemandsS, askGuardQuestion) !== s) return hold("demand_scrub");
+      if (scrubUnsourcedAmounts(s, askScrubSourceS) !== s) return hold("unsourced_amount");
+      if (scrubUnsourcedNegations(s, askScrubSourceS) !== s) return hold("unsourced_negation");
       const fin = finalizeAskAnswer(s, { dataText: askGuardData, question: askGuardQuestion });
-      if (fin.isolated || fin.changed || fin.answer !== s) return null;
-      if (scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) !== s) return null;
+      if (fin.isolated || fin.changed || fin.answer !== s) return hold("finalize_rewrite");
+      if (scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) !== s) return hold("link_scrub");
       // 拒答形句段扣下不外发：整答为拒答时下游会走复问重试/诚实拒答通道整体
       // 替换答案（isRefusalAnswer 分支），先发的拒答 delta 会被 done 撤回。
       // 非拒答句段一旦存在，整答即非拒答，不受重试影响，照常外发。
-      if (isRefusalAnswer(s)) return null;
+      if (isRefusalAnswer(s)) return hold("refusal_shape");
       // R282 F-1：代码类嫌疑句段（任一能力命中）一律扣到 done——语义主判在
       // done 收口时才裁决，先发 delta 会构成「先泄后收」。
-      if (segmentExecSuspicious(s)) return null;
+      if (segmentExecSuspicious(s)) return hold("exec_suspicious");
       return s;
     };
     const enc = new TextEncoder();
@@ -5201,6 +5244,7 @@ app.post("/api/ask", async (c) => {
           const tFin = Date.now();
           const body = await finalizeGenerationBody(raw);
           body.conaud_ms = Date.now() - tFin;
+          if (Object.keys(heldCounts).length > 0) body.sse_held = heldCounts;
           delete body.guard_finalized;
           send("done", body);
         } catch (err) {
@@ -5221,7 +5265,18 @@ app.post("/api/ask", async (c) => {
     });
   }
 
-  return c.json(await finalizeGenerationBody(await runGeneration()));
+  const finalBody = await finalizeGenerationBody(await runGeneration());
+  // execcls 相在生成之后才发生：finalize 完成后重写 Server-Timing，让判别器
+  // 触发率/耗时对外可观测（R290 P1）。
+  c.header(
+    "Server-Timing",
+    serverTimingHeader([
+      ...askMarks,
+      ...(execGateMark !== null && execGateMark !== "none" ? ([["execgate", 1]] as Array<[string, number]>) : []),
+      ["total", Date.now() - askT0],
+    ])
+  );
+  return c.json(finalBody);
 });
 
 // ---- GET /api/threads ----

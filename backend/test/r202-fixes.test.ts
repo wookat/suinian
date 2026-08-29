@@ -58,11 +58,11 @@ describe("财务极值零命中的时间口径明示 (R202 P3-3)", () => {
   it("带时间短语零命中时明示记录时间口径", () => {
     const md = buildFinanceExtremeAnswer(q, [], 0, "本月");
     expect(md).toContain("没有已识别出金额的单笔收入");
-    expect(md).toContain("时间范围按笔记记录时间划定，不按正文里写的时间");
+    expect(md).toContain("时间范围按正文事件时间划定（正文无日期时按记录时间）");
   });
   it("无时间短语零命中时不加口径说明", () => {
     const md = buildFinanceExtremeAnswer(q, [], 0, null);
-    expect(md).not.toContain("时间范围按笔记记录时间划定");
+    expect(md).not.toContain("时间范围按正文事件时间划定");
   });
 });
 

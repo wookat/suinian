@@ -222,6 +222,56 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     };
   }
 
+  // 「M月D日之前/以前」（R290 P1，audit-r289 §财务时间窗：「3 月 10 日之前一共花了
+  // 多少钱」被解成当天单日窗）：终点为该日零点（不含当日）、起点开放；
+  // 年份与裸「X月」同口径（未来月份取去年）。
+  if (
+    (m = q.match(
+      /(?:((?:19|20)\d{2})\s*年\s*)?(\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日]\s*(?:之前|以前)/
+    ))
+  ) {
+    const yAbs = m[1] ? parseInt(m[1], 10) : null;
+    const mon = parseNum(m[2]);
+    const day = parseNum(m[3]);
+    if (mon !== null && day !== null && mon >= 1 && mon <= 12 && day >= 1 && day <= 31) {
+      const sh = new Date(now.getTime() + SH_OFFSET_MS);
+      const y = yAbs ?? (mon - 1 > sh.getUTCMonth() ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear());
+      return {
+        start: null,
+        end: toUtcSql(new Date(Date.UTC(y, mon - 1, day) - SH_OFFSET_MS)),
+        phrase: m[0].trim(),
+      };
+    }
+  }
+
+  // 「M月上/中/下旬」（R290 P1）：上旬 1–10、中旬 11–20、下旬 21–月末；
+  // 年份与裸「X月」同口径。
+  if (
+    (m = q.match(
+      /(?:((?:19|20)\d{2})\s*年\s*)?(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月\s*(上|中|下)旬/
+    ))
+  ) {
+    const yAbs = m[1] ? parseInt(m[1], 10) : null;
+    const mon = parseNum(m[2]);
+    if (mon !== null && mon >= 1 && mon <= 12) {
+      const sh = new Date(now.getTime() + SH_OFFSET_MS);
+      const y = yAbs ?? (mon - 1 > sh.getUTCMonth() ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear());
+      const dq = m[3];
+      const start = dq === "上" ? 1 : dq === "中" ? 11 : 21;
+      const end =
+        dq === "上"
+          ? new Date(Date.UTC(y, mon - 1, 11) - SH_OFFSET_MS)
+          : dq === "中"
+            ? new Date(Date.UTC(y, mon - 1, 21) - SH_OFFSET_MS)
+            : new Date(Date.UTC(y, mon, 1) - SH_OFFSET_MS);
+      return {
+        start: toUtcSql(new Date(Date.UTC(y, mon - 1, start) - SH_OFFSET_MS)),
+        end: toUtcSql(end),
+        phrase: m[0].trim(),
+      };
+    }
+  }
+
   // 明确日期与日期区间（R236 P3-4，audit-r235 §6：「8月10号到8月20号之间买咖啡豆
   // 花了多少」时间窗问法落空）：「M月D号」「M月D号到(M月)D号(之间)」确定性
   // 解析成上海日界的闭开区间；年份与裸「X月」同口径（未来月份取去年）。
@@ -880,7 +930,7 @@ export function buildFinanceExtremeAnswer(
       shortNote,
       ledgerNote,
       unknownAmount > 0 ? `另有 ${unknownAmount} 笔${label}未识别出金额` : "",
-      phrase ? "时间范围按笔记记录时间划定，不按正文里写的时间" : "",
+      phrase ? "时间范围按正文事件时间划定（正文无日期时按记录时间）" : "",
     ].filter(Boolean);
     if (rank > 1 && shortCurrencies.length > 0) {
       return `${scope}已识别出金额的单笔${label}不足 ${rank} 笔，不存在${kindLabel}的一笔。（${extras.join("；")}。）`;
@@ -926,7 +976,7 @@ export function buildFinanceExtremeAnswer(
       : rows.length === 1
         ? verdict + lines[0]
         : `${verdict}${scope}按币种分别比较（不同币种金额不可直接比较），${kindLabel}的${label}：\n${lines.join("\n")}`;
-  md += `\n\n以上为数据库精确查询结果（${topic ? `按关键词${topic}匹配标题/正文/标签，` : ""}按已识别金额${count > 1 ? `排序取前 ${count} 名` : rank === 1 ? "比较" : "排序取第 " + rank + " 名"}，不含已删除笔记${phrase ? "；时间范围按笔记记录时间划定，不按正文里写的时间" : ""}${unknownAmount > 0 ? `；另有 ${unknownAmount} 笔未识别出金额，未参与比较` : ""}${ledgerNote ? `；${ledgerNote}` : ""}${shortNote ? `；${shortNote}` : ""}）。`;
+  md += `\n\n以上为数据库精确查询结果（${topic ? `按关键词${topic}匹配标题/正文/标签，` : ""}按已识别金额${count > 1 ? `排序取前 ${count} 名` : rank === 1 ? "比较" : "排序取第 " + rank + " 名"}，不含已删除笔记${phrase ? "；时间范围按正文事件时间划定（正文无日期时按记录时间）" : ""}${unknownAmount > 0 ? `；另有 ${unknownAmount} 笔未识别出金额，未参与比较` : ""}${ledgerNote ? `；${ledgerNote}` : ""}${shortNote ? `；${shortNote}` : ""}）。`;
   if (query.reversedAdj) {
     md += `\n（排序口径：“倒数第 ${rank} ${query.reversedAdj}”按“${query.reversedAdj}榜倒序”理解，即金额第 ${rank} ${query.kind === "max" ? "大" : "小"}；如你想问金额第 ${rank} ${query.kind === "max" ? "小" : "大"}，请直接问“第 ${rank} ${query.kind === "max" ? "便宜" : "贵"}”。）`;
   }
@@ -985,7 +1035,7 @@ export function buildLedgerRowExtremeAnswer(
       : `${scope}按币种分别比较（不同币种金额不可直接比较），${kindLabel}的明细行：\n${lines.join("\n")}`;
   const shortNote =
     short.length > 0 ? `币种 ${short.map((s) => `${s.currency} 明细行仅 ${s.count} 行`).join("、")}，不存在第 ${rank} 名` : "";
-  md += `\n\n以上为数据库精确查询结果（台账行级明细口径：按命中${topic}的台账明细行金额${rank === 1 ? "比较" : `排序取第 ${rank} 名`}，合计行不参与${negatives > 0 ? `；另有 ${negatives} 行负数（退款）明细未参与大小比较` : ""}${phrase ? "；时间范围按笔记记录时间划定，不按正文里写的时间" : ""}${shortNote ? `；${shortNote}` : ""}）。`;
+  md += `\n\n以上为数据库精确查询结果（台账行级明细口径：按命中${topic}的台账明细行金额${rank === 1 ? "比较" : `排序取第 ${rank} 名`}，合计行不参与${negatives > 0 ? `；另有 ${negatives} 行负数（退款）明细未参与大小比较` : ""}${phrase ? "；时间范围按正文事件时间划定（正文无日期时按记录时间）" : ""}${shortNote ? `；${shortNote}` : ""}）。`;
   if (query.reversedAdj) {
     md += `\n（排序口径：“倒数第 ${rank} ${query.reversedAdj}”按“${query.reversedAdj}榜倒序”理解，即金额第 ${rank} ${query.kind === "max" ? "大" : "小"}；如你想问金额第 ${rank} ${query.kind === "max" ? "小" : "大"}，请直接问“第 ${rank} ${query.kind === "max" ? "便宜" : "贵"}”。）`;
   }
@@ -1542,7 +1592,7 @@ export function buildFinanceSubsetAnswer(
     });
     md += `\n（另有 ${transfers.length} 笔资金往来/还款类记录（transfer，不计收支合计）：${tItems.join("、")}。）`;
   }
-  md += `\n\n以上为数据库精确统计（关键词匹配口径，金额口径与周报/月报一致，不含已删除笔记${phrase ? "；时间范围按笔记记录时间划定，不按正文里写的时间" : ""}）。如果你的记录用了别的说法，换个关键词再问试试。`;
+  md += `\n\n以上为数据库精确统计（关键词匹配口径，金额口径与周报/月报一致，不含已删除笔记${phrase ? "；时间范围按正文事件时间划定（正文无日期时按记录时间）" : ""}）。如果你的记录用了别的说法，换个关键词再问试试。`;
   return md;
 }
 
@@ -1674,7 +1724,7 @@ export function buildFinanceListAnswer(
 ): string {
   const scope = phrase ?? "到目前为止";
   const label = FINANCE_LIST_LABELS[direction];
-  const caliber = `以上为按记账笔记的数据库精确列举（口径与周报/月报一致，不含已删除笔记；待办等尚未发生的计划不计入${phrase ? "；时间范围按笔记记录时间划定，不按正文里写的时间" : ""}）。`;
+  const caliber = `以上为按记账笔记的数据库精确列举（口径与周报/月报一致，不含已删除笔记；待办等尚未发生的计划不计入${phrase ? "；时间范围按正文事件时间划定（正文无日期时按记录时间）" : ""}）。`;
   if (rows.length === 0) {
     return `${scope}没有找到${label}记录。\n\n按记账笔记（分类为${direction === "both" ? "支出/收入" : label}）的数据库精确查询，${scope}确实没有这类记录；待办等尚未发生的计划不计入，为避免误答我不引用时间范围之外的笔记。如果这段时间的花费还没记账，补记后再问试试。`;
   }
@@ -2307,6 +2357,26 @@ export function buildFinanceClarifyAnswer(
   return `${head}与「${terms.join("、")}」相关的记账记录：\n\n${lines.join("\n")}\n\n${buildFinanceAggAnswer(stats, phrase)}`;
 }
 
+/**
+ * 记账口径问答（R290 P2，audit-r289 §8：`退款算收入还是支出的冲减？` 被答成
+ * 「退款算收入」）：口径是本产品自己的记账规则（triage 系统提示里已写死
+ * 「同一笔交易的退款是价款冲减」），不是可由 LLM 现场推断的知识——由代码
+ * 确定性作答，避免与实际入账口径自相矛盾。
+ */
+export function financeCaliberAnswer(question: string): string | null {
+  const q = question.replace(/\s+/g, "");
+  if (!/退款|退货|返现|退回|退了/.test(q)) return null;
+  if (!/算|计入|归为|属于|方向|口径|收入还是|支出还是|怎么记|如何记/.test(q)) return null;
+  return [
+    "退款按「支出冲减」记，不算收入。",
+    "",
+    "- 同一笔交易的退款（「付款 34.5 其中退款 9」「午饭 20 咖啡 -5(退款)」）是价款冲减：整笔按净额记为支出，退款金额不单独计入收入。",
+    "- 台账里的退款行同样按相反方向扣减合计（「打印纸 120 墨盒 260 供应商退款 454」→ 净支出）。",
+    "- 只有退款超过支出、净额为负时才是净流入，此时按收入记该净额。",
+    "- 押金退回、借还、垫付收回是资金往来或收入回补，与商家退款不同口径。",
+  ].join("\n");
+}
+
 const COUNT_CATEGORY_LABELS: Record<string, string> = {
   idea: "想法",
   todo: "待办",
@@ -2536,7 +2606,7 @@ export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null
   }
   if (stats.unknownAmount > 0) md += `\n（另有 ${stats.unknownAmount} 笔未识别出金额，未计入合计。）`;
   if (stats.transferCount > 0) md += `\n（另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支合计。）`;
-  md += `\n\n以上为精确统计，口径与周报/月报一致${phrase ? "；时间范围按笔记记录时间划定，不按正文里写的时间" : ""}。`;
+  md += `\n\n以上为精确统计，口径与周报/月报一致${phrase ? "；时间范围按正文事件时间划定（正文无日期时按记录时间）" : ""}。`;
   return md;
 }
 
@@ -2583,6 +2653,62 @@ export function inTimeRange(createdAt: string, range: TimeRange): boolean {
   if (range.start && createdAt < range.start) return false;
   if (range.end && createdAt >= range.end) return false;
   return true;
+}
+
+/**
+ * R290 P1（audit-r289 §财务时间窗）：事后补记的记账，正文里写的事件日期
+ * （「3月8日买了打印机」）才是用户心智里的记账时间——时间窗只认 created_at
+ * 会把这类最自然的问法整窗拒答。本组辅助把「正文事件时间（无则回退记录
+ * 时间）」作为时间窗的有效时间：
+ *  - noteEventTime：从标题+正文抽取首个明确日期（YYYY-MM-DD / YYYY年M月D日 /
+ *    M月D日(号) / M月上·中·下旬），无年份时按记录时间就近推断（事件不晚于
+ *    补记太多：得出的日期若比记录时间晚 60 天以上则回退上一年）；返回该日
+ *    上海正午的 UTC sql 串（旬取 5/15/25 日代表日）。
+ *  - widenTimeRangeForEvents：SQL 侧放宽窗（±400 天）粗取候选行，精筛在
+ *    TS 侧按有效时间做——D1 无法解析正文中文日期。
+ *  - inEventTimeRange：有效时间 ∈ 窗口。
+ */
+export function noteEventTime(note: Pick<NoteRow, "title" | "content" | "created_at">): string | null {
+  const text = `${note.title ?? ""}\n${note.content}`.slice(0, 2000);
+  let y: number | null = null;
+  let mo: number | null = null;
+  let d: number | null = null;
+  let m: RegExpMatchArray | null;
+  if ((m = text.match(/(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})日?号?/))) {
+    [y, mo, d] = [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
+  } else if ((m = text.match(/(?<![\d.])(\d{1,2})月(\d{1,2})[日号]/))) {
+    [mo, d] = [parseInt(m[1], 10), parseInt(m[2], 10)];
+  } else if ((m = text.match(/(?<![\d.])(\d{1,2})月(上|中|下)旬/))) {
+    mo = parseInt(m[1], 10);
+    d = m[2] === "上" ? 5 : m[2] === "中" ? 15 : 25;
+  } else {
+    return null;
+  }
+  if (mo === null || d === null || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const createdMs = Date.parse(note.created_at.replace(" ", "T") + "Z");
+  if (Number.isNaN(createdMs)) return null;
+  const shCreated = new Date(createdMs + SH_OFFSET_MS);
+  if (y === null) {
+    y = shCreated.getUTCFullYear();
+    // 无年份日期按「事件不晚于补记太多」就近取年：比记录时间晚 60 天以上视为去年的事
+    if (Date.UTC(y, mo - 1, d) - Date.UTC(y, shCreated.getUTCMonth(), shCreated.getUTCDate()) > 60 * 86400_000) y -= 1;
+  }
+  if (y < 2000 || y > 2100) return null;
+  // 该日上海正午（窗口边界都是上海零点，正午稳在当日内）
+  return toUtcSql(new Date(Date.UTC(y, mo - 1, d, 12) - SH_OFFSET_MS));
+}
+
+const EVENT_WIDEN_MS = 400 * 86400_000;
+
+/** SQL 侧粗取窗：按记录时间 ±400 天放宽，精筛交给 inEventTimeRange。 */
+export function widenTimeRangeForEvents(range: TimeRange): TimeRange {
+  const shift = (s: string | null, ms: number) => (s ? toUtcSql(new Date(Date.parse(s.replace(" ", "T") + "Z") + ms)) : null);
+  return { start: shift(range.start, -EVENT_WIDEN_MS), end: shift(range.end, EVENT_WIDEN_MS), phrase: range.phrase };
+}
+
+/** 有效时间（正文事件时间，无则记录时间）∈ 窗口。 */
+export function inEventTimeRange(note: Pick<NoteRow, "title" | "content" | "created_at">, range: TimeRange): boolean {
+  return inTimeRange(noteEventTime(note) ?? note.created_at, range);
 }
 
 /** UTC sql 串 → 上海本地日期 YYYY-MM-DD（endExclusive 时取前一刻所在日）。 */
