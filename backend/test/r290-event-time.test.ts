@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { parseTimeRange, noteEventTime, inEventTimeRange, widenTimeRangeForEvents, financeCaliberAnswer } from "../src/ask";
+import {
+  parseTimeRange,
+  noteEventTime,
+  inEventTimeRange,
+  widenTimeRangeForEvents,
+  financeCaliberAnswer,
+  financeListIntent,
+  financeListTopicTerms,
+  financeAggIntent,
+} from "../src/ask";
 
 const NOW = new Date("2026-08-29T10:00:00Z");
 const note = (content: string, created_at: string) => ({ title: null, content, created_at });
@@ -26,6 +35,24 @@ describe("R290 P1 财务时间窗按正文事件时间（audit-r289 §7）", () 
     expect(noteEventTime(note("3月8日买了打印机 899 元", "2026-04-02 03:00:00"))).toBe("2026-03-08 04:00:00");
     expect(noteEventTime(note("2026-03-22 团队聚餐 460", "2026-08-01 03:00:00"))).toBe("2026-03-22 04:00:00");
     expect(noteEventTime(note("3月下旬出差报销 1200", "2026-04-02 03:00:00"))).toBe("2026-03-25 04:00:00");
+  });
+
+  // R290 生产实测漏面：仓库自身文案风格「3 月 8 日」带空格，抽取整条空转
+  it("日期各段之间带空格同样抽取（「3 月 8 日」「3 月 下旬」「2026 - 03 - 08」）", () => {
+    expect(noteEventTime(note("3 月 8 日聚餐花了 420 元（这条是 3 月下旬才补记的）。", "2026-08-29 12:00:00"))).toBe(
+      "2026-03-08 04:00:00"
+    );
+    expect(noteEventTime(note("3 月 8 号买了打印机 899 元", "2026-04-02 03:00:00"))).toBe("2026-03-08 04:00:00");
+    expect(noteEventTime(note("3 月 下旬出差报销 1200", "2026-04-02 03:00:00"))).toBe("2026-03-25 04:00:00");
+    expect(noteEventTime(note("2026 年 3 月 22 日 团队聚餐 460", "2026-08-01 03:00:00"))).toBe("2026-03-22 04:00:00");
+  });
+
+  it("「M 月 D 日之前」「M 月下旬」是纯时间限定，不残留为财务关键词", () => {
+    expect(financeListIntent("3 月 10 日之前有哪些支出？")).toBe("expense");
+    expect(financeListIntent("3 月下旬有哪些支出？")).toBe("expense");
+    expect(financeListTopicTerms("3 月下旬有哪些支出？")).toBeNull();
+    expect(financeAggIntent("3 月 10 日之前一共花了多少钱？")).toBe("exact");
+    expect(financeAggIntent("3 月下旬一共花了多少钱？")).toBe("exact");
   });
 
   it("正文无日期时回退记录时间", () => {
