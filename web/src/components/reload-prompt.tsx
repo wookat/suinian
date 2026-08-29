@@ -3,6 +3,7 @@ import { CloudOff, RefreshCw, X } from "lucide-react"
 import { useRegisterSW } from "virtual:pwa-register/react"
 import { Button } from "@/components/ui/button"
 import { defaultApiBase } from "@/lib/settings"
+import { disableSwAndReload, isSwDisabled, setSwDisabled, withSwTimeout } from "@/lib/sw-control"
 
 // 长驻 PWA 里 SW 只在页面加载时检查一次更新，常开着不关的用户可能几天
 // 都见不到更新提示：定期 + 回到前台时主动 update()，让 needRefresh 能
@@ -23,6 +24,10 @@ const SW_START_TIMEOUT_RE = /timed out while trying to start the service worker/
 // 失败后 worker 变 redundant 被回收的卡死终态，不自查会永远停在这里
 const NO_WORKER_CHECK_DELAY_MS = 20_000
 const NO_WORKER_CHECK_INTERVAL_MS = 60_000
+// R288 P1-2：SW 组件级悬挂时 unregister()/register() 既不 resolve 也不 reject
+// （R287 实测 120s 无结算），此前的自愈 await 会永远挂着、SwNoWorkerHealed
+// 永不产生。所有自愈动作一律加超时；超时即判定 wedge，转成用户可操作的出路。
+const HEAL_TIMEOUT_MS = 20_000
 
 /** 注册失败原因轻量上报：只带错误名称/消息与重试序号（不含任何用户内容
  * 或凭据），供运维统计真实用户侧的失败原因分布；上报失败静默。 */
@@ -64,8 +69,50 @@ async function hardResetAndRegister(): Promise<ServiceWorkerRegistration> {
   return navigator.serviceWorker.register(`/sw.js?reinstall=${Date.now()}`, { scope: "/" })
 }
 
+/** 带超时的完整重置：返回 null 表示浏览器 SW 组件没有结算（wedge 确诊）。 */
+function hardResetWithTimeout(): Promise<ServiceWorkerRegistration | null> {
+  return withSwTimeout(() => hardResetAndRegister(), HEAL_TIMEOUT_MS)
+}
+
+/** SW 已被用户禁用：不再注册（hooks 不能条件调用，所以拆成两个组件），
+ * 给出可见状态与「重新启用」入口，避免用户永久停在无离线缓存状态而不自知。 */
+function SwDisabledNotice() {
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
+  return (
+    <div className="fixed inset-x-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-50 mx-auto flex max-w-sm items-center gap-3 rounded-xl border bg-popover p-3 shadow-lg md:bottom-6">
+      <CloudOff className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+      <p className="min-w-0 flex-1 text-sm">已关闭离线缓存（Service Worker），在线功能正常。如需恢复离线可用，可重新启用。</p>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => {
+          setSwDisabled(false)
+          location.reload()
+        }}
+      >
+        重新启用
+      </Button>
+      <button
+        onClick={() => setDismissed(true)}
+        aria-label="关闭"
+        className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        <X className="size-4" />
+      </button>
+    </div>
+  )
+}
+
 export function ReloadPrompt() {
+  if (isSwDisabled()) return <SwDisabledNotice />
+  return <ReloadPromptInner />
+}
+
+function ReloadPromptInner() {
   const [registerError, setRegisterError] = useState(false)
+  // wedge 确诊：自愈动作超时未结算 —— 此时只能给用户可操作的出路
+  const [wedged, setWedged] = useState(false)
   const retryAttempt = useRef(0)
   const startTimeout = useRef(false)
   const noWorkerStreak = useRef(0)
@@ -92,7 +139,12 @@ export function ReloadPrompt() {
         if (noWorkerStreak.current < 2) return
         noWorkerHealed.current = true
         reportSwError(new SwHealEvent("SwNoWorkerStuck", "registration without any worker; hard reset"), 0)
-        await hardResetAndRegister()
+        const healed = await hardResetWithTimeout()
+        if (healed === null) {
+          reportSwError(new SwHealEvent("SwNoWorkerHealTimeout", `hard reset unsettled in ${HEAL_TIMEOUT_MS}ms`), 0)
+          setWedged(true)
+          return
+        }
         reportSwError(new SwHealEvent("SwNoWorkerHealed", "hard reset register ok"), 0)
         setRegisterError(false)
       } catch {
@@ -120,9 +172,20 @@ export function ReloadPrompt() {
         return
       }
       const hard = startTimeout.current && attempt + 1 >= HARD_RESET_FROM_ATTEMPT
-      const register = hard ? hardResetAndRegister() : navigator.serviceWorker.register("/sw.js")
+      const register: Promise<ServiceWorkerRegistration | null> = hard
+        ? hardResetWithTimeout()
+        : withSwTimeout(() => navigator.serviceWorker.register("/sw.js"), HEAL_TIMEOUT_MS)
       register
-        .then(() => {
+        .then((reg) => {
+          if (reg === null) {
+            // 注册调用本身没有结算：SW 组件级悬挂，继续退避重试没有意义
+            reportSwError(
+              new SwHealEvent("SwRegisterUnsettled", `register unsettled in ${HEAL_TIMEOUT_MS}ms (hard=${hard})`),
+              retryAttempt.current,
+            )
+            setWedged(true)
+            return
+          }
           setRegisterError(false)
           if (hard) reportSwError(new SwHealEvent("SwStartTimeoutHealed", "hard reset register ok"), retryAttempt.current)
         })
@@ -184,6 +247,27 @@ export function ReloadPrompt() {
       scheduleRegisterRetry()
     },
   })
+
+  if (wedged && !needRefresh) {
+    return (
+      <div className="fixed inset-x-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-50 mx-auto max-w-sm space-y-2 rounded-xl border bg-popover p-3 shadow-lg md:bottom-6">
+        <div className="flex items-start gap-3">
+          <CloudOff className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <p className="min-w-0 flex-1 text-sm">
+            浏览器的离线缓存组件卡住了（自动修复无响应），可能导致登录/注册等请求长时间无反应。关闭离线缓存即可恢复在线使用；如仍异常，请在浏览器设置里对本站「清除数据」后强制刷新（Ctrl/⌘+Shift+R）。
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={() => void disableSwAndReload()}>
+            关闭离线缓存并重载
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setWedged(false)}>
+            暂不处理
+          </Button>
+        </div>
+      </div>
+    )
+  }
 
   if (registerError && !needRefresh) {
     return (

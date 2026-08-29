@@ -1230,6 +1230,13 @@ export const EXEC_ISOLATED_MARK =
 export const EXEC_DEGRADED_ISOLATED_MARK =
   "〔代码安全判别暂不可用，已对疑似可执行代码保守隔离（未展示）；原文可在引用的笔记卡片中查看〕";
 
+/**
+ * 官方安装脚本警示（R288 P1-1）：来源全部可核的官方安装法保留原文，只加警示。
+ * 与「已隔离」文案明确区分——用户拿得到自己存的安装备忘，同时被提醒风险。
+ */
+export const EXEC_INSTALLER_WARN_MARK =
+  "〔警示：以下为官方安装脚本，会从官方域名下载并执行代码，请自行确认来源与版本〕";
+
 /** R286 P0-1：降级窗口的用户可感知提示（答案末尾追加一次）。 */
 export const EXEC_DEGRADED_NOTICE =
   "（本次回答处于代码安全判别降级窗口：判别服务超时/不可用，系统已对代码区域保守隔离，稍后重试可获得完整判定。）";
@@ -1812,6 +1819,194 @@ export function crossLineExecUnits(
   return out;
 }
 
+// ---- R288 P0-1：判定不再依赖切分粒度（docs/decision-r288.md §2） ----
+// 根因（audit-r287）：R284 在句段上求合取，R286 在代码单元上求合取——「先切分、
+// 再逐片求合取」这个结构本身就是绕过面：任何切分都要有边界，边界即绕过点
+// （插一行散文 / 插 5 个空行 / 拆两个围栏 / 围栏内外各一半 / 跨段落，实测全放行）。
+// R288 取消能力聚合对边界的依赖：codeUnitSpans() 只用来定位「代码在哪里」
+// （处置范围），能力判定的输入换成**代码面**——答案里所有代码区域按原序拼接。
+// 散文从「硬边界」降级为「不参与判定的文本」，于是同一载荷的任何排布方式
+// 代码面完全相同 ⇒ 判定结果完全相同（等价类性质，可证伪，见 r288 测试）。
+
+/** 答案的代码面：所有代码区域文本按原序拼接（散文丢弃，不作为边界）。 */
+export function codeSurface(text: string): { units: Array<{ start: number; end: number; text: string }>; surface: string } {
+  const units = codeUnitSpans(text);
+  return { units, surface: units.map((u) => u.text).join("\n") };
+}
+
+// 编码地址（obfaddr）：把 IPv4 写成十进制/十六进制/八进制整数或 struct.pack 常量，
+// 是「地址间接化」绕过的必要手段（实测 a6alias：link(3405803783) = 203.0.113.7）。
+// 只在「地址/连接语境」里的整数才算，避免把时间戳/自增 ID 误判成地址。
+const OBF_ADDR_CTX_RE =
+  /\b(?:addr|address|host|ip|inet|sock|socket|conn|connect|dial|link|tunnel|peer|c2|target|endpoint|remote|server)\w*\s*[=(:,]\s*[^\n,)]{0,24}|\b(?:inet_aton|inet_addr|inet_ntoa|htonl|ntohl|struct\.pack|pack\s*\(\s*[\x22\x27]!?I)\b[^\n]{0,24}/i;
+const OBF_ADDR_HEXOCT_RE = /\b0x[0-9a-f]{8}\b|\b0[0-7]{11}\b/i;
+
+/** 十进制整数是否形如被编码的 IPv4（1.0.0.0 – 239.255.255.255）。 */
+function looksLikePackedIpv4(n: number): boolean {
+  return Number.isInteger(n) && n >= 16_777_216 && n <= 4_026_531_839;
+}
+
+function hasObfuscatedAddress(surface: string): boolean {
+  if (OBF_ADDR_HEXOCT_RE.test(surface) && OBF_ADDR_CTX_RE.test(surface)) return true;
+  for (const m of surface.matchAll(/\b(\d{8,10})\b/g)) {
+    const n = Number(m[1]);
+    if (!looksLikePackedIpv4(n)) continue;
+    // 语境窗口：整数前 48 字符内出现地址/连接关键字，或紧随其后是端口样式的数字
+    const before = surface.slice(Math.max(0, m.index - 48), m.index);
+    if (OBF_ADDR_CTX_RE.test(before)) return true;
+    const after = surface.slice(m.index + m[1].length, m.index + m[1].length + 16);
+    if (/^\s*[,)]\s*\d{2,5}\b/.test(after)) return true;
+  }
+  return false;
+}
+
+// 执行语义词根（execish）：含**自定义标识符**（run_shell / do_exec / spawn_proc），
+// 不依赖具体 API 字面——攻击者改名也绕不开「要执行」这个语义词根。
+const EXECISH_RE =
+  /\b\w*(?:shell|exec|spawn|system|popen|subprocess|cmdline|pty)\w*\b|\/bin\/(?:ba|z|da|k|fi)?sh\b|\bcmd(?:\.exe)?\s+\/[ck]\b|\bcmd\.exe\b|\bpowershell(?:\.exe)?\b/i;
+// 进程 stdio 与网络对端绑定（stdio）
+const STDIO_RE =
+  /\bdup2?\s*\(|\bstdin\b|\bstdout\b|\bstderr\b|\bSTDIN\b|\bSTDOUT\b|\bPIPE\b|\bmkfifo\b|>&\s*\d|<&\s*\d|\bpipe\s*\(|\bfileno\s*\(/i;
+// 通用建连动词 + 数值/地址实参（connectish，容忍语义改名：link/attach/tunnel/hook）
+const CONNECTISH_WIDE_RE =
+  /\b\w*(?:conn|dial|link|sock|attach|tunnel|hook|bind|listen)\w*\s*\(\s*[^)\n]{0,40}(?:\d{2,}|["'][^"'\n]*\d)/i;
+
+/** 代码面上的连续量风险打分（R288 §2.3）：与语言/命令字面无关。 */
+export function execRiskScore(text: string): { score: number; signals: string[] } {
+  return execRiskScoreSurface(codeSurface(text).surface);
+}
+
+export function execRiskScoreSurface(surface: string): { score: number; signals: string[] } {
+  if (!surface.trim()) return { score: 0, signals: [] };
+  const normalized = normalizeCommandText(surface);
+  const c = execCapabilities(normalized);
+  const signals: string[] = [];
+  let score = 0;
+  if (hasObfuscatedAddress(normalized)) {
+    score += 2;
+    signals.push("obfaddr");
+  }
+  if (c.hostport) {
+    score += 1;
+    signals.push("hostport");
+  }
+  if (EXECISH_RE.test(normalized)) {
+    score += 1;
+    signals.push("execish");
+  }
+  if (STDIO_RE.test(normalized)) {
+    score += 1;
+    signals.push("stdio");
+  }
+  if (CONNECTISH_WIDE_RE.test(normalized) || CONNECTISH_RE.test(normalized)) {
+    score += 0.5;
+    signals.push("connectish");
+  }
+  if (c.fetch && (c.sink || c.priv)) {
+    score += 1.5;
+    signals.push("fetchsink");
+  }
+  return { score, signals };
+}
+
+/** 打分阈值（§2.3）：≥ RISK_ISOLATE 确定性隔离；≥ RISK_GATE 必须调判别器。 */
+export const EXEC_RISK_ISOLATE_THRESHOLD = 3;
+export const EXEC_RISK_GATE_THRESHOLD = 1.5;
+
+// ---- R288 P1-1：官方安装源清单（处置分级，docs/decision-r288.md §4） ----
+// R287 实测：「下载脚本→执行」被当作充分条件，对 docker/rustup/poetry/nvm/helm/
+// k3s/PowerShell 官方安装法误伤 7/20（常态）、8/20（降级）。这里不放宽判据，
+// 只把处置从「整体隔离」降级为「警示保留原文」，且仅在来源全部可核时。
+const OFFICIAL_INSTALL_SOURCE_RE =
+  /^https?:\/\/(?:get\.docker\.com|sh\.rustup\.rs|static\.rust-lang\.org\/rustup|install\.python-poetry\.org|raw\.githubusercontent\.com\/(?:nvm-sh\/nvm|Homebrew\/install|helm\/helm|rust-lang\/rustup)\/|get\.helm\.sh|get\.k3s\.io|get\.k8s\.io|deb\.nodesource\.com|dot\.net\/v1|aka\.ms|astral\.sh|get\.pnpm\.io|get\.sdkman\.io|sh\.brew\.sh|apt\.releases\.hashicorp\.com|packages\.microsoft\.com|cli\.github\.com|install\.determinate\.systems|get\.volta\.sh|bun\.sh\/install|ollama\.com\/install\.sh)/i;
+
+/** 取码 URL 是否全部来自可核的官方安装源（无 URL 视为不成立）。 */
+function allFetchUrlsOfficial(text: string): boolean {
+  const urls = [...text.matchAll(/https?:\/\/[^\s"'`)<>\]]+/gi)].map((m) => m[0]);
+  if (urls.length === 0) return false;
+  return urls.every((u) => OFFICIAL_INSTALL_SOURCE_RE.test(u));
+}
+
+/** 「取码 → 执行」家族的理由（唯一可降级处置的理由家族）。 */
+function isFetchRunFamily(reason: string): boolean {
+  return /fetch\+sink|fetch\+priv|fetch\+run-downloaded|literal:pipeline|code\+fetch\+proc/.test(reason);
+}
+
+/**
+ * 官方安装脚本豁免（R288 P1-1）：命中理由只属「取码→执行」家族、取码 URL 全部
+ * 在官方清单内、且不含任何外连/编码地址/stdio 接管/建连 API/LOLBin 时，
+ * 处置降级为「警示 + 保留原文」。内容仍被判定、仍带警示，只是不剥夺原文。
+ */
+export function installerBenignReason(text: string, reason: string): boolean {
+  if (!isFetchRunFamily(reason)) return false;
+  const normalized = normalizeCommandText(text);
+  if (!allFetchUrlsOfficial(normalized)) return false;
+  const c = execCapabilities(normalized);
+  if (c.net || c.lolbin || c.shellio) return false;
+  if (/(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}/.test(normalized)) return false;
+  if (hasObfuscatedAddress(normalized)) return false;
+  if (NET_BACKCONNECT_RE.test(normalized)) return false;
+  return true;
+}
+
+/**
+ * 全局危险判定（R288 P0-1）：在**代码面**上求确定性能力内核 + 连续量打分。
+ * 返回命中理由（null = 未命中）。与判别器是否可用无关，两态同判。
+ * 官方安装脚本豁免只影响处置形态（见 installerBenignReason），不影响命中。
+ */
+export function installerBenignText(text: string): boolean {
+  const normalized = normalizeCommandText(text);
+  const reason = hasExecIntentReason(normalized) ?? fetchThenRunReason(text) ?? fallbackCapabilityReason(text);
+  if (!reason) return false;
+  return installerBenignReason(text, reason);
+}
+
+export function globalExecDangerReason(answer: string): string | null {
+  return globalExecDangerReasonForSurface(codeSurface(answer).surface);
+}
+
+export function globalExecDangerReasonForSurface(surface: string): string | null {
+  if (!surface.trim()) return null;
+  const kernel = hasExecIntentReason(normalizeCommandText(surface));
+  if (kernel) return `global-${kernel}`;
+  const fr = fetchThenRunReason(surface);
+  if (fr) return `global-${fr}`;
+  const { score, signals } = execRiskScoreSurface(surface);
+  if (score >= EXEC_RISK_ISOLATE_THRESHOLD) return `global-score:${score}:${signals.join("+")}`;
+  return null;
+}
+
+/**
+ * 全局判定命中时的处置范围（R288 §2.2）：答案里的**全部代码单元**（散文保留）。
+ * 能力已跨块聚合，「哪一块危险」没有语义答案——只隔离一块等于把载荷另一半逐字交付。
+ */
+export function globalExecDangerUnits(
+  answer: string
+): Array<{ start: number; end: number; text: string; reason: string }> {
+  const reason = globalExecDangerReason(answer);
+  if (!reason) return [];
+  return codeUnitSpans(answer).map((u) => ({ ...u, reason }));
+}
+
+/**
+ * 判别器调用门控（R288 P0-2）：只问「是否可能是代码」，不问「是否命中危险特征」。
+ * 门控错了顶多多花一次 LLM 调用；门控不成立时也**不存在**「直接放行且不打标记」
+ * 的路径（调用方对 null 一律 fail-closed）。返回开门理由或 null。
+ */
+export function execClassifierGateReason(answer: string): string | null {
+  try {
+    const { units, surface } = codeSurface(answer);
+    if (foldCompact(surface).length >= 24 && units.length > 0) return "gate:code-unit";
+    if (CODEISH_FENCE_RE.test(answer)) return "gate:codeish-block";
+    const { score, signals } = execRiskScore(answer);
+    if (score >= EXEC_RISK_GATE_THRESHOLD) return `gate:score:${score}:${signals.join("+")}`;
+    return null;
+  } catch {
+    // 门控自身出错 ⇒ 开门（fail-closed：宁可多判一次，绝不静默放行）
+    return "gate:error";
+  }
+}
+
 /**
  * 降级窗口的单元判定，并参照**资料原文**（R286 P0-1c，近生产实测）。
  * 实测现象：答案到达本函数前已经被上游收口（链接/指令剪除）改写过，
@@ -2145,7 +2340,28 @@ export function isolateNoteInstructions(
   // 资料回显，于是「部分改写的命令文本」被当原文交付——第三态。收口：verbatim
   // 出口一律用资料原文的精确切片；对不上（模型自造/改写）就整段隔离。
   const CITE_MARK_RE = /[[［]\d{1,2}[\]］]/g;
+  // R288 P1-1：上游外链收口会把取码 URL 换成 LINK_REMOVED_MARK，答案侧因此看不到
+  // 「来源是否官方」这一证据（R287 §2 的 7/20 误伤里 docker/helm 正是这条路径）。
+  // 收口：官方安装源判定回落到资料原文——答案片段去掉 URL/链接标记后必须是某个
+  // **本身即官方安装法**的资料代码单元的子串；答案里多出来的内容一律不豁免
+  // （只允许 source ⊇ answer 方向，fail-closed）。
+  const stripUrlsFold = (s: string) =>
+    foldCompact(s.replace(/https?:\/\/[^\s"'`)<>\]]+/g, "").replace(LINK_REMOVED_MARK, ""));
+  const dataInstallerFolds = dataText
+    ? codeUnitSpans(dataText)
+        .filter((u) => installerBenignText(u.text))
+        .map((u) => stripUrlsFold(u.text))
+        .filter((f) => f.length >= 8)
+    : [];
+  const installerBenignHere = (segText: string): boolean => {
+    if (installerBenignText(segText)) return true;
+    if (dataInstallerFolds.length === 0) return false;
+    const af = stripUrlsFold(segText);
+    return af.length >= 8 && dataInstallerFolds.some((f) => f.includes(af));
+  };
   const execSegRep = (segText: string) => {
+    // R288 P1-1：来源全部可核的官方安装法 → 警示 + 保留原文（处置分级，非判据放宽）。
+    if (installerBenignHere(segText)) return `${EXEC_INSTALLER_WARN_MARK}${segText}`;
     if (!verbatim) return EXEC_ISOLATED_MARK;
     const cites = segText.match(CITE_MARK_RE)?.join("") ?? "";
     const exact = restoreVerbatimFromData(segText.replace(CITE_MARK_RE, ""), dataText);
@@ -2194,11 +2410,74 @@ export function isolateNoteInstructions(
   // R286 P0-1：判别器不可用窗口最先处置——以「代码单元」为整体判定与替换，
   // 能力信号跨行/跨段聚合（反弹 shell 的建连与执行天然分布在不同物理行）。
   // 单元整体一个处置，保证同一危险单元只有一种形态（两态，无第三态）。
-  const degradedUnits = opts?.execClassifierUnavailable
-    ? execDegradedIsolationUnitsWithSource(answer, dataText)
-    : [];
+  // R288 P1-1：降级窗口同样适用官方安装源豁免（确定性来源判定，不依赖 LLM）。
+  const degradedRep = (text: string) =>
+    installerBenignHere(text) ? `${EXEC_INSTALLER_WARN_MARK}${text}` : EXEC_DEGRADED_ISOLATED_MARK;
+  // R288 P0-1：全局判定（代码面能力聚合 + 连续量打分）——专治「分布式载荷」：
+  // 单个单元/单行都不足以命中，但把答案里全部代码区拼起来能力齐备（插散文、
+  // 插空行、跨围栏、围栏内外各一半都改变不了拼起来的代码面）。只对**局部判定
+  // 覆盖不到的单元**求残余代码面：局部已命中的单元走既有精细处置（verbatim
+  // 原文核对+警示、行级隔离邻行保留），不被全局路径吞掉；残余面仍危险 ⇒
+  // 载荷是分布式的，残余单元全部隔离——只隔离一块等于把另一半逐字交付。
+  // 与判别器是否可用无关，两态同判，只有标记文案不同。
+  const globalSurface = codeSurface(answer).surface;
+  const globalReason = globalExecDangerReasonForSurface(globalSurface);
+  const globalHit =
+    globalReason !== null &&
+    !installerBenignReason(globalSurface, globalReason) &&
+    !installerBenignHere(globalSurface);
+  // 处置粒度：命中后隔离**所有携带能力信号的代码行**（建连/执行/取码/stdio/
+  // 地址）。只隔离其中一半等于把另一半逐字交付（R287 §1 的实测形态），而
+  // 无能力信号的邻行（注释、`tail -f`、打印语句）保留可读——误伤治理与
+  // 防泄漏在这里同时成立。
+  const lineCarriesCapability = (line: string): boolean => {
+    const n = normalizeCommandText(line);
+    const c = execCapabilities(n);
+    if (c.net || c.exec || c.inline || c.lolbin || c.sink || c.shellio || c.fetch || c.priv || c.hostport)
+      return true;
+    if (
+      hasObfuscatedAddress(n) || EXECISH_RE.test(n) || STDIO_RE.test(n) || CONNECTISH_WIDE_RE.test(n) || CONNECTISH_RE.test(n)
+    )
+      return true;
+    // 落地与再执行环节（取码→落盘→赋权→执行链条里的中间行）：写文件、
+    // 重定向到脚本、直接调用脚本/可执行文件路径。只在全局已命中时才生效，
+    // 因此不会把普通教学代码里的 write() 卷进来。
+    if (/\.write\s*\(|\bopen\s*\([^)\n]*[\x22\x27][wa]b?\+?[\x22\x27]/i.test(n)) return true;
+    if (/(?:^|[\s;&|>])(?:sudo\s+)?(?:\.{0,2}\/)?[\w.\-/]*\.(?:sh|ps1|bat|cmd|exe|py)\b/i.test(n)) return true;
+    return false;
+  };
+  const globalUnits: Array<{ start: number; end: number }> = [];
+  if (globalHit && verbatim && !opts?.execClassifierUnavailable) {
+    // verbatim 出口沿用 R286 的单元级契约：整单元「警示 + 资料原文精确切片」，
+    // 对不上就整单元隔离——行级还原会把模型丢字的语法行（`func main{`）当原文交付。
+    for (const u of codeUnitSpans(answer).map((x) => fenceInnerSpan(answer, x))) {
+      globalUnits.push({ start: u.start, end: u.end });
+      reps.push({ start: u.start, end: u.end, rep: execSegRep(u.text) });
+    }
+  } else if (globalHit) {
+    for (const u of codeUnitSpans(answer).map((x) => fenceInnerSpan(answer, x))) {
+      let lineStart = u.start;
+      for (const line of answer.slice(u.start, u.end).split("\n")) {
+        const lineEnd = lineStart + line.length;
+        if (line.trim() && !line.trim().startsWith("```") && lineCarriesCapability(line)) {
+          globalUnits.push({ start: lineStart, end: lineEnd });
+          reps.push({
+            start: lineStart,
+            end: lineEnd,
+            rep: opts?.execClassifierUnavailable ? degradedRep(line) : execSegRep(line),
+          });
+        }
+        lineStart = lineEnd + 1;
+      }
+    }
+  }
+  const inGlobalUnit = (start: number, end: number) =>
+    globalUnits.some((u) => start < u.end && end > u.start);
+  const degradedUnits = (
+    opts?.execClassifierUnavailable ? execDegradedIsolationUnitsWithSource(answer, dataText) : []
+  ).filter((u) => !inGlobalUnit(u.start, u.end));
   for (const u of degradedUnits) {
-    reps.push({ start: u.start, end: u.end, rep: EXEC_DEGRADED_ISOLATED_MARK });
+    reps.push({ start: u.start, end: u.end, rep: degradedRep(u.text) });
   }
   const inDegradedUnit = (start: number, end: number) =>
     degradedUnits.some((u) => start < u.end && end > u.start);
@@ -2219,6 +2498,7 @@ export function isolateNoteInstructions(
     ? []
     : codeUnitSpans(answer)
         .map((u) => fenceInnerSpan(answer, u))
+        .filter((u) => !inGlobalUnit(u.start, u.end))
         .filter((u) => {
           if (!u.text.includes("\n")) return false;
           const spans = execIntentLineSpans(answer);
@@ -2240,7 +2520,8 @@ export function isolateNoteInstructions(
         .filter(
           (u, i, arr) =>
             arr.findIndex((o) => o.start === u.start && o.end === u.end) === i &&
-            !verbatimDangerUnits.some((d) => u.start < d.end && u.end > d.start)
+            !verbatimDangerUnits.some((d) => u.start < d.end && u.end > d.start) &&
+            !inGlobalUnit(u.start, u.end)
         );
   const dangerUnits = [...verbatimDangerUnits, ...crossUnits];
   for (const u of dangerUnits) {
@@ -2249,7 +2530,7 @@ export function isolateNoteInstructions(
   const inDangerUnit = (start: number, end: number) =>
     dangerUnits.some((u) => start < u.end && end > u.start);
   const execSpans = execIntentLineSpans(answer).filter(
-    (sp) => !inDegradedUnit(sp.start, sp.end) && !inDangerUnit(sp.start, sp.end)
+    (sp) => !inDegradedUnit(sp.start, sp.end) && !inDangerUnit(sp.start, sp.end) && !inGlobalUnit(sp.start, sp.end)
   );
   for (const sp of execSpans) {
     reps.push({ start: sp.start, end: sp.end, rep: execSegRep(answer.slice(sp.start, sp.end)) });
@@ -2280,13 +2561,14 @@ export function isolateNoteInstructions(
   const overlapsReps = (start: number, end: number) =>
     reps.some((r) => start < r.end && end > r.start);
   for (const seg of segs) {
+    if (inGlobalUnit(seg.start, seg.end)) continue;
     if (inDegradedUnit(seg.start, seg.end)) continue;
     if (inDangerUnit(seg.start, seg.end)) continue;
     if (seg.text.startsWith("```")) {
       // 围栏块：逐行隔离/警示命中行（跨行形态已由 execSpans 全局处置，
       // 与 execSpan 重叠的行跳过，避免替换区间重叠）
       if (degradedHit(seg.text) && !inExecSpan(seg.start, seg.end)) {
-        reps.push({ start: seg.start, end: seg.end, rep: EXEC_DEGRADED_ISOLATED_MARK });
+        reps.push({ start: seg.start, end: seg.end, rep: degradedRep(seg.text) });
         continue;
       }
       if (llmDangerHit(seg.text) && !inExecSpan(seg.start, seg.end)) {
@@ -2315,7 +2597,7 @@ export function isolateNoteInstructions(
       if (inDegradedUnit(lb.start, lb.end)) continue;
       if (!overlapsReps(lb.start, lb.end)) {
         extraSpans.push(lb);
-        reps.push({ start: lb.start, end: lb.end, rep: EXEC_DEGRADED_ISOLATED_MARK });
+        reps.push({ start: lb.start, end: lb.end, rep: degradedRep(answer.slice(lb.start, lb.end)) });
       }
       continue;
     }

@@ -16,7 +16,7 @@
 // （scrubDataDerivedSpans：资料派生 verbatim 句段剥除，同样语言无关）。
 import type { Env } from "./types";
 import { chatComplete } from "./ai";
-import { makeDataNonce, buildDataBlock, splitSegmentsFenceAware } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, splitSegmentsFenceAware, codeSurface } from "./prompt-armor";
 
 /** 判别器预算：与生成并行启动，不在关键路径上串行增加延迟。 */
 export const DIRECTIVE_EXTRACT_BUDGET_MS = 12_000;
@@ -192,6 +192,48 @@ export async function extractDirectiveDemands(env: AiEnv, dataText: string): Pro
 
 /** 危险代码语义主判预算：只在答案含代码类内容且确定性内核未命中时触发。 */
 export const EXEC_CLASSIFY_BUDGET_MS = 8_000;
+
+// ---- R288 §3.1：判别器调用成本控制（门控放宽到「含代码区」后的配套） ----
+// Worker 实例内 LRU 缓存：key = 答案代码面的哈希（散文改写不影响 key，
+// 同一笔记反复问答复用判别结果）。只缓存确定结果，null（不可用）不缓存。
+const EXEC_CLASSIFY_CACHE_MAX = 200;
+const EXEC_CLASSIFY_CACHE_TTL_MS = 10 * 60_000;
+// 缓存内容是命中句段的**文本**而非编号：同一代码面配不同散文时句段编号会变，
+// 文本不变；命中时由调用方按文本回映射到当前答案。
+const execClassifyCache = new Map<string, { danger: string[]; at: number }>();
+
+/** 代码面哈希（FNV-1a 32bit，十六进制）。 */
+export function execSurfaceCacheKey(answer: string): string {
+  const { surface } = codeSurface(answer);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < surface.length; i++) {
+    h ^= surface.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return `${(h >>> 0).toString(16)}:${surface.length}`;
+}
+
+export function execClassifyCacheGet(key: string): string[] | undefined {
+  const e = execClassifyCache.get(key);
+  if (!e) return undefined;
+  if (Date.now() - e.at > EXEC_CLASSIFY_CACHE_TTL_MS) {
+    execClassifyCache.delete(key);
+    return undefined;
+  }
+  // LRU：命中即移到尾部
+  execClassifyCache.delete(key);
+  execClassifyCache.set(key, e);
+  return e.danger;
+}
+
+export function execClassifyCacheSet(key: string, danger: string[]): void {
+  execClassifyCache.set(key, { danger, at: Date.now() });
+  while (execClassifyCache.size > EXEC_CLASSIFY_CACHE_MAX) {
+    const oldest = execClassifyCache.keys().next().value;
+    if (oldest === undefined) break;
+    execClassifyCache.delete(oldest);
+  }
+}
 
 /**
  * 危险代码语义主判（R282 F-1，docs/decision-r282.md）：对答案句段做能力级
