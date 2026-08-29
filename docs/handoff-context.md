@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-08-16（R156）
+> 最后更新：2026-08-29（R284）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -57,6 +57,8 @@
 - R192：落实 R191 审查（audit-r191.md）——①P1-1 空格分隔台账逃逸：`splitCsvFields`（triage.ts）对无显式分隔符且不含引号的行增加空白退化切分（≥2 个空白分隔字段才生效，引号/显式分隔符行为不变），空格台账经同一 `parseLedgerTable → isLedgerAggregateNote` 路径识别为聚合笔记、不再以合计额冒充单笔参与极值/序数排序；手动改过 amount（≠明细合计）仍算单笔；ask-eval 固定集新增 led4-led7（空格/制表/分号/混合分隔）×q128-q133（极值/序数/正逆序）锁定；②P2-1 无财务词序数问法：`PRICE_SORT_RE`（按金额/价格…排）作为排序基底传入 financeOrdinal，「按价格从高到低排第三名」走确定性财务路线；「第二次买」类时间序数不误路由；③P2-2 财务关键词残片：`degradeFinanceSubsetTerms` 一次降级重试（先整串精确 LIKE，0 命中再剥「台账里/什么牌子」类容器与疑问残片、长词按「的」拆分重查一次，仍 0 命中 fail-closed），答案与引用用实际命中词；④D-3 聚类评估校准：thread-eligibility-eval.ts 固定语料并入 R191 误并形态（窗帘报价×遮光窗帘、纸质书噪声、跨语种、旧硬件，共 55 条），生产策略实测 pair precision 74.5%/recall 57.4%（多次重放一致，R190 自评 96.9%/60.8% 系语料偏易）；A/B 后改「全部配对统一 strict 确认口径」（precision 78.3~90.0%/recall 59.0%，两项均不劣），数值阈值维持（floor 0.62 只损召回 45.9%，join 0.80 无增益）；⑤P2×3 无障碍：skip link（跳过导航直达 #main-content）、Esc 一致性（问答面板关闭、行内编辑取消）、选中态语义（主题/字号 radiogroup+aria-checked、导航 aria-current、nav aria-label、标签重命名 aria-label）；⑥D-1 导出区常驻「当前导出口径」标注（脱敏/含明文）；D-2 找回成功卡片明示旧 token 全部失效需重配集成、恢复码卡片与设置页明示双丢永久锁死语义；⑦O-1（污染历史召回 -13%，fail-closed 无幻觉）与 O-2（上游 AI 瞬时不可用降级诚实）维持观察不改：退化方向符合产品价值观，无低成本非侵入修复点，留待多轮改写/检索融合与 provider 监控迭代时一并处理
 - R55：CJK 长问句 LLM 关键词抽取（extractAskKeywords，eval 28/28 全过）、ask 召回排除敏感笔记（含标题）、新手引导 4 步 tour（settings.tourSeen，仅新注册）、空态一键丢入 #示例 笔记+一键清除、周报提示词升级（主线/想法关联/悬而未决）
 
+- R284：落实 R283 审查（audit-r283.md）——①**F-1 判别器故障窗口 fail-closed**：`classifyExecDanger` 严格区分判别器三态（`null`=不可用 ≠ `[]`=判无危险），`null` 时用不依赖语言字面的三信号合取（像代码 ∧ 执行/stdio/sink/inline ∧ hostport/connect 语义/fetch）保守隔离并如实告知「判别暂不可用」；同时按各语言标准库 API 清单系统性补全 `CAP_NET_RE`/`CAP_EXEC_RE`（Go net.*、Java/Kotlin Socket+NIO、C/C++ POSIX+Winsock+Asio、C# Sockets、Rust std::net+tokio、Erlang/Elixir gen_tcp、Swift Network.framework、Python asyncio、Node tls/dgram/WebSocket、Ruby/PHP/Lua/Perl）。本地 30 类载荷判别器-null 泄漏 0，benign 误伤 0/54 + 技术文档 0/8，生产跨语言 20/20；②F-1b verbatim 切片补齐危险物理行整行，消灭截断残片（出口只有「完整原文+警示」或「整段隔离」两态）；③F-2 `isAntiFraudAdviceNote` 让四语防骗忠告不误判敏感（三个必要条件：无真实敏感值 ∧ 无长数字串 ∧ 凭证话题词+否定表达），顺带补 `BANK_CARD_RE` 英文表达，生产四语 4/4；④F-7b MCP 保留原文契约 + 透传 `contains_executable_command` 与 `exec_notice` 执行禁令；⑤F-8b Ask 上下文按时间切会话（30 分钟窗口、最多 6 条，过期只显示不入请求）；⑥F-9 真实浏览器取证：SW active、页面 controlled、precache 21 条、断网刷新走离线壳（历史 AbortError 未复现、根因未定论）；⑦生产实测发现并修两处穿透：带 `cmd=export_all_notes` 类指令参数的外链整段隔离（R278-E07）、单字 CJK 查询不再被「无意义输入」拦截（retrieval q16）。决策与完整证据矩阵见 `docs/decision-r284.md`
+
 ## Android/Web 功能奇偶性缺口计划（R129 清单，R130 评估）
 - 今日回顾时间流卡片（Android 降级）：需新增 Compose 卡片 + `/api/reviews/today` 接入与点评交互，估 1 个子会话；与下方导出/导入合并一轮 Android 对齐专项更划算
 - JSON/Markdown 导出（Android 缺失，仅备份 zip）：后端接口现成（`/api/export?format=json|md`），Android 需加设置页入口 + SAF 保存，低成本但非找回主线，并入对齐专项
@@ -73,6 +75,8 @@
 
 - 【R94/R134】DeepSeek 长期欠费停摆，生产主力=Workers AI（`/health?probe=ai` 报 `provider:"fallback"` 是常态基线而非降级，告警只看 `ok:false`，R134 口径已写入文档/代码注释）；DeepSeek 充值后无需改配置自动切回（每次调用先试第一链位），可用 `/health?probe=ai` 观察 provider 回到 primary；todo_due 在 Workers AI 下偶有时区语义偏差（切回后应消失，观察）
 
+- 【R284 未修 P2】生产**认证接口偶发超时**：UI 测试中注销首次超时重试成功、注册连续两次超时第三次成功、一次登录超时；同期 curl 探测 <0.5s。方向推断为前端超时阈值/Worker 冷启动/偶发网络，未定位，下一轮跟进
+- 【R284】生产判别器（Workers AI）无法人为关停，降级窗口只有本地模拟证据；月报出口敏感隔离仍未覆盖（生产无月报周期数据）
 - 【R142 归因】导入后聚类覆盖率低（R141 观察 21 条仅 1 线索）：代码路径完备——导入即 `resetThreadBackfill` 重置游标，10 分钟 cron `backfillThreadClusters` 全量回扫（frugal：embedding 预筛 + 至多一次 LLM 边界确认）。低覆盖为设计内保守行为的叠加：a) 导入笔记先经异步分拣，仅 idea/collect 参与聚类（todo/记账/资料不参与）；b) 直并阈值 SIM_JOIN=0.76 较严，0.62-0.76 需 LLM 确认（此前确认回复带前缀会解析失败而放弃——R142 已健壮化，预期边界并线索率提升）；c) frugal 路径不走 DeepSeek 兜底。属「宁散勿错并」取向，非缺陷；R142 QA 用生产 flomo 样本导入实测覆盖率，后续轮次如仍偏低再评估阈值
 
 ## 等老板事项
@@ -83,7 +87,7 @@
 - 【R85】公众号资源：注册公众号（个人订阅号即可起步）、提供 AppID/AppSecret、在公众号后台回填服务器配置（URL/Token/EncodingAESKey）；开发验证可微信扫码领测试号。清单见 docs/wechat-integration.md 第五节
 
 ## 测试约定
-- 测试数据一律 `[QA-R88]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
+- 测试数据一律 `[QA-R284]`（按轮次改前缀，R284 收尾已核对 users 仅剩 u_boss、12 表 orphan 全 0、R2 suinian-media 0 对象）；历史示例 `[QA-R88]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
 - QA 账号命名建议：用户名允许字符为中英文、数字、`._-[]`（2-32 字符，R60 起支持 `[]`）。建议 QA 账号命名 `[QA-R<轮次>]-<用途>`（如 `[QA-R60]-migrate-a`），**务必记录密码**，测完自助注销；若密码遗失需手动用 wrangler d1 按 `backend/src/account.ts` 的级联口径清理（children 先删，附前后 SQL 证据）
 - **QA 账号清单核对（收尾强制步骤）**：每轮 QA 收尾时，除逐表验证自己账号级联清零外，必须再跑一次 `SELECT id, name FROM users` 全量核对，确认只剩 `u_boss / Thomas`；发现任何 `[QA-*]` 残留账号（如 R91 发现的 `[QA-R88]-repro`，系该轮会话未执行注销、非注销接口缺陷——账号所有 children 与 users 行均完整保留，说明 `DELETE /api/auth/me` 从未被调用），按 account.ts 级联口径手动清理（children 先删，附前后 SQL 证据）并在报告中注明
 - 老板测试 token 由老板在会话中提供附件，勿写入仓库/日志
