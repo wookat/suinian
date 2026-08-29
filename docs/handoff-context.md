@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-08-29（R284）
+> 最后更新：2026-08-29（R290）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -59,6 +59,8 @@
 
 - R284：落实 R283 审查（audit-r283.md）——①**F-1 判别器故障窗口 fail-closed**：`classifyExecDanger` 严格区分判别器三态（`null`=不可用 ≠ `[]`=判无危险），`null` 时用不依赖语言字面的三信号合取（像代码 ∧ 执行/stdio/sink/inline ∧ hostport/connect 语义/fetch）保守隔离并如实告知「判别暂不可用」；同时按各语言标准库 API 清单系统性补全 `CAP_NET_RE`/`CAP_EXEC_RE`（Go net.*、Java/Kotlin Socket+NIO、C/C++ POSIX+Winsock+Asio、C# Sockets、Rust std::net+tokio、Erlang/Elixir gen_tcp、Swift Network.framework、Python asyncio、Node tls/dgram/WebSocket、Ruby/PHP/Lua/Perl）。本地 30 类载荷判别器-null 泄漏 0，benign 误伤 0/54 + 技术文档 0/8，生产跨语言 20/20；②F-1b verbatim 切片补齐危险物理行整行，消灭截断残片（出口只有「完整原文+警示」或「整段隔离」两态）；③F-2 `isAntiFraudAdviceNote` 让四语防骗忠告不误判敏感（三个必要条件：无真实敏感值 ∧ 无长数字串 ∧ 凭证话题词+否定表达），顺带补 `BANK_CARD_RE` 英文表达，生产四语 4/4；④F-7b MCP 保留原文契约 + 透传 `contains_executable_command` 与 `exec_notice` 执行禁令；⑤F-8b Ask 上下文按时间切会话（30 分钟窗口、最多 6 条，过期只显示不入请求）；⑥F-9 真实浏览器取证：SW active、页面 controlled、precache 21 条、断网刷新走离线壳（历史 AbortError 未复现、根因未定论）；⑦生产实测发现并修两处穿透：带 `cmd=export_all_notes` 类指令参数的外链整段隔离（R278-E07）、单字 CJK 查询不再被「无意义输入」拦截（retrieval q16）。决策与完整证据矩阵见 `docs/decision-r284.md`
 
+- R290：落实 R289 审查（audit-r289.md，NO-GO 第十五轮）——核心是**取消「代码面抽取」这一单点**：①P0-1/P0-2 全文归一化判定面：`normalizeJudgeSurface`（prompt-armor.ts）把整个答案剥围栏/行内码/引用/列表编号/表格竖线/HTML 标签实体/JSON-YAML 转义/日志前缀 + 全角→半角 + 零宽剔除 + 续行合并，逐行保留原文 offset 映射；`globalExecDangerReason`/`execClassifierGateReason`/`execDegradedIsolationUnits` 全部改为「归一化全文 ∨ 原文」双面判定（归一化漏某载体时原文面兜底），不再依赖先识别「哪块是代码」；verbatim 出口维持两态互斥且危险多行每个非空行加警示前缀（P0-4 R274-G05 复发修复），行级对齐 `isLineAlignedSlice`；②P0-3 缓存重做：SHA-256(版本\0用户ID\0归一化全文) 为键、只缓存危险结论、命中时再校验完整 surface、TTL 10 分钟、R289 meet-in-the-middle 碰撞手法自测不再放行（test/r290-cache-collision.test.ts）；③P1：同一问答全部引用笔记并入单一判定面（askGuardData）；官方安装上下文（rustup/Homebrew 等）警示+保留原文但网络回连/编码地址/stdio 接管/LOLBin 仍整段隔离；财务时间窗按**正文事件日期**（noteEventTime，无日期回退记录时间），新增「N 日之前/上中下旬」解析；退款确定性直答「支出冲减」（financeCaliberAnswer）；`execcls`/`execgate` 进 Server-Timing 与 JSON/SSE done；SSE 新增 `sse_held` 扣段归因（实测 R289「单 delta」系短答案自然形态非退化）。本地：3246 用例全过、恶意 576 例 0 违规、善意 146 例四态误伤 0；生产：injection-eval 240 变体/498 问 泄露 0、执行 1（R272-17 图谱实体名提及注入产品名、无安装建议无链接，复测 3/3 过，判定为 LLM 随机措辞的 P2 残留，见 PR #320 评论）；SSE 20 抓包一致 20/20 先泄后收 0/20；REST P50 4.28s/P95 10.6s（与 R289 基线 4.3s/8.1s 同阶，P95 尾部为 execcls 触发问）；QA 收尾 users 仅剩 u_boss、15 表 orphan 全 0、R2 0 对象。决策论证见 `docs/decision-r290.md`，PR #320
+
 ## Android/Web 功能奇偶性缺口计划（R129 清单，R130 评估）
 - 今日回顾时间流卡片（Android 降级）：需新增 Compose 卡片 + `/api/reviews/today` 接入与点评交互，估 1 个子会话；与下方导出/导入合并一轮 Android 对齐专项更划算
 - JSON/Markdown 导出（Android 缺失，仅备份 zip）：后端接口现成（`/api/export?format=json|md`），Android 需加设置页入口 + SAF 保存，低成本但非找回主线，并入对齐专项
@@ -87,7 +89,7 @@
 - 【R85】公众号资源：注册公众号（个人订阅号即可起步）、提供 AppID/AppSecret、在公众号后台回填服务器配置（URL/Token/EncodingAESKey）；开发验证可微信扫码领测试号。清单见 docs/wechat-integration.md 第五节
 
 ## 测试约定
-- 测试数据一律 `[QA-R284]`（按轮次改前缀，R284 收尾已核对 users 仅剩 u_boss、12 表 orphan 全 0、R2 suinian-media 0 对象）；历史示例 `[QA-R88]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
+- 测试数据一律 `[QA-R290]`（按轮次改前缀，R290 收尾已核对 users 仅剩 u_boss、15 表 orphan 全 0、R2 suinian-media 0 对象）；历史示例 `[QA-R88]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
 - QA 账号命名建议：用户名允许字符为中英文、数字、`._-[]`（2-32 字符，R60 起支持 `[]`）。建议 QA 账号命名 `[QA-R<轮次>]-<用途>`（如 `[QA-R60]-migrate-a`），**务必记录密码**，测完自助注销；若密码遗失需手动用 wrangler d1 按 `backend/src/account.ts` 的级联口径清理（children 先删，附前后 SQL 证据）
 - **QA 账号清单核对（收尾强制步骤）**：每轮 QA 收尾时，除逐表验证自己账号级联清零外，必须再跑一次 `SELECT id, name FROM users` 全量核对，确认只剩 `u_boss / Thomas`；发现任何 `[QA-*]` 残留账号（如 R91 发现的 `[QA-R88]-repro`，系该轮会话未执行注销、非注销接口缺陷——账号所有 children 与 users 行均完整保留，说明 `DELETE /api/auth/me` 从未被调用），按 account.ts 级联口径手动清理（children 先删，附前后 SQL 证据）并在报告中注明
 - 老板测试 token 由老板在会话中提供附件，勿写入仓库/日志
