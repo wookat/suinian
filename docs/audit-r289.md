@@ -242,9 +242,9 @@ TypeError                1   ｜ AbortError 1
 ## 8. QA 纪律与清理
 
 - 账号：本轮全部 `[QA-R289]` 前缀，**从未触碰 `u_boss`**；口令均运行时随机生成（`secrets.token_urlsafe`），未落库未提交。
-- 注销级联（D1 权威直查，清理后）：`users` 仅剩 `u_boss`（+ 收尾时段仍在跑的 benign 对照账号，跑完即注销）；`notes / note_embeddings / attachments / threads / entities / edges / api_tokens / user_preferences / daily_reviews / weekly_reports / thread_jobs / thread_backfill / push_subscriptions / push_daily_log` 非 `u_boss` 残留 **0**；孤儿 `note_embeddings` 0；`media_delete_failures` / `media_encrypt_failures` 0。
-- R2 权威列举（Cloudflare R2 objects API，非应用接口）：桶 `suinian-media` 对象数 **0**。
-- 例外与如实说明：`[QA-R289]benign-…` 与一个被我中止的 `injection-eval` 批次账号（`inj-mte92fyu-natb`）因脚本异常/进程被杀未走 `DELETE /api/auth/me`，其 token 已丢失，故改用 D1 逐表 `DELETE` 清除（15 条语句，368 行写入，覆盖上列全部用户维度表）。这是**审查侧脚本缺陷**，不是产品级联缺陷；同批其余账号均由产品接口注销并验证旧 token 401。
+- 注销级联（D1 权威直查，收尾复查于 11:35 UTC）：`users` 非 `u_boss` **0**；`notes / attachments / threads / entities / edges / api_tokens / user_preferences / daily_reviews / weekly_reports / thread_jobs / thread_backfill / push_subscriptions / push_daily_log` 非 `u_boss` 残留 **0**；孤儿 `note_embeddings` **0**；`media_delete_failures` / `media_encrypt_failures` 0。
+- R2 权威列举（Cloudflare R2 objects API，非应用接口）：桶 `suinian-media` 对象数 **0**（收尾复查同上）。
+- 例外与如实说明：`[QA-R289]benign-…` 以及两个被我中止的 `injection-eval` 批次账号（`inj-mte92fyu-natb`、`inj-mteap4u3-86m7`）因脚本异常/进程被我提前终止而未走 `DELETE /api/auth/me`，其 token 已丢失，故改用 D1 逐表 `DELETE`（15 条语句 × 2 批，378 行写入，覆盖上列全部用户维度表 + `attachments`/`note_embeddings` 关联删除）清除。这是**审查侧脚本缺陷**，不是产品级联缺陷；同批其余账号均由产品接口 `DELETE /api/auth/me` 注销并验证旧 token 401。
 - `sw_error_reports` 按设计不含用户维度，未清除，仅做窗口对账。
 - GitHub Actions 未改动、保持禁用。
 - 仓库内为复跑历轮套件而临时生成的 `backend/scripts/r289-*.ts` 副本**不提交**；对 `backend/scripts/injection-eval.ts` 的账号前缀临时改动已 `git checkout` 还原。本报告是唯一提交物。
@@ -293,7 +293,7 @@ TypeError                1   ｜ AbortError 1
 | 微信 / 企微通道 | 生产未配置 |
 | 月报出口敏感隔离 | 生产无月报周期数据（沿历轮限制） |
 | `SwStartTimeoutHealed` / `SwNoWorkerHealed` / `SwAuthWedgeDetachTimeout` 的真实触发 | 测试窗内未自然发生（前两者全表历史有 2 条 `SwNoWorkerHealed`） |
-| 环境 blueprint 更新 | 该仓库当前无 blueprint，且本会话无 ManageRepoBlueprints 权限 → **未完成**（本轮为 Android SDK 缺失手工补装，建议后续由有权限者写入 blueprint） |
+| 环境 blueprint 更新 | 该仓库原无 blueprint；本轮已提交一份 blueprint 建议（Android SDK cmdline-tools + platform/build-tools 35、backend/web 依赖、test/lint/build 口径），**待用户批准后才生效** |
 | R288 / R287 的 PR 编号与合并状态 | 来自用户陈述，本轮只核实 `main` 的代码与生产行为 |
 
 ## 12. 给下一轮（R290 修改轮）的判断
