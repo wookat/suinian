@@ -5,6 +5,47 @@ import { defaultApiBase } from "./settings"
  * 不再注册 SW，把在线功能救回来（离线缓存/推送在此模式下不可用）。 */
 const SW_DISABLED_KEY = "sn_sw_disabled"
 
+/**
+ * R294 P1-3（docs/decision-r294.md §4）：离线缓存改为**默认关闭的可选项**。
+ * 依据：生产 sw_error_reports 权威直查（128 行 / 6 天 / 4 个 Chrome 大版本）全是
+ * `registration without any worker` 与 `hard reset unsettled in 20000ms`——SW 从未
+ * activated，却反复弹窗并拖慢登录/注册请求，净体验为负。因此：不开即不注册，
+ * 想要离线的用户在设置里自己打开；打开后失败 N 次则彻底 unregister 并回到关闭态。
+ */
+const OFFLINE_CACHE_KEY = "sn_offline_cache"
+
+export function isOfflineCacheEnabled(): boolean {
+  try {
+    return localStorage.getItem(OFFLINE_CACHE_KEY) === "1" && !isSwDisabled()
+  } catch {
+    return false
+  }
+}
+
+export function setOfflineCacheEnabled(enabled: boolean) {
+  try {
+    if (enabled) {
+      localStorage.setItem(OFFLINE_CACHE_KEY, "1")
+      localStorage.removeItem(SW_DISABLED_KEY)
+    } else {
+      localStorage.removeItem(OFFLINE_CACHE_KEY)
+    }
+  } catch {
+    // storage 不可用时默认即关闭，与产品决策一致
+  }
+}
+
+/**
+ * 终态放弃（R294 P1-3）：注册/自愈连续失败或悬挂后，彻底注销并回到关闭态，
+ * 此后不再注册、不再弹窗（只保留 sw_error_reports 遥测供观察真实终端占比）。
+ */
+export async function giveUpOfflineCache(reason: string) {
+  setOfflineCacheEnabled(false)
+  reportSwEvent("SwGaveUp", reason.slice(0, 300))
+  const ok = await detachServiceWorker(8_000)
+  reportSwEvent(ok ? "SwGaveUpUnregistered" : "SwGaveUpUnregisterTimeout", `unregister ok=${ok}`)
+}
+
 export function isSwDisabled(): boolean {
   try {
     return localStorage.getItem(SW_DISABLED_KEY) === "1"

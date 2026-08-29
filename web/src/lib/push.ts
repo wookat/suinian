@@ -1,6 +1,7 @@
 // Browser-side Web Push helpers: permission, subscribe/unsubscribe against the
 // registered PWA service worker, syncing the subscription to the backend.
 import { getPushConfig, subscribePush, unsubscribePush } from "./api"
+import { isOfflineCacheEnabled } from "./sw-control"
 
 export type PushSupport = "ok" | "unsupported" | "ios-needs-install"
 
@@ -40,6 +41,8 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
 
 /** Request permission, subscribe with the server's VAPID key, and sync to the backend. */
 export async function enablePush(): Promise<void> {
+  // 推送订阅挂在 PWA Service Worker 上；离线缓存（SW）默认关闭时无 registration 可用
+  if (!isOfflineCacheEnabled()) throw new Error("推送依赖离线缓存（Service Worker），请先在设置→离线与更新里开启离线缓存后重试")
   const config = await getPushConfig()
   if (!config.enabled || !config.vapid_public_key) throw new Error("服务端未配置推送（VAPID）")
   const permission = await Notification.requestPermission()
