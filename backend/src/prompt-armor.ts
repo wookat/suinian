@@ -2063,10 +2063,13 @@ export function isMeaninglessQuestion(question: string): boolean {
   // 去掉标点/空白后的有效字符
   const core = t.replace(/[\s\p{P}\p{S}]+/gu, "");
   if (core.length === 0) return true;
-  // 纯 ASCII 且不足 3 字符（"aa"、"ok" 之类）；CJK 不足 2 字
+  // 纯 ASCII 且不足 3 字符（"aa"、"ok" 之类）判为无意义。
+  // R284（生产 retrieval-eval q16「潮」实测）：单个 CJK 字是合法的长尾检索词
+  // （audit-r269 §5 q11 必过题），R282 的「CJK 不足 2 字即无意义」把它挡在检索
+  // 之外，返回确定性引导 = 0 召回。改为单字放行进检索，检索无命中时仍走
+  // 「没找到相关笔记」的确定性零命中路径，不影响 F-4 的标点/纯动词类兜底。
   const cjk = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(core);
   if (!cjk && core.length < 3) return true;
-  if (cjk && core.length < 2) return true;
   // 只有请求动词没有对象（「帮我」「帮忙」「查一下」「告诉我」）
   if (/^(?:帮我|帮忙|帮我一下|帮个忙|查一下|查查|看一下|看看|告诉我|说一下|说说|来一个|随便|whatever|help( me)?|hi|hey|hello|test)$/i.test(core))
     return true;
