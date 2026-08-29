@@ -25,7 +25,8 @@ describe("parseTimeRange", () => {
   it("parses 最近一周 / 最近3天 rolling windows", () => {
     const week = parseTimeRange("最近一周我花了哪些钱", NOW)!;
     expect(week.start).toBe("2026-07-31 16:00:00");
-    expect(week.end).toBeNull();
+    // 相对滚动窗以 now 为上界（R294 P2-1，audit-r293：「最近半年」不得计入未来事件时间）
+    expect(week.end).toBe("2026-08-08 07:00:00");
     const d3 = parseTimeRange("最近3天记了什么", NOW)!;
     expect(d3.start).toBe("2026-08-04 16:00:00");
   });

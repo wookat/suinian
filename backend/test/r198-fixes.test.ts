@@ -163,11 +163,11 @@ describe("确定性答案时间口径明示 (R198 P3-3)", () => {
   const stats = financeStats([]);
   it("带时间短语的聚合答案明示按记录时间划定", () => {
     const md = buildFinanceAggAnswer({ ...stats, expenseCount: 1, totals: { CNY: { expense: 10, income: 0 } } }, "上周");
-    expect(md).toContain("时间范围按正文事件时间划定");
+    expect(md).toContain("时间按正文事件时间");
   });
   it("无时间短语不加口径说明", () => {
     const md = buildFinanceAggAnswer({ ...stats, expenseCount: 1, totals: { CNY: { expense: 10, income: 0 } } }, null);
-    expect(md).not.toContain("时间范围按正文事件时间划定");
+    expect(md).not.toContain("时间按正文事件时间");
   });
   it("子集答案同口径", () => {
     const row = {

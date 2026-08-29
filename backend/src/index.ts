@@ -4039,6 +4039,39 @@ app.post("/api/ask", async (c) => {
   // 枚举家族入口统一收口 resolveAskEnumIntent（R150 P1-1）：主题枚举与时间窗
   // 枚举正则同时命中时交 LLM 统一分类主判，正则只做 fail-closed 兜底；
   // 单家族命中与全未命中（R132 LLM 补路由）行为不变。
+  // R294 P2-4（audit-r293 §9.4）：route（枚举意图 LLM）、kwext（关键词抽取
+  // LLM）与语义召回 embedding 三段原本串行，是 ask p50 2.4-3.4s 的主因之一。
+  // 三者互不依赖（都只吃 recallQuestion），此处并行启动；枚举路由命中时多花
+  // 一次小模型调用，换 LLM 生成主路径的串行等待时间。
+  let terms = extractAskTerms(recallQuestion, history);
+  // R270 单字长尾（audit-r269 P1-1 q11：裸问「潮」0 召回）：整问剥掉标点/语气词
+  // 后只剩 1-2 个 CJK 字时，该短词直接作为 LIKE 关键词——单字主题是语义向量
+  // 的固有弱区，子串精确匹配才召得回
+  const bareShortQ = recallQuestion.replace(/[\s,，。？?！!、;；:：的呢吗啊嘛呀]/g, "");
+  if (bareShortQ.length >= 1 && bareShortQ.length <= 2 && /^[\u4e00-\u9fff]+$/.test(bareShortQ) && !terms.includes(bareShortQ)) {
+    terms.unshift(bareShortQ);
+  }
+  // semantic recall only depends on recallQuestion — start it here so the
+  // embedding call overlaps the enum-route LLM call, keyword-extraction LLM
+  // call and keyword SQL (R172/R294 归因：sem 串行贡献 150-400ms)
+  const semTiming: SemanticRecallTiming = { embed: 0, scan: 0 };
+  const tSem = Date.now();
+  const semHitsPromise = semanticRecall(c.env, userId, recallQuestion, 10, undefined, semTiming, false).then((h) => {
+    askMarks.push(["sem", Date.now() - tSem], ["embed", semTiming.embed], ["scan", semTiming.scan]);
+    return h;
+  });
+  // unsegmented CJK clauses never LIKE-match: extract real keywords via LLM,
+  // keeping any short naive terms; failures keep the naive terms untouched.
+  // Budget-capped (R172 归因：kwext 偶发 4s+ 长尾直接顶高 ask P95)；超时按
+  // 提取失败对待，沿用朴素分词
+  const tKwExtStart = Date.now();
+  const kwExtPromise: Promise<string[]> | null =
+    needsCjkKeywordExtraction(terms) || needsBilingualKeywordExtraction(recallQuestion)
+      ? Promise.race([
+          extractAskKeywords(c.env, recallQuestion),
+          new Promise<string[]>((resolve) => setTimeout(() => resolve([]), ASK_KWEXT_BUDGET_MS)),
+        ]).catch(() => [] as string[])
+      : null;
   const tRoute = Date.now();
   const enumRoute = await resolveAskEnumIntent(c.env, intentQuestion, metaQuestion ? question : recallQuestion);
   askMarks.push(["route", Date.now() - tRoute]);
@@ -4162,34 +4195,9 @@ app.post("/api/ask", async (c) => {
       enum_aggregate: true,
     });
   }
-  let terms = extractAskTerms(recallQuestion, history);
-  // R270 单字长尾（audit-r269 P1-1 q11：裸问「潮」0 召回）：整问剥掉标点/语气词
-  // 后只剩 1-2 个 CJK 字时，该短词直接作为 LIKE 关键词——单字主题是语义向量
-  // 的固有弱区，子串精确匹配才召得回
-  const bareShortQ = recallQuestion.replace(/[\s,，。？?！!、;；:：的呢吗啊嘛呀]/g, "");
-  if (bareShortQ.length >= 1 && bareShortQ.length <= 2 && /^[\u4e00-\u9fff]+$/.test(bareShortQ) && !terms.includes(bareShortQ)) {
-    terms.unshift(bareShortQ);
-  }
-  // semantic recall only depends on recallQuestion — start it here so the
-  // embedding call overlaps the keyword-extraction LLM call and keyword SQL
-  // instead of running after them (R172 归因：sem 全程串行贡献 150-400ms)
-  const semTiming: SemanticRecallTiming = { embed: 0, scan: 0 };
-  const tSem = Date.now();
-  const semHitsPromise = semanticRecall(c.env, userId, recallQuestion, 10, undefined, semTiming, false).then((h) => {
-    askMarks.push(["sem", Date.now() - tSem], ["embed", semTiming.embed], ["scan", semTiming.scan]);
-    return h;
-  });
-  // unsegmented CJK clauses never LIKE-match: extract real keywords via LLM,
-  // keeping any short naive terms; failures keep the naive terms untouched.
-  // Budget-capped (R172 归因：kwext 偶发 4s+ 长尾直接顶高 ask P95)；超时按
-  // 提取失败对待，沿用朴素分词
-  if (needsCjkKeywordExtraction(terms) || needsBilingualKeywordExtraction(recallQuestion)) {
-    const tKwExt = Date.now();
-    const kw = await Promise.race([
-      extractAskKeywords(c.env, recallQuestion),
-      new Promise<string[]>((resolve) => setTimeout(() => resolve([]), ASK_KWEXT_BUDGET_MS)),
-    ]);
-    askMarks.push(["kwext", Date.now() - tKwExt]);
+  if (kwExtPromise) {
+    const kw = await kwExtPromise;
+    askMarks.push(["kwext", Date.now() - tKwExtStart]);
     if (kw.length > 0) {
       terms = [...kw, ...terms.filter((t) => !(CJK_RE.test(t) && t.length >= 8))]
         .filter((t, i, a) => a.indexOf(t) === i)

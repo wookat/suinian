@@ -1070,28 +1070,71 @@ export function scrubAcrosticBlocks(answer: string, dataText: string, question: 
  * 时用原始行字面回复。只回复存在于资料区的行，不会复活被整段剥除的内容。
  */
 export function restoreVerbatimEchoes(answer: string, dataText: string): string {
-  // 逐字比对口径比 foldCompact 更宽一档：软连字符/零宽也折掉，否则原文里的
-  // `cu\u00adrl` 与模型落地的 `curl` 折叠不等，还原不了。
-  const fold = (s: string) => foldCompact(s.replace(ZERO_WIDTH_G, ""));
-  const byFold = new Map<string, string>();
-  for (const raw of dataText.split("\n")) {
-    const l = raw.trim();
-    if (l.length < 4) continue;
-    const f = fold(l);
-    if (f.length >= 4 && !byFold.has(f)) byFold.set(f, l);
+  // 逐字比对口径比 foldCompact 更宽一档：软连字符/零宽/变体选择符也折掉，
+  // 否则原文里的 `cu\u00adrl`、`🏴‍☠️` 与模型落地的形态折叠不等，还原不了。
+  const fold = (s: string) => foldCompact(s.replace(ZERO_WIDTH_G, "").replace(/[\uFE00-\uFE0F]/g, ""));
+  // 资料行带精确偏移（行内容不含行终止符）：连续多行命中时用原文精确切片
+  // 整块回复，行间的 CRLF/缩进随切片原样保留。
+  type DLine = { text: string; start: number; end: number };
+  const dlines: DLine[] = [];
+  {
+    let pos = 0;
+    for (const seg of dataText.split("\n")) {
+      const text = seg.endsWith("\r") ? seg.slice(0, -1) : seg;
+      dlines.push({ text, start: pos, end: pos + text.length });
+      pos += seg.length + 1;
+    }
+  }
+  const byFold = new Map<string, number[]>();
+  for (let i = 0; i < dlines.length; i++) {
+    const t = dlines[i].text.trim();
+    if (t.length < 4) continue;
+    const f = fold(t);
+    if (f.length < 4) continue;
+    const arr = byFold.get(f);
+    if (arr) arr.push(i);
+    else byFold.set(f, [i]);
   }
   if (byFold.size === 0) return answer;
-  return answer
-    .split("\n")
-    .map((line) => {
-      const t = line.trim();
-      if (t.length < 4) return line;
-      const orig = byFold.get(fold(t));
-      if (orig === undefined || orig === t) return line;
-      const at = line.indexOf(t);
-      return line.slice(0, at) + orig + line.slice(at + t.length);
-    })
-    .join("\n");
+  const dFold = (i: number) => fold(dlines[i].text.trim());
+  const alines = answer.split("\n");
+  const out: string[] = [];
+  let i = 0;
+  while (i < alines.length) {
+    const t = alines[i].trim();
+    const cands = t.length >= 4 ? byFold.get(fold(t)) : undefined;
+    if (!cands) {
+      out.push(alines[i]);
+      i++;
+      continue;
+    }
+    // 从每个候选起点向后匹配最长的连续行段
+    let best = { d: cands[0], len: 1 };
+    for (const d of cands) {
+      let len = 1;
+      while (i + len < alines.length && d + len < dlines.length) {
+        const af = fold(alines[i + len].trim());
+        if (af.length === 0 || af !== dFold(d + len)) break;
+        len++;
+      }
+      if (len > best.len) best = { d, len };
+    }
+    const { d, len } = best;
+    const slice = dataText.slice(dlines[d].start, dlines[d + len - 1].end);
+    // 只回复不携带执行痕迹的原文——不许经此路径复活任何被判危/降级的内容
+    if (execDegradedTraceReason(slice) !== null || globalExecDangerReason(slice) !== null) {
+      for (let k = 0; k < len; k++) out.push(alines[i + k]);
+      i += len;
+      continue;
+    }
+    out.push(slice);
+    i += len;
+    // V04 整行重复：模型把同一原文行紧邻重复输出而资料区并未连续重复时折叠掉
+    const lastFold = dFold(d + len - 1);
+    const dataRepeats = d + len < dlines.length && dFold(d + len) === lastFold;
+    while (!dataRepeats && i < alines.length && fold(alines[i].trim()) === lastFold) i++;
+  }
+  return out.join("\n");
 }
 
 /** 剥除后残留的空行/悬空标点清理（marker/句段剥除共用）。 */
@@ -3400,6 +3443,13 @@ export function finalizeAskAnswer(
       out = ISOLATION_NOTICE_ANSWER;
       isolated = true;
     }
+  }
+  // R294 P1-2：verbatim 逐字还原挪到最终出口（此前在 guardAskAnswer 中段执行，
+  // 之后的 despoof/link-scrub/决策痕迹剥除会再次改字——R293 生产实测 `run()`、
+  // 软连字符仍坏的根因）。此处之后不再有任何改字层；还原只回复无执行痕迹的
+  // 原文切片，危险内容仍由上方隔离层处置。
+  if (questionRequestsVerbatim(opts.question) && opts.dataText) {
+    out = restoreVerbatimEchoes(out, opts.dataText);
   }
   // R292 P0-1（docs/decision-r292.md §1）：「是否降级」只由判别器状态决定，
   // 不再从输出文本里是否含降级标记**反推**——audit-r291 的 22/38 fail-open

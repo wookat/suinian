@@ -62,23 +62,36 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
   const q = question;
   let m: RegExpMatchArray | null;
 
+  // 裸「X月」/裸日期的年份推断与笔记事件时间同口径（audit-r293 P2-1）：
+  // 未来 ≤60 天视为今年的临近月份/日期（与 noteEventDate 的补记容忍一致），
+  // 更远的未来才回退到去年——消除「10月记了账却答『10月没有记账记录』」。
+  const bareYear = (sh: Date, mon: number, day = 1): number => {
+    if (mon - 1 <= sh.getUTCMonth()) return sh.getUTCFullYear();
+    const aheadMs =
+      Date.UTC(sh.getUTCFullYear(), mon - 1, day) -
+      Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), sh.getUTCDate());
+    return aheadMs > 60 * 86400_000 ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear();
+  };
+
   if (/今天|今日/.test(q)) return { start: toUtcSql(shanghaiMidnight(now, 0)), end: null, phrase: "今天" };
   if (/昨天|昨日/.test(q))
     return { start: toUtcSql(shanghaiMidnight(now, -1)), end: toUtcSql(shanghaiMidnight(now, 0)), phrase: "昨天" };
   if (/前天/.test(q))
     return { start: toUtcSql(shanghaiMidnight(now, -2)), end: toUtcSql(shanghaiMidnight(now, -1)), phrase: "前天" };
   if (/这几天|最近几天|近几天/.test(q))
-    return { start: toUtcSql(shanghaiMidnight(now, -6)), end: null, phrase: "这几天" };
+    return { start: toUtcSql(shanghaiMidnight(now, -6)), end: toUtcSql(now), phrase: "这几天" };
 
   // 最近/过去 N 天|周|个月 (rolling window ending now)
   if ((m = q.match(/(?:最近|近|过去)\s*(\d+|[一两二三四五六七八九十半]{1,2})\s*(天|日|周|星期|个?月|年)/))) {
     const n = parseNum(m[1]);
     if (n !== null) {
       const unitDays = /天|日/.test(m[2]) ? 1 : /周|星期/.test(m[2]) ? 7 : /月/.test(m[2]) ? 30 : 365;
-      return { start: toUtcSql(shanghaiMidnight(now, -Math.round(n * unitDays))), end: null, phrase: m[0] };
+      // 相对滚动窗以 now 为上界（audit-r293 P2-1：「最近半年」不得把未来
+      // 事件时间计入）
+      return { start: toUtcSql(shanghaiMidnight(now, -Math.round(n * unitDays))), end: toUtcSql(now), phrase: m[0] };
     }
   }
-  if (/最近一周|最近1周/.test(q)) return { start: toUtcSql(shanghaiMidnight(now, -7)), end: null, phrase: "最近一周" };
+  if (/最近一周|最近1周/.test(q)) return { start: toUtcSql(shanghaiMidnight(now, -7)), end: toUtcSql(now), phrase: "最近一周" };
 
   // 本周/这周 (since Monday) and 上周 (previous Mon..Sun)
   if (/本周|这周|这一?周/.test(q)) {
@@ -162,8 +175,9 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     const sh = new Date(now.getTime() + SH_OFFSET_MS);
     const firstHalf = m[2] === "上" || m[2] === "前";
     let y = absYear(m[1]) ?? (m[1] === "去年" ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear());
-    // 裸「下半年」在上半年问出时指去年下半年（未来窗与裸「X月」同口径）
-    if (!m[1] && !firstHalf && sh.getUTCMonth() < 6) y -= 1;
+    // 裸「下半年」在上半年问出时指去年下半年（未来窗与裸「X月」同口径，
+    // 含 ±60 天临近容忍）
+    if (!m[1] && !firstHalf && bareYear(sh, 7) !== sh.getUTCFullYear()) y -= 1;
     const startMon = firstHalf ? 0 : 6;
     return {
       start: toUtcSql(new Date(Date.UTC(y, startMon, 1) - SH_OFFSET_MS)),
@@ -235,7 +249,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     const day = parseNum(m[3]);
     if (mon !== null && day !== null && mon >= 1 && mon <= 12 && day >= 1 && day <= 31) {
       const sh = new Date(now.getTime() + SH_OFFSET_MS);
-      const y = yAbs ?? (mon - 1 > sh.getUTCMonth() ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear());
+      const y = yAbs ?? bareYear(sh, mon, day);
       return {
         start: null,
         end: toUtcSql(new Date(Date.UTC(y, mon - 1, day) - SH_OFFSET_MS)),
@@ -255,7 +269,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     const day = parseNum(m[3]);
     if (mon !== null && day !== null && mon >= 1 && mon <= 12 && day >= 1 && day <= 31) {
       const sh = new Date(now.getTime() + SH_OFFSET_MS);
-      const y = yAbs ?? (mon - 1 > sh.getUTCMonth() ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear());
+      const y = yAbs ?? bareYear(sh, mon, day);
       return {
         start: toUtcSql(new Date(Date.UTC(y, mon - 1, day) - SH_OFFSET_MS)),
         end: null,
@@ -275,7 +289,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     const mon = parseNum(m[2]);
     if (mon !== null && mon >= 1 && mon <= 12) {
       const sh = new Date(now.getTime() + SH_OFFSET_MS);
-      const y = yAbs ?? (mon - 1 > sh.getUTCMonth() ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear());
+      const y = yAbs ?? bareYear(sh, mon);
       const dq = m[3];
       const start = dq === "上" ? 1 : dq === "中" ? 11 : 21;
       const end =
@@ -339,7 +353,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     const n = parseNum(m[2]);
     if (n !== null && n >= 1 && n <= 12) {
       const sh = new Date(now.getTime() + SH_OFFSET_MS);
-      const y = n - 1 > sh.getUTCMonth() ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear();
+      const y = bareYear(sh, n);
       return {
         start: toUtcSql(new Date(Date.UTC(y, n - 1, 1) - SH_OFFSET_MS)),
         end: null,
@@ -353,7 +367,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     const n = parseNum(m[1]);
     if (n !== null && n >= 1 && n <= 12) {
       const sh = new Date(now.getTime() + SH_OFFSET_MS);
-      const y = n - 1 > sh.getUTCMonth() ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear();
+      const y = bareYear(sh, n);
       return {
         start: toUtcSql(new Date(Date.UTC(y, n - 1, 1) - SH_OFFSET_MS)),
         end: toUtcSql(new Date(Date.UTC(y, n, 1) - SH_OFFSET_MS)),
@@ -557,12 +571,29 @@ export function financeDualWindowTopicTerms(question: string): string[] | null {
   return subsetTopicExtract(question.replace(DUAL_WINDOW_FRAME_STRIP_RE, ""));
 }
 
+/**
+ * 口径说明小字（R294 P2-2，audit-r293 §9.2）：只在口径可能有歧义时出现
+ * （带时间窗/关键词限定），且只给一句短话；同时披露「之前不含当日 /
+ * 以后含当日」的边界口径（P2-2）。无限定时不再逐答复读报表式免责声明。
+ */
+export function financeCaliberNote(phrase: string | null | undefined, keyword = false): string {
+  const parts: string[] = [];
+  if (keyword) parts.push("关键词匹配口径");
+  if (phrase) {
+    parts.push("时间按正文事件时间（无日期按记录时间）");
+    if (/之前|以前/.test(phrase)) parts.push("「之前」不含当日");
+    if (/之后|以后|以来|起/.test(phrase)) parts.push("「以后」含当日");
+  }
+  if (parts.length === 0) return "";
+  return `\n\n（口径与周报/月报一致；${parts.join("；")}。）`;
+}
+
 /** 收支比较的确定性答案：按币种分别比较（不同币种金额不可直接比较）。 */
 export function buildFinanceCompareAnswer(stats: FinanceStats, phrase: string | null): string {
   const scope = phrase ?? "全部笔记";
   if (stats.expenseCount === 0 && stats.incomeCount === 0) {
     const transferNote = stats.transferCount > 0 ? `另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支。` : "";
-    return `${scope}没有记账记录（支出/收入均为 0 笔），无法比较收支。${transferNote}\n\n以上为精确统计，口径与周报/月报一致。`;
+    return `${scope}没有记账记录（支出/收入均为 0 笔），无法比较收支。${transferNote}${financeCaliberNote(phrase)}`;
   }
   const entries = Object.entries(stats.totals);
   const lines = entries.map(([cur, t]) => {
@@ -586,7 +617,7 @@ export function buildFinanceCompareAnswer(stats: FinanceStats, phrase: string | 
   let md = `${head}\n${lines.join("\n")}\n共 ${stats.expenseCount} 笔支出、${stats.incomeCount} 笔收入。`;
   if (stats.unknownAmount > 0) md += `\n（另有 ${stats.unknownAmount} 笔未识别出金额，未计入比较。）`;
   if (stats.transferCount > 0) md += `\n（另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支。）`;
-  md += `\n\n以上为精确统计，口径与周报/月报一致。`;
+  md += financeCaliberNote(phrase);
   return md;
 }
 
@@ -601,11 +632,10 @@ export function buildFinanceMomAnswer(
   // 主题限定的双窗对比（R258 P2-1）：答案口径必须回显关键词，绝不把主题
   // 对比冒充全账对比
   const kwHead = topic ? `按关键词「${topic.join("、")}」精确匹配（标题/正文/标签），` : "";
-  const kwCaliber = topic ? "（关键词匹配口径）" : "";
   const noCur = cur.expenseCount === 0 && cur.incomeCount === 0;
   const noPrev = prev.expenseCount === 0 && prev.incomeCount === 0;
   if (noCur && noPrev) {
-    return `${kwHead}${curPhrase}和${prevPhrase}都没有${topic ? "匹配的" : ""}记账记录，无法对比。\n\n以上为精确统计${kwCaliber}，口径与周报/月报一致。`;
+    return `${kwHead}${curPhrase}和${prevPhrase}都没有${topic ? "匹配的" : ""}记账记录，无法对比。${financeCaliberNote(curPhrase, !!topic)}`;
   }
   const currencies = [...new Set([...Object.keys(cur.totals), ...Object.keys(prev.totals)])];
   const lines = currencies.map((c) => {
@@ -620,7 +650,7 @@ export function buildFinanceMomAnswer(
   let md = `${kwHead}${curPhrase}与${prevPhrase}对比（按币种分别比较，不同币种金额不可直接比较）：\n${lines.join("\n")}\n${curPhrase}共 ${cur.expenseCount} 笔支出、${cur.incomeCount} 笔收入；${prevPhrase}共 ${prev.expenseCount} 笔支出、${prev.incomeCount} 笔收入。`;
   const unknown = cur.unknownAmount + prev.unknownAmount;
   if (unknown > 0) md += `\n（另有 ${unknown} 笔未识别出金额，未计入对比。）`;
-  md += `\n\n以上为精确统计${kwCaliber}，口径与周报/月报一致。`;
+  md += financeCaliberNote(curPhrase, !!topic);
   return md;
 }
 
@@ -2603,7 +2633,7 @@ export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null
   const scope = phrase ?? "全部笔记";
   if (stats.expenseCount === 0 && stats.incomeCount === 0) {
     const transferNote = stats.transferCount > 0 ? `另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支。` : "";
-    return `${scope}没有记账记录（支出/收入均为 0 笔）。${transferNote}\n\n以上为精确统计，口径与周报/月报一致。`;
+    return `${scope}没有记账记录（支出/收入均为 0 笔）。${transferNote}${financeCaliberNote(phrase)}`;
   }
   const lines = Object.entries(stats.totals).map(
     ([cur, t]) =>
@@ -2626,7 +2656,7 @@ export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null
   }
   if (stats.unknownAmount > 0) md += `\n（另有 ${stats.unknownAmount} 笔未识别出金额，未计入合计。）`;
   if (stats.transferCount > 0) md += `\n（另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支合计。）`;
-  md += `\n\n以上为精确统计，口径与周报/月报一致${phrase ? "；时间范围按正文事件时间划定（正文无日期时按记录时间）" : ""}。`;
+  md += financeCaliberNote(phrase);
   return md;
 }
 

@@ -128,9 +128,28 @@ function saveMessages(messages: AskChatMessage[]) {
   }
 }
 
+// 隔离标记短句化（R294 P2-3，audit-r293 §9.3）：服务端标记为防仿冒是较长的
+// 固定文案，渲染层换成短句，「查看原文」由横幅按钮承担。只改展示，存为笔记
+// 仍用原文。
+const GUARD_MARK_SHORTS: [string, string][] = [
+  ["〔已隔离笔记内指令，未采纳；原文可在引用的笔记卡片中查看〕", "〔已隔离笔记内指令〕"],
+  ["〔已隔离危险命令（会下载执行远程代码或建立外连），未展示；原文可在引用的笔记卡片中查看〕", "〔已隔离危险命令〕"],
+  ["〔代码安全判别暂不可用，已对疑似可执行代码保守隔离（未展示）；原文可在引用的笔记卡片中查看〕", "〔判别暂不可用，已保守隔离〕"],
+  ["相关笔记内容命中安全隔离规则，已隔离未采纳；原文可在引用的笔记卡片中查看。", "相关内容命中安全隔离规则，已隔离未采纳。"],
+]
+// 降级窗口的答尾长提示整句折进横幅（横幅已说明降级+可重试），正文不重复。
+const DEGRADED_NOTICE_RE =
+  /\n*（本次回答处于代码安全判别降级窗口：判别服务超时\/不可用，系统已对代码区域保守隔离，稍后重试可获得完整判定。）\n*/g
+
+export function shortenGuardMarks(content: string): string {
+  let out = content.replace(DEGRADED_NOTICE_RE, "\n")
+  for (const [long, short] of GUARD_MARK_SHORTS) out = out.split(long).join(short)
+  return out.trim()
+}
+
 /** 把回答中的 [n] 渲染为可点击引用，点击滚动到下方对应笔记卡片 */
 function AnswerText({ msgId, content, refIndexes }: { msgId: string; content: string; refIndexes: Set<number> }) {
-  const parts = content.split(/([[［]\d{1,2}[\]］])/g)
+  const parts = shortenGuardMarks(content).split(/([[［]\d{1,2}[\]］])/g)
   return (
     <p className="whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]">
       {parts.map((part, i) => {
@@ -418,9 +437,7 @@ export function AskChat({
                       <div className="space-y-1.5 rounded-lg bg-sky-500/10 px-2.5 py-1.5 text-xs leading-relaxed text-sky-700 dark:text-sky-400">
                         <div className="flex items-start gap-1.5">
                           <ShieldQuestion className="mt-0.5 size-3.5 shrink-0" />
-                          <span>
-                            安全判别服务暂时不可用，本轮回答中的代码/命令已按保守策略暂时隐去（并非已确认危险）。稍后重试通常即可看到完整内容。
-                          </span>
+                          <span>安全判别暂不可用，代码/命令已暂时隐去，稍后重试可看到完整内容。</span>
                         </div>
                         {m.question && (
                           <Button
@@ -437,9 +454,25 @@ export function AskChat({
                       </div>
                     ) : null}
                     {m.isolated && !m.guardDegraded && (
-                      <div className="flex items-start gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
-                        <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
-                        <span>笔记中含有指令或高风险内容，已被安全隔离或标注，未被采纳；完整原文可在下方引用的笔记卡片中查看。</span>
+                      <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+                        <ShieldAlert className="size-3.5 shrink-0" />
+                        <span>部分内容已被安全隔离，未采纳。</span>
+                        {(m.refs?.length ?? 0) > 0 && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => {
+                              const first = m.refs![0]
+                              const el = document.getElementById(`ask-ref-${m.id}-${first.index}`)
+                              el?.scrollIntoView({ behavior: "smooth", block: "center" })
+                              el?.classList.add("ring-2", "ring-primary")
+                              window.setTimeout(() => el?.classList.remove("ring-2", "ring-primary"), 1600)
+                            }}
+                          >
+                            查看原文
+                          </Button>
+                        )}
                       </div>
                     )}
                     <AnswerText
