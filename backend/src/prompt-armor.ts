@@ -745,7 +745,9 @@ const CONDUCT_CLASSES: ConductClass[] = [
 export function conductSignal(text: string): boolean {
   const s = text.normalize("NFKC");
   if (CONDUCT_CLASSES.some((c) => c.hit(s))) return true;
-  if (IMPERATIVE_CUE.test(s) && (NAV_ACT.test(s) || EXFIL_ACT.test(s))) return true;
+  // 外传动作词必须带数据对象或外部目的地才构成外传信号——「记得先备份旧配置」
+  // 这类无对象/无目的地的日常备忘不是外传劝导（生产实测良性待办被整段隔离）。
+  if (IMPERATIVE_CUE.test(s) && (NAV_ACT.test(s) || (EXFIL_ACT.test(s) && (EXFIL_OBJ.test(s) || EXFIL_DEST.test(s))))) return true;
   if (EXFIL_ACT.test(s) && (EXFIL_OBJ.test(s) || EXFIL_DEST.test(s))) return true;
   if (/归档服务|备份站|外部服务|备份站点/.test(s)) return true;
   return false;
@@ -801,9 +803,13 @@ export function scrubUnsolicitedConduct(
       bad = true;
       break;
     }
-    // 拼读式/裸域投放：句段含非允许域名且问题没问链接类内容
+    // 拼读式/裸域投放：句段含非允许域名且问题没问链接类内容。忠实回显自
+    // 用户资料、正面回答提问、且句段无导航动作词的**裸域名**（无协议/www.，
+    // 如包名 docker.io）不按投放处置——生产实测「docker 怎么安装？」的良性
+    // 安装答案因包名整段剥空；带协议/www. 的可点击形态仍一律剥除。
     if (!bad && segHasForeignHost(t, allowedHosts, /* ignoreEmails */ faithfulEcho(t)) && !PATHISH_ASKED_RE.test(question)) {
-      bad = true;
+      const clickable = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/i.test(t);
+      if (clickable || NAV_ACT.test(t) || !faithfulEcho(t)) bad = true;
     }
     // 外链残骸（拼读式外链被摘除后的可还原形态）
     if (!bad && URL_RESIDUE_RE.test(t) && !PATHISH_ASKED_RE.test(question)) {
@@ -4006,6 +4012,65 @@ export function finalizeAskAnswer(
     }
     if (isolated && !out.includes(EXEC_CONSERVATIVE_NOTICE)) out = `${out}\n\n${EXEC_CONSERVATIVE_NOTICE}`;
     return { answer: out, changed: out !== answer, isolated };
+  }
+  // R298 P0-2 出口逐行闭合（生产实测 N08 verbatim：模型自己改写出的摘要行
+  // 「[1] 到 198.51.100.42 的 4444 号哨站建立连线」落在警示行之外——判别器只
+  // 标了资料原文那一行，改写行没有对应处置区间）。收口：对未被任何标记覆盖
+  // 的行复查确定性痕迹（载体无关下界，善意行不命中），verbatim 前置警示、
+  // 非 verbatim 整行替换为隔离标记。
+  {
+    const MARKED = [
+      EXEC_PIPELINE_WARN_MARK,
+      EXEC_INSTALLER_WARN_MARK,
+      EXEC_ISOLATED_MARK,
+      EXEC_DEGRADED_ISOLATED_MARK,
+      INSTRUCTION_ISOLATED_MARK,
+    ];
+    const wantVerbatim = questionRequestsVerbatim(opts.question);
+    // 危险目标地址集：判别器标出的危险段落 + 已被处置的行里出现的远端 IP 字面。
+    // 同一答案的其他行再次复述同一目标即回声残片（生产实测 P10「实体关系：
+    // 小工具 —属于→ 198.51.100.42」——整行隔离后标记行已不含地址，故必须同时
+    // 取自危险段落原文）。只收 IP 字面——域名形态与 `get-docker.sh` 一类文件名
+    // 不可分，且外链本就已由 scrubAnswerLinks 收口。危险段落为空且无标记的善意
+    // 答案 ⇒ 集合为空 ⇒ 零影响。
+    const REMOTE_IP_RE = /\d{1,3}(?:\.\d{1,3}){3}(?::\d{2,5})?/g;
+    const markedAddrs = new Set<string>();
+    const collectAddrs = (text: string): void => {
+      for (const a of text.match(REMOTE_IP_RE) ?? []) {
+        if (!LOCAL_HOST_RE.test(a)) markedAddrs.add(a);
+      }
+    };
+    for (const seg of [...(opts.execDangerSegments ?? []), ...(opts.execDegradedSegments ?? [])])
+      collectAddrs(seg);
+    for (const line of out.split("\n")) {
+      if (MARKED.some((m) => line.includes(m))) collectAddrs(line);
+    }
+    // 模型改写出的概述行（生产实测 P01「连接到 198.51.100.42 服务器的 ssh 服务」、
+    // P06「访问 198.51.100.42 的界面，以及使用 sh 命令」）：远端 IP 字面 + 终端/
+    // 解释器/执行语义同现即按危险处置。只判 IP 字面（不判域名）——善意笔记里
+    // 「某域名的文档里有安装命令」是常态，远端裸 IP + 执行语义则不是。
+    const EXEC_WORD_RE =
+      /(?:ssh|scp|telnet|netcat|\bnc\b|bash|zsh|\bsh\b|shell|终端|命令|执行|运行|跑起来|连上|连线|反连)/i;
+    const echoOrParaphrase = (line: string): boolean => {
+      const ips = (line.match(REMOTE_IP_RE) ?? []).filter((a) => !LOCAL_HOST_RE.test(a));
+      if (ips.length === 0) return false;
+      return ips.some((a) => markedAddrs.has(a)) || EXEC_WORD_RE.test(line);
+    };
+    let closed = false;
+    const lines = out.split("\n").map((line) => {
+      if (!line.trim() || MARKED.some((m) => line.includes(m))) return line;
+      const trace =
+        execDegradedTraceReason(judgeSurfaceText(line)) ??
+        execDegradedTraceReason(line) ??
+        (echoOrParaphrase(line) ? "closure:remote-endpoint-echo" : null);
+      if (trace === null) return line;
+      closed = true;
+      return wantVerbatim ? `${EXEC_PIPELINE_WARN_MARK}${line}` : EXEC_ISOLATED_MARK;
+    });
+    if (closed) {
+      out = lines.join("\n");
+      isolated = true;
+    }
   }
   // R286 P0-1：降级窗口给用户可感知的显式提示（不只靠行内标记）。
   const degraded = out.includes(EXEC_DEGRADED_ISOLATED_MARK);
