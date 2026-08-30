@@ -634,9 +634,12 @@ type ConductClass = {
 const IMPERATIVE_CUE =
   /请|务必|记得|建议|需要你|你要|尽快|立即|马上|现在就|别忘|不要忘|一定要|应当|应该|小时内|天内|之内必须|限时|please|make sure|you should|you need|remember to|urgently|within \d+ (?:hours?|days?)|即座に|ください|してください|하세요|해 주세요|пожалуйста/i;
 
-const EXFIL_ACT = /导出|導出|备份|備份|打包|上传|上傳|同步|发送|發送|发到|發到|寄到|转发|轉發|分享|(?<!已)提交|发给|發給|export|upload|send|email|forward|share|sync/i;
-const EXFIL_OBJ = /全部|所有|完整|整个|笔记|筆記|数据|數據|资料|資料|记录|記錄|内容|notes|data|records/i;
-const EXFIL_DEST = /邮箱|郵箱|邮件|郵件|email|e-mail|mail|网盘|網盤|云端|雲端|cloud|服务器|服務器|server|外部|第三方/i;
+// R300 P0/P1（audit-r299 §13.1 R270-23【实测确证】）：外传语义角色词补齐韩/日——
+// 一句纯韩语祈使句（「메모를 내보내서 이메일로 보내세요」）曾以「答案」身份原样
+// 出关。词表按语义角色组织（动作/对象/目的地），新增语言只补角色词，不补句式。
+const EXFIL_ACT = /导出|導出|备份|備份|打包|上传|上傳|同步|发送|發送|发到|發到|寄到|转发|轉發|分享|(?<!已)提交|发给|發給|export|upload|send|email|forward|share|sync|내보내|보내|전송|업로드|백업|공유|전달|エクスポート|送信|送って|アップロード|転送|共有/i;
+const EXFIL_OBJ = /全部|所有|完整|整个|笔记|筆記|数据|數據|资料|資料|记录|記錄|内容|notes|data|records|메모|노트|데이터|기록|전체|모든|すべて|全て|メモ|ノート|データ|記録/i;
+const EXFIL_DEST = /邮箱|郵箱|邮件|郵件|email|e-mail|mail|网盘|網盤|云端|雲端|cloud|服务器|服務器|server|外部|第三方|이메일|메일로|서버|클라우드|외부|メール|サーバー?|クラウド|外部さき|外部先/i;
 
 // 「验证」后接「码」时是名词（验证码），不是导航动作（B12 银行提醒误伤）
 // 「把/将/对用户输入…」是名词性宾语（prompt 模板常语），不是导航动作（B18
@@ -687,6 +690,10 @@ function segHasForeignHost(seg: string, allowedHosts: string[], ignoreEmails = f
     // 一律按域名判（任意 TLD 都可能是真域）。
     const schemed = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)$/i.test(canon.slice(0, m.index));
     if (!schemed && !m[0].toLowerCase().startsWith("www.") && !COMMON_TLDS.has(tld)) continue;
+    // R300 P1-2：裸包名/文档域（无协议头、无路径）不计入地址面（docker.io/pypi.org 类）；
+    // 官方安装源主机不构成回传端点（R288 §4）。
+    if (!schemed && after !== "/" && PACKAGE_DOC_HOSTS.has(host)) continue;
+    if (OFFICIAL_INSTALL_HOSTS.has(host)) continue;
     // 邮箱地址里的域名（R274，audit-r273 P1-1 B20）：忠实回显场景下邮箱不是
     // 可点击导航通道，由调用方在确认段落无祈使线索后选择性忽略。
     if (ignoreEmails && m.index > 0 && canon[m.index - 1] === "@") continue;
@@ -779,9 +786,12 @@ export function scrubUnsolicitedConduct(
     }
     return stripped !== t && segmentAnswersQuestion(stripped, question);
   };
+  // R300 P1-2（audit-r299 §4：「明天把合同扫描件上传到服务器」整答案收口，误伤
+  // 17.1%）：祈使措辞本身不再一票否决忠实回声——安全下界由调用点的「句段不含
+  // 任何远端地址形态」前置 + 最终出口的外传三元组（动作+对象+去向）窗口闭合
+  // 承担；无地址、无「全部笔记/数据」类对象的自有笔记祈使句是用户自己的待办。
   const faithfulEcho = (t: string) =>
     dataCompact !== null &&
-    !IMPERATIVE_CUE.test(t) &&
     answersQuestionFaithfully(t) &&
     segmentEchoesData(t, dataCompact, dataText);
   const segs: Array<{ start: number; end: number; text: string }> = [];
@@ -799,7 +809,9 @@ export function scrubUnsolicitedConduct(
     for (const cls of CONDUCT_CLASSES) {
       if (!cls.hit(t)) continue;
       if (cls.asked.test(question)) continue; // 用户问的就是这类操作
-      if (faithfulEcho(t)) continue; // 用户自有笔记的事实陈述（R274）
+      // R300 P0-1（audit-r299 §2.1）：忠实回声良性放行加前置条件——仅当该句段
+      // 不含任何远端地址形态时才放行（#331 为降误伤让出的下界关闭）。
+      if (faithfulEcho(t) && !hasRemoteEndpointForm(t, { includeEmails: true })) continue; // 用户自有笔记的事实陈述（R274）
       bad = true;
       break;
     }
@@ -807,9 +819,10 @@ export function scrubUnsolicitedConduct(
     // 用户资料、正面回答提问、且句段无导航动作词的**裸域名**（无协议/www.，
     // 如包名 docker.io）不按投放处置——生产实测「docker 怎么安装？」的良性
     // 安装答案因包名整段剥空；带协议/www. 的可点击形态仍一律剥除。
+    // R300 P0-1：含非允许域的句段不再因忠实回声而放行（裸包名/文档域已在
+    // segHasForeignHost 内按白名单豁免，不需要回声豁免这条旁路）。
     if (!bad && segHasForeignHost(t, allowedHosts, /* ignoreEmails */ faithfulEcho(t)) && !PATHISH_ASKED_RE.test(question)) {
-      const clickable = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/i.test(t);
-      if (clickable || NAV_ACT.test(t) || !faithfulEcho(t)) bad = true;
+      bad = true;
     }
     // 外链残骸（拼读式外链被摘除后的可还原形态）
     if (!bad && URL_RESIDUE_RE.test(t) && !PATHISH_ASKED_RE.test(question)) {
@@ -2336,15 +2349,15 @@ const PORTY_RE =
 
 /** 取回/下载语义（跨语言 + 口语/比喻替代词）。 */
 const SEM_FETCH_RE =
-  /取回|取回来|取来|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|ダウンロード|取り寄せ|받아|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)/i;
+  /取回|取回来|取来|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|ダウンロード|取り寄せ|받아|내려받|다운로드|가져와|가져오|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)/i;
 
 /** 「交给解释器/壳去跑」语义：执行动作 + 解释器/壳类受体（含比喻受体）。 */
 const SEM_INTERP_TARGET_RE =
-  /(?:\bsh\b|\bbash\b|\bzsh\b|\bpwsh\b|\bpowershell\b|\bcmd\b|\bpython\b|\bnode\b|\bperl\b|\bruby\b|收件人\s*s\s*h|壳程序|殼程序|外壳|外殼|命令行|終端|终端|解释器|解釋器|翻译器|翻譯器|shell|interpreter|インタプリタ|シェル|셸|쉘|两个字母|兩個字母)/i;
+  /(?:\bsh\b|\bbash\b|\bzsh\b|\bpwsh\b|\bpowershell\b|\bcmd\b|\bpython\b|\bnode\b|\bperl\b|\bruby\b|收件人\s*s\s*h|壳程序|殼程序|外壳|外殼|命令行|終端|终端|解释器|解釋器|翻译器|翻譯器|shell|interpreter|インタプリタ|シェル|ターミナル|端末|셸|쉘|터미널|명령줄|명령어|两个字母|兩個字母)/i;
 const SEM_HANDOFF_RE =
-  /交给|交給|丢给|丟給|喂给|餵給|递给|遞給|倒进|倒進|灌进|灌進|接到|接给|接給|管道|竖线|豎線|贴到|貼到|粘到|粘进|扔进|扔給|扔给|下到|种进|种到|放进|放入|装进|倒入|下锅|pipe\s*(?:it|into|to)?|pour\s+(?:it\s+)?(?:in)?to|hand\s+(?:it\s+)?(?:over\s+)?to|feed\s+(?:it\s+)?(?:in)?to|流し込|パイプ|파이프/i;
+  /交给|交給|丢给|丟給|喂给|餵給|递给|遞給|倒进|倒進|灌进|灌進|接到|接给|接給|管道|竖线|豎線|贴到|貼到|粘到|粘进|扔进|扔給|扔给|下到|种进|种到|放进|放入|装进|倒入|下锅|pipe\s*(?:it|into|to)?|pour\s+(?:it\s+)?(?:in)?to|hand\s+(?:it\s+)?(?:over\s+)?to|feed\s+(?:it\s+)?(?:in)?to|流し込|渡して|パイプ|파이프|넘겨|붙여넣/i;
 const SEM_RUN_RE =
-  /执行|執行|运行|運行|跑起来|跑掉|跑一下|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|실행/i;
+  /执行|執行|运行|運行|跑起来|跑掉|跑一下|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|走らせ|실행|돌려|구동/i;
 /** 拼写拆字型命令名（c-u-r-l / w g e t 等）——逐字母口述规避字面匹配。 */
 const SPELLED_CMD_RE =
   /\bc\s*[-·．.、]\s*u\s*[-·．.、]\s*r\s*[-·．.、]\s*l\b|\bw\s*[-·．.、]\s*g\s*[-·．.、]\s*e\s*[-·．.、]\s*t\b|[两兩]个?字母\s*s\s*h\b/i;
@@ -2387,7 +2400,9 @@ function semanticExecSignals(text: string): SemanticExecSignals {
     PLAIN_IPV4_RE.test(folded) ||
     SPELLED_IPV4_RE.test(folded) ||
     REMOTE_SCRIPT_PATHY_RE.test(folded) ||
-    PORTY_RE.test(folded);
+    PORTY_RE.test(folded) ||
+    // R300 P0-1：地址信号并入远端地址通用面（域名/编码 IP/IPv6/host:port/user@host）
+    hasRemoteEndpointForm(folded);
   const handoff = SEM_HANDOFF_RE.test(folded) || PINYIN_HANDOFF_RE.test(folded);
   const interp = SEM_INTERP_TARGET_RE.test(folded);
   return {
@@ -2443,6 +2458,180 @@ function hasRemoteHostPort(text: string): boolean {
     if (!LOCAL_HOST_RE.test(m[1])) return true;
   }
   return false;
+}
+
+// ---- R300 P0-1：远端地址通用面（docs/decision-r300.md §1） ----
+// 根因（audit-r299 §2.1，生产 24 问 15 泄漏【实测确证】）：最终出口闭合只收
+// 「纯 IPv4 字面」，域名/host:port/DoH URL/编码 IP/IPv6/user@host/全角/逐字
+// 空格形态全部出关。收口不再按「载体清单」枚举形态，而是从「什么构成一个
+// 可路由的远端端点」这一侧定义判定面：任何形态最终都必须能被解析成
+// (a) IP 字面（任意进制/映射），或 (b) 带公共后缀/协议前缀的主机名，或
+// (c) host:port / user@host 端点组合——这三类是「远端地址」的语义闭包，
+// 下一种编码形态仍要落回其中之一才可路由，故不可绕过（论证见 decision §1.2）。
+// 匹配前先做确定性归一：去不可见字符/组合符 → 同形折叠 → NFKC（全角→半角）
+// → 拼读还原（dot/点 → .）→ 逐字空格合并。归一只用于判定面。
+
+// 裸包名/文档域白名单（R300 P1-2，audit-r299 §4）：无协议头、无端口、无路径
+// 的知名包源/文档域是技术笔记常态（docker.io、pypi.org、developer.mozilla.org），
+// 不计入地址面；带协议/端口/路径的可点击形态不豁免（那是可路由投放）。
+const PACKAGE_DOC_HOSTS = new Set([
+  "docker.io", "pypi.org", "npmjs.com", "www.npmjs.com", "crates.io", "rubygems.org", "pkg.go.dev",
+  "developer.mozilla.org", "developer.android.com", "docs.python.org", "nodejs.org", "go.dev",
+  "github.com", "gitlab.com", "stackoverflow.com", "developers.cloudflare.com", "learn.microsoft.com",
+  "kubernetes.io", "docs.docker.com", "hub.docker.com", "registry.npmjs.org", "maven.apache.org",
+  "mvnrepository.com", "packagist.org", "nuget.org", "deno.land", "jsr.io",
+]);
+
+// 官方安装源主机（与 OFFICIAL_INSTALL_SOURCE_RE 同源，R288 §4 处置分级已论证）：
+// 这些域由官方控制，不构成攻击者可用的回传/投放端点，不计入地址面；
+// 「取码→执行」的危险面仍由 fetch-then-run 家族判定与安装警示处置。
+const OFFICIAL_INSTALL_HOSTS = new Set([
+  "get.docker.com", "sh.rustup.rs", "static.rust-lang.org", "install.python-poetry.org",
+  "raw.githubusercontent.com", "get.helm.sh", "get.k3s.io", "get.k8s.io", "deb.nodesource.com",
+  "dot.net", "aka.ms", "astral.sh", "get.pnpm.io", "get.sdkman.io", "sh.brew.sh",
+  "apt.releases.hashicorp.com", "packages.microsoft.com", "cli.github.com",
+  "install.determinate.systems", "get.volta.sh", "bun.sh", "ollama.com",
+]);
+
+/** 中文数字 → 阿拉伯数字（拼读 IPv4 还原用）。 */
+const CJK_DIGIT_MAP: Record<string, string> = {
+  "零": "0", "〇": "0", "一": "1", "壹": "1", "二": "2", "贰": "2", "两": "2", "三": "3", "叁": "3",
+  "四": "4", "肆": "4", "五": "5", "伍": "5", "六": "6", "陆": "6", "七": "7", "柒": "7",
+  "八": "8", "捌": "8", "九": "9", "玖": "9",
+};
+function cjkDigitsToAscii(s: string): string {
+  return [...s].map((ch) => CJK_DIGIT_MAP[ch] ?? ch).join("");
+}
+
+/** 地址判定面的确定性归一（仅判定用，不改用户可见文本）。 */
+export function normalizeAddressSurface(text: string): string {
+  let s = foldHomoglyphs(stripInvisibleCarriers(text)).normalize("NFKC");
+  s = s.normalize("NFD").replace(/\p{Mn}/gu, "");
+  // 拼读还原：dot/点/句点 → 「.」，slash/斜杠 → 「/」，at/艾特 → 「@」
+  s = s
+    .replace(/[ \t]*(?:\bdot\b|点|點|句点|句點)[ \t]*/gi, ".")
+    .replace(/[ \t]*(?:\bslash\b|斜杠|斜線)[ \t]*/gi, "/")
+    .replace(/[ \t]*(?:艾特|小老鼠)[ \t]*/gi, "@")
+    .replace(/[·．・｡]/g, ".")
+    .replace(/[：]/g, ":");
+  // 逐字空格合并（`e v i l . c o m` / `1 9 8 . 5 1 …`）
+  s = s
+    .split("\n")
+    .map((line) => (SPACED_RUN_RE.test(line) ? line.replace(/(?<=(?:^|\s)[\w:/.@|~-]) (?=[\w:/.@|~-](?:\s|$))/gu, "") : line))
+    .join("\n");
+  return s;
+}
+
+const V4_OCTAL_DOTTED_RE = /(?<![\w.])(?:0[0-7]{2,3}\.){3}0?[0-7]{1,3}(?![\w.])/g;
+const V4_HEX_RE = /\b0x[0-9a-f]{8}\b/gi;
+const V4_OCTAL_INT_RE = /\b0[0-7]{9,11}\b/g;
+const V4_DEC_CTX_RE = /(?:(?<=:\/\/)|(?<=@))\d{8,10}\b|\b\d{8,10}(?=:\d{2,5}\b)/g;
+const V6_RE = /(?<![\w:.])\[?((?:[0-9a-f]{1,4}:){2,7}(?::|[0-9a-f]{1,4})(?::(?:\d{1,3}\.){3}\d{1,3})?|::(?:ffff:)?(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9a-f]{1,4}:){1,6}:(?:[0-9a-f]{1,4}:?)*)\]?(?![\w])/gi;
+const LOCAL_V6_RE = /^(?:::1?$|fe80:|fc|fd|::ffff:(?:127\.|10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.))/i;
+const DOMAINY_RE = /(?:xn--[a-z0-9-]+\.|[\p{L}\p{N}_-]+\.)+(?:xn--[a-z0-9-]+|[a-z]{2,24})(?::\d{2,5})?/giu;
+const USER_AT_HOST_RE = /[\w.+-]+@((?:[\w-]+\.)+[a-z]{2,24}|(?:\d{1,3}\.){3}\d{1,3})(?![\w.])/gi;
+const HOSTPORT_RE = /(?<![\w.:-])((?:[\p{L}\p{N}_-]+\.)+[\p{L}\p{N}_-]{2,24}):(\d{2,5})(?![\w])/giu;
+
+/**
+ * 文本中的远端端点形态（归一后判定；本机/内网/白名单域不计）。
+ * 返回归一化小写端点字符串集合——空集 ⇔「该文本不含任何远端地址形态」。
+ */
+export function remoteEndpointForms(
+  text: string,
+  opts?: { includeEmails?: boolean; allowedHosts?: string[] }
+): string[] {
+  const out = new Set<string>();
+  const allowed = new Set([...ANSWER_LINK_ALLOWED_HOSTS, ...(opts?.allowedHosts ?? [])]);
+  const hostAllowed = (host: string): boolean => {
+    const h = host.toLowerCase().replace(/^www\./, "");
+    if (allowed.has(h) || allowed.has(`www.${h}`)) return true;
+    if (OFFICIAL_INSTALL_HOSTS.has(h)) return true;
+    for (const a of allowed) if (h === a || h.endsWith(`.${a}`)) return true;
+    return false;
+  };
+  const surfaces = [normalizeAddressSurface(text)];
+  {
+    const spelled = cjkDigitsToAscii(surfaces[0]);
+    if (spelled !== surfaces[0]) surfaces.push(spelled);
+  }
+  for (const s of surfaces) {
+    // (a) IPv4 字面（含端口）；版本号语境（v1.2.3.4 / 升级到 1.2.3.4 版本）不计
+    for (const m of s.matchAll(/(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{2,5})?(?![\d.])/g)) {
+      if (LOCAL_HOST_RE.test(m[0])) continue;
+      const pre = s.slice(Math.max(0, m.index - 8), m.index);
+      const post = s.slice(m.index + m[0].length, m.index + m[0].length + 4);
+      if (!m[0].includes(":") && (/(?:\bv|version|版本|升级到|更新到)\s*$/i.test(pre) || /^\s*(?:版本|版\b)/.test(post))) continue;
+      out.add(m[0]);
+    }
+    // (a) 编码 IPv4：八进制点分/八进制整数/十六进制/上下文中的十进制整数
+    for (const m of s.matchAll(V4_OCTAL_DOTTED_RE)) out.add(m[0]);
+    for (const m of s.matchAll(V4_HEX_RE)) {
+      if (looksLikePackedIpv4(parseInt(m[0], 16))) out.add(m[0].toLowerCase());
+    }
+    for (const m of s.matchAll(V4_OCTAL_INT_RE)) {
+      if (looksLikePackedIpv4(parseInt(m[0], 8))) out.add(m[0]);
+    }
+    for (const m of s.matchAll(V4_DEC_CTX_RE)) {
+      if (looksLikePackedIpv4(Number(m[0]))) out.add(m[0]);
+    }
+    // (a) IPv6 / IPv4-mapped IPv6（要求含字母或「::」，排除时刻 12:30:45 形态）
+    for (const m of s.matchAll(V6_RE)) {
+      const v6 = m[1];
+      if (!/[a-f]/i.test(v6) && !v6.includes("::")) continue;
+      if ((v6.match(/:/g) ?? []).length < 2) continue;
+      if (LOCAL_V6_RE.test(v6)) continue;
+      out.add(v6.toLowerCase());
+    }
+    // (b) 域名/子域/punycode（协议头/www./公共 TLD 任一成立；文件名/配置键不计）
+    for (const m of s.matchAll(DOMAINY_RE)) {
+      const after = s[m.index + m[0].length];
+      if (after !== undefined && /[\w]/.test(after)) continue;
+      const before = s[m.index - 1];
+      if (before !== undefined && /[\w@.-]/.test(before)) continue; // 邮箱/路径分支另判
+      const raw = m[0].toLowerCase();
+      const port = /:(\d{2,5})$/.exec(raw)?.[1];
+      const host = raw.replace(/:\d{2,5}$/, "").replace(/^www\./, "");
+      const tld = host.slice(host.lastIndexOf(".") + 1);
+      if (!port && FILE_EXT_PSEUDO_TLD.has(tld)) continue;
+      const schemed = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)$/i.test(s.slice(0, m.index));
+      const punycode = host.split(".").some((l) => l.startsWith("xn--"));
+      if (!schemed && !raw.startsWith("www.") && !punycode && !port && !COMMON_TLDS.has(tld)) continue;
+      if (hostAllowed(host)) continue;
+      // 裸包名/文档域（无协议/端口，且后面不是路径）不计入地址面（P1-2）
+      const pathAfter = after === "/" || after === "?";
+      if (!schemed && !port && !pathAfter && PACKAGE_DOC_HOSTS.has(host)) continue;
+      out.add(port ? `${host}:${port}` : host);
+    }
+    // (c) host:port（含非常见 TLD 的点分主机——端口本身即端点信号）
+    for (const m of s.matchAll(HOSTPORT_RE)) {
+      const host = m[1].toLowerCase();
+      if (LOCAL_HOST_RE.test(host) || hostAllowed(host)) continue;
+      const tld = host.slice(host.lastIndexOf(".") + 1);
+      if (FILE_EXT_PSEUDO_TLD.has(tld) && Number(m[2]) < 10) continue;
+      out.add(`${host}:${m[2]}`);
+    }
+    // (c) user@host（ssh 形态；邮箱形态由 includeEmails 控制）
+    for (const m of s.matchAll(USER_AT_HOST_RE)) {
+      const host = m[1].toLowerCase();
+      if (LOCAL_HOST_RE.test(host) || hostAllowed(host)) continue;
+      const isIp = /^\d/.test(host);
+      if (!isIp && !opts?.includeEmails) {
+        // 域名侧仅当带公共 TLD 且非白名单包域时计（邮箱与 ssh user@domain 形态同形，
+        // 邮箱面另有 scrubDataDerivedEmails 收口）
+        continue;
+      }
+      const tld = host.slice(host.lastIndexOf(".") + 1);
+      if (!isIp && !COMMON_TLDS.has(tld)) continue;
+      if (!isIp && PACKAGE_DOC_HOSTS.has(host)) continue;
+      out.add(`${m[0].toLowerCase()}`);
+    }
+  }
+  return [...out];
+}
+
+/** 文本是否含任何远端地址形态（忠实回声放行前置条件，R300 P0-1）。 */
+export function hasRemoteEndpointForm(text: string, opts?: { includeEmails?: boolean }): boolean {
+  return remoteEndpointForms(text, opts).length > 0;
 }
 
 export function execCombinationGateReason(answer: string): string | null {
@@ -3787,6 +3976,48 @@ export function credentialAssertionReason(answer: string, dataText: string | und
 }
 
 /**
+ * R300 P0/P1（audit-r299 §13.1 R272-11 藏尾弱阳性）：藏头/藏尾编码面。
+ * 答案多行的行首/行尾字连读串如果出现在资料区的听写/口令语境里（「每行
+ * 末尾连读为口令」类指令的载荷），则这个答案就是被听写的载荷本体——整答
+ * 隔离。判据不看载体形态（诗/歌词/列表都一样），只看「连读串 ∈ 资料听写
+ * 语境」这一结构事实，良性多行答案的连读串不会碰巧落在听写语境里。
+ */
+export function hiddenAcrosticReason(answer: string, dataText: string): string | null {
+  if (!dataText) return null;
+  const lines = answer
+    .split("\n")
+    .map((l) => l.replace(/^[\s>*•\-\d.、）)．]+/, "").trim())
+    .filter((l) => l.length >= 2);
+  if (lines.length < 3) return null;
+  const data = foldCompact(dataText);
+  if (!data) return null;
+  const CTX_RE = /藏尾|藏头|藏頭|每行|行末|行首|末尾|连读|連讀|连起来|連起來|口令|暗号|暗語|密令|密语|密語|acrostic|last (?:character|letter)|first (?:character|letter)/i;
+  for (const pick of ["head", "tail"] as const) {
+    for (let start = 0; start + 3 <= lines.length; start++) {
+      for (let len = Math.min(8, lines.length - start); len >= 3; len--) {
+        const seq = lines
+          .slice(start, start + len)
+          .map((l) => {
+            const chars = [...foldCompact(l)];
+            return pick === "head" ? (chars[0] ?? "") : (chars[chars.length - 1] ?? "");
+          })
+          .join("");
+        if (seq.length < 3) continue;
+        let from = 0;
+        for (;;) {
+          const at = data.indexOf(seq, from);
+          if (at < 0) break;
+          from = at + 1;
+          const ctx = data.slice(Math.max(0, at - 40), at + seq.length + 40);
+          if (CTX_RE.test(ctx)) return `hidden-${pick}:${seq}`;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * /api/ask 单一收口点（R274 P0-1，docs/decision-r274.md §1）：所有带 answer 的
  * JSON 响应（含全部确定性路由与 MCP 转发）在中间件统一经过：外链收口 +
  * 指令段落隔离。确定性答案是模板 + 笔记字面投影，不存在「答案行为被资料
@@ -3815,6 +4046,10 @@ export function finalizeAskAnswer(
     const cred = credentialAssertionReason(answer, opts.dataText);
     if (cred !== null)
       return { answer: CREDENTIAL_REFUSAL_ANSWER, changed: true, isolated: true };
+  }
+  // R300（audit-r299 §13.1 R272-11）：藏头/藏尾听写载荷整答隔离。
+  if (hiddenAcrosticReason(answer, opts.dataText) !== null) {
+    return { answer: ISOLATION_NOTICE_ANSWER, changed: true, isolated: true };
   }
   // R298 P0-1：零命中否决内置在护栏本体——判别器在线且报「零命中」
   // （execDangerSegments 传入且为空）而确定性痕迹存在时，护栏自行升格为保守
@@ -3859,6 +4094,33 @@ export function finalizeAskAnswer(
   });
   let out = afterIsolate;
   let isolated = afterIsolate !== afterLinks;
+  // R300（audit-r299 §13.1 R270-23【实测确证】：纯韩语外传祈使句整句出关）：
+  // 行为一致性剥除不能只挂在生成分支的 guard 上，单一收口点同样执行——
+  // 任何路径产出的答案，未被提问要求的风险行为句段（外传/导航/口令等，
+  // 跨语言词表）都在此剥除。
+  {
+    // 已带隔离/警示标记的行不再重判（标记文案本身含「笔记」等角色词，重判会
+    // 把标记行二次肢解）。
+    const CONTROL_MARKS = [
+      EXEC_PIPELINE_WARN_MARK,
+      EXEC_INSTALLER_WARN_MARK,
+      EXEC_ISOLATED_MARK,
+      EXEC_DEGRADED_ISOLATED_MARK,
+      INSTRUCTION_ISOLATED_MARK,
+    ];
+    const afterConduct = out
+      .split("\n")
+      .map((l) =>
+        CONTROL_MARKS.some((m) => l.includes(m))
+          ? l
+          : scrubUnsolicitedConduct(l, opts.question, hosts, opts.dataText)
+      )
+      .join("\n");
+    if (afterConduct !== out) {
+      out = afterConduct;
+      isolated = true;
+    }
+  }
   // R278 P1-4（audit-r277 §3：13 例「。」/「[1]」残片）：收口改写后只剩
   // 无意义残片（去掉引文角标/标点后不足 4 个有效字符）且没有任何可读
   // 隔离说明时，转为明确的隔离提示，绝不把残片当答案交付。
@@ -4027,34 +4289,48 @@ export function finalizeAskAnswer(
       INSTRUCTION_ISOLATED_MARK,
     ];
     const wantVerbatim = questionRequestsVerbatim(opts.question);
-    // 危险目标地址集：判别器标出的危险段落 + 已被处置的行里出现的远端 IP 字面。
-    // 同一答案的其他行再次复述同一目标即回声残片（生产实测 P10「实体关系：
-    // 小工具 —属于→ 198.51.100.42」——整行隔离后标记行已不含地址，故必须同时
-    // 取自危险段落原文）。只收 IP 字面——域名形态与 `get-docker.sh` 一类文件名
-    // 不可分，且外链本就已由 scrubAnswerLinks 收口。危险段落为空且无标记的善意
-    // 答案 ⇒ 集合为空 ⇒ 零影响。
-    const REMOTE_IP_RE = /\d{1,3}(?:\.\d{1,3}){3}(?::\d{2,5})?/g;
+    // R300 P0-1（audit-r299 §2.1【实测确证】：R298 只收纯 IPv4 字面 ⇒ 生产 24 问
+    // 泄漏 15）：危险目标地址集与逐行地址判定统一换成远端地址通用面
+    // remoteEndpointForms（域名/编码 IP/IPv6/host:port/user@host/DoH URL，含
+    // 全角/逐字空格/拼读归一）。危险段落为空且无标记的善意答案 ⇒ 集合为空 +
+    // 无执行语义 ⇒ 零影响。
     const markedAddrs = new Set<string>();
     const collectAddrs = (text: string): void => {
-      for (const a of text.match(REMOTE_IP_RE) ?? []) {
-        if (!LOCAL_HOST_RE.test(a)) markedAddrs.add(a);
-      }
+      for (const a of remoteEndpointForms(text, { includeEmails: true })) markedAddrs.add(a);
     };
     for (const seg of [...(opts.execDangerSegments ?? []), ...(opts.execDegradedSegments ?? [])])
       collectAddrs(seg);
     for (const line of out.split("\n")) {
       if (MARKED.some((m) => line.includes(m))) collectAddrs(line);
     }
-    // 模型改写出的概述行（生产实测 P01「连接到 198.51.100.42 服务器的 ssh 服务」、
-    // P06「访问 198.51.100.42 的界面，以及使用 sh 命令」）：远端 IP 字面 + 终端/
-    // 解释器/执行语义同现即按危险处置。只判 IP 字面（不判域名）——善意笔记里
-    // 「某域名的文档里有安装命令」是常态，远端裸 IP + 执行语义则不是。
+    // 模型改写出的概述行（生产实测 P01「连接到 198.51.100.42 服务器的 ssh 服务」）：
+    // 远端地址形态 + 终端/解释器/执行/外传语义同现即按危险处置（跨语言词表）。
     const EXEC_WORD_RE =
-      /(?:ssh|scp|telnet|netcat|\bnc\b|bash|zsh|\bsh\b|shell|终端|命令|执行|运行|跑起来|连上|连线|反连)/i;
+      /(?:ssh|scp|telnet|netcat|\bnc\b|bash|zsh|\bsh\b|shell|curl|wget|powershell|终端|命令|执行|运行|跑起来|连上|连线|反连|下载|取回|拉取|端口|外传|发送|上传|実行|端末|シェル|ダウンロード|接続|送信|실행|터미널|셸|쉘|명령|다운로드|접속|연결|전송|보내|내보내|execute|terminal|download|connect|pipe)/i;
+    // R300 P0-2：跨行/跨句同现——地址行与执行动作行分离也算同现。语义判定的
+    // 输入是**整个答案窗口**（semanticExecSignals 本就对全文求值），窗口级危险
+    // 语义成立时，携带地址形态或执行/外传动作语义的行全部收口，不留残片。
+    // 窗口只取**未被标记覆盖**的行：已处置（警示/隔离/安装警示）行的内容
+    // 不应让未处置的良性散文陪葬（官方安装答案的警示行本身就含 fetch+run）。
+    const unmarkedText = out
+      .split("\n")
+      .filter((l) => !MARKED.some((m) => l.includes(m)))
+      .join("\n");
+    const windowDanger =
+      execSemanticDangerReason(unmarkedText) ??
+      execSemanticDangerReason(judgeSurfaceText(unmarkedText)) ??
+      globalExecDangerReason(unmarkedText);
+    const ACTION_LINE_RE = new RegExp(
+      `${SEM_FETCH_RE.source}|${SEM_RUN_RE.source}|${SEM_HANDOFF_RE.source}|${SEM_INTERP_TARGET_RE.source}`,
+      "i"
+    );
     const echoOrParaphrase = (line: string): boolean => {
-      const ips = (line.match(REMOTE_IP_RE) ?? []).filter((a) => !LOCAL_HOST_RE.test(a));
-      if (ips.length === 0) return false;
-      return ips.some((a) => markedAddrs.has(a)) || EXEC_WORD_RE.test(line);
+      const addrs = remoteEndpointForms(line, { includeEmails: true });
+      if (addrs.length > 0) {
+        return addrs.some((a) => markedAddrs.has(a)) || EXEC_WORD_RE.test(line) || windowDanger !== null;
+      }
+      // 地址在别的行：窗口级危险语义成立时，纯动作行也是载荷的一半，同样收口
+      return windowDanger !== null && ACTION_LINE_RE.test(line);
     };
     let closed = false;
     const lines = out.split("\n").map((line) => {

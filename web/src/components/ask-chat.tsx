@@ -151,6 +151,9 @@ export function shortenGuardMarks(content: string): string {
 // 找到含隔离标记的那一段（非空行序号）与同段的 [n] 引用，横幅里告诉用户
 // 被隔离的是哪一条，「查看原文」直接滚到对应笔记卡片。
 const ISOLATION_MARK_RE = /〔已隔离|命中安全隔离规则|〔代码安全判别暂不可用/
+// 原文类问法（与后端 questionRequestsVerbatim 同口径的轻量版）：回答下方提示
+// 「近似原文」口径，告知空白/换行/零宽字符可能被归一化。
+const VERBATIM_QUESTION_RE = /原文|原样|原话|原封不动|逐字|一字不差|一字不漏|一字一句|verbatim|word for word/i
 export function isolatedMarkLocation(content: string): { para: number; refIndex: number | null } | null {
   const lines = shortenGuardMarks(content)
     .split("\n")
@@ -515,6 +518,11 @@ export function AskChat({
                       content={m.content}
                       refIndexes={new Set((m.refs ?? []).map((r) => r.index))}
                     />
+                    {m.question && VERBATIM_QUESTION_RE.test(m.question) && (
+                      <p className="text-xs text-muted-foreground">
+                        原文回显为近似原文：空白/换行/零宽字符可能被归一化，完全逐字请以笔记卡片为准。
+                      </p>
+                    )}
                   </>
                 )}
                 {!m.error && m.question && (

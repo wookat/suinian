@@ -1796,7 +1796,7 @@ export function financeListIntent(question: string): FinanceListDirection | null
 }
 
 const FINANCE_LIST_STRIP_RE =
-  /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出来|列出|列举|列一下|列个?清单|罗列|拉个?清单|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|逐[笔条项个]?|一笔笔|一条条|挨个|笔|记|账|的|所有|全部|我们?|你|咱|把|都|请|麻烦|帮我?|给我|收到|到账|款/g;
+  /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出来|列出|列举|列一下|列个?清单|罗列|拉个?清单|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|逐[笔条项个]?|一笔笔|一条条|挨个|笔|记|账|所有|全部|我们?|你|咱|把|都|请|麻烦|帮我?|给我|收到|到账|款|别人|有人|人家|转给|打给|转来|转过来|打过来|汇给|汇过来|是|的|钱/g;
 
 function financeListResidual(question: string): string {
   return applyStrips(question, [...STRIP_RES, FINANCE_LIST_STRIP_RE]);
