@@ -6,6 +6,8 @@
 // - P2-6 「M月D日以后/之前」边界含/不含当日显式披露。
 import { describe, it, expect } from "vitest";
 import { parseTimeRange, isFinanceAggQuestion } from "../src/ask";
+import { enumNoteLines } from "../src/index";
+import type { NoteRow } from "../src/types";
 
 // 2026-08-30 03:00 UTC = 2026-08-30 11:00 Asia/Shanghai（与 audit-r295 §6 同日）
 const NOW = new Date("2026-08-30T03:00:00Z");
@@ -129,5 +131,45 @@ describe("R296 P2-6 日边界披露", () => {
     const r = parseTimeRange("10月5日之前一共花了多少钱", NOW)!;
     expect(r.end).toBe("2026-10-04 16:00:00");
     expect(r.phrase).toContain("不含当日");
+  });
+});
+
+describe("R296 枚举列举逐笔附金额（生产复测 #9「8月17日以后有哪些账」）", () => {
+  const row = (over: Partial<NoteRow>): NoteRow =>
+    ({
+      id: "n1",
+      title: "买椅子",
+      content: "买椅子 610 元",
+      created_at: "2026-08-17 03:00:00",
+      category: "expense",
+      is_sensitive: 0,
+      amount: 610,
+      currency: "CNY",
+      ...over,
+    }) as unknown as NoteRow;
+
+  it("记账类笔记标题无金额时逐条附上底账金额", () => {
+    const lines = enumNoteLines([
+      row({}),
+      row({ id: "n2", title: "卖旧书收入 300 元", category: "income", amount: 300 }),
+      row({ id: "n3", title: "预付旅行团费", amount: 1200 }),
+    ]);
+    expect(lines[0]).toContain("买椅子（¥610）");
+    // 标题已含金额的不重复附注
+    expect(lines[1]).toContain("卖旧书收入 300 元");
+    expect(lines[1]).not.toContain("¥300");
+    expect(lines[2]).toContain("预付旅行团费（¥1200）");
+  });
+
+  it("非记账/敏感/无金额笔记不附金额", () => {
+    const lines = enumNoteLines([
+      row({ id: "n4", title: "买杯咖啡的想法", category: "idea", amount: 22 }),
+      row({ id: "n5", is_sensitive: 1 }),
+      row({ id: "n6", title: "记一笔", amount: null }),
+    ]);
+    expect(lines[0]).not.toContain("¥");
+    expect(lines[1]).toContain("（加密的敏感笔记）");
+    expect(lines[1]).not.toContain("¥");
+    expect(lines[2]).not.toContain("¥");
   });
 });

@@ -52,7 +52,7 @@ import {
   sweepAuthRateLimits,
   clientIp,
 } from "./auth";
-import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports, financeStats, type FinanceStats } from "./reports";
+import { generatePeriodReport, generateAllWeeklyReports, generateAllMonthlyReports, financeStats, formatAmount, type FinanceStats } from "./reports";
 import { getTodayReview, generateAllDailyReviews, readCronHeartbeats, writeCronHeartbeat } from "./review";
 import { upsertNoteEmbedding, deleteNoteEmbedding, deleteNoteEmbeddings, semanticRecall, backfillEmbeddings, purgeLowSignalEmbeddings, EMBED_BACKFILL_BUDGET_MS, embedText, cosineSim, type SemanticRecallTiming } from "./semantic";
 import { extractGraph, deleteNoteGraph, deleteNotesGraph, getThreadGraph, graphExpand, backfillGraphExtracts } from "./graph";
@@ -1341,7 +1341,7 @@ const CATEGORY_LABEL: Record<string, string> = {
  * 时间），不再回显任意正文首行；标题本身经 sanitizeEnumTitle 中和（剥仿冒
  * 标注、隔离读者指令/伪授权、外链收口）；正文只能在笔记卡片（引用区）查看。
  */
-function enumNoteLines(rows: NoteRow[]): string[] {
+export function enumNoteLines(rows: NoteRow[]): string[] {
   const order: string[] = [];
   const counts = new Map<string, number>();
   for (const n of rows) {
@@ -1354,6 +1354,17 @@ function enumNoteLines(rows: NoteRow[]): string[] {
       text =
         sanitizeEnumTitle(n.title, { sourceContent: n.content }) ||
         `（无标题笔记，${(n.created_at || "").slice(0, 10)}）`;
+    }
+    // 记账类笔记逐条附金额（底账字段，非正文回显）——列举答案可直接逐笔核对
+    if (
+      !n.is_sensitive &&
+      (n.category === "expense" || n.category === "income" || n.category === "transfer") &&
+      typeof n.amount === "number" &&
+      Number.isFinite(n.amount) &&
+      n.amount > 0
+    ) {
+      const amt = formatAmount(n.amount, n.currency || "CNY");
+      if (!text.includes(String(n.amount))) text += `（${amt}）`;
     }
     const line = "- ［" + label + "］" + text;
     if (!counts.has(line)) order.push(line);
