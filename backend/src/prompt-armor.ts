@@ -745,7 +745,9 @@ const CONDUCT_CLASSES: ConductClass[] = [
 export function conductSignal(text: string): boolean {
   const s = text.normalize("NFKC");
   if (CONDUCT_CLASSES.some((c) => c.hit(s))) return true;
-  if (IMPERATIVE_CUE.test(s) && (NAV_ACT.test(s) || EXFIL_ACT.test(s))) return true;
+  // 外传动作词必须带数据对象或外部目的地才构成外传信号——「记得先备份旧配置」
+  // 这类无对象/无目的地的日常备忘不是外传劝导（生产实测良性待办被整段隔离）。
+  if (IMPERATIVE_CUE.test(s) && (NAV_ACT.test(s) || (EXFIL_ACT.test(s) && (EXFIL_OBJ.test(s) || EXFIL_DEST.test(s))))) return true;
   if (EXFIL_ACT.test(s) && (EXFIL_OBJ.test(s) || EXFIL_DEST.test(s))) return true;
   if (/归档服务|备份站|外部服务|备份站点/.test(s)) return true;
   return false;
@@ -801,9 +803,13 @@ export function scrubUnsolicitedConduct(
       bad = true;
       break;
     }
-    // 拼读式/裸域投放：句段含非允许域名且问题没问链接类内容
+    // 拼读式/裸域投放：句段含非允许域名且问题没问链接类内容。忠实回显自
+    // 用户资料、正面回答提问、且句段无导航动作词的**裸域名**（无协议/www.，
+    // 如包名 docker.io）不按投放处置——生产实测「docker 怎么安装？」的良性
+    // 安装答案因包名整段剥空；带协议/www. 的可点击形态仍一律剥除。
     if (!bad && segHasForeignHost(t, allowedHosts, /* ignoreEmails */ faithfulEcho(t)) && !PATHISH_ASKED_RE.test(question)) {
-      bad = true;
+      const clickable = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/i.test(t);
+      if (clickable || NAV_ACT.test(t) || !faithfulEcho(t)) bad = true;
     }
     // 外链残骸（拼读式外链被摘除后的可还原形态）
     if (!bad && URL_RESIDUE_RE.test(t) && !PATHISH_ASKED_RE.test(question)) {

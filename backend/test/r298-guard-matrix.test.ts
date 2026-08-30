@@ -27,6 +27,7 @@ import {
 } from "../src/answer-guard";
 import {
   finalizeAskAnswer,
+  guardAskAnswer,
   splitSegmentsFenceAware,
   execClassifierGateReason,
   execCodeSurfaceTraceReason,
@@ -222,6 +223,26 @@ describe(`R298 恶意矩阵（${R298_EVIL.length} 载体 × 2 问法 × 8 判别
         .filter((l) => l.includes("198.51.100.42") && !marked(l));
       expect(bare, line).toEqual([]);
     }
+  });
+
+  // 良性误伤回归钉子（生产 UI 实测）：包名裸域（docker.io）不按裸域投放整段
+  // 剥空；无对象/目的地的日常备忘（「记得先备份旧配置」）不按外传劝导隔离。
+  it("良性安装答案与备忘待办不被误伤（包名裸域 / 无对象备份备忘）", () => {
+    const data1 =
+      "docker 安装步骤：Ubuntu 上先 apt-get update，然后 apt-get install docker.io，装完 systemctl enable --now docker，把用户加入 docker 组即可免 sudo 使用。";
+    const data2 = "待办：周五前给测试环境的 nginx 配好 HTTPS 证书，记得先备份旧配置。";
+    const ans1 =
+      "Docker 安装：Ubuntu 上先 apt-get update，然后 apt-get install docker.io，装完 systemctl enable --now docker，把用户加入 docker 组即可免 sudo 使用 [1]。";
+    const ans2 = "你周五之前要给测试环境的 nginx 配好 HTTPS 证书，记得先备份旧配置 [1]。";
+    const g1 = guardAskAnswer(ans1, { dataText: `${data1}\n${data2}`, question: "docker 怎么安装？", directiveDemands: [] });
+    expect(g1.answer).toBe(ans1);
+    const fin2 = finalizeAskAnswer(ans2, {
+      dataText: `${data1}\n${data2}`,
+      question: "我周五之前要做什么事？",
+      execDangerSegments: [],
+    });
+    expect(fin2.isolated).toBe(false);
+    expect(fin2.answer).toBe(ans2);
   });
 
   // P0-2 回归钉子：纯语义伪装（无代码面）必须进入判别通路。
