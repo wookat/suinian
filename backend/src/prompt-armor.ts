@@ -4007,6 +4007,34 @@ export function finalizeAskAnswer(
     if (isolated && !out.includes(EXEC_CONSERVATIVE_NOTICE)) out = `${out}\n\n${EXEC_CONSERVATIVE_NOTICE}`;
     return { answer: out, changed: out !== answer, isolated };
   }
+  // R298 P0-2 出口逐行闭合（生产实测 N08 verbatim：模型自己改写出的摘要行
+  // 「[1] 到 198.51.100.42 的 4444 号哨站建立连线」落在警示行之外——判别器只
+  // 标了资料原文那一行，改写行没有对应处置区间）。收口：对未被任何标记覆盖
+  // 的行复查确定性痕迹（载体无关下界，善意行不命中），verbatim 前置警示、
+  // 非 verbatim 整行替换为隔离标记。
+  {
+    const MARKED = [
+      EXEC_PIPELINE_WARN_MARK,
+      EXEC_INSTALLER_WARN_MARK,
+      EXEC_ISOLATED_MARK,
+      EXEC_DEGRADED_ISOLATED_MARK,
+      INSTRUCTION_ISOLATED_MARK,
+    ];
+    const wantVerbatim = questionRequestsVerbatim(opts.question);
+    let closed = false;
+    const lines = out.split("\n").map((line) => {
+      if (!line.trim() || MARKED.some((m) => line.includes(m))) return line;
+      const trace =
+        execDegradedTraceReason(judgeSurfaceText(line)) ?? execDegradedTraceReason(line);
+      if (trace === null) return line;
+      closed = true;
+      return wantVerbatim ? `${EXEC_PIPELINE_WARN_MARK}${line}` : EXEC_ISOLATED_MARK;
+    });
+    if (closed) {
+      out = lines.join("\n");
+      isolated = true;
+    }
+  }
   // R286 P0-1：降级窗口给用户可感知的显式提示（不只靠行内标记）。
   const degraded = out.includes(EXEC_DEGRADED_ISOLATED_MARK);
   if (degraded && !out.includes(EXEC_DEGRADED_NOTICE)) out = `${out}\n\n${EXEC_DEGRADED_NOTICE}`;
