@@ -672,7 +672,12 @@ const COMMON_TLDS = new Set([
 ]);
 
 // 域名形态（含拼读还原）：句段里出现非允许域即属导航/回传投放
-function segHasForeignHost(seg: string, allowedHosts: string[], ignoreEmails = false): boolean {
+function segHasForeignHost(
+  seg: string,
+  allowedHosts: string[],
+  ignoreEmails = false,
+  ignoreBareHosts = false
+): boolean {
   const canon = seg
     .normalize("NFKC")
     .replace(/[ \t]*(?:dot|点|句点)[ \t]*/gi, ".")
@@ -694,6 +699,13 @@ function segHasForeignHost(seg: string, allowedHosts: string[], ignoreEmails = f
     // 官方安装源主机不构成回传端点（R288 §4）。
     if (!schemed && after !== "/" && PACKAGE_DOC_HOSTS.has(host)) continue;
     if (OFFICIAL_INSTALL_HOSTS.has(host)) continue;
+    // R300 P1-2（audit-r299 §4：裸包名/文档域白名单治不了 8.6% 的误伤面——
+    // proxy.golang.org / sqlite.org / mirrors.tuna… 都不在任何清单里）。判定面
+    // 改成形态 + 语义而非清单：**裸主机名**（无协议、无 www.、后面不接路径）
+    // 在忠实回显用户自有资料且句段内**没有任何导航/取回/执行/外传动作语义**时
+    // 不是投放通道——它只是被记下来的一个名字。地址 + 动作（同句或跨行窗口）
+    // 仍由 CONDUCT_CLASSES 与最终出口的窗口级闭合收口。
+    if (ignoreBareHosts && !schemed && after !== "/" && !m[0].toLowerCase().startsWith("www.")) continue;
     // 邮箱地址里的域名（R274，audit-r273 P1-1 B20）：忠实回显场景下邮箱不是
     // 可点击导航通道，由调用方在确认段落无祈使线索后选择性忽略。
     if (ignoreEmails && m.index > 0 && canon[m.index - 1] === "@") continue;
@@ -708,6 +720,11 @@ function segHasForeignHost(seg: string, allowedHosts: string[], ignoreEmails = f
 // 连字符（普通路径 `src/index.ts`、`$PWD:/app` 不命中），且左边界不接 -/_/./ 词字符
 // （`--rm -it`、`node:22` 不命中）。
 const URL_RESIDUE_RE = /(?<![\w/.:-])[a-z0-9]+(?:-[a-z0-9]+)+[ \t]*\/[ \t]*[a-z0-9][\w.-]*/i;
+
+// 元问法（R300 P1-2）：问题问的是「这条笔记本身写了什么 / 原文复述」，
+// 笔记内容整体即答案，忠实回显天然「正面回答提问」。
+const WHOLE_NOTE_QUESTION_RE =
+  /笔记(?:里|中|上)?(?:都)?(?:写|讲|说|记|提)(?:了|的)?(?:些)?(?:什么|啥|哪些)|筆記(?:里|中|上)?(?:都)?(?:寫|講|說|記|提)(?:了|的)?(?:些)?(?:什麼|啥|哪些)|内容是什么|內容是什麼|原文|原样|原話|原话|逐字|一字不(?:差|改|漏)|复述|複述|念给|念給|verbatim|word for word|what does (?:the|this) note say/i;
 
 // 外链/路径类提问豁免：用户点名要链接、路径、命令、脚本、原文时保留
 const PATHISH_ASKED_RE = /链接|鏈接|网址|網址|域名|网站|網站|站点|站點|地址|页面|路径|路徑|命令|指令|脚本|腳本|代码|代碼|原文|原话|url|link|domain|site|path|command|script|code/i;
@@ -790,10 +807,17 @@ export function scrubUnsolicitedConduct(
   // 17.1%）：祈使措辞本身不再一票否决忠实回声——安全下界由调用点的「句段不含
   // 任何远端地址形态」前置 + 最终出口的外传三元组（动作+对象+去向）窗口闭合
   // 承担；无地址、无「全部笔记/数据」类对象的自有笔记祈使句是用户自己的待办。
+  // R300 P1-2（audit-r299 §4「只给来源引用」计误伤 17.1%）：问法本身就是
+  // 「这条笔记写了什么 / 原文复述」时，笔记内容整体即该问题的答案——忠实回声
+  // 的「正面回答提问」前置条件对这类元问法恒成立，不该因关键词不重合而失效。
+  const wholeNoteAsked = WHOLE_NOTE_QUESTION_RE.test(question);
   const faithfulEcho = (t: string) =>
     dataCompact !== null &&
-    answersQuestionFaithfully(t) &&
+    (wholeNoteAsked || answersQuestionFaithfully(t)) &&
     segmentEchoesData(t, dataCompact, dataText);
+  // 句段内是否有「去到/取回/执行/外传」动作语义（裸主机名豁免的否决条件）。
+  const segHasReachAction = (t: string) =>
+    NAV_ACT.test(t) || EXFIL_ACT.test(t) || SEM_FETCH_RE.test(t) || SEM_RUN_RE.test(t) || SEM_HANDOFF_RE.test(t);
   const segs: Array<{ start: number; end: number; text: string }> = [];
   for (const m of answer.matchAll(/[^\n。！？!?；;]+/g)) {
     // 英文句号仅在后随空白/结尾时是句界（不切 3.5、example.com）
@@ -821,7 +845,16 @@ export function scrubUnsolicitedConduct(
     // 安装答案因包名整段剥空；带协议/www. 的可点击形态仍一律剥除。
     // R300 P0-1：含非允许域的句段不再因忠实回声而放行（裸包名/文档域已在
     // segHasForeignHost 内按白名单豁免，不需要回声豁免这条旁路）。
-    if (!bad && segHasForeignHost(t, allowedHosts, /* ignoreEmails */ faithfulEcho(t)) && !PATHISH_ASKED_RE.test(question)) {
+    if (
+      !bad &&
+      segHasForeignHost(
+        t,
+        allowedHosts,
+        /* ignoreEmails */ faithfulEcho(t),
+        /* ignoreBareHosts */ faithfulEcho(t) && !segHasReachAction(t)
+      ) &&
+      !PATHISH_ASKED_RE.test(question)
+    ) {
       bad = true;
     }
     // 外链残骸（拼读式外链被摘除后的可还原形态）
@@ -2349,7 +2382,7 @@ const PORTY_RE =
 
 /** 取回/下载语义（跨语言 + 口语/比喻替代词）。 */
 const SEM_FETCH_RE =
-  /取回|取回来|取来|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|ダウンロード|取り寄せ|받아|내려받|다운로드|가져와|가져오|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)/i;
+  /取回|取回来|取来|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|ダウンロード|取り寄せ|받아|내려받|다운로드|가져와|가져오|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)|скача|загрузи|حمّ?ل|نزّ?ل|descarga|télécharge|herunterlade|lade\s+(?:es\s+)?herunter/i;
 
 /** 「交给解释器/壳去跑」语义：执行动作 + 解释器/壳类受体（含比喻受体）。 */
 const SEM_INTERP_TARGET_RE =
@@ -2357,7 +2390,7 @@ const SEM_INTERP_TARGET_RE =
 const SEM_HANDOFF_RE =
   /交给|交給|丢给|丟給|喂给|餵給|递给|遞給|倒进|倒進|灌进|灌進|接到|接给|接給|管道|竖线|豎線|贴到|貼到|粘到|粘进|扔进|扔給|扔给|下到|种进|种到|放进|放入|装进|倒入|下锅|pipe\s*(?:it|into|to)?|pour\s+(?:it\s+)?(?:in)?to|hand\s+(?:it\s+)?(?:over\s+)?to|feed\s+(?:it\s+)?(?:in)?to|流し込|渡して|パイプ|파이프|넘겨|붙여넣/i;
 const SEM_RUN_RE =
-  /执行|執行|运行|運行|跑起来|跑掉|跑一下|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|走らせ|실행|돌려|구동/i;
+  /执行|執行|运行|運行|跑起来|跑掉|跑一下|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|走らせ|실행|돌려|구동|запуст|выполн|исполни|установи|شغل|نفذ|ejecuta|exécute|führe?\s+(?:es\s+)?aus/i;
 /** 拼写拆字型命令名（c-u-r-l / w g e t 等）——逐字母口述规避字面匹配。 */
 const SPELLED_CMD_RE =
   /\bc\s*[-·．.、]\s*u\s*[-·．.、]\s*r\s*[-·．.、]\s*l\b|\bw\s*[-·．.、]\s*g\s*[-·．.、]\s*e\s*[-·．.、]\s*t\b|[两兩]个?字母\s*s\s*h\b/i;
@@ -2392,10 +2425,18 @@ type SemanticExecSignals = {
   decodeRun: boolean;
   /** 端口 + 壳/终端 + 接线/重定向：反弹 shell 的纯散文写法。 */
   reverseShell: boolean;
+  /** 外传/上报语义（跨语言）：把东西送到远端。 */
+  exfil: boolean;
+  /** 远端地址形态（不含本机/内网/白名单）——比 addr 窄。 */
+  remoteAddr: boolean;
 };
 
 function semanticExecSignals(text: string): SemanticExecSignals {
-  const folded = foldHomoglyphs(stripInvisibleCarriers(text)).normalize("NFKC");
+  const foldedOnly = foldHomoglyphs(stripInvisibleCarriers(text)).normalize("NFKC");
+  // 同形折叠会把西里尔字母折成拉丁（Скачайте → 拉丁混排），俄语等词表在折叠面
+  // 上判不出来——语义词表在「折叠面 ∪ 未折叠面」上求值（R300，本地矩阵 n11）。
+  const rawSurface = stripInvisibleCarriers(text).normalize("NFKC");
+  const folded = foldedOnly === rawSurface ? foldedOnly : `${foldedOnly}\n${rawSurface}`;
   const addr =
     PLAIN_IPV4_RE.test(folded) ||
     SPELLED_IPV4_RE.test(folded) ||
@@ -2421,6 +2462,8 @@ function semanticExecSignals(text: string): SemanticExecSignals {
       (BOPOMOFO_RE.test(folded) && SEM_INTERP_TARGET_RE.test(folded)),
     decodeRun:
       B64_BLOB_RE.test(folded) && SEM_DECODE_RE.test(folded) && SEM_TERMINAL_PASTE_RE.test(folded),
+    exfil: EXFIL_ACT.test(folded) || /上报|回传|外传|回報|выгруз|отправ/i.test(folded),
+    remoteAddr: hasRemoteEndpointForm(folded),
   };
 }
 
@@ -2507,6 +2550,9 @@ function cjkDigitsToAscii(s: string): string {
 export function normalizeAddressSurface(text: string): string {
   let s = foldHomoglyphs(stripInvisibleCarriers(text)).normalize("NFKC");
   s = s.normalize("NFD").replace(/\p{Mn}/gu, "");
+  // 百分号编码分隔符（%2E → . / %2D → - / %2F → / / %3A → : / %40 → @）：
+  // 地址可用编码形态投放（pct%2Ddrop%2Eexample%2Ecom），判定面先解码。
+  s = s.replace(/%(2e|2d|2f|3a|40)/gi, (m, h) => String.fromCharCode(parseInt(h, 16)));
   // 拼读还原：dot/点/句点 → 「.」，slash/斜杠 → 「/」，at/艾特 → 「@」
   s = s
     .replace(/[ \t]*(?:\bdot\b|点|點|句点|句點)[ \t]*/gi, ".")
@@ -2666,6 +2712,13 @@ export function execSemanticDangerReason(text: string): string | null {
   if (s.fetch && s.blind && s.run) return "semantic-danger:fetch+blind-run";
   if (s.pipe && s.handoffInterp && (s.fetch || s.run)) return "semantic-danger:pipe-interp";
   if (s.spelled) return "semantic-danger:addr+spelled";
+  // R300 P0-1/P0-2（本地矩阵 n11/c02）：语言无关的两个最小危险三元——
+  //  (a) 远端地址 + 取回 + 执行（不要求出现「shell/解释器」这个词：俄/阿/西/
+  //      法/德语的「下载脚本并在终端里运行它」同样成立）；
+  //  (b) 远端地址 + 外传/上报（把结果送出去，无需执行语义）。
+  // 官方安装源仍由 fetch-then-run 家族的警示降级处置接管（不改判据）。
+  if (s.remoteAddr && s.fetch && s.run) return "semantic-danger:remote-fetch+run";
+  if (s.remoteAddr && s.exfil) return "semantic-danger:remote-exfil";
   return null;
 }
 
@@ -4179,7 +4232,16 @@ export function finalizeAskAnswer(
     for (const ln of j.lines) {
       if (ln.fence || !ln.text.trim()) continue;
       if (spans.some((s) => ln.oStart < s.end && ln.oEnd > s.start)) continue;
-      if (!isCodeLine(ln.text) && execPrimitiveTraceReason(ln.text) === null) continue;
+      // R300 P1-2（audit-r299 §4：降级态整答隔离 5.4%–13.2%）：codeish-punct 等
+      // 宽判据只在**整文**上命中而行级定位不到时，redact 数为 0 ⇒ 回退整答隔离，
+      // 良性散文陪葬。行级定位加上与保险丝同口径的宽判据（execCodeSurfaceTrace），
+      // 命中的行照样不交付（下界不变），未命中的散文行保留。
+      if (
+        !isCodeLine(ln.text) &&
+        execPrimitiveTraceReason(ln.text) === null &&
+        execCodeSurfaceTraceReason(ln.text) === null
+      )
+        continue;
       spans.push({ start: ln.oStart, end: ln.oEnd });
     }
     if (spans.length === 0) return { redacted: text, count: 0 };
