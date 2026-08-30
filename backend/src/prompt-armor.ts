@@ -2427,6 +2427,8 @@ type SemanticExecSignals = {
   reverseShell: boolean;
   /** 外传/上报语义（跨语言）：把东西送到远端。 */
   exfil: boolean;
+  /** 远程登录面（ssh/scp/telnet/登录到）。 */
+  login: boolean;
   /** 远端地址形态（不含本机/内网/白名单）——比 addr 窄。 */
   remoteAddr: boolean;
 };
@@ -2462,7 +2464,12 @@ function semanticExecSignals(text: string): SemanticExecSignals {
       (BOPOMOFO_RE.test(folded) && SEM_INTERP_TARGET_RE.test(folded)),
     decodeRun:
       B64_BLOB_RE.test(folded) && SEM_DECODE_RE.test(folded) && SEM_TERMINAL_PASTE_RE.test(folded),
-    exfil: EXFIL_ACT.test(folded) || /上报|回传|外传|回報|выгруз|отправ/i.test(folded),
+    // 方法调用形（client.send(…) / res.post(…)）是良性代码常态，不算外传语义。
+    exfil: (() => {
+      const prose = folded.replace(/\.\s*(?:send|post|upload|export|emit)\s*\(/gi, "(");
+      return EXFIL_ACT.test(prose) || /上报|回传|外传|回報|выгруз|отправ/i.test(prose);
+    })(),
+    login: /\bssh\b|\bscp\b|\btelnet\b|登录到|登陆到|遠端登入/i.test(folded),
     remoteAddr: hasRemoteEndpointForm(folded),
   };
 }
@@ -2719,6 +2726,7 @@ export function execSemanticDangerReason(text: string): string | null {
   // 官方安装源仍由 fetch-then-run 家族的警示降级处置接管（不改判据）。
   if (s.remoteAddr && s.fetch && s.run) return "semantic-danger:remote-fetch+run";
   if (s.remoteAddr && s.exfil) return "semantic-danger:remote-exfil";
+  if (s.remoteAddr && s.login && s.run) return "semantic-danger:remote-login+run";
   return null;
 }
 
@@ -4403,7 +4411,15 @@ export function finalizeAskAnswer(
         (echoOrParaphrase(line) ? "closure:remote-endpoint-echo" : null);
       if (trace === null) return line;
       closed = true;
-      return wantVerbatim ? `${EXEC_PIPELINE_WARN_MARK}${line}` : EXEC_ISOLATED_MARK;
+      // verbatim 加警示前缀保留原文，对**已判危险的地址**等于原样放行
+      // （audit-r299 §2.1 verbatim 放大器）：行内地址命中危险段落地址集或
+      // 窗口级危险语义成立时，两模式同为隔离；其余（良性技术行的警示级
+      // 命中）verbatim 仍保留原文加警示。
+      const lineAddrs = remoteEndpointForms(line, { includeEmails: true });
+      const dangerousAddr =
+        lineAddrs.some((a) => markedAddrs.has(a)) || (lineAddrs.length > 0 && windowDanger !== null);
+      if (!wantVerbatim || dangerousAddr) return EXEC_ISOLATED_MARK;
+      return `${EXEC_PIPELINE_WARN_MARK}${line}`;
     });
     if (closed) {
       out = lines.join("\n");
