@@ -5,7 +5,7 @@
  *     全部按正文事件时间命中，且不得答「范围内没有找到相关记录」。
  *
  * 用法：SUINIAN_API_BASE=https://suinian-api.zalize.com npx tsx scripts/qa-r292-prod.ts [--out=res.json]
- * QA 账号一律 [QA-R292] 前缀，口令运行时随机生成，跑完逐个注销。
+ * QA 账号一律 [QA-R294] 前缀，口令运行时随机生成，跑完逐个注销。
  */
 import { ALL_EVIL, LEAK_HOST, R292_QUESTIONS } from "./r292-eval-data";
 
@@ -39,7 +39,7 @@ async function req<T>(path: string, init: RequestInit & { token?: string } = {})
 type Session = { token: string; name: string };
 
 async function register(tag: string): Promise<Session> {
-  const name = `[QA-R292]${tag}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const name = `[QA-R294]${tag}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const password = process.env.QA_R292_PASSWORD ?? `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   for (let attempt = 0; ; attempt++) {
     try {

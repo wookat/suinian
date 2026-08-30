@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react"
-import { CloudOff, RefreshCw, X } from "lucide-react"
+import { useEffect, useRef } from "react"
+import { RefreshCw, X } from "lucide-react"
 import { useRegisterSW } from "virtual:pwa-register/react"
 import { Button } from "@/components/ui/button"
 import { defaultApiBase } from "@/lib/settings"
-import { disableSwAndReload, isSwDisabled, setSwDisabled, withSwTimeout } from "@/lib/sw-control"
+import { detachServiceWorker, giveUpOfflineCache, isOfflineCacheEnabled, withSwTimeout } from "@/lib/sw-control"
 
 // 长驻 PWA 里 SW 只在页面加载时检查一次更新，常开着不关的用户可能几天
 // 都见不到更新提示：定期 + 回到前台时主动 update()，让 needRefresh 能
@@ -74,45 +74,32 @@ function hardResetWithTimeout(): Promise<ServiceWorkerRegistration | null> {
   return withSwTimeout(() => hardResetAndRegister(), HEAL_TIMEOUT_MS)
 }
 
-/** SW 已被用户禁用：不再注册（hooks 不能条件调用，所以拆成两个组件），
- * 给出可见状态与「重新启用」入口，避免用户永久停在无离线缓存状态而不自知。 */
-function SwDisabledNotice() {
-  const [dismissed, setDismissed] = useState(false)
-  if (dismissed) return null
-  return (
-    <div className="fixed inset-x-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-50 mx-auto flex max-w-sm items-center gap-3 rounded-xl border bg-popover p-3 shadow-lg md:bottom-6">
-      <CloudOff className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-      <p className="min-w-0 flex-1 text-sm">已关闭离线缓存（Service Worker），在线功能正常。如需恢复离线可用，可重新启用。</p>
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => {
-          setSwDisabled(false)
-          location.reload()
-        }}
-      >
-        重新启用
-      </Button>
-      <button
-        onClick={() => setDismissed(true)}
-        aria-label="关闭"
-        className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        <X className="size-4" />
-      </button>
-    </div>
-  )
+/**
+ * 离线缓存未开启（R294 P1-3 的默认态）：不注册、不弹窗。只做一件事——把历史
+ * 遗留的 registration 静默清掉，否则旧用户的页面仍被卡死的 SW 接管。
+ */
+function SwCleanup() {
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return
+    void (async () => {
+      try {
+        const regs = await navigator.serviceWorker.getRegistrations()
+        if (regs.length === 0 && !navigator.serviceWorker.controller) return
+        await detachServiceWorker(8_000)
+      } catch {
+        // 清理失败不影响在线功能，不打扰用户
+      }
+    })()
+  }, [])
+  return null
 }
 
 export function ReloadPrompt() {
-  if (isSwDisabled()) return <SwDisabledNotice />
+  if (!isOfflineCacheEnabled()) return <SwCleanup />
   return <ReloadPromptInner />
 }
 
 function ReloadPromptInner() {
-  const [registerError, setRegisterError] = useState(false)
-  // wedge 确诊：自愈动作超时未结算 —— 此时只能给用户可操作的出路
-  const [wedged, setWedged] = useState(false)
   const retryAttempt = useRef(0)
   const startTimeout = useRef(false)
   const noWorkerStreak = useRef(0)
@@ -141,12 +128,13 @@ function ReloadPromptInner() {
         reportSwError(new SwHealEvent("SwNoWorkerStuck", "registration without any worker; hard reset"), 0)
         const healed = await hardResetWithTimeout()
         if (healed === null) {
+          // R294 P1-3：自愈不结算 = 浏览器 SW 组件卡死（生产遥测里的终态）。
+          // 不再弹窗骚扰：彻底注销 + 回到离线缓存关闭态，在线功能立刻恢复。
           reportSwError(new SwHealEvent("SwNoWorkerHealTimeout", `hard reset unsettled in ${HEAL_TIMEOUT_MS}ms`), 0)
-          setWedged(true)
+          await giveUpOfflineCache("no-worker heal unsettled")
           return
         }
         reportSwError(new SwHealEvent("SwNoWorkerHealed", "hard reset register ok"), 0)
-        setRegisterError(false)
       } catch {
         // 自愈失败保持横幅/设置页出路，不打扰用户
       }
@@ -162,7 +150,12 @@ function ReloadPromptInner() {
 
   const scheduleRegisterRetry = () => {
     const attempt = retryAttempt.current
-    if (attempt >= REGISTER_RETRY_DELAYS_MS.length || !("serviceWorker" in navigator)) return
+    if (!("serviceWorker" in navigator)) return
+    // R294 P1-3：重试额度耗尽 = 终态失败，彻底 unregister 并停止再注册。
+    if (attempt >= REGISTER_RETRY_DELAYS_MS.length) {
+      void giveUpOfflineCache(`register failed ${attempt} times`)
+      return
+    }
     retryAttempt.current = attempt + 1
     setTimeout(() => {
       if (!navigator.onLine) {
@@ -178,15 +171,14 @@ function ReloadPromptInner() {
       register
         .then((reg) => {
           if (reg === null) {
-            // 注册调用本身没有结算：SW 组件级悬挂，继续退避重试没有意义
+            // 注册调用本身没有结算：SW 组件级悬挂，继续退避重试没有意义 ⇒ 终态放弃
             reportSwError(
               new SwHealEvent("SwRegisterUnsettled", `register unsettled in ${HEAL_TIMEOUT_MS}ms (hard=${hard})`),
               retryAttempt.current,
             )
-            setWedged(true)
+            void giveUpOfflineCache("register unsettled")
             return
           }
-          setRegisterError(false)
           if (hard) reportSwError(new SwHealEvent("SwStartTimeoutHealed", "hard reset register ok"), retryAttempt.current)
         })
         .catch((err) => {
@@ -240,50 +232,15 @@ function ReloadPromptInner() {
     },
     // SW 注册失败意味着离线缓存/推送不可用：可见化降级提示而非静默失效
     // （R194 P2-3），同时上报失败原因并退避自动重试，成功即撤横幅
+    // R294 P1-3：注册失败不再弹降级横幅（离线缓存是用户主动开的可选项，
+    // 失败不影响在线功能）；只退避重试 + 遥测，额度耗尽即终态注销。状态与手动
+    // 修复入口在「设置 → 离线与更新」里。
     onRegisterError(err) {
       if (err instanceof Error && SW_START_TIMEOUT_RE.test(err.message)) startTimeout.current = true
-      setRegisterError(true)
       reportSwError(err, 0)
       scheduleRegisterRetry()
     },
   })
-
-  if (wedged && !needRefresh) {
-    return (
-      <div className="fixed inset-x-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-50 mx-auto max-w-sm space-y-2 rounded-xl border bg-popover p-3 shadow-lg md:bottom-6">
-        <div className="flex items-start gap-3">
-          <CloudOff className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <p className="min-w-0 flex-1 text-sm">
-            浏览器的离线缓存组件卡住了（自动修复无响应），可能导致登录/注册等请求长时间无反应。关闭离线缓存即可恢复在线使用；如仍异常，请在浏览器设置里对本站「清除数据」后强制刷新（Ctrl/⌘+Shift+R）。
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" onClick={() => void disableSwAndReload()}>
-            关闭离线缓存并重载
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setWedged(false)}>
-            暂不处理
-          </Button>
-        </div>
-      </div>
-    )
-  }
-
-  if (registerError && !needRefresh) {
-    return (
-      <div className="fixed inset-x-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-50 mx-auto flex max-w-sm items-center gap-3 rounded-xl border bg-popover p-3 shadow-lg md:bottom-6">
-        <CloudOff className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-        <p className="min-w-0 flex-1 text-sm">离线缓存不可用（Service Worker 注册失败），在线功能不受影响；会自动重试，也可刷新重试</p>
-        <button
-          onClick={() => setRegisterError(false)}
-          aria-label="关闭"
-          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <X className="size-4" />
-        </button>
-      </div>
-    )
-  }
 
   if (!needRefresh) return null
 

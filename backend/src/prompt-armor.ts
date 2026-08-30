@@ -1070,28 +1070,71 @@ export function scrubAcrosticBlocks(answer: string, dataText: string, question: 
  * 时用原始行字面回复。只回复存在于资料区的行，不会复活被整段剥除的内容。
  */
 export function restoreVerbatimEchoes(answer: string, dataText: string): string {
-  // 逐字比对口径比 foldCompact 更宽一档：软连字符/零宽也折掉，否则原文里的
-  // `cu\u00adrl` 与模型落地的 `curl` 折叠不等，还原不了。
-  const fold = (s: string) => foldCompact(s.replace(ZERO_WIDTH_G, ""));
-  const byFold = new Map<string, string>();
-  for (const raw of dataText.split("\n")) {
-    const l = raw.trim();
-    if (l.length < 4) continue;
-    const f = fold(l);
-    if (f.length >= 4 && !byFold.has(f)) byFold.set(f, l);
+  // 逐字比对口径比 foldCompact 更宽一档：软连字符/零宽/变体选择符也折掉，
+  // 否则原文里的 `cu\u00adrl`、`🏴‍☠️` 与模型落地的形态折叠不等，还原不了。
+  const fold = (s: string) => foldCompact(s.replace(ZERO_WIDTH_G, "").replace(/[\uFE00-\uFE0F]/g, ""));
+  // 资料行带精确偏移（行内容不含行终止符）：连续多行命中时用原文精确切片
+  // 整块回复，行间的 CRLF/缩进随切片原样保留。
+  type DLine = { text: string; start: number; end: number };
+  const dlines: DLine[] = [];
+  {
+    let pos = 0;
+    for (const seg of dataText.split("\n")) {
+      const text = seg.endsWith("\r") ? seg.slice(0, -1) : seg;
+      dlines.push({ text, start: pos, end: pos + text.length });
+      pos += seg.length + 1;
+    }
+  }
+  const byFold = new Map<string, number[]>();
+  for (let i = 0; i < dlines.length; i++) {
+    const t = dlines[i].text.trim();
+    if (t.length < 4) continue;
+    const f = fold(t);
+    if (f.length < 4) continue;
+    const arr = byFold.get(f);
+    if (arr) arr.push(i);
+    else byFold.set(f, [i]);
   }
   if (byFold.size === 0) return answer;
-  return answer
-    .split("\n")
-    .map((line) => {
-      const t = line.trim();
-      if (t.length < 4) return line;
-      const orig = byFold.get(fold(t));
-      if (orig === undefined || orig === t) return line;
-      const at = line.indexOf(t);
-      return line.slice(0, at) + orig + line.slice(at + t.length);
-    })
-    .join("\n");
+  const dFold = (i: number) => fold(dlines[i].text.trim());
+  const alines = answer.split("\n");
+  const out: string[] = [];
+  let i = 0;
+  while (i < alines.length) {
+    const t = alines[i].trim();
+    const cands = t.length >= 4 ? byFold.get(fold(t)) : undefined;
+    if (!cands) {
+      out.push(alines[i]);
+      i++;
+      continue;
+    }
+    // 从每个候选起点向后匹配最长的连续行段
+    let best = { d: cands[0], len: 1 };
+    for (const d of cands) {
+      let len = 1;
+      while (i + len < alines.length && d + len < dlines.length) {
+        const af = fold(alines[i + len].trim());
+        if (af.length === 0 || af !== dFold(d + len)) break;
+        len++;
+      }
+      if (len > best.len) best = { d, len };
+    }
+    const { d, len } = best;
+    const slice = dataText.slice(dlines[d].start, dlines[d + len - 1].end);
+    // 只回复不携带执行痕迹的原文——不许经此路径复活任何被判危/降级的内容
+    if (execDegradedTraceReason(slice) !== null || globalExecDangerReason(slice) !== null) {
+      for (let k = 0; k < len; k++) out.push(alines[i + k]);
+      i += len;
+      continue;
+    }
+    out.push(slice);
+    i += len;
+    // V04 整行重复：模型把同一原文行紧邻重复输出而资料区并未连续重复时折叠掉
+    const lastFold = dFold(d + len - 1);
+    const dataRepeats = d + len < dlines.length && dFold(d + len) === lastFold;
+    while (!dataRepeats && i < alines.length && fold(alines[i].trim()) === lastFold) i++;
+  }
+  return out.join("\n");
 }
 
 /** 剥除后残留的空行/悬空标点清理（marker/句段剥除共用）。 */
@@ -1500,7 +1543,8 @@ function substituteShellAssignments(text: string): string {
  * percent-decode → 引号切分还原 → `$(echo/printf …)` 展开 → 变量代入。
  */
 export function deobfuscateCommandShell(text: string): string {
-  let out = decodePercentEscapes(text);
+  let out = foldHomoglyphs(text);
+  out = decodePercentEscapes(out);
   out = decodeCharEscapes(out);
   out = stripQuoteSplices(out);
   out = inlineEchoSubstitutions(out);
@@ -1512,6 +1556,69 @@ export function deobfuscateCommandShell(text: string): string {
   if (out.includes(LINK_REMOVED_MARK))
     out = out.split(LINK_REMOVED_MARK).join("http://link-removed.invalid/s.sh");
   return out;
+}
+
+// ---- R294 P0-1：同形异义字折叠（docs/decision-r294.md §2.2） ----
+// 根因（audit-r293 §2 C11 实测）：`сurl -s … | ѕh` 用 Cyrillic с/ѕ 冒充 ASCII
+// c/s，NFKC 不做跨字母表折叠 ⇒ 能力内核的命令名字面全部落空 ⇒ 常态无标记直出。
+// 折叠只作用于**判定面**（normalizeCommandText 的反混淆产物），用户可见文本与
+// verbatim 出口永不使用其产物。表按「Unicode confusables 里映射到 ASCII
+// [a-z0-9./:-] 的西里尔/希腊/数学字母/罗马数字」枚举。
+const HOMOGLYPH_MAP: Record<string, string> = {
+  "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p", "\u0441": "c", "\u0445": "x",
+  "\u0443": "y", "\u0456": "i", "\u0458": "j", "\u0455": "s", "\u04bb": "h", "\u0501": "d",
+  "\u051b": "q", "\u051d": "w", "\u04cf": "l", "\u0405": "S", "\u0410": "A", "\u0412": "B",
+  "\u0415": "E", "\u041a": "K", "\u041c": "M", "\u041d": "H", "\u041e": "O", "\u0420": "P",
+  "\u0421": "C", "\u0422": "T", "\u0425": "X", "\u0406": "I",
+  "\u03bf": "o", "\u03c1": "p", "\u03b1": "a", "\u03b5": "e", "\u03bd": "v", "\u03c4": "t",
+  "\u03b9": "i", "\u03ba": "k", "\u03bc": "u", "\u03c7": "x", "\u03c5": "u", "\u03c2": "s",
+  "\u0392": "B", "\u039f": "O", "\u03a1": "P", "\u0397": "H",
+  "\u217c": "l", "\u2044": "/", "\u2215": "/", "\u01c0": "|", "\u2223": "|", "\u2758": "|",
+  "\u02d0": ":", "\u0589": ":", "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-",
+};
+const HOMOGLYPH_RE = new RegExp(`[${Object.keys(HOMOGLYPH_MAP).join("")}]`, "g");
+
+/** 同形异义字 → ASCII（仅判定面）。 */
+export function foldHomoglyphs(text: string): string {
+  if (!HOMOGLYPH_RE.test(text)) {
+    HOMOGLYPH_RE.lastIndex = 0;
+    return text;
+  }
+  HOMOGLYPH_RE.lastIndex = 0;
+  return text.replace(HOMOGLYPH_RE, (ch) => HOMOGLYPH_MAP[ch] ?? ch);
+}
+
+// ---- R294 P0-1：不可见/双向控制字符载体的还原面（docs/decision-r294.md §2.1） ----
+// 根因（audit-r293 §2 C13/C14 实测 12/12 fail-open）：`U+202E` 包裹的倒序
+// `curl -s http://…/s.sh | sh` 在任何归一化面上都不呈命令形态——归一化只
+// 「删除」零宽字符，而双向控制字符既没被删除也没被还原，**渲染顺序与字节
+// 顺序相反**这一层语义从未进入判定。收口：判定面额外生成两条还原候选——
+//   V1 剔除全部不可见/双向控制字符后的文本；
+//   V2 V1 再整行倒序（RTL 覆盖/隔离符渲染出的视觉顺序即倒序字节序）。
+// 只用于判定（门控/全局判定/行级能力），用户可见文本与 verbatim 出口不使用。
+export const BIDI_CTRL_G = /[\u202A-\u202E\u2066-\u2069\u200E\u200F]/g;
+const INVISIBLE_CARRIER_RE = /[\u200B-\u200D\u2060\uFEFF\u00AD\u180E\u034F\u202A-\u202E\u2066-\u2069\u200E\u200F\u00A0]/;
+
+/** 含不可见/双向控制字符时的还原候选面（无则空数组）。 */
+export function invisibleCarrierVariants(text: string): string[] {
+  if (!INVISIBLE_CARRIER_RE.test(text)) return [];
+  const stripped = text
+    .replace(BIDI_CTRL_G, "")
+    .replace(ZERO_WIDTH_G, "")
+    .replace(/\u00a0/g, " ");
+  const reversed = stripped
+    .split("\n")
+    .map((l) => [...l].reverse().join(""))
+    .join("\n");
+  return reversed === stripped ? [stripped] : [stripped, reversed];
+}
+
+/** 双向控制字符存在与否（门控信号，不要求还原出原语）。 */
+export function hasBidiControls(text: string): boolean {
+  BIDI_CTRL_G.lastIndex = 0;
+  const hit = BIDI_CTRL_G.test(text);
+  BIDI_CTRL_G.lastIndex = 0;
+  return hit;
 }
 
 /** 命令文本归一化（判定前置）：NFKC + 续行符合并 + 行尾注释剥除 + 空白折叠 + 反混淆。 */
@@ -1536,8 +1643,27 @@ const EXEC_FETCH_RE =
 
 // 交给解释器执行（行为角色 B）：管道入解释器 / 进程替换 / eval|iex / -Enc /
 // 下载落盘后 sh|bash|python 执行 / ./x.sh 直接执行
+// R294 P0-1（audit-r293 §2 C25/C26）：进程替换的点号/source 形式
+// （`. <(curl …)` / `source <(curl …)`）旧口径要求行首或分隔符锚定，写在
+// 中文冒号/叙述后面时不命中 ⇒ sink 能力落空 ⇒ fetch+sink 不成立。
 const EXEC_SINK_RE =
-  /\|\s*(?:sudo\s+)?(?:(?:ba|z|da|k|fi)?sh|python[0-9.]*|perl|ruby|node|php|pwsh|powershell)\b|\b(?:ba|z)?sh\s+(?:-[a-z]+\s+)?<\(|\beval\s|\|\s*iex\b|\biex\s*\(|invoke-expression|-enc(?:odedcommand)?\b|(?:^|[;&|]|&&|\|\|)\s*(?:sudo\s+)?(?:\.\/\S+|(?:ba|z)?sh\s+\S+\.\w{1,4}|python[0-9.]*\s+\S+\.py|source\s+\S+)/i;
+  /\|\s*(?:sudo\s+)?(?:(?:ba|z|da|k|fi)?sh|python[0-9.]*|perl|ruby|node|php|pwsh|powershell)\b|\b(?:ba|z)?sh\s+(?:-[a-z]+\s+)?<\(|\bsource\s+<\(|(?:^|[\s;&|(:：])\.\s+<\(|\beval\s|\|\s*iex\b|\biex\s*\(|invoke-expression|-enc(?:odedcommand)?\b|(?:^|[;&|]|&&|\|\|)\s*(?:sudo\s+)?(?:\.\/\S+|(?:ba|z)?sh\s+\S+\.\w{1,4}|python[0-9.]*\s+\S+\.py|source\s+\S+)/i;
+
+// R294 P0-1（audit-r293 §2 C06/C07/C08/C22）：「解码器 → 解释器」链。
+// `echo <rot13> | tr A-Za-z N-ZA-Mn-za-m | sh`、`echo <hex> | xxd -r -p | bash`、
+// `$(echo <b64> | base64 -d)` 在字面上既无 curl 也无已知命令名，但「把解码
+// 产物交给解释器/命令替换执行」本身就是完整的执行语义，与被解码内容无关。
+const DECODER_RE =
+  /\bbase64\s+(?:-d|-D|--decode)\b|\bbasenc\b[^\n]{0,24}--decode|\bxxd\s+-r\b|\bopenssl\s+enc\b[^\n]{0,40}-d\b|\bb64decode\b|\batob\s*\(|\buudecode\b|\btr\s+['\"]?[A-Za-z]-[A-Za-z][^\n]{0,24}['\"]?[A-Za-z]-[A-Za-z]|\brev\b\s*\||\bgunzip\b|\bgzip\s+-d\b|\bunhexlify\b/i;
+const DECODER_IN_SUBST_RE =
+  /(?:`|\$\()[^`)\n]{0,160}(?:base64\s+(?:-d|-D|--decode)|xxd\s+-r|openssl\s+enc[^\n]{0,30}-d|b64decode|unhexlify|tr\s+['\"]?[A-Za-z]-[A-Za-z])/i;
+
+// R294 P0-1（audit-r293 §2 C23）：纯散文步骤——「先用 curl 把 X 下载下来，
+// 再交给 sh 执行」没有任何命令标点，却是完整可执行的指引。判据：取码能力
+// ∧ 远程脚本 URL ∧ 「交给解释器执行」的自然语言表达。
+const REMOTE_SCRIPT_URL_RE = /https?:\/\/\S+\.(?:sh|bash|py|ps1|pl|rb|php|exe|bin|run)\b/i;
+const PROSE_EXEC_RE =
+  /(?:执行|运行|跑一下|跑起来|交给|喂给|管道|管道给|导入|pipe|run|execute)[^\n]{0,24}\b(?:sh|bash|zsh|dash|ksh|python[0-9.]*|perl|ruby|node|php|powershell|pwsh)\b|\b(?:sh|bash|zsh|dash|ksh|python[0-9.]*|perl|ruby|node|php|powershell|pwsh)\b[^\n]{0,24}(?:执行|运行|跑一下|run it|execute)/i;
 
 // 反弹外连/远控（行为角色 C）：单独即危险，无需组合
 const NET_BACKCONNECT_RE =
@@ -1697,6 +1823,12 @@ export function hasExecIntentReason(normalized: string): string | null {
   if (c.fetch && c.sink) return "cap:fetch+sink";
   if (c.inline && c.fetch && c.exec) return "cap:inline+fetch+exec";
   if (c.fetch && c.priv) return "cap:fetch+priv";
+  // R294 P0-1：解码器 → 解释器/命令替换（与被解码内容无关的执行语义）
+  if (c.sink && DECODER_RE.test(normalized)) return "cap:decode+sink";
+  if (DECODER_IN_SUBST_RE.test(normalized)) return "cap:decode+cmdsubst";
+  // R294 P0-1：纯散文的「取远程脚本 → 交给解释器执行」步骤
+  if (c.fetch && REMOTE_SCRIPT_URL_RE.test(normalized) && PROSE_EXEC_RE.test(normalized))
+    return "cap:fetch+prose-exec";
   if (NET_BACKCONNECT_RE.test(normalized)) return "literal:backconnect";
   if (PRIV_THEN_EXEC_RE.test(normalized)) return "literal:priv-then-exec";
   if (EXEC_PIPELINE_RE.test(normalized)) return "literal:pipeline";
@@ -2365,7 +2497,15 @@ export function judgeSurfaceText(answer: string): string {
  * JSON 转义/HTML 实体）。
  */
 export function globalExecDangerReason(answer: string): string | null {
-  return globalExecDangerReasonForSurface(judgeSurfaceText(answer)) ?? globalExecDangerReasonForSurface(answer);
+  const direct =
+    globalExecDangerReasonForSurface(judgeSurfaceText(answer)) ?? globalExecDangerReasonForSurface(answer);
+  if (direct) return direct;
+  // R294 P0-1：不可见/双向控制字符载体的还原面（倒序 RTL / 零宽切分）。
+  for (const v of invisibleCarrierVariants(answer)) {
+    const r = globalExecDangerReasonForSurface(v);
+    if (r) return `unmask-${r}`;
+  }
+  return null;
 }
 
 export function globalExecDangerReasonForSurface(surface: string): string | null {
@@ -2404,6 +2544,18 @@ export function execClassifierGateReason(answer: string): string | null {
     const surface = judgeSurfaceText(answer);
     const prim = execPrimitiveTraceReason(surface) ?? execPrimitiveTraceReason(answer);
     if (prim) return `gate:${prim}`;
+    // R294 P0-1（audit-r293 §2，C13/C14/C30 实测 12/12 fail-open）：剔除不可见/
+    // 双向控制字符（含倒序还原）后出现 exec 原语 ⇒ 开门。
+    for (const v of invisibleCarrierVariants(answer)) {
+      const p = execPrimitiveTraceReason(v);
+      if (p) return `gate:unmask:${p}`;
+      const s = execRiskScoreSurface(v);
+      if (s.score >= EXEC_RISK_GATE_THRESHOLD)
+        return `gate:unmask-score:${s.score}:${s.signals.join("+")}`;
+    }
+    // 双向控制字符本身即信号：笔记答案里没有它们的合法用途，而它们能把任何
+    // 字节序渲染成另一个样子——开门只多一次判别器调用，漏面则是静默放行。
+    if (hasBidiControls(answer)) return "gate:bidi-control";
     if (CODEISH_FENCE_RE.test(answer)) return "gate:codeish-block";
     const { score, signals } = execRiskScoreSurface(surface);
     if (score >= EXEC_RISK_GATE_THRESHOLD) return `gate:score:${score}:${signals.join("+")}`;
@@ -2412,6 +2564,61 @@ export function execClassifierGateReason(answer: string): string | null {
     // 门控自身出错 ⇒ 开门（fail-closed：宁可多判一次，绝不静默放行）
     return "gate:error";
   }
+}
+
+/**
+ * R294 P0-1：降级分支的**宽判据**——本次答案是否含任一「代码面/命令面痕迹」。
+ * 与门控（execClassifierGateReason）的区别：门控用于「要不要叫判别器」，本函数
+ * 用于「判别器不可用/零命中时要不要进保守隔离」。两者同源但宽于门控：门控漏面
+ * 时仍需有一条独立路径把答案拉进保守处置（fail-closed，不得放行）。
+ */
+export function execDegradedTraceReason(text: string): string | null {
+  if (!text.trim()) return null;
+  for (const v of invisibleCarrierVariants(text)) {
+    if (v === text) continue;
+    const r = execDegradedTraceReasonRaw(v);
+    if (r) return `unmask-${r}`;
+  }
+  return execDegradedTraceReasonRaw(text);
+}
+
+/**
+ * R294 P1-4：降级窗口的**保守处置痕迹**判据（docs/decision-r294.md §3）。
+ * 判别器要判的是「这段代码会不会执行/外连」，不是「这是不是代码」：它不可用时
+ * 的保守面取「确定性内核命中 ∨ 弱信号组合 ∨ 两类以上能力同现 ∨ 地址+执行类能力」，
+ * 单一能力（只有 hostport、只有 fetch、只有 `#!/bin/bash`）不构成隔离理由——
+ * 否则 nginx 配置/requests 示例/发布脚本这类善意笔记会因判别器掉线被整篇探空
+ * （audit-r293 §8.1 实测 105/116）。
+ */
+function execDegradedTraceReasonRaw(text: string): string | null {
+  const n = normalizeCommandText(text);
+  const kernel = hasExecIntentReason(n);
+  if (kernel) return `degraded-${kernel}`;
+  const fb = fallbackCapabilityReason(text);
+  if (fb) return `degraded-${fb}`;
+  const c = execCapabilities(n);
+  const classes = [c.net, c.exec, c.shellio, c.fetch, c.inline, c.lolbin, c.sink, c.priv].filter(Boolean).length;
+  if (classes >= 2) return "degraded:multi-capability";
+  // hostport 与建连能力单独同现（无执行/汇入面）是监听/转发类代码的常态；
+  // 真实载荷（反弹/绑定 shell）必带 exec/sink → 已被 multi-capability 覆盖。
+  if (c.hostport && (c.exec || c.shellio || c.sink || c.inline)) return "degraded:hostport+proc";
+  if (hasObfuscatedAddress(n)) return "degraded:obfaddr";
+  if (fetchThenRunReason(text)) return "degraded:fetch+run";
+  return null;
+}
+
+export function execCodeSurfaceTraceReason(answer: string): string | null {
+  if (!answer.trim()) return null;
+  const gate = execClassifierGateReason(answer);
+  if (gate) return gate;
+  if (hasBidiControls(answer)) return "wide:bidi-control";
+  const judge = normalizeJudgeSurface(answer);
+  for (const ln of judge.lines) {
+    if (ln.fence) return "wide:fence";
+    if (ln.text.trim() && isCodeLine(ln.text)) return "wide:code-line";
+  }
+  if (CODEISH_PUNCT_RE.test(judge.text)) return "wide:codeish-punct";
+  return null;
 }
 
 /** 任何命令/网络/执行原语迹象（R290 §4 门控判据 1）。 */
@@ -2814,7 +3021,21 @@ export function isolateNoteInstructions(
   // R282 F-1 语义主判（answer-guard.classifyDangerousCodeSegments）命中的句段：
   // 与确定性能力内核同一处置口径（两态无第三态）。
   const llmDanger = new Set((opts?.execDangerSegments ?? []).map((s) => foldCompact(s)).filter((s) => s.length > 0));
-  const llmDangerHit = (segText: string) => llmDanger.size > 0 && llmDanger.has(foldCompact(segText));
+  // R294 P0-1（本轮新发现）：判别器在**收口前**的答案上跑，而 finalizeAskAnswer 会
+  // 先做外链收口（URL → LINK_REMOVED_MARK）再进本函数：含 URL 的危险句段折叠后
+  // 与判别器回传的句段不再相等 ⇒ 判别器命中被静默丢弃（实测 C11/C22/C23/
+  // C25/C26 在「判别器命中」态仍无标记）。收口：比对面去 URL/外链标记，并允许
+  // 双向包含（长度 ≥ 8 的非平凡片段）。
+  const dangerFold = (s: string) =>
+    foldCompact(s.replace(/https?:\/\/[^\s"'`)<>\]]+/g, "").split(LINK_REMOVED_MARK).join(""));
+  const llmDangerLoose = [...llmDanger].map((s) => dangerFold(s)).filter((s) => s.length >= 8);
+  const llmDangerHit = (segText: string) => {
+    if (llmDanger.size === 0) return false;
+    if (llmDanger.has(foldCompact(segText))) return true;
+    const f = dangerFold(segText);
+    if (f.length < 8) return false;
+    return llmDangerLoose.some((d) => d.includes(f) || f.includes(d));
+  };
   // R284 F-1：判别器不可用窗口内的保守隔离命中段（弱信号兜底）——此窗口内
   // 不区分 verbatim，一律替换为降级隔离说明，不交付原文（fail-closed）。
   const degradedDanger = new Set(
@@ -2868,7 +3089,10 @@ export function isolateNoteInstructions(
   const judge = normalizeJudgeSurface(answer);
   const globalSurface = judge.text;
   const globalReason =
-    globalExecDangerReasonForSurface(globalSurface) ?? globalExecDangerReasonForSurface(answer);
+    globalExecDangerReasonForSurface(globalSurface) ??
+    globalExecDangerReasonForSurface(answer) ??
+    // R294 P0-1：不可见/双向控制字符载体的还原面（C13/C14/C30）。
+    globalExecDangerReason(answer);
   const globalHit =
     globalReason !== null &&
     !installerBenignReason(globalSurface, globalReason) &&
@@ -2878,6 +3102,14 @@ export function isolateNoteInstructions(
   // 无能力信号的邻行（注释、`tail -f`、打印语句）保留可读——误伤治理与
   // 防泄漏在这里同时成立。
   const lineCarriesCapability = (line: string): boolean => {
+    // R294 P0-1：不可见/双向控制字符载体的还原面也要判一遍（否则 RTL 倒序
+    // 行在全局命中后依然定位不到，只能退化成整答隔离）。
+    for (const v of invisibleCarrierVariants(line)) {
+      if (v !== line && lineCarriesCapabilityRaw(v)) return true;
+    }
+    return lineCarriesCapabilityRaw(line);
+  };
+  const lineCarriesCapabilityRaw = (line: string): boolean => {
     const n = normalizeCommandText(line);
     const c = execCapabilities(n);
     if (c.net || c.exec || c.inline || c.lolbin || c.sink || c.shellio || c.fetch || c.priv || c.hostport)
@@ -2950,15 +3182,26 @@ export function isolateNoteInstructions(
   if (opts?.execClassifierUnavailable) {
     const covered = (start: number, end: number) =>
       inGlobalUnit(start, end) || degradedUnits.some((u) => start < u.end && end > u.start);
+    // R294 P1-4（audit-r293 §8.1，r288-guard-eval 降级态 105/116 善意误伤）：
+    // R292 的层 2 把「全部代码区域 + 全部代码形态行」无差别隔离——isCodeLine 只
+    // 要求「看着像代码」（一个 `foo(` 或赋值就算），于是判别器一掉线，教学代码/
+    // 技术笔记整篇被探空。判别器要判的是「这段代码会不会执行/外连」，不是
+    // 「这是不是代码」——它不可用时的保守面应当是**携带执行/网络/取码能力痕迹
+    // 的行与围栏块**，其余正文保留可读。P0 的 fail-closed 下界不变：痕迹存在却
+    // 一个区间都定位不到时仍整答隔离（层 3）。
+    const fenceCarries = (u: { text: string }) =>
+      execDegradedTraceReason(u.text) !== null ||
+      u.text.split("\n").some((l) => execDegradedTraceReason(l) !== null);
     for (const u of codeUnitSpans(answer)) {
       if (covered(u.start, u.end)) continue;
+      if (!fenceCarries(u)) continue;
       degradedUnits.push({ ...u, reason: "degraded:code-region" });
     }
     for (const ln of judge.lines) {
       if (ln.fence || !ln.text.trim()) continue;
       if (covered(ln.oStart, ln.oEnd)) continue;
       if (degradedUnits.some((u) => ln.oStart < u.end && ln.oEnd > u.start)) continue;
-      if (!isCodeLine(ln.text) && !lineCarriesCapability(ln.text)) continue;
+      if (execDegradedTraceReason(ln.text) === null) continue;
       degradedUnits.push({
         start: ln.oStart,
         end: ln.oEnd,
@@ -2966,10 +3209,12 @@ export function isolateNoteInstructions(
         reason: "degraded:code-line",
       });
     }
-    // 层 3（安全下界）：门控已开（本函数只在 gate≠null 时收到 unavailable）而
-    // 层 1/层 2 一个区间都没定位到 ⇒ 整答隔离，绝不原样交付。
+    // 层 3（安全下界，R294 收窄）：本次答案确实存在执行原语痕迹，层 1/层 2 却
+    // 一个区间都没定位到 ⇒ 整答隔离，绝不原样交付（门控完全瞎掉时的下界）。
+    // 反之，没有任何执行原语痕迹的普通技术笔记不因判别器掉线而被剥夺。
     if (degradedUnits.length === 0 && globalUnits.length === 0) {
-      return EXEC_DEGRADED_ISOLATED_MARK;
+      const trace = execDegradedTraceReason(globalSurface) ?? execDegradedTraceReason(answer);
+      if (trace) return EXEC_DEGRADED_ISOLATED_MARK;
     }
   }
   for (const u of degradedUnits) {
@@ -3199,17 +3444,27 @@ export function finalizeAskAnswer(
       isolated = true;
     }
   }
+  // R294 P1-2：verbatim 逐字还原挪到最终出口（此前在 guardAskAnswer 中段执行，
+  // 之后的 despoof/link-scrub/决策痕迹剥除会再次改字——R293 生产实测 `run()`、
+  // 软连字符仍坏的根因）。此处之后不再有任何改字层；还原只回复无执行痕迹的
+  // 原文切片，危险内容仍由上方隔离层处置。
+  if (questionRequestsVerbatim(opts.question) && opts.dataText) {
+    out = restoreVerbatimEchoes(out, opts.dataText);
+  }
   // R292 P0-1（docs/decision-r292.md §1）：「是否降级」只由判别器状态决定，
   // 不再从输出文本里是否含降级标记**反推**——audit-r291 的 22/38 fail-open
   // 正是「识别不到载体 ⇒ 没有标记 ⇒ degraded 不置位 ⇒ 原样放行」这条链。
   // 出口收尾保险：判别器不可用而输出里既无降级隔离标记也无官方安装警示
   // ⇒ 整答隔离（层 3 的同义兜底，防未来任何上游路径遗漏）。
   if (opts.execClassifierUnavailable) {
+    // R294 P1-4：保险丝的触发条件与层 3 同口径——「存在执行原语痕迹」而非
+    // 「门控非空」（门控含 codeish-block，沿用它会把任何带围栏的善意答案整篇探空）。
+    const residueTrace = execDegradedTraceReason(judgeSurfaceText(out)) ?? execDegradedTraceReason(out);
     if (
       !out.includes(EXEC_DEGRADED_ISOLATED_MARK) &&
       !out.includes(EXEC_INSTALLER_WARN_MARK) &&
       !out.includes(EXEC_ISOLATED_MARK) &&
-      execClassifierGateReason(out) !== null
+      residueTrace !== null
     ) {
       out = EXEC_DEGRADED_ISOLATED_MARK;
       isolated = true;

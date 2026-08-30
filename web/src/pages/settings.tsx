@@ -54,7 +54,7 @@ import {
   type TestConnectionResult,
 } from "@/lib/api"
 import { detectPushSupport, currentSubscription, enablePush, disablePush } from "@/lib/push"
-import { disableSwAndReload, isSwDisabled, setSwDisabled } from "@/lib/sw-control"
+import { detachServiceWorker, isOfflineCacheEnabled, setOfflineCacheEnabled } from "@/lib/sw-control"
 import { RecoveryCodeCard } from "@/pages/auth"
 import type { TagCount } from "@/lib/types"
 import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
@@ -158,7 +158,8 @@ function SwStatusCard() {
   const status = useSwStatus()
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState<string | null>(null)
-  const swOff = isSwDisabled()
+  // R294 P1-3（docs/decision-r294.md §4）：离线缓存默认关闭的可选项。
+  const [offlineOn, setOfflineOn] = useState(() => isOfflineCacheEnabled())
   if (!status) return null
   const ok = status.active && status.offlineReady
   // 安装失败终态（R178 P1-1）：已注册但既无 active 也无 installing —— 新 SW
@@ -169,15 +170,17 @@ function SwStatusCard() {
   const degraded = status.active && !status.offlineReady && !status.installing && !status.waiting
   const text = !status.supported
     ? "当前浏览器不支持离线缓存（Service Worker）"
-    : ok
-      ? `离线可用：页面已缓存，断网也能打开${status.controlling ? "" : "（刷新后接管本页）"}${status.waiting ? "；新版本已就绪，刷新页面完成更新" : ""}`
-      : failed
-        ? "离线缓存安装失败（可能是网络问题），可点击重试"
-        : degraded
-          ? "离线缓存不完整（页面预缓存缺失），断网将无法打开页面，可点击修复"
-          : status.registered
-            ? "离线缓存正在安装中，稍后刷新可生效"
-            : "离线缓存未注册，刷新页面重试"
+    : !offlineOn
+      ? "离线缓存已关闭（默认）：在线功能完整，不会因浏览器 Service Worker 卡住而影响登录/注册"
+      : ok
+        ? `离线可用：页面已缓存，断网也能打开${status.controlling ? "" : "（刷新后接管本页）"}${status.waiting ? "；新版本已就绪，刷新页面完成更新" : ""}`
+        : failed
+          ? "离线缓存安装失败（可能是网络问题），可点击重试"
+          : degraded
+            ? "离线缓存不完整（页面预缓存缺失），断网将无法打开页面，可点击修复"
+            : status.registered
+              ? "离线缓存正在安装中，稍后刷新可生效"
+              : "离线缓存未注册，刷新页面重试"
   // 注销卡死的 registration 可能永远不返回（SW 组件 wedge），10s 超时给出
   // 失败原因与用户可自救的路径，而不是无限「重试中…」
   const retry = async () => {
@@ -217,13 +220,13 @@ function SwStatusCard() {
       <p
         className={cn(
           "mt-2 flex items-center gap-1.5 text-sm",
-          ok ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground",
+          ok && offlineOn ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground",
         )}
       >
-        {ok ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
+        {ok || !offlineOn ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
         {text}
       </p>
-      {(failed || degraded) && (
+      {offlineOn && (failed || degraded) && (
         <>
           <Button size="sm" variant="outline" className="mt-2" disabled={retrying} onClick={() => void retry()}>
             {retrying ? "重试中…" : failed ? "重试安装离线缓存" : "修复离线缓存"}
@@ -231,39 +234,30 @@ function SwStatusCard() {
           {retryError && <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">{retryError}</p>}
         </>
       )}
-      <p className="mt-1 text-xs text-muted-foreground">
-        有新版本时页面会弹出「点击刷新」提示；离线时可浏览已缓存的笔记/线索/周报
-      </p>
-      {/* R288 P1-2：SW 组件级悬挂时注销/重注册可能永不结算，修复按钮也救不回来。
-          这里给一条不依赖 SW 结算的出路：本浏览器此后不再注册 SW，在线功能立刻恢复。 */}
+      {/* R294 P1-3（docs/decision-r294.md §4）：离线缓存改为默认关闭的可选项。
+          依据：生产 sw_error_reports 直查显示 SW 从未 activated，反而弹窗骚扰并拖慢
+          登录/注册；关闭后在线功能完整，想要离线的用户可在这里自行开启。 */}
       {status.supported && (
-        <div className="mt-3 border-t pt-3">
-          {swOff ? (
-            <>
-              <p className="text-xs text-muted-foreground">已在本浏览器关闭离线缓存：登录/注册等在线请求不再经过 Service Worker</p>
-              <Button
-                size="sm"
-                variant="outline"
-                className="mt-2"
-                onClick={() => {
-                  setSwDisabled(false)
-                  window.location.reload()
-                }}
-              >
-                重新启用离线缓存
-              </Button>
-            </>
-          ) : (
-            <>
-              <p className="text-xs text-muted-foreground">
-                如果登录/注册/注销长时间无反应（浏览器 Service Worker 卡住），可关闭离线缓存后重试：只影响离线可用与推送，笔记都在云端
-              </p>
-              <Button size="sm" variant="outline" className="mt-2" onClick={() => void disableSwAndReload()}>
-                关闭离线缓存并重载
-              </Button>
-            </>
-          )}
-        </div>
+        <label className="mt-3 flex items-start gap-2 border-t pt-3 text-sm">
+          <Checkbox
+            className="mt-0.5"
+            checked={offlineOn}
+            onCheckedChange={(v) => {
+              const on = v === true
+              setOfflineOn(on)
+              setOfflineCacheEnabled(on)
+              if (!on) void detachServiceWorker(8_000).finally(() => window.location.reload())
+              else window.location.reload()
+            }}
+          />
+          <span>
+            开启离线缓存（实验性）
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              开启后可在断网时浏览已缓存的笔记/线索/周报，并在有新版本时提示刷新。部分浏览器的 Service Worker
+              组件会卡住并拖慢登录/注册；若多次安装失败，会自动注销并回到关闭状态。
+            </span>
+          </span>
+        </label>
       )}
     </Card>
   )
