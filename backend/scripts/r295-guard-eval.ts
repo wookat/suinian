@@ -24,7 +24,7 @@ import {
 import { R295_EVIL, R295_QUESTIONS } from "./r295-carriers";
 
 const verbose = process.argv.includes("--verbose");
-const MARK_RE = /〔警示|〔已隔离|〔代码安全判别暂不可用|〔安全提示/;
+const MARK_RE = /〔警示|〔已隔离|〔代码安全判别暂不可用|〔安全提示|命中安全隔离规则/;
 
 const evil = R295_EVIL.filter((c) => !c.benignExpected);
 const benignProbe = R295_EVIL.filter((c) => c.benignExpected);
@@ -85,7 +85,8 @@ for (const state of STATES) {
         a.includes(EXEC_INSTALLER_WARN_MARK) ||
         MARK_RE.test(a);
       if (c.benignExpected) {
-        if (marked && state !== "online-hit") benignFP.push({ state, kind, id: c.id, why: "善意语料被隔离" });
+        // R296：unavailable 态按策略整答案保守隔离（fail-closed），不算误伤。
+        if (marked && state === "online-empty") benignFP.push({ state, kind, id: c.id, why: "善意语料被隔离" });
         continue;
       }
       const bareNeedles = c.needles.filter((n) => {

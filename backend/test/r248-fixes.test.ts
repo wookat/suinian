@@ -49,7 +49,7 @@ describe("parseTimeRange X月到现在 (R248 P3, audit-r247 F-3)", () => {
     expect(r).not.toBeNull();
     expect(r!.start).toBe("2026-07-31 16:00:00");
     expect(r!.end).toBeNull();
-    expect(r!.phrase).toBe("8月到现在");
+    expect(r!.phrase).toBe("2026年8月到现在"); // R296 P1-4：裸月份显式回写生效年份
   });
 
   it("「6月以来」「7月份至今」同口径开放终点", () => {

@@ -214,9 +214,16 @@ function SwStatusCard() {
       )
     }
   }
+  // R296 P3-2（audit-r295）：SW 是默认关闭的实验性能力，设置卡收进「高级」
+  // 折叠区，普通用户不被 Service Worker 细节打扰；开启过的用户默认展开。
   return (
     <Card className="p-4">
-      <h2 className="text-sm font-medium">离线与更新（PWA）</h2>
+      <details className="group" open={offlineOn}>
+        <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-medium [&::-webkit-details-marker]:hidden">
+          <span>高级：离线与更新（PWA）</span>
+          <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
+          <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
+        </summary>
       <p
         className={cn(
           "mt-2 flex items-center gap-1.5 text-sm",
@@ -259,6 +266,7 @@ function SwStatusCard() {
           </span>
         </label>
       )}
+      </details>
     </Card>
   )
 }

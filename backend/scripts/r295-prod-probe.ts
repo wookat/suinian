@@ -2,7 +2,7 @@
  * R295 生产问答探针（audit-r295 §6/§7 的一手数据来源）。
  *
  *   SUINIAN_API_BASE=https://suinian-api.zalize.com \
- *   SUINIAN_TOKEN=<[QA-R295] 账号的 token> \
+ *   SUINIAN_TOKEN=<[QA-R296] 账号的 token> \
  *   npx tsx scripts/r295-prod-probe.ts [--sse] "问题1" "问题2" ...
  *
  * 非流式：打印总耗时 + Server-Timing 逐段（route/kwext/sem/graph/dirext/conaud/gen/execcls）。
@@ -18,7 +18,7 @@ const UA =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 if (!TOKEN) {
-  console.error("需要 SUINIAN_TOKEN（[QA-R295] 临时账号）");
+  console.error("需要 SUINIAN_TOKEN（[QA-R296] 临时账号）");
   process.exit(2);
 }
 

@@ -4,7 +4,7 @@
  * WHERE user_id=? 全表扫描；补 idx_threads_user 后测 DELETE /api/auth/me
  * 端到端耗时是否稳定收敛。
  *
- * 每轮：注册 [QA-R236] 临时账号 → /api/import 导入 N 条笔记 →
+ * 每轮：注册 [QA-R296] 临时账号 → /api/import 导入 N 条笔记 →
  * DELETE /api/auth/me 计时 → 校验旧 token 401。
  *
  * Usage: npx tsx scripts/qa-r236-delete-stress.ts [rounds] [notesPerRound]
@@ -32,7 +32,7 @@ function syntheticNotes(count: number): string {
   for (let i = 0; i < count; i++) {
     const d = new Date(base - (count - i) * 3_600_000);
     const ts = `${d.toISOString().slice(0, 10)} ${d.toISOString().slice(11, 16)}`;
-    lines.push(`${ts}\n[QA-R236] 注销压测笔记 ${i}：合成内容 ${i % 97}，用于级联删除耗时测量。`);
+    lines.push(`${ts}\n[QA-R296] 注销压测笔记 ${i}：合成内容 ${i % 97}，用于级联删除耗时测量。`);
   }
   return lines.join("\n\n---\n\n");
 }

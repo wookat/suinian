@@ -1,8 +1,8 @@
 // R294 P2-4：生产 ask p50/p95 测量（修复前后对比）。
-// 用 [QA-R294] 账号注册→写入少量笔记→重复问答→输出延迟分位数。
+// 用 [QA-R296] 账号注册→写入少量笔记→重复问答→输出延迟分位数。
 // 口令运行时随机生成，不落盘不提交。
 const API = process.env.SUINIAN_API ?? "https://suinian-api.zalize.com";
-const NAME = process.env.QA_NAME ?? `[QA-R294]perf-${Date.now().toString(36)}`;
+const NAME = process.env.QA_NAME ?? `[QA-R296]perf-${Date.now().toString(36)}`;
 const PASS = crypto.randomUUID() + crypto.randomUUID().slice(0, 8);
 
 const j = (r) => r.json();

@@ -147,6 +147,22 @@ export function shortenGuardMarks(content: string): string {
   return out.trim()
 }
 
+// 隔离位置定位（R296 P2-1，audit-r295：提示从「吓人」矫枉到「看不懂」）：
+// 找到含隔离标记的那一段（非空行序号）与同段的 [n] 引用，横幅里告诉用户
+// 被隔离的是哪一条，「查看原文」直接滚到对应笔记卡片。
+const ISOLATION_MARK_RE = /〔已隔离|命中安全隔离规则|〔代码安全判别暂不可用/
+export function isolatedMarkLocation(content: string): { para: number; refIndex: number | null } | null {
+  const lines = shortenGuardMarks(content)
+    .split("\n")
+    .filter((l) => l.trim().length > 0)
+  for (let i = 0; i < lines.length; i++) {
+    if (!ISOLATION_MARK_RE.test(lines[i])) continue
+    const m = lines[i].match(/[[［](\d{1,2})[\]］]/)
+    return { para: i + 1, refIndex: m ? parseInt(m[1], 10) : null }
+  }
+  return null
+}
+
 /** 把回答中的 [n] 渲染为可点击引用，点击滚动到下方对应笔记卡片 */
 function AnswerText({ msgId, content, refIndexes }: { msgId: string; content: string; refIndexes: Set<number> }) {
   const parts = shortenGuardMarks(content).split(/([[［]\d{1,2}[\]］])/g)
@@ -236,8 +252,11 @@ export function AskChat({
   }, [onClose, confirmClear])
 
   const hasStreamText = streamState.text.length > 0
+  // 只滚内部列表容器，不用 scrollIntoView（R296 P3-1，audit-r295：375px 多轮
+  // 对话后它会连带滚动页面，把卡片底部的输入框挤出可视区）。
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
+    const el = listRef.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
   }, [messages.length, asking, hasStreamText])
 
   // 上下文在发送时按当下时刻现算（见 selectAskContext）：useMemo 只依赖
@@ -388,7 +407,9 @@ export function AskChat({
         </div>
       </div>
 
-      <div ref={listRef} className="max-h-[55vh] space-y-3 overflow-y-auto px-3 py-3 md:max-h-[420px]">
+      {/* dvh 口径（R296 P3-1）：移动端地址栏/键盘收起时 vh 会大于可视高度，
+          55vh 列表 + 头部 + 输入框在 375px 小屏上溢出，输入框落到可视区外。 */}
+      <div ref={listRef} className="max-h-[45dvh] space-y-3 overflow-y-auto px-3 py-3 md:max-h-[420px]">
         {messages.length === 0 && !asking && (
           <div className="space-y-3 px-1 py-6 text-center">
             <p className="text-sm text-muted-foreground">
@@ -453,28 +474,42 @@ export function AskChat({
                         )}
                       </div>
                     ) : null}
-                    {m.isolated && !m.guardDegraded && (
-                      <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
-                        <ShieldAlert className="size-3.5 shrink-0" />
-                        <span>部分内容已被安全隔离，未采纳。</span>
-                        {(m.refs?.length ?? 0) > 0 && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-6 px-2 text-xs"
-                            onClick={() => {
-                              const first = m.refs![0]
-                              const el = document.getElementById(`ask-ref-${m.id}-${first.index}`)
-                              el?.scrollIntoView({ behavior: "smooth", block: "center" })
-                              el?.classList.add("ring-2", "ring-primary")
-                              window.setTimeout(() => el?.classList.remove("ring-2", "ring-primary"), 1600)
-                            }}
-                          >
-                            查看原文
-                          </Button>
-                        )}
-                      </div>
-                    )}
+                    {m.isolated && !m.guardDegraded && (() => {
+                      const loc = isolatedMarkLocation(m.content)
+                      const refIndexes = new Set((m.refs ?? []).map((r) => r.index))
+                      const targetIndex =
+                        loc?.refIndex != null && refIndexes.has(loc.refIndex) ? loc.refIndex : m.refs?.[0]?.index
+                      const targetNote =
+                        targetIndex != null ? m.refs!.find((r) => r.index === targetIndex)?.note : undefined
+                      const noteLabel = targetNote
+                        ? (targetNote.title || targetNote.content).replace(/\s+/g, " ").slice(0, 12)
+                        : null
+                      return (
+                        <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+                          <ShieldAlert className="size-3.5 shrink-0" />
+                          <span>
+                            {loc
+                              ? `回答第 ${loc.para} 段中的内容已被安全隔离，未采纳${noteLabel ? `（关于「${noteLabel}」的那条笔记）` : ""}；笔记原文仍在，未被修改。`
+                              : "部分内容已被安全隔离，未采纳；笔记原文仍在，未被修改。"}
+                          </span>
+                          {targetIndex != null && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 px-2 text-xs"
+                              onClick={() => {
+                                const el = document.getElementById(`ask-ref-${m.id}-${targetIndex}`)
+                                el?.scrollIntoView({ behavior: "smooth", block: "center" })
+                                el?.classList.add("ring-2", "ring-primary")
+                                window.setTimeout(() => el?.classList.remove("ring-2", "ring-primary"), 1600)
+                              }}
+                            >
+                              查看原文
+                            </Button>
+                          )}
+                        </div>
+                      )
+                    })()}
                     <AnswerText
                       msgId={m.id}
                       content={m.content}

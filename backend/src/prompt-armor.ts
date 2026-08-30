@@ -1085,12 +1085,15 @@ export function restoreVerbatimEchoes(answer: string, dataText: string): string 
       pos += seg.length + 1;
     }
   }
+  // 行长门槛 2（R296 P2-5，audit-r295 V01：三字短行进不了候选面，CRLF
+  // 混排永远还原不了）：还原只在折叠相等时用原文切片替换，短行碰撞
+  // 最坏也只是换成同折叠面的原文形态，不会引入资料外内容。
   const byFold = new Map<string, number[]>();
   for (let i = 0; i < dlines.length; i++) {
     const t = dlines[i].text.trim();
-    if (t.length < 4) continue;
+    if (t.length < 2) continue;
     const f = fold(t);
-    if (f.length < 4) continue;
+    if (f.length < 2) continue;
     const arr = byFold.get(f);
     if (arr) arr.push(i);
     else byFold.set(f, [i]);
@@ -1102,7 +1105,7 @@ export function restoreVerbatimEchoes(answer: string, dataText: string): string 
   let i = 0;
   while (i < alines.length) {
     const t = alines[i].trim();
-    const cands = t.length >= 4 ? byFold.get(fold(t)) : undefined;
+    const cands = t.length >= 2 ? byFold.get(fold(t)) : undefined;
     if (!cands) {
       out.push(alines[i]);
       i++;
@@ -1113,7 +1116,16 @@ export function restoreVerbatimEchoes(answer: string, dataText: string): string 
     for (const d of cands) {
       let len = 1;
       while (i + len < alines.length && d + len < dlines.length) {
-        const af = fold(alines[i + len].trim());
+        const at = alines[i + len].trim();
+        const dt = dlines[d + len].text.trim();
+        // 空行/仅空白行对齐（R296 P2-5，audit-r295 V14：连续空行断开连续段，
+        // 行内空白形态还原不了）：两侧都是空白行时视为命中，切片时原文
+        // 的空白形态（尾随空格/tab/CRLF）随切片原样回复。
+        if (at.length === 0 && dt.length === 0) {
+          len++;
+          continue;
+        }
+        const af = fold(at);
         if (af.length === 0 || af !== dFold(d + len)) break;
         len++;
       }
@@ -1597,20 +1609,27 @@ export function foldHomoglyphs(text: string): string {
 //   V2 V1 再整行倒序（RTL 覆盖/隔离符渲染出的视觉顺序即倒序字节序）。
 // 只用于判定（门控/全局判定/行级能力），用户可见文本与 verbatim 出口不使用。
 export const BIDI_CTRL_G = /[\u202A-\u202E\u2066-\u2069\u200E\u200F]/g;
-const INVISIBLE_CARRIER_RE = /[\u200B-\u200D\u2060\uFEFF\u00AD\u180E\u034F\u202A-\u202E\u2066-\u2069\u200E\u200F\u00A0]/;
+// R296 P1-5：补齐变体选择符 U+FE00–FE0F、Unicode 标签字符 U+E0000–E007F
+// 与补充变体选择符 U+E0100–E01EF（audit-r295 P1-5，载体 D03/D04）。
+const INVISIBLE_CARRIER_RE =
+  /[\u200B-\u200D\u2060\uFEFF\u00AD\u180E\u034F\u202A-\u202E\u2066-\u2069\u200E\u200F\u00A0\uFE00-\uFE0F\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/u;
 
 /** 含不可见/双向控制字符时的还原候选面（无则空数组）。 */
 export function invisibleCarrierVariants(text: string): string[] {
   if (!INVISIBLE_CARRIER_RE.test(text)) return [];
-  const stripped = text
-    .replace(BIDI_CTRL_G, "")
-    .replace(ZERO_WIDTH_G, "")
-    .replace(/\u00a0/g, " ");
+  // R296 P1-5：标签字符先还原成它携带的 ASCII（剥除会让载荷从判定面消失），
+  // 再剥其余不可见字符。
+  const decoded = decodeTagChars(text);
+  const stripped = stripInvisibleCarriers(decoded.replace(BIDI_CTRL_G, "")).replace(/\u00a0/g, " ");
   const reversed = stripped
     .split("\n")
     .map((l) => [...l].reverse().join(""))
     .join("\n");
-  return reversed === stripped ? [stripped] : [stripped, reversed];
+  const out = reversed === stripped ? [stripped] : [stripped, reversed];
+  // 标签字符还原面与「纯剥除」面都保留：前者带回载荷，后者是无壳基线。
+  const bare = stripInvisibleCarriers(text.replace(BIDI_CTRL_G, "")).replace(/\u00a0/g, " ");
+  if (!out.includes(bare)) out.push(bare);
+  return out;
 }
 
 /** 双向控制字符存在与否（门控信号，不要求还原出原语）。 */
@@ -2298,8 +2317,30 @@ export function installerBenignText(text: string): boolean {
 // 归一化按**行对齐**构造（归一化行数 = 原文行数），因此偏移映射是行级双射，
 // 处置一律落在原始行边界上（不产生残片，见 §5）。
 
-/** 零宽/软连字符类混淆字符。 */
-const ZERO_WIDTH_G = /[\u200B-\u200D\u2060\uFEFF\u00AD\u180E\u034F]/g;
+/** 零宽/软连字符/变体选择符类混淆字符（BMP 单码元）。
+ * R296 P1-5（audit-r295 §2.3）：补 U+FE00–FE0F 变体选择符。 */
+const ZERO_WIDTH_G = /[\u200B-\u200D\u2060\uFEFF\u00AD\u180E\u034F\uFE00-\uFE0F]/g;
+
+/** R296 P1-5：星际面不可见携带字符——Unicode 标签字符 U+E0000–E007F
+ * （当前最流行的不可见携带手段）与补充变体选择符 U+E0100–E01EF。
+ * UTF-16 下均由高代理 U+DB40/U+DB41 起头。 */
+const TAG_SUPP_VS_G = /[\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+/** 上述星际字符的高代理（逐码元扫描时用）。 */
+const TAG_SUPP_VS_HIGH_RE = /[\uDB40\uDB41]/;
+
+/** 剥除全部不可见携带字符（零宽 + 变体选择符 + 标签字符）。 */
+export function stripInvisibleCarriers(s: string): string {
+  return s.replace(TAG_SUPP_VS_G, "").replace(ZERO_WIDTH_G, "");
+}
+
+/** R296 P1-5：Unicode 标签字符还原成它携带的 ASCII（U+E0020–E007E → 0x20–0x7E）。
+ * 只用于判定面，用户可见文本与 verbatim 出口不使用。 */
+export function decodeTagChars(s: string): string {
+  return s.replace(/[\u{E0000}-\u{E007F}]/gu, (ch) => {
+    const cp = ch.codePointAt(0)! - 0xe0000;
+    return cp >= 0x20 && cp <= 0x7e ? String.fromCharCode(cp) : "";
+  });
+}
 
 // 只剥白名单 HTML 标签，绝不用 `<[^>]+>` 通配——通配会吃掉 shell 的 `<(curl …)`。
 const HTML_TAG_AT_RE =
@@ -2419,6 +2460,13 @@ export function normalizeJudgeSurface(text: string): JudgeSurface {
       const abs = oStart + consumed + i;
       const rest = body.slice(i);
       const ch = body[i];
+      // R296 P1-5：标签字符/补充变体选择符是代理对，逐码元跳 2。
+      if (TAG_SUPP_VS_HIGH_RE.test(ch) && TAG_SUPP_VS_G.test(body.slice(i, i + 2))) {
+        TAG_SUPP_VS_G.lastIndex = 0;
+        i += 2;
+        continue;
+      }
+      TAG_SUPP_VS_G.lastIndex = 0;
       if (ZERO_WIDTH_G.test(ch)) {
         ZERO_WIDTH_G.lastIndex = 0;
         i += 1;
@@ -2688,6 +2736,32 @@ function unitsMatchingSource(
         }) || [...marks].some((m) => u.text.includes(m))
     )
     .map((u) => ({ ...u, reason: "unit:src-danger" }));
+}
+
+/**
+ * R296 P0-2（audit-r295 §3.1 段落级连坐）：把「整行」处置粒度收窄到
+ * 自然语言句。行级隔离假设「一行一条笔记」，而生成模型回答「回顾最近的
+ * 笔记」时通常一段多条，整段被替换会让无害待办/灵感一起消失。
+ * 只在该行能按 CJK 句读（。！？）切出 ≥2 句时生效；代码行（`;` 分句、
+ * 无 CJK 句读）维持 R284 F-1b 的整行一体口径，不产生代码残片。
+ * 返回该行的逐句区间（原文偏移，含句末标点），不适用时返回 null。
+ */
+export function proseSentenceSpans(
+  text: string,
+  lb: { start: number; end: number }
+): Array<{ start: number; end: number }> | null {
+  const lineText = text.slice(lb.start, lb.end);
+  if (!/[。！？]/.test(lineText)) return null;
+  const parts = lineText.split(/(?<=[。！？])/).filter((p) => p.length > 0);
+  if (parts.length < 2) return null;
+  const out: Array<{ start: number; end: number }> = [];
+  let pos = lb.start;
+  for (const p of parts) {
+    const lead = p.length - p.trimStart().length;
+    if (p.trim().length > 0) out.push({ start: pos + lead, end: pos + p.length });
+    pos += p.length;
+  }
+  return out.length >= 2 ? out : null;
 }
 
 /** 答案在判别器不可用窗口内是否存在需要保守隔离的代码单元。 */
@@ -3028,7 +3102,9 @@ export function isolateNoteInstructions(
   // 双向包含（长度 ≥ 8 的非平凡片段）。
   const dangerFold = (s: string) =>
     foldCompact(s.replace(/https?:\/\/[^\s"'`)<>\]]+/g, "").split(LINK_REMOVED_MARK).join(""));
-  const llmDangerLoose = [...llmDanger].map((s) => dangerFold(s)).filter((s) => s.length >= 8);
+  // 去 URL 必须作用在**原始**句段上：先 foldCompact 会把 `://` 等分隔符折没，
+  // URL 正则随之失配，两侧折叠面不再可比（同形异义/组合符载体上尤其明显）。
+  const llmDangerLoose = (opts?.execDangerSegments ?? []).map((s) => dangerFold(s)).filter((s) => s.length >= 8);
   const llmDangerHit = (segText: string) => {
     if (llmDanger.size === 0) return false;
     if (llmDanger.has(foldCompact(segText))) return true;
@@ -3144,6 +3220,13 @@ export function isolateNoteInstructions(
       if (ln.fence || !ln.text.trim()) continue;
       if (capSpans.some((s) => ln.oStart < s.end && ln.oEnd > s.start)) continue;
       if (!lineCarriesCapability(ln.text)) continue;
+      // R296 P0-2：一段多条笔记时只隔离携带能力信号的那一句，无关笔记保留。
+      const sentences = verbatim ? null : proseSentenceSpans(answer, { start: ln.oStart, end: ln.oEnd });
+      const hitSentences = sentences?.filter((s) => lineCarriesCapability(answer.slice(s.start, s.end)));
+      if (sentences && hitSentences && hitSentences.length > 0 && hitSentences.length < sentences.length) {
+        for (const s of hitSentences) capSpans.push({ ...s, text: answer.slice(s.start, s.end) });
+        continue;
+      }
       capSpans.push({ start: ln.oStart, end: ln.oEnd, text: answer.slice(ln.oStart, ln.oEnd) });
     }
     // 两态原子化（§5，修 P0-2）：verbatim 在线态下任一非豁免区间还原失败 ⇒
@@ -3294,6 +3377,11 @@ export function isolateNoteInstructions(
     const ls = answer.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
     let le = answer.indexOf("\n", end);
     if (le === -1) le = answer.length;
+    // R296 P0-2（audit-r295 §3.1）：行内能按自然语言句读切出多句时，处置区间
+    // 收窄到命中句——同一段里的其他笔记不连坐。代码行无 CJK 句读，仍走整行。
+    const sentences = verbatim ? null : proseSentenceSpans(answer, { start: ls, end: le });
+    const hit = sentences?.find((s) => start < s.end && end > s.start);
+    if (hit) return hit;
     return { start: ls, end: le };
   };
   const extraSpans: Array<{ start: number; end: number }> = [];
@@ -3398,6 +3486,18 @@ export function finalizeAskAnswer(
   }
 ): { answer: string; changed: boolean; isolated: boolean; degraded?: boolean } {
   const hosts = opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS;
+  // R296 P0-1（docs/decision-r296.md §1，audit-r295 §2.2 unavailable 态 23/60）：
+  // 判别器不可用/超时/解析失败窗口的安全下界不再依赖「本次答案能否被识别出
+  // 代码面痕迹」——R294 用「有痕迹才行级隔离」做降级处置，于是散文型/注音型/
+  // 摩斯型/分片型/标签字符型/密文型载体（确定性内核对其全部返回 null）在判别器
+  // 掉线时原样交付。判别器不可用是攻击者可主动制造的状态，识别能力恰恰是此刻
+  // 不可信的那一项，不能用它当放行前置。
+  // 收口：unavailable ⇒ 无条件整答案保守隔离 + degraded 置真 + 可感知的重试提示。
+  // 行级精度只在判别器在线态保留（R294 的 1.5% 误伤是 online 态成绩，不受影响）。
+  if (opts.execClassifierUnavailable) {
+    const degradedOut = `${EXEC_DEGRADED_ISOLATED_MARK}\n\n${EXEC_DEGRADED_NOTICE}`;
+    return { answer: degradedOut, changed: degradedOut !== answer, isolated: true, degraded: true };
+  }
   // R276 P0-2：先剥除内容侧仿冒的标注/审计标记，再做外链收口与指令隔离——
   // 此后插入的标注必然出自系统本轮判定，不可仿冒（本函数是唯一插入
   // 真标注的地方，且每个答案只经过一次：生成分支打 guard_finalized 标记，

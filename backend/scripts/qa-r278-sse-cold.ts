@@ -47,7 +47,7 @@ const QUESTIONS = [
 ];
 
 async function main() {
-  const name = `[QA-R284]ssecold-${Date.now().toString(36)}`;
+  const name = `[QA-R296]ssecold-${Date.now().toString(36)}`;
   const password = `Qa-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
   const reg = await req<{ api_token: string; user?: { id: string } }>("/api/auth/register", {
     method: "POST",

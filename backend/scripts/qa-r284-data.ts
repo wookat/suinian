@@ -9,7 +9,7 @@
  * /api/threads、/api/review/today、/api/tags、/api/stats、/api/reports、
  * /api/todos/today、/api/notes/random。
  *
- * 账号 [QA-R284] 前缀，跑完注销；绝不触碰 u_boss。
+ * 账号 [QA-R296] 前缀，跑完注销；绝不触碰 u_boss。
  */
 const API = process.env.SUINIAN_API_BASE ?? "https://suinian-api.zalize.com";
 const OUT = (process.argv.find((a) => a.startsWith("--out=")) ?? "").replace("--out=", "");
@@ -83,7 +83,7 @@ const OUTLETS = [
 ];
 
 async function main() {
-  const name = `[QA-R284]data-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const name = `[QA-R296]data-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const password = process.env.QA_R284_PASSWORD ?? `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   const reg = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",
