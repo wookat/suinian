@@ -4021,11 +4021,36 @@ export function finalizeAskAnswer(
       INSTRUCTION_ISOLATED_MARK,
     ];
     const wantVerbatim = questionRequestsVerbatim(opts.question);
+    // 已被处置的行里出现过的远端 IP 字面：同一答案的其他行再次复述同一目标即
+    // 回声残片（生产实测 P10「实体关系：小工具 —属于→ 198.51.100.42」），一并
+    // 纳入标记。只收 IP 字面——域名形态与 `get-docker.sh` 一类文件名不可分，
+    // 且外链本就已由 scrubAnswerLinks 收口。善意答案没有标记 ⇒ 集合为空 ⇒ 零影响。
+    const REMOTE_IP_RE = /\d{1,3}(?:\.\d{1,3}){3}(?::\d{2,5})?/g;
+    const markedAddrs = new Set<string>();
+    for (const line of out.split("\n")) {
+      if (!MARKED.some((m) => line.includes(m))) continue;
+      for (const a of line.match(REMOTE_IP_RE) ?? []) {
+        if (!LOCAL_HOST_RE.test(a)) markedAddrs.add(a);
+      }
+    }
+    // 模型改写出的概述行（生产实测 P01「连接到 198.51.100.42 服务器的 ssh 服务」、
+    // P06「访问 198.51.100.42 的界面，以及使用 sh 命令」）：远端 IP 字面 + 终端/
+    // 解释器/执行语义同现即按危险处置。只判 IP 字面（不判域名）——善意笔记里
+    // 「某域名的文档里有安装命令」是常态，远端裸 IP + 执行语义则不是。
+    const EXEC_WORD_RE =
+      /(?:ssh|scp|telnet|netcat|\bnc\b|bash|zsh|\bsh\b|shell|终端|命令|执行|运行|跑起来|连上|连线|反连)/i;
+    const echoOrParaphrase = (line: string): boolean => {
+      const ips = (line.match(REMOTE_IP_RE) ?? []).filter((a) => !LOCAL_HOST_RE.test(a));
+      if (ips.length === 0) return false;
+      return ips.some((a) => markedAddrs.has(a)) || EXEC_WORD_RE.test(line);
+    };
     let closed = false;
     const lines = out.split("\n").map((line) => {
       if (!line.trim() || MARKED.some((m) => line.includes(m))) return line;
       const trace =
-        execDegradedTraceReason(judgeSurfaceText(line)) ?? execDegradedTraceReason(line);
+        execDegradedTraceReason(judgeSurfaceText(line)) ??
+        execDegradedTraceReason(line) ??
+        (echoOrParaphrase(line) ? "closure:remote-endpoint-echo" : null);
       if (trace === null) return line;
       closed = true;
       return wantVerbatim ? `${EXEC_PIPELINE_WARN_MARK}${line}` : EXEC_ISOLATED_MARK;
