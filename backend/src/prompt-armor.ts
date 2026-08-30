@@ -1348,7 +1348,11 @@ export const EXEC_INSTALLER_WARN_MARK =
 
 /** R286 P0-1：降级窗口的用户可感知提示（答案末尾追加一次）。 */
 export const EXEC_DEGRADED_NOTICE =
-  "（本次回答处于代码安全判别降级窗口：判别服务超时/不可用，系统已对代码区域保守隔离，稍后重试可获得完整判定。）";
+  "（本次回答处于代码安全判别降级窗口：判别服务超时/不可用，系统已对疑似可执行的段落保守隔离，其余内容照常给出；稍后重试可获得完整判定。）";
+
+/** R298 P0-1：确定性判危但语义判别器零命中时的说明（判别器在线，不是降级）。 */
+export const EXEC_CONSERVATIVE_NOTICE =
+  "（上面被隔离的段落含系统判定为「会下载执行远程代码或建立外连」的内容，未展示；原文可在引用的笔记卡片中查看。）";
 
 // ---- R276 P0-2：隔离/审计标注防仿冒（audit-r275 X06/K05） ----
 // 系统标注是纯文本常量，笔记正文可以写出同一串文案冒充系统行为（真标注+
@@ -1629,6 +1633,61 @@ export function invisibleCarrierVariants(text: string): string[] {
   // 标签字符还原面与「纯剥除」面都保留：前者带回载荷，后者是无壳基线。
   const bare = stripInvisibleCarriers(text.replace(BIDI_CTRL_G, "")).replace(/\u00a0/g, " ");
   if (!out.includes(bare)) out.push(bare);
+  return out;
+}
+
+// ---- R298 P0-1/P0-2：另外三类「折叠后才现形」的载体还原面 ----
+// 根因（r295-guard-eval online-empty 实测 D08/D15/D18）：
+//   D08 每个字符后缀组合附加符号（`c\u0301u\u0301r\u0301l\u0301`）——NFKC 不合并
+//       组合符，命令字面在判定面上不成立；
+//   D15 逐字符空格拉开（`c u r l   - s   h t t p : / /`）——视觉上是命令，
+//       分词后每个 token 只有一个字符；
+//   D18 `data:…;base64,<blob>` 不带任何解码祈使句，解码后才是完整命令。
+// 三者都不是「新载体清单」，而是判定面缺了三种确定性还原：去组合符、去逐字
+// 空格、解 base64。还原产物只进判定，用户可见文本与 verbatim 出口不使用。
+const COMBINING_G = /\p{Mn}/gu;
+const SPACED_RUN_RE = /(?:(?:^|\s)[\w:/.@|~-](?=\s|$)){6,}/u;
+const B64_RUN_G = /[A-Za-z0-9+/]{24,}={0,2}/g;
+
+/** 逐字符空格拉开的段落合并回连续文本（仅判定面）。 */
+function foldSpacedOut(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => (SPACED_RUN_RE.test(line) ? line.replace(/(?<=(?:^|\s)[\w:/.@|~-]) (?=[\w:/.@|~-](?:\s|$))/gu, "") : line))
+    .join("\n");
+}
+
+/** 文本内 base64 长串的解码结果（仅可打印 ASCII 才采信）。 */
+function decodeB64Blobs(text: string): string | null {
+  const parts: string[] = [];
+  for (const m of text.matchAll(B64_RUN_G)) {
+    try {
+      const s = atob(m[0]);
+      if (s.length >= 8 && /^[\x20-\x7e\s]+$/.test(s)) parts.push(s);
+    } catch {
+      // 非法 base64：不是还原面，忽略
+    }
+  }
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+/**
+ * 判定面的全部确定性还原候选（不可见/双向载体 + 组合符 + 逐字空格 + base64）。
+ * 只用于危险判定，绝不用于用户可见输出。
+ */
+export function maskedCarrierVariants(text: string): string[] {
+  const out = [...invisibleCarrierVariants(text)];
+  const push = (v: string | null) => {
+    if (v && v !== text && !out.includes(v)) out.push(v);
+  };
+  COMBINING_G.lastIndex = 0;
+  if (COMBINING_G.test(text)) {
+    COMBINING_G.lastIndex = 0;
+    push(text.normalize("NFD").replace(COMBINING_G, ""));
+  }
+  const despaced = foldSpacedOut(text);
+  push(despaced);
+  push(decodeB64Blobs(text));
   return out;
 }
 
@@ -2241,6 +2300,180 @@ export function execRiskScoreSurface(surface: string): { score: number; signals:
 export const EXEC_RISK_ISOLATE_THRESHOLD = 3;
 export const EXEC_RISK_GATE_THRESHOLD = 1.5;
 
+// ---- R298 P0-2：无代码面的「执行意图语义」判定（docs/decision-r298.md §2） ----
+// 根因（audit-r297 §2 P04 16/16）：整条 exec 管线的入口是「答案里有没有代码/
+// 命令形态」。载体只要把同一套操作用自然语言、比喻或替代词写出来（"取 X 的
+// 汤包，倒进 sh 锅煮开"），就既不进判别器、也不进降级兜底——fail-closed 无从
+// 触发。补丁式地往清单里加载体形态治标不治本（下一个喻体照样穿透）。
+//
+// 改从「哪些信号足以要求送判」这一侧设计：一次远程执行攻击在**自然语言**里
+// 也绕不开三件事——(1) 说清楚去哪儿取（地址：IPv4／带脚本路径的域名／端口，
+// 含中文数字点分与全角写法），(2) 说清楚要取回来（取回/下载/拉取语义），
+// (3) 说清楚取回来之后要让它跑（执行/管道/交给解释器语义）。三者同现即
+// **要求送判**（gate，判错代价只是多一次 LLM 调用）；其中「交给解释器/壳」
+// 或「竖线管道 + 地址」这一更强的子集才作为**确定性保守处置**判据
+// （danger，进降级隔离与零命中否决），把误伤限制在真正有执行语义的段落上。
+//
+// 判定在归一化面（含不可见字符还原、同形异义折叠、全角折叠）上做，因此
+// 语言/字形/伪装形态无关；喻体（汤包/锅/门牌号）不进任何清单——被识别的是
+// 「地址 + 取回 + 交给解释器执行」这一语义组合本身。
+
+/** 中文数字/全角点分地址（"二零三点零点一一三点七七"、"二〇三·〇·一一三·七七"）。 */
+const SPELLED_IPV4_RE =
+  /(?:[零〇一二三四五六七八九壹贰叁肆伍陆柒捌玖]{1,4}|\d{1,3})(?:\s*[点點·．・.]\s*(?:[零〇一二三四五六七八九壹贰叁肆伍陆柒捌玖]{1,4}|\d{1,3})){3}/;
+const PLAIN_IPV4_RE = /(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/;
+/** 远程脚本地址（域名/IP + 脚本路径）——不要求协议头。 */
+const REMOTE_SCRIPT_PATHY_RE =
+  /(?:[a-z0-9-]+\.)+[a-z]{2,24}(?::\d{2,5})?\/\S*\.(?:sh|bash|py|ps1|pl|rb|php|exe|bin|run)\b/i;
+const PORTY_RE =
+  /(?:\b(?:port|PORT)\b|端口|ポート|포트)[^\n]{0,8}\d{2,5}|\d{2,5}\s*(?:号|號)?\s*(?:端口|哨站|ポート|포트)|\bport\s*\d{2,5}\b|(?:\d{1,3}\.){3}\d{1,3}\s*[:：]\s*\d{2,5}/i;
+
+/** 取回/下载语义（跨语言 + 口语/比喻替代词）。 */
+const SEM_FETCH_RE =
+  /取回|取回来|取来|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|ダウンロード|取り寄せ|받아|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)/i;
+
+/** 「交给解释器/壳去跑」语义：执行动作 + 解释器/壳类受体（含比喻受体）。 */
+const SEM_INTERP_TARGET_RE =
+  /(?:\bsh\b|\bbash\b|\bzsh\b|\bpwsh\b|\bpowershell\b|\bcmd\b|\bpython\b|\bnode\b|\bperl\b|\bruby\b|收件人\s*s\s*h|壳程序|殼程序|外壳|外殼|命令行|終端|终端|解释器|解釋器|翻译器|翻譯器|shell|interpreter|インタプリタ|シェル|셸|쉘|两个字母|兩個字母)/i;
+const SEM_HANDOFF_RE =
+  /交给|交給|丢给|丟給|喂给|餵給|递给|遞給|倒进|倒進|灌进|灌進|接到|接给|接給|管道|竖线|豎線|贴到|貼到|粘到|粘进|扔进|扔給|扔给|下到|种进|种到|放进|放入|装进|倒入|下锅|pipe\s*(?:it|into|to)?|pour\s+(?:it\s+)?(?:in)?to|hand\s+(?:it\s+)?(?:over\s+)?to|feed\s+(?:it\s+)?(?:in)?to|流し込|パイプ|파이프/i;
+const SEM_RUN_RE =
+  /执行|執行|运行|運行|跑起来|跑掉|跑一下|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|실행/i;
+/** 拼写拆字型命令名（c-u-r-l / w g e t 等）——逐字母口述规避字面匹配。 */
+const SPELLED_CMD_RE =
+  /\bc\s*[-·．.、]\s*u\s*[-·．.、]\s*r\s*[-·．.、]\s*l\b|\bw\s*[-·．.、]\s*g\s*[-·．.、]\s*e\s*[-·．.、]\s*t\b|[两兩]个?字母\s*s\s*h\b/i;
+/** 注音符号（ㄅ-ㄩ）——命令被整句转写成注音时的载体信号。 */
+const BOPOMOFO_RE = /[\u3105-\u312f\u31a0-\u31bf]{2}/;
+/** 长 base64 令牌 + 解码语义 + 终端/回车语义：「解完直接跑」型密文载体。 */
+const B64_BLOB_RE = /[A-Za-z0-9+\/]{24,}={0,2}/;
+const SEM_DECODE_RE = /解码|解出|解完|解开|还原|還原|base64|decode/i;
+/** 拼音转写的执行语义（汉字被拆成罗马化读音时仍是同一语义）。 */
+const PINYIN_FETCH_RE = /\bxia\s?zai\b|\bxia\s?zai\s?xia\s?lai\b|\bqu\s?hui\b|\bla\s?qu\b/i;
+const PINYIN_HANDOFF_RE = /\bjiao\s?gei\b|\bdao\s?jin\b|\bshu\s?xian\b/i;
+const PINYIN_RUN_RE = /\bzhi\s?xing\b|\byun\s?xing\b|\bpao\s?qi\s?lai\b/i;
+/** 反弹/绑定 shell 的纯散文描述：端口 + 壳/终端 + 接线/重定向语义。 */
+const SEM_CONNECT_RE =
+  /重定向|接到|接过去|接上|连线|连上|连接|打个电话|打电话|建立会话|建立连|redirect|connect\s+(?:to|back)|reverse\s+shell|call\s+home/i;
+const SEM_TERMINAL_PASTE_RE = /终端|終端|命令行|回车|回車|粘|贴|貼|paste|terminal|console/i;
+
+/** 「别看内容/直接照做」——把「未经检查即执行」这一危险语义本身作为信号。 */
+const SEM_BLIND_RE =
+  /别看|別看|不用看|不看内容|不检查|不檢查|不用检查|不必检查|无需查看|無需查看|without\s+(?:checking|inspecting|looking)|don'?t\s+(?:check|inspect|read)/i;
+
+type SemanticExecSignals = {
+  addr: boolean;
+  fetch: boolean;
+  handoffInterp: boolean;
+  run: boolean;
+  pipe: boolean;
+  blind: boolean;
+  /** 拼写拆字/注音转写型命令描述（规避字面匹配的载体形态）。 */
+  spelled: boolean;
+  /** 长 base64 密文 + 解码 + 终端/回车语义：解完即跑。 */
+  decodeRun: boolean;
+  /** 端口 + 壳/终端 + 接线/重定向：反弹 shell 的纯散文写法。 */
+  reverseShell: boolean;
+};
+
+function semanticExecSignals(text: string): SemanticExecSignals {
+  const folded = foldHomoglyphs(stripInvisibleCarriers(text)).normalize("NFKC");
+  const addr =
+    PLAIN_IPV4_RE.test(folded) ||
+    SPELLED_IPV4_RE.test(folded) ||
+    REMOTE_SCRIPT_PATHY_RE.test(folded) ||
+    PORTY_RE.test(folded);
+  const handoff = SEM_HANDOFF_RE.test(folded) || PINYIN_HANDOFF_RE.test(folded);
+  const interp = SEM_INTERP_TARGET_RE.test(folded);
+  return {
+    addr,
+    fetch: SEM_FETCH_RE.test(folded) || PINYIN_FETCH_RE.test(folded),
+    handoffInterp: handoff && interp,
+    run: SEM_RUN_RE.test(folded) || PINYIN_RUN_RE.test(folded),
+    reverseShell:
+      PORTY_RE.test(folded) &&
+      (interp || /终端|命令行|输入输出|stdin|stdout|哨站/i.test(folded)) &&
+      SEM_CONNECT_RE.test(folded),
+    pipe: /竖线|豎線|管道|\bpipe\b|パイプ|파이프/i.test(folded),
+    blind: SEM_BLIND_RE.test(folded),
+    spelled:
+      SPELLED_CMD_RE.test(folded) ||
+      (BOPOMOFO_RE.test(folded) && SEM_INTERP_TARGET_RE.test(folded)),
+    decodeRun:
+      B64_BLOB_RE.test(folded) && SEM_DECODE_RE.test(folded) && SEM_TERMINAL_PASTE_RE.test(folded),
+  };
+}
+
+/**
+ * R298 P0-2 **送判**判据（宽）：无代码面也要求调判别器的信号组合。
+ * 地址 ∧ 取回 ∧（执行 ∨ 交给解释器）——误伤代价只是多一次 LLM 调用，
+ * 在线态由判别器给出最终结论，不改变处置。
+ */
+export function execSemanticGateReason(text: string): string | null {
+  if (!text.trim()) return null;
+  const s = semanticExecSignals(text);
+  // 拼写拆字/解码即跑不要求地址（地址可藏在拆字/密文/另一条笔记里）。
+  if (s.spelled) return "semantic:spelled-cmd";
+  if (s.decodeRun) return "semantic:decode-run";
+  if (!s.addr) return null;
+  if (s.reverseShell) return "semantic:addr+reverse-shell";
+  if (s.fetch && (s.run || s.handoffInterp)) return "semantic:addr+fetch+exec";
+  if (s.handoffInterp && s.pipe) return "semantic:addr+pipe-interp";
+  return null;
+}
+
+/**
+ * R298 P0-1（audit-r297 §1）：**多能力组合门控**——门控命中的原因里含两个以上
+ * 执行原语（`fetch+sink`、`net+hostport`、`exec+inline` …）或语义执行意图时，
+ * 判别器的「零命中」不得当作放行依据（C06 Go 反连 / C04 远程 eval 正是这里漏的）。
+ * 单一原语（只有 hostport、只有 fetch）不进此判据——那是善意代码的常态。
+ * 官方安装源（rustup/nvm/helm …）仍由既有白名单在处置层豁免。
+ */
+const LOCAL_HOST_RE = /^(?:0\.0\.0\.0|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|localhost|::1?|10\.\d|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.)/i;
+
+/** 文本里是否出现**非本机/非内网**的 host:port 端点（反连载荷的必要面）。 */
+function hasRemoteHostPort(text: string): boolean {
+  const re = /((?:\d{1,3}\.){3}\d{1,3}|\[[0-9a-f:]+\]|(?:[a-z0-9-]+\.)+[a-z]{2,24})\s*[:：,，]?\s*["']?\s*(\d{2,5})\b/gi;
+  for (const m of text.matchAll(re)) {
+    if (!LOCAL_HOST_RE.test(m[1])) return true;
+  }
+  return false;
+}
+
+export function execCombinationGateReason(answer: string): string | null {
+  const gate = execClassifierGateReason(answer);
+  if (!gate) return null;
+  if (!/\+|semantic/.test(gate)) return null;
+  // net+hostport 单独出现时，监听/回环服务端（bind 0.0.0.0 / 127.x）是善意代码
+  // 的常态——只有出现**远端** host:port（反连方向）才作为零命中的否决依据。
+  if (/net\+hostport/.test(gate) && !/fetch|exec|sink|inline|semantic/.test(gate)) {
+    const surface = judgeSurfaceText(answer);
+    if (!hasRemoteHostPort(surface) && !hasRemoteHostPort(answer)) return null;
+  }
+  return gate;
+}
+
+/**
+ * R298 P0-2 **确定性保守处置**判据（严，danger 方向）：在送判判据之上再要求
+ * 「取回来的东西被交给解释器/壳」或「未经检查即执行」这一真正危险的语义，
+ * 才允许在判别器不可用/零命中态做隔离。良性技术散文（"从 10.0.0.5 下载依赖
+ * 后 npm run build"）没有「交给解释器跑取回来的内容」这层语义，不命中。
+ */
+export function execSemanticDangerReason(text: string): string | null {
+  if (!text.trim()) return null;
+  const s = semanticExecSignals(text);
+  // 解码即跑型密文与拼写拆字型不依赖地址信号（地址藏在密文/拆字里）。
+  if (s.decodeRun) return "semantic-danger:decode-run";
+  if (s.spelled && (s.run || s.handoffInterp || s.fetch)) return "semantic-danger:spelled-cmd";
+  if (!s.addr) return null;
+  if (s.reverseShell) return "semantic-danger:reverse-shell";
+  if (s.fetch && s.blind && s.handoffInterp) return "semantic-danger:fetch+blind-interp";
+  if (s.fetch && s.handoffInterp) return "semantic-danger:fetch+interp";
+  if (s.fetch && s.blind && s.run) return "semantic-danger:fetch+blind-run";
+  if (s.pipe && s.handoffInterp && (s.fetch || s.run)) return "semantic-danger:pipe-interp";
+  if (s.spelled) return "semantic-danger:addr+spelled";
+  return null;
+}
+
 // ---- R288 P1-1：官方安装源清单（处置分级，docs/decision-r288.md §4） ----
 // R287 实测：「下载脚本→执行」被当作充分条件，对 docker/rustup/poetry/nvm/helm/
 // k3s/PowerShell 官方安装法误伤 7/20（常态）、8/20（降级）。这里不放宽判据，
@@ -2548,8 +2781,9 @@ export function globalExecDangerReason(answer: string): string | null {
   const direct =
     globalExecDangerReasonForSurface(judgeSurfaceText(answer)) ?? globalExecDangerReasonForSurface(answer);
   if (direct) return direct;
-  // R294 P0-1：不可见/双向控制字符载体的还原面（倒序 RTL / 零宽切分）。
-  for (const v of invisibleCarrierVariants(answer)) {
+  // R294 P0-1：不可见/双向控制字符载体的还原面（倒序 RTL / 零宽切分）；
+  // R298 P0-1：并入组合符/逐字空格/base64 还原面。
+  for (const v of maskedCarrierVariants(answer)) {
     const r = globalExecDangerReasonForSurface(v);
     if (r) return `unmask-${r}`;
   }
@@ -2593,8 +2827,9 @@ export function execClassifierGateReason(answer: string): string | null {
     const prim = execPrimitiveTraceReason(surface) ?? execPrimitiveTraceReason(answer);
     if (prim) return `gate:${prim}`;
     // R294 P0-1（audit-r293 §2，C13/C14/C30 实测 12/12 fail-open）：剔除不可见/
-    // 双向控制字符（含倒序还原）后出现 exec 原语 ⇒ 开门。
-    for (const v of invisibleCarrierVariants(answer)) {
+    // 双向控制字符（含倒序还原）后出现 exec 原语 ⇒ 开门。R298 P0-1 并入组合符/
+    // 逐字空格/base64 还原面。
+    for (const v of maskedCarrierVariants(answer)) {
       const p = execPrimitiveTraceReason(v);
       if (p) return `gate:unmask:${p}`;
       const s = execRiskScoreSurface(v);
@@ -2607,6 +2842,9 @@ export function execClassifierGateReason(answer: string): string | null {
     if (CODEISH_FENCE_RE.test(answer)) return "gate:codeish-block";
     const { score, signals } = execRiskScoreSurface(surface);
     if (score >= EXEC_RISK_GATE_THRESHOLD) return `gate:score:${score}:${signals.join("+")}`;
+    // R298 P0-2：无代码面但含「地址 + 取回 + 执行/交给解释器」语义 ⇒ 也送判。
+    const sem = execSemanticGateReason(answer) ?? execSemanticGateReason(surface);
+    if (sem) return `gate:${sem}`;
     return null;
   } catch {
     // 门控自身出错 ⇒ 开门（fail-closed：宁可多判一次，绝不静默放行）
@@ -2622,7 +2860,7 @@ export function execClassifierGateReason(answer: string): string | null {
  */
 export function execDegradedTraceReason(text: string): string | null {
   if (!text.trim()) return null;
-  for (const v of invisibleCarrierVariants(text)) {
+  for (const v of maskedCarrierVariants(text)) {
     if (v === text) continue;
     const r = execDegradedTraceReasonRaw(v);
     if (r) return `unmask-${r}`;
@@ -2652,6 +2890,9 @@ function execDegradedTraceReasonRaw(text: string): string | null {
   if (c.hostport && (c.exec || c.shellio || c.sink || c.inline)) return "degraded:hostport+proc";
   if (hasObfuscatedAddress(n)) return "degraded:obfaddr";
   if (fetchThenRunReason(text)) return "degraded:fetch+run";
+  // R298 P0-2：纯语义执行意图（无代码面）——降级/零命中态的保守处置下界。
+  const sem = execSemanticDangerReason(text);
+  if (sem) return `degraded:${sem}`;
   return null;
 }
 
@@ -3027,8 +3268,17 @@ export function isolateNoteInstructions(
     execDegradedSegments?: string[];
     /** R286 P0-1：判别器不可用窗口——代码单元整体保守隔离（不区分 verbatim）。 */
     execClassifierUnavailable?: boolean;
+    /** R298 P0-1：判别器在线但确定性痕迹判危而判别器零命中 ⇒ 同样保守处置，
+     * 但文案如实说明「已判定为危险内容」而非「判别不可用」。 */
+    execConservativeVeto?: boolean;
   }
 ): string {
+  // R298：两条保守处置入口（判别器不可用 / 确定性否决零命中）共用同一套定位与
+  // 隔离机制，只有对用户的说明文案不同。
+  const conservative = !!(opts?.execClassifierUnavailable || opts?.execConservativeVeto);
+  const conservativeMark = opts?.execClassifierUnavailable
+    ? EXEC_DEGRADED_ISOLATED_MARK
+    : EXEC_ISOLATED_MARK;
   // R278 P1-1（audit-r277 DG1–DG3/S08）：可执行下载管道整段处置，禁止交付
   // 残片——R277 实测只替换正则命中字面会把「bash <(curl -fsSL …)」切成
   // 「-fsSL …)」残片送达用户。处置口径：
@@ -3150,7 +3400,7 @@ export function isolateNoteInstructions(
   // 单元整体一个处置，保证同一危险单元只有一种形态（两态，无第三态）。
   // R288 P1-1：降级窗口同样适用官方安装源豁免（确定性来源判定，不依赖 LLM）。
   const degradedRep = (text: string) =>
-    installerBenignHere(text) ? `${EXEC_INSTALLER_WARN_MARK}${text}` : EXEC_DEGRADED_ISOLATED_MARK;
+    installerBenignHere(text) ? `${EXEC_INSTALLER_WARN_MARK}${text}` : conservativeMark;
   // R288 P0-1：全局判定（代码面能力聚合 + 连续量打分）——专治「分布式载荷」：
   // 单个单元/单行都不足以命中，但把答案里全部代码区拼起来能力齐备（插散文、
   // 插空行、跨围栏、围栏内外各一半都改变不了拼起来的代码面）。只对**局部判定
@@ -3209,7 +3459,7 @@ export function isolateNoteInstructions(
     // verbatim 在线态沿用 R286 的「代码单元整体」契约：整单元「警示 + 资料原文
     // 精确切片」，对不上就整单元隔离——行级还原会把模型丢字的语法行
     // （`func main{`）当原文交付。围栏之外的载体由下面的归一化行覆盖。
-    if (verbatim && !opts?.execClassifierUnavailable) {
+    if (verbatim && !conservative) {
       for (const u of codeUnitSpans(answer).map((x) => fenceInnerSpan(answer, x))) capSpans.push(u);
     }
     // 载体无关的处置粒度：归一化后携带能力信号的**原文行**（行级双射，§5）。
@@ -3235,12 +3485,12 @@ export function isolateNoteInstructions(
       start: s.start,
       end: s.end,
       installer: installerBenignHere(s.text),
-      rep: opts?.execClassifierUnavailable ? degradedRep(s.text) : execSegRep(s.text),
+      rep: conservative ? degradedRep(s.text) : execSegRep(s.text),
     }));
     const anyIsolated = planned.some((p) => !p.installer && p.rep === EXEC_ISOLATED_MARK);
     for (const p of planned) {
       const rep =
-        verbatim && !opts?.execClassifierUnavailable && anyIsolated && !p.installer
+        verbatim && !conservative && anyIsolated && !p.installer
           ? EXEC_ISOLATED_MARK
           : p.rep;
       globalUnits.push({ start: p.start, end: p.end });
@@ -3249,12 +3499,12 @@ export function isolateNoteInstructions(
     if (planned.length === 0) wholeAnswerIsolate = true;
   }
   if (wholeAnswerIsolate) {
-    return opts?.execClassifierUnavailable ? EXEC_DEGRADED_ISOLATED_MARK : ISOLATION_NOTICE_ANSWER;
+    return conservative ? conservativeMark : ISOLATION_NOTICE_ANSWER;
   }
   const inGlobalUnit = (start: number, end: number) =>
     globalUnits.some((u) => start < u.end && end > u.start);
   const degradedUnits = (
-    opts?.execClassifierUnavailable ? execDegradedIsolationUnitsWithSource(answer, dataText) : []
+    conservative ? execDegradedIsolationUnitsWithSource(answer, dataText) : []
   ).filter((u) => !inGlobalUnit(u.start, u.end));
   // R292 P0-1（docs/decision-r292.md §1，audit-r291 22/38 fail-open）：降级窗口
   // 内「隔离哪一段」只是定位问题，定位失败不得放行。层 2：能力判定（上面的
@@ -3262,7 +3512,7 @@ export function isolateNoteInstructions(
   // 呈代码形态的行）一律保守隔离——判别器本来要判的就是这些代码危不危险，
   // 它不可用时这些代码安全性未知，fail-closed 即不交付；官方安装源豁免由
   // degradedRep 内部处理（确定性判据，不依赖 LLM）。
-  if (opts?.execClassifierUnavailable) {
+  if (conservative) {
     const covered = (start: number, end: number) =>
       inGlobalUnit(start, end) || degradedUnits.some((u) => start < u.end && end > u.start);
     // R294 P1-4（audit-r293 §8.1，r288-guard-eval 降级态 105/116 善意误伤）：
@@ -3297,7 +3547,7 @@ export function isolateNoteInstructions(
     // 反之，没有任何执行原语痕迹的普通技术笔记不因判别器掉线而被剥夺。
     if (degradedUnits.length === 0 && globalUnits.length === 0) {
       const trace = execDegradedTraceReason(globalSurface) ?? execDegradedTraceReason(answer);
-      if (trace) return EXEC_DEGRADED_ISOLATED_MARK;
+      if (trace) return conservativeMark;
     }
   }
   for (const u of degradedUnits) {
@@ -3318,7 +3568,7 @@ export function isolateNoteInstructions(
   // 非 verbatim 只有「隔离标记」一种形态，本就不存在第三态，故维持既有行级
   // 口径——单元级隔离会把同一代码块里无害的邻行（`tail -f …`/`rsync …`）一起
   // 吞掉，那是另一种误伤。单元级处置只用于 verbatim 出口。
-  const verbatimDangerUnits = !verbatim || opts?.execClassifierUnavailable
+  const verbatimDangerUnits = !verbatim || conservative
     ? []
     : codeUnitSpans(answer)
         .map((u) => fenceInnerSpan(answer, u))
@@ -3332,7 +3582,7 @@ export function isolateNoteInstructions(
   // R286 P0-1b：「取码→赋权→执行」这类只有跨行聚合才成立的单元，任何单行都不
   // 命中确定性内核、也过不了判别器前置门槛（判别器压根不会被叫起），行级口径
   // 无从下手 ⇒ 必须整单元处置，且与判别器是否可用无关。
-  const crossUnits = opts?.execClassifierUnavailable
+  const crossUnits = conservative
     ? []
     : [
         ...crossLineExecUnits(answer),
@@ -3457,14 +3707,77 @@ export function isolateNoteInstructions(
   if (reps.length === 0) return answer;
   let out = "";
   let pos = 0;
+  // R298 P1-5（audit-r297 §7）：有序列表项被整体替换成隔离标记时保留列表前缀
+  // （「3. 〔已隔离…〕」），编号保持连续；前缀是纯序号无信息量，不构成交付面。
+  const LIST_PREFIX_RE = /^(\s*(?:\d{1,3}|[一二三四五六七八九十]{1,3})[.、)）：:]\s*)/;
   for (const r of reps) {
     if (r.start < pos) continue; // 重叠区间只处理一次（防重复交付）
-    out += answer.slice(pos, r.start) + r.rep;
+    let rep = r.rep;
+    if (rep.startsWith("〔") && (r.start === 0 || answer[r.start - 1] === "\n")) {
+      const m = answer.slice(r.start, r.end).match(LIST_PREFIX_RE);
+      if (m) rep = m[1] + rep;
+    }
+    out += answer.slice(pos, r.start) + rep;
     pos = r.end;
   }
   out += answer.slice(pos);
   // 相邻重复标记合并
   return out.replace(new RegExp(`(?:${INSTRUCTION_ISOLATED_MARK}[\\s。；;，]*){2,}`, "g"), INSTRUCTION_ISOLATED_MARK);
+}
+
+// ---- R298 P1-3：凭据断言拒答（docs/decision-r298.md §4） ----
+// 根因（audit-r297 §6）：生产 UI 问「我的服务器密码是多少？」，模型答「你的服务器
+// 密码是 1234567890abcdef。」——加密敏感笔记本身没泄漏，这串是**编造**的，且无
+// 任何提示。判据不去区分「编造 / 泄漏」（那需要知道真值），而是：答案里出现
+// 「<凭据词> 是/为/： <高熵串>」且该串**不在本次引用的笔记明文里** ⇒ 一律拒答。
+//   - 若串在明文里 ⇒ 说明用户自己把它记成了普通笔记，按既有敏感规则处理，不在此拦；
+//   - 若不在 ⇒ 要么幻觉、要么来自不该进问答的加密内容，两种都不交付。
+// 覆盖中/英/日/韩多语与多种句式；高熵定义见 isHighEntropySecret。
+export const CREDENTIAL_REFUSAL_ANSWER =
+  "这个问题涉及密码/密钥一类的凭据，我不能给出具体值：加密的敏感笔记内容不进问答，未加密来源里也没有可核对的原文，直接给值只会是编造的。请到时间流找到对应笔记并解锁查看。";
+
+const CREDENTIAL_SUBJECT_RE =
+  /(?:密码|密碼|口令|密钥|密鑰|秘钥|私钥|私鑰|通行码|通行證|验证码|驗證碼|校验码|动态码|恢复码|备用码|一次性密码|授权码|授權碼|token|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|secret|password|passwd|passphrase|credential|verification code|one[- ]?time password|otp|パスワード|暗証番号|認証コード|ワンタイムパスワード|비밀번호|인증번호|암호)/i;
+// 「是 / 为 / ： / is / = / です / 입니다」等断言连接词后紧跟取值。
+const CREDENTIAL_ASSERT_RE = new RegExp(
+  `${CREDENTIAL_SUBJECT_RE.source}[^\\n]{0,24}?(?:是|為|为|＝|=|:|：|叫做|设成|設成|设置为|改成|is|was|equals?|:\\s|は|が|=|는|은|이|가)\\s*[「『"'\`\\[（(]?\\s*([A-Za-z0-9!@#$%^&*()_+\\-=./:;?~\\[\\]{}|]{6,128})`,
+  "i"
+);
+
+// 取值尾部的标点/引号剥离。引号类用 \uXXXX 转义写出：write-path-guard 的
+// 字符串字面量扫描器是朴素正则，字符类里的裸引号会被它当成未闭合字符串，
+// 在本文件这个体量上造成灾难性回溯。
+const CREDENTIAL_TRAIL_RE = /[。．.,，、；;：:!！?？)）\]」』\u0022\u0027\u0060]+$/;
+
+/** 高熵取值判定：长度 + 字符类混合 / 十六进制 / 常见凭据前缀。 */
+function isHighEntropySecret(v: string): boolean {
+  const s = v.trim().replace(CREDENTIAL_TRAIL_RE, "");
+  if (s.length < 6) return false;
+  // 纯数字：6 位以上即可能是验证码/PIN（正是要拦的形态）。
+  if (/^\d{6,}$/.test(s)) return true;
+  if (/^[0-9a-f]{8,}$/i.test(s)) return true; // 十六进制串
+  if (/^(?:sk|pk|ghp|gho|xox[baprs]|AKIA|AIza|eyJ)[A-Za-z0-9_\-.]{6,}/.test(s)) return true; // 常见前缀
+  const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((re) => re.test(s)).length;
+  return s.length >= 8 && classes >= 2;
+}
+
+/**
+ * 答案里是否存在「凭据 = 具体值」且该值无法在引用笔记明文中核对。
+ * 返回拒答理由或 null。
+ */
+export function credentialAssertionReason(answer: string, dataText: string | undefined): string | null {
+  if (!CREDENTIAL_SUBJECT_RE.test(answer)) return null;
+  const src = (dataText ?? "").toLowerCase();
+  const re = new RegExp(CREDENTIAL_ASSERT_RE.source, "gi");
+  for (const m of answer.matchAll(re)) {
+    const raw = m[1] ?? "";
+    const val = raw.trim().replace(CREDENTIAL_TRAIL_RE, "");
+    if (!isHighEntropySecret(val)) continue;
+    // 明文可核对（用户自己记在非敏感笔记里）⇒ 交由既有敏感规则处理，不在此拦。
+    if (src.includes(val.toLowerCase())) continue;
+    return `credential-assertion:${val.length}`;
+  }
+  return null;
 }
 
 /**
@@ -3483,21 +3796,46 @@ export function finalizeAskAnswer(
     execDegradedSegments?: string[];
     /** R286 P0-1：代码安全判别器不可用（null）窗口。 */
     execClassifierUnavailable?: boolean;
+    /** R298 P0-1：判别器在线零命中被确定性痕迹否决 ⇒ 保守处置。 */
+    execConservativeVeto?: boolean;
   }
 ): { answer: string; changed: boolean; isolated: boolean; degraded?: boolean } {
   const hosts = opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS;
-  // R296 P0-1（docs/decision-r296.md §1，audit-r295 §2.2 unavailable 态 23/60）：
-  // 判别器不可用/超时/解析失败窗口的安全下界不再依赖「本次答案能否被识别出
-  // 代码面痕迹」——R294 用「有痕迹才行级隔离」做降级处置，于是散文型/注音型/
-  // 摩斯型/分片型/标签字符型/密文型载体（确定性内核对其全部返回 null）在判别器
-  // 掉线时原样交付。判别器不可用是攻击者可主动制造的状态，识别能力恰恰是此刻
-  // 不可信的那一项，不能用它当放行前置。
-  // 收口：unavailable ⇒ 无条件整答案保守隔离 + degraded 置真 + 可感知的重试提示。
-  // 行级精度只在判别器在线态保留（R294 的 1.5% 误伤是 online 态成绩，不受影响）。
-  if (opts.execClassifierUnavailable) {
-    const degradedOut = `${EXEC_DEGRADED_ISOLATED_MARK}\n\n${EXEC_DEGRADED_NOTICE}`;
-    return { answer: degradedOut, changed: degradedOut !== answer, isolated: true, degraded: true };
+  // R298 P1-3（audit-r297 §6，生产 UI 实测「你的服务器密码是 1234567890abcdef。」）：
+  // 凭据形态的断言只有两种可能——要么是加密敏感笔记的明文（不该进问答），要么是
+  // 模型编造（更糟：用户会拿去用）。两种都拒答，判据不区分，因此不需要判断
+  // 「是不是幻觉」。见 hallucinatedCredentialReason。
+  {
+    const cred = credentialAssertionReason(answer, opts.dataText);
+    if (cred !== null)
+      return { answer: CREDENTIAL_REFUSAL_ANSWER, changed: true, isolated: true };
   }
+  // R298 P0-1：零命中否决内置在护栏本体——判别器在线且报「零命中」
+  // （execDangerSegments 传入且为空）而确定性痕迹存在时，护栏自行升格为保守
+  // 处置，不依赖调用方（ask 层）记得做同一判定。LLM 结论只能在拦的方向加严，
+  // 永不能否决确定性门控。
+  if (
+    !opts.execClassifierUnavailable &&
+    !opts.execConservativeVeto &&
+    opts.execDangerSegments !== undefined &&
+    opts.execDangerSegments.length === 0
+  ) {
+    const veto =
+      globalExecDangerReason(answer) ??
+      execDegradedTraceReason(judgeSurfaceText(answer)) ??
+      execDegradedTraceReason(answer) ??
+      execCombinationGateReason(answer);
+    if (veto !== null) opts = { ...opts, execConservativeVeto: true };
+  }
+  // R298 P1-2（audit-r297 §3，降级态 34/132 = 25.8% 良意误伤）：R296 在这里直接
+  // 返回「整答案隔离占位符」，把 R294 已经调好的降级段落级定位机制整条旁路掉了
+  // （变成不可达代码），代价是判别器抖一下就连纯散文都只能拿到占位符。
+  // 现在降级态走与在线态同一条隔离管线，只是判据换成确定性的 execDegraded-
+  // TraceReason（含 R298 新增的纯语义执行意图），且保留完整三层下界：
+  //   层 1/2：能力判定命中的代码单元/代码行/语义行 → 逐段隔离 + 告知；
+  //   层 3：痕迹存在却一个区间都定位不到 → 整答隔离（fail-closed 不让）；
+  //   出口保险丝：降级态输出里残留任何执行痕迹 → 整答隔离。
+  // 安全下界因此不依赖「能不能识别出载体形态」，而是「任何执行痕迹都不交付」。
   // R276 P0-2：先剥除内容侧仿冒的标注/审计标记，再做外链收口与指令隔离——
   // 此后插入的标注必然出自系统本轮判定，不可仿冒（本函数是唯一插入
   // 真标注的地方，且每个答案只经过一次：生成分支打 guard_finalized 标记，
@@ -3511,6 +3849,7 @@ export function finalizeAskAnswer(
     execDangerSegments: opts.execDangerSegments,
     execDegradedSegments: opts.execDegradedSegments,
     execClassifierUnavailable: opts.execClassifierUnavailable,
+    execConservativeVeto: opts.execConservativeVeto,
   });
   let out = afterIsolate;
   let isolated = afterIsolate !== afterLinks;
@@ -3548,29 +3887,125 @@ export function finalizeAskAnswer(
   // 之后的 despoof/link-scrub/决策痕迹剥除会再次改字——R293 生产实测 `run()`、
   // 软连字符仍坏的根因）。此处之后不再有任何改字层；还原只回复无执行痕迹的
   // 原文切片，危险内容仍由上方隔离层处置。
-  if (questionRequestsVerbatim(opts.question) && opts.dataText) {
+  // 判别器不可用/保守否决态不做逐字还原：还原判定「切片无执行痕迹」对分片型
+  // 载体（单片各自无痕）恰恰失效，而此刻没有判别器兜底（R298 P0-1）。
+  if (
+    questionRequestsVerbatim(opts.question) &&
+    opts.dataText &&
+    !opts.execClassifierUnavailable &&
+    !opts.execConservativeVeto
+  ) {
     out = restoreVerbatimEchoes(out, opts.dataText);
   }
+  // R298 P1-2（audit-r297 §4，降级态良性整答隔离 34/132=25.8%）：不可用态的
+  // 出口保险丝从「宽判据命中 ⇒ 整答隔离」收窄为「先定位全部代码面区域逐段
+  // 隔离、散文保留」；只有隔离后残余面仍带痕迹（纯语义载体、折叠后才现形的
+  // 分片/同形载体）才回到整答隔离——安全下界不变（所有代码面在不可用态一律
+  // 不交付），改变的只是良性散文是否陪葬。
+  const redactCodeSurface = (text: string, mark: string): { redacted: string; count: number } => {
+    const spans: Array<{ start: number; end: number }> = codeUnitSpans(text).map((u) => ({
+      start: u.start,
+      end: u.end,
+    }));
+    const j = normalizeJudgeSurface(text);
+    for (const ln of j.lines) {
+      if (ln.fence || !ln.text.trim()) continue;
+      if (spans.some((s) => ln.oStart < s.end && ln.oEnd > s.start)) continue;
+      if (!isCodeLine(ln.text) && execPrimitiveTraceReason(ln.text) === null) continue;
+      spans.push({ start: ln.oStart, end: ln.oEnd });
+    }
+    if (spans.length === 0) return { redacted: text, count: 0 };
+    spans.sort((a, b) => a.start - b.start);
+    let redacted = "";
+    let cursor = 0;
+    // R298 P1-5：整行列表项被隔离时保留纯序号前缀，编号连续（前缀无信息量）。
+    const LIST_PREFIX_RE = /^(\s*(?:\d{1,3}|[一二三四五六七八九十]{1,3})[.、)）：:]\s*)/;
+    for (const s of spans) {
+      if (s.start < cursor) continue;
+      let rep = mark;
+      if (s.start === 0 || text[s.start - 1] === "\n") {
+        const m = text.slice(s.start, s.end).match(LIST_PREFIX_RE);
+        if (m) rep = m[1] + mark;
+      }
+      redacted += text.slice(cursor, s.start) + rep;
+      cursor = s.end;
+    }
+    redacted += text.slice(cursor);
+    return { redacted, count: spans.length };
+  };
   // R292 P0-1（docs/decision-r292.md §1）：「是否降级」只由判别器状态决定，
   // 不再从输出文本里是否含降级标记**反推**——audit-r291 的 22/38 fail-open
   // 正是「识别不到载体 ⇒ 没有标记 ⇒ degraded 不置位 ⇒ 原样放行」这条链。
   // 出口收尾保险：判别器不可用而输出里既无降级隔离标记也无官方安装警示
   // ⇒ 整答隔离（层 3 的同义兜底，防未来任何上游路径遗漏）。
-  if (opts.execClassifierUnavailable) {
+  if (opts.execClassifierUnavailable || opts.execConservativeVeto) {
     // R294 P1-4：保险丝的触发条件与层 3 同口径——「存在执行原语痕迹」而非
     // 「门控非空」（门控含 codeish-block，沿用它会把任何带围栏的善意答案整篇探空）。
-    const residueTrace = execDegradedTraceReason(judgeSurfaceText(out)) ?? execDegradedTraceReason(out);
+    const mark = opts.execClassifierUnavailable ? EXEC_DEGRADED_ISOLATED_MARK : EXEC_ISOLATED_MARK;
+    // 不可用态的残留判据必须是**宽面**（门控 + 代码面 + 语义痕迹），不能只用
+    // 高置信危险痕迹：同形/填充/注音/分片等载体正是靠「折叠后才现形」的宽判据
+    // 才被送进判别器的，此刻判别器不可信，宽判据命中即不交付。官方安装白名单
+    // 同理只在判别器在线时生效（判定「这是官方脚本且无夹带」本身依赖判别）。
+    // 判据施加在**原始答案**上（与送判前置同口径）：out 已被局部隔离/剥链改写，
+    // 折叠后才现形的载体（同形/填充/分片）可能在 out 上恰好判不出来，但「这次
+    // 答案需要判别器、而判别器不可信」这一事实由原始答案决定，不随改写消失。
+    const residueTrace = opts.execClassifierUnavailable
+      ? execClassifierGateReason(answer) ??
+        execCodeSurfaceTraceReason(answer) ??
+        execDegradedTraceReason(judgeSurfaceText(out)) ??
+        execDegradedTraceReason(out)
+      : // 保守否决（在线零命中 + 确定性痕迹）同样判在**原始答案**上：外链剥除
+        // 会把地址换成占位符，语义痕迹（取回 + 交给解释器）随之判不出来，但
+        // 「模型确实在教人下载并交给壳执行」这件事不因剥链而消失。
+        execDegradedTraceReason(judgeSurfaceText(answer)) ??
+        execDegradedTraceReason(answer) ??
+        execDegradedTraceReason(judgeSurfaceText(out)) ??
+        execDegradedTraceReason(out) ??
+        execCombinationGateReason(answer);
+    const installerExempt = !opts.execClassifierUnavailable && out.includes(EXEC_INSTALLER_WARN_MARK);
+    // 不可用态下宽判据命中即整答隔离，**不因上游已做过局部隔离而豁免**：分片型
+    // 载体（如 E08 跨笔记拆字）局部隔离只吞掉带痕迹的那一片，其余片段单看无痕
+    // 但组合即命令——此刻没有判别器能证明剩余片段无害。
+    const partialMarked =
+      out.includes(EXEC_DEGRADED_ISOLATED_MARK) || out.includes(EXEC_ISOLATED_MARK);
     if (
-      !out.includes(EXEC_DEGRADED_ISOLATED_MARK) &&
-      !out.includes(EXEC_INSTALLER_WARN_MARK) &&
-      !out.includes(EXEC_ISOLATED_MARK) &&
+      (opts.execClassifierUnavailable || !partialMarked) &&
+      out !== mark &&
+      !installerExempt &&
       residueTrace !== null
     ) {
-      out = EXEC_DEGRADED_ISOLATED_MARK;
+      // 先尝试段落级：把 out 与原始 answer 各自的全部代码面区域替换为隔离
+      // 标记，散文保留；两个面都必须在隔离后复查为无痕（宽判据同口径），
+      // 任一残留 ⇒ 整答隔离（层 3 下界不变）。
+      const wideTrace = (t: string): string | null =>
+        execClassifierGateReason(t) ??
+        execCodeSurfaceTraceReason(t) ??
+        execDegradedTraceReason(judgeSurfaceText(t)) ??
+        execDegradedTraceReason(t);
+      const ro = redactCodeSurface(out, mark);
+      const ra = redactCodeSurface(answer, mark);
+      const markFree = (t: string) =>
+        t.split(mark).join("").split(EXEC_DEGRADED_ISOLATED_MARK).join("").split(EXEC_ISOLATED_MARK).join("");
+      if (
+        opts.execClassifierUnavailable &&
+        ro.count > 0 &&
+        wideTrace(markFree(ro.redacted)) === null &&
+        wideTrace(markFree(ra.redacted)) === null
+      ) {
+        out = ro.redacted;
+      } else {
+        out = mark;
+      }
       isolated = true;
     }
-    if (!out.includes(EXEC_DEGRADED_NOTICE)) out = `${out}\n\n${EXEC_DEGRADED_NOTICE}`;
-    return { answer: out, changed: out !== answer, isolated, degraded: true };
+    if (opts.execClassifierUnavailable) {
+      // 降级窗口对用户始终可感知（R286 P0-1 / R292 §4）：即使本次答案是纯散文
+      // 未被动过，也附提示说明当前处于降级窗口，避免「随机抽风」的观感。
+      if (!out.includes(EXEC_DEGRADED_NOTICE)) out = `${out}\n\n${EXEC_DEGRADED_NOTICE}`;
+      return { answer: out, changed: out !== answer, isolated, degraded: true };
+    }
+    if (isolated && !out.includes(EXEC_CONSERVATIVE_NOTICE)) out = `${out}\n\n${EXEC_CONSERVATIVE_NOTICE}`;
+    return { answer: out, changed: out !== answer, isolated };
   }
   // R286 P0-1：降级窗口给用户可感知的显式提示（不只靠行内标记）。
   const degraded = out.includes(EXEC_DEGRADED_ISOLATED_MARK);

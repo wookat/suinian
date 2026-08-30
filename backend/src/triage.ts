@@ -1405,6 +1405,21 @@ export const INJECTION_NEUTRALIZED_MARK = "〔笔记中疑似注入指令已中�
 // 层 0：零宽/双向控制/BOM/软连字符
 const INVISIBLE_CHARS_RE = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u00ad\ufeff]/g;
 
+// R298 P3-1（audit-r297 §9 V03）：ZWJ（U+200D）在 emoji 序列里是合法组字符
+// （👨‍👩‍👧‍👦 / 🏴‍☠️），无差别剥除会把家庭 emoji 拆成 4 个人。仅当 ZWJ 两侧都是
+// 表情图形字符（可带变体选择符）时保留；文字间的 ZWJ（拆字混淆用途）仍剥除。
+// 判定面（normalizeCommandText/stripInvisibleCarriers）不受影响，照旧全剥。
+const EMOJI_BEFORE_ZWJ_RE = /\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}]?\uFE0F?$/u;
+const EMOJI_AFTER_ZWJ_RE = /^\p{Extended_Pictographic}/u;
+function stripInvisibleKeepEmojiZwj(text: string): string {
+  return text.replace(INVISIBLE_CHARS_RE, (ch, offset: number) => {
+    if (ch !== "\u200d") return "";
+    const before = text.slice(Math.max(0, offset - 5), offset);
+    const after = text.slice(offset + 1, offset + 3);
+    return EMOJI_BEFORE_ZWJ_RE.test(before) && EMOJI_AFTER_ZWJ_RE.test(after) ? ch : "";
+  });
+}
+
 // 层 1：ChatML 角色/控制 token（audit-r263 V9）与行首伪角色行（V4）。
 // token 改写成全角尖括号同形文本，角色行冒号换全角——保留可读性、丧失控制语义。
 const CHATML_TOKEN_RE =
@@ -1525,7 +1540,7 @@ function neutralizeEncodedPayloads(text: string): string {
  * 与问答召回片段发给模型前都必须过这里。
  */
 export function neutralizePromptInjection(content: string): string {
-  let out = content.replace(INVISIBLE_CHARS_RE, ""); // 层 0
+  let out = stripInvisibleKeepEmojiZwj(content); // 层 0（emoji ZWJ 序列保留）
   out = neutralizeDelimiterSpoof(out); // R216 定界仿冒
   out = defuseStructuralTokens(out); // 层 1
   out = neutralizeEncodedPayloads(out); // 层 2
@@ -1538,7 +1553,7 @@ export function neutralizePromptInjection(content: string): string {
  * 回答里没有正当用途，确定性剥除，不影响正文文字。
  */
 export function scrubModelOutputInjectionArtifacts(answer: string): string {
-  return answer.replace(INVISIBLE_CHARS_RE, "").replace(CHATML_TOKEN_RE, "").trimStart();
+  return stripInvisibleKeepEmojiZwj(answer).replace(CHATML_TOKEN_RE, "").trimStart();
 }
 
 // 中文数字金额兜底（R238 P3-2，audit-r235 P3-3 / audit-r237 P3-2 遗留）：语音

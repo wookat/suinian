@@ -83,6 +83,35 @@ export function parseConductVerdict(raw: string | null, segCount: number): numbe
   }
 }
 
+// ---- R298 P0-1：危险代码判别器输出的**严格**有效性校验（decision-r298 §1） ----
+// 根因（audit-r297 §1，544 例 9 例无警示泄漏）：宽松解析把「结构不符/字段越界/
+// 非枚举值/截断 JSON 里能抠出来的部分」统统折叠成一个合法的「零命中」，于是
+// 「判别器根本没给出可信结论」与「判别器说安全」在类型上不可分——后者会覆盖
+// 已经触发的确定性门控，原样投递危险内容。
+// 收口：判别器结论只有**完全合法**时才算结论；任何一处不合法即 null（= 不可用，
+// 与抛错/超时同等对待，走保守处置）。合法定义：去围栏后整体就是一个 JSON 数组，
+// 元素全部是 1..segCount 的整数（允许重复，去重后返回），不允许字符串数字、
+// 不允许对象、不允许越界、不允许数组外有正文残留。
+export function parseSegListStrict(raw: string | null, segCount: number): number[] | null {
+  if (raw === null) return null;
+  const stripped = raw.replace(/```(?:json)?/gi, "").trim();
+  if (!stripped.startsWith("[") || !stripped.endsWith("]")) return null;
+  let arr: unknown;
+  try {
+    arr = JSON.parse(stripped);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(arr)) return null;
+  const out: number[] = [];
+  for (const item of arr) {
+    if (typeof item !== "number" || !Number.isInteger(item)) return null;
+    if (item < 1 || item > segCount) return null;
+    if (!out.includes(item)) out.push(item);
+  }
+  return out;
+}
+
 /**
  * 来源归因审计（R272 主判，docs/decision-r272.md 支柱 1，替换 R270 五类枚举
  * 审计）：独立 LLM 看（用户问题, nonce 标记的资料区, 编号答案句段），判据是
@@ -193,6 +222,14 @@ export async function extractDirectiveDemands(env: AiEnv, dataText: string): Pro
 /** 危险代码语义主判预算：只在答案含代码类内容且确定性内核未命中时触发。 */
 export const EXEC_CLASSIFY_BUDGET_MS = 8_000;
 
+// R298 P0-1（慢成功）：接近硬预算的「成功」不可信。论据：判别器是 temperature=0、
+// max_tokens=120 的单次小请求，正常完成在百毫秒量级（R296 预热实测中位 0.6s）；
+// 耗时溢到秒级意味着上游已经在降级/限流/重试，此时返回的内容常是截断或降级
+// 模型的产物（audit-r297 实测：6.5s 慢成功的零命中与硬失败同时发生）。而误判为
+// 不可信的代价只是本次回答多一次重试/段落级保守隔离，而误信一次的代价是危险
+// 内容无警示投递——不对称，故取硬预算的 40%（约 3.2s）作为软阈值。
+export const EXEC_CLASSIFY_SOFT_BUDGET_MS = 3_200;
+
 // ---- R288 §3.1：判别器调用成本控制（门控放宽到「含代码区」后的配套） ----
 // Worker 实例内 LRU 缓存：key = 答案代码面的哈希（散文改写不影响 key，
 // 同一笔记反复问答复用判别结果）。只缓存确定结果，null（不可用）不缓存。
@@ -258,28 +295,45 @@ export function execClassifyCacheReset(): void {
 // 收口：记录判别器最近一次不可用时刻；处在不可用窗口内时，即使本次答案没有
 // 代码面痕迹也按降级处置（整答案保守隔离 + 用户可感知提示）。判别器在线时
 // 该窗口恒为假，不影响 online 态的行级精度与 1.5% 误伤率。
-const EXEC_CLASSIFIER_UNHEALTHY_MS = 60_000;
-let execClassifierLastFailureAt = 0;
+// R298 P1-2（audit-r297 §3）：60s 单次失败开窗把一次拖放大成一分钟的全局降级，
+// 而 Worker 是多 isolate 的，相邻请求可能落在不同 isolate 上——用户感知到的是
+// 「随机抽风」。改为：单次失败只影响本请求（本请求内先即时重试一次，仍失败则
+// 本次保守处置）；只有**连续** N 次失败才开窗，窗长 8s（小于一次判别硬预算，
+// 只用于遮断上游硬寕时的雪崩），任何一次成功立即清零。
+const EXEC_CLASSIFIER_UNHEALTHY_MS = 8_000;
+export const EXEC_CLASSIFIER_FAIL_STREAK_OPEN = 3;
+let execClassifierFailStreak = 0;
+let execClassifierWindowOpenedAt = 0;
 
 export function markExecClassifierUnavailable(): void {
-  execClassifierLastFailureAt = Date.now();
+  execClassifierFailStreak += 1;
+  if (execClassifierFailStreak >= EXEC_CLASSIFIER_FAIL_STREAK_OPEN) {
+    execClassifierWindowOpenedAt = Date.now();
+  }
 }
 
 export function markExecClassifierHealthy(): void {
-  execClassifierLastFailureAt = 0;
+  execClassifierFailStreak = 0;
+  execClassifierWindowOpenedAt = 0;
 }
 
-/** 判别器是否处在「最近一次不可用」的健康窗口内。 */
+/** 判别器是否处在「连续失败开窗」的不健康窗口内。 */
 export function execClassifierRecentlyUnavailable(): boolean {
   return (
-    execClassifierLastFailureAt > 0 &&
-    Date.now() - execClassifierLastFailureAt < EXEC_CLASSIFIER_UNHEALTHY_MS
+    execClassifierWindowOpenedAt > 0 &&
+    Date.now() - execClassifierWindowOpenedAt < EXEC_CLASSIFIER_UNHEALTHY_MS
   );
 }
 
-/** 测试用：重置健康窗口。 */
+/** 测试用：重置健康窗口与连续失败计数。 */
 export function execClassifierHealthReset(): void {
-  execClassifierLastFailureAt = 0;
+  execClassifierFailStreak = 0;
+  execClassifierWindowOpenedAt = 0;
+}
+
+/** 测试/观测用：当前连续失败次数。 */
+export function execClassifierFailStreakCount(): number {
+  return execClassifierFailStreak;
 }
 
 /**
@@ -292,15 +346,19 @@ export function execClassifierHealthReset(): void {
  */
 export async function classifyDangerousCodeSegments(
   env: AiEnv,
-  answer: string
+  answer: string,
+  opts?: { budgetMs?: number; softBudgetMs?: number }
 ): Promise<number[] | null> {
   const segs = splitAnswerSegments(answer);
   if (segs.length === 0) return [];
+  const budget = opts?.budgetMs ?? EXEC_CLASSIFY_BUDGET_MS;
+  const soft = opts?.softBudgetMs ?? EXEC_CLASSIFY_SOFT_BUDGET_MS;
+  const t0 = Date.now();
   const numbered = segs.map((s, i) => `${i + 1}. ${s.text.trim()}`).join("\n");
   const raw = await chatComplete(env, {
     temperature: 0,
     max_tokens: 120,
-    timeout_ms: EXEC_CLASSIFY_BUDGET_MS,
+    timeout_ms: budget,
     messages: [
       {
         role: "system",
@@ -315,5 +373,7 @@ export async function classifyDangerousCodeSegments(
       { role: "user", content: `答案句段：\n${numbered}` },
     ],
   });
-  return parseConductVerdict(raw, segs.length);
+  // R298 P0-1：慢成功与结构不合法一律归为「无结论」（null）。
+  if (Date.now() - t0 > soft) return null;
+  return parseSegListStrict(raw, segs.length);
 }
