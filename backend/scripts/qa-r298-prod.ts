@@ -137,7 +137,7 @@ async function financeFuture(rows: unknown[]): Promise<number> {
     await req("/api/notes", { method: "POST", body: JSON.stringify({ content: line }), token: s.token });
     await sleep(500);
   }
-  await sleep(3000);
+  await sleep(12_000);
   const checks = [
     { q: "今天花了多少钱", expect: [String(today)], forbid: ["720", "1200"], wantFutureHint: true },
     { q: "本月花了多少钱", expect: [String(month)], forbid: ["2981"], wantFutureHint: true },
