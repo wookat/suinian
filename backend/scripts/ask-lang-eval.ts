@@ -4,7 +4,7 @@
  * 用法：
  *   SUINIAN_API_BASE=https://suinian-api.zalize.com npx tsx scripts/ask-lang-eval.ts [--keep]
  *
- * 注册一次性 QA 账号（[QA-R238] 前缀数据），导入小型黄金台账，等待分拣
+ * 注册一次性 QA 账号（[QA-R296] 前缀数据），导入小型黄金台账，等待分拣
  * cron 补齐 amount 后，对每个财务意图跑三语问法（en / mixed / zh），断言：
  *   1) 三语都命中确定性管道（响应带 finance_aggregate / extreme_aggregate /
  *      count_aggregate / finance_subset 等确定性标志）；
@@ -41,12 +41,12 @@ interface SeedNote {
   category: "expense" | "income";
 }
 const NOTES: SeedNote[] = [
-  { content: "[QA-R238] 买咖啡豆花了 128 元", daysAgo: 3, category: "expense" },
-  { content: "[QA-R238] 又买了一包咖啡豆 96 元", daysAgo: 5, category: "expense" },
-  { content: "[QA-R238] 买了台咖啡机 899 元", daysAgo: 4, category: "expense" },
-  { content: "[QA-R238] 打车去机场 45 元", daysAgo: 6, category: "expense" },
-  { content: "[QA-R238] 超市买菜 68.5 元", daysAgo: 2, category: "expense" },
-  { content: "[QA-R238] 本月工资到账 15000 元", daysAgo: 7, category: "income" },
+  { content: "[QA-R296] 买咖啡豆花了 128 元", daysAgo: 3, category: "expense" },
+  { content: "[QA-R296] 又买了一包咖啡豆 96 元", daysAgo: 5, category: "expense" },
+  { content: "[QA-R296] 买了台咖啡机 899 元", daysAgo: 4, category: "expense" },
+  { content: "[QA-R296] 打车去机场 45 元", daysAgo: 6, category: "expense" },
+  { content: "[QA-R296] 超市买菜 68.5 元", daysAgo: 2, category: "expense" },
+  { content: "[QA-R296] 本月工资到账 15000 元", daysAgo: 7, category: "income" },
 ];
 
 function backdatedIso(daysAgo: number): string {

@@ -12,7 +12,7 @@
  *  - MCP（F-7b）：MCP search_notes 对含危险命令的笔记回传原文 + contains_executable_command
  *    标记 + exec_notice 声明；普通笔记不带标记。
  *
- * 账号一律 [QA-R284] 前缀，跑完立即注销并校验旧 token 401；绝不触碰 u_boss。
+ * 账号一律 [QA-R296] 前缀，跑完立即注销并校验旧 token 401；绝不触碰 u_boss。
  */
 const API = process.env.SUINIAN_API_BASE ?? "https://suinian-api.zalize.com";
 const ONLY = (process.argv.find((a) => a.startsWith("--only=")) ?? "").replace("--only=", "").split(",").filter(Boolean);
@@ -51,7 +51,7 @@ async function req<T>(path: string, init: RequestInit & { token?: string } = {})
 }
 
 async function register(tag: string): Promise<Session> {
-  const name = `[QA-R284]${tag}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const name = `[QA-R296]${tag}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const password = process.env.QA_R284_PASSWORD ?? `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   const body = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",

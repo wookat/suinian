@@ -15,7 +15,7 @@
  *  - ENUM：同一批含危险/指令内容的笔记，枚举标题处理必须一致。
  *  - MCP：/mcp 响应头 Server-Timing 必须含 conaud。
  *
- * 账号一律 [QA-R284] 前缀，跑完立即注销并校验旧 token 401。
+ * 账号一律 [QA-R296] 前缀，跑完立即注销并校验旧 token 401。
  */
 
 const API = process.env.SUINIAN_API_BASE ?? "https://suinian-api.zalize.com";
@@ -55,7 +55,7 @@ async function req<T>(path: string, init: RequestInit & { token?: string } = {})
 }
 
 async function register(tag: string): Promise<Session> {
-  const name = `[QA-R284]${tag}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const name = `[QA-R296]${tag}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const password = process.env.QA_R282_PASSWORD ?? `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   const body = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",

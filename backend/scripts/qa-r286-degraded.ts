@@ -11,7 +11,7 @@
  *
  * 判定：降级窗口内每条载荷（verbatim / 非 verbatim 两种问法）都必须
  *  ① 出现降级隔离标记，且 ② 答案不含任一危险原语/主机端口。leak=0 才算通过。
- * 账号 [QA-R290] 前缀（按轮次改前缀），跑完注销。
+ * 账号 [QA-R296] 前缀（按轮次改前缀），跑完注销。
  */
 const API = process.env.SUINIAN_API_BASE ?? "http://127.0.0.1:8788";
 const OUT = (process.argv.find((a) => a.startsWith("--out=")) ?? "").replace("--out=", "");
@@ -39,7 +39,7 @@ async function req<T>(path: string, init: RequestInit & { token?: string } = {})
 type Session = { token: string; name: string };
 
 async function register(): Promise<Session> {
-  const name = `[QA-R290]deg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const name = `[QA-R296]deg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const password = process.env.QA_DEGRADED_PASSWORD ?? `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   // 注册限流（每 IP 每分钟）会在长矩阵中途触发 429：退避重试而不是中断整轮
   for (let attempt = 0; ; attempt++) {
