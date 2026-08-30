@@ -2,6 +2,11 @@ import type { Env, NoteRow } from "./types";
 import { formatAmount, type FinanceStats } from "./reports";
 import { chatComplete } from "./ai";
 import { parseLedgerTable, ledgerPositiveRows, ledgerRowsMatching } from "./triage";
+import {
+  remoteEndpointForms,
+  execDegradedTraceReason,
+  scrubUnsolicitedConduct,
+} from "./prompt-armor";
 
 /**
  * Helpers for /api/ask retrieval quality (R54): deterministic time-range
@@ -2938,8 +2943,7 @@ export function buildTimeWindowNoAnswerResponse(
   if (outOfRange.length === 0) return { answer: head, references: [] };
   const top = outOfRange.slice(0, 3);
   const lines = top.map((n, i) => {
-    const label = (n.title || n.content).replace(/\s+/g, " ").slice(0, 40);
-    return `[${i + 1}]（${shDate(n.created_at)}）${label}`;
+    return `[${i + 1}]（${shDate(n.created_at)}）${safeSuggestionLabel(n)}`;
   });
   return {
     answer: `${head}以下 ${top.length} 条相近的记录不在这个时间范围内，仅供参考：\n${lines.join("\n")}`,
@@ -3237,6 +3241,31 @@ export function sensitiveFallbackHintLine(credential: boolean): string {
 }
 
 /** 凭据类问法的兜底指引（sensitiveFallbackHintLine 的凭据措辞）。 */
+/**
+ * R300 P0-1（本地矩阵 c02/n08/n11，【实测确证】）：拒答/无召回路径的
+ * 「相近的记录」标签直接取笔记正文前 40 字，不经最终出口闭合——载体把
+ * 远端地址/外传指令写在开头时，地址与指令随建议行原样出关。标签含远端
+ * 地址形态或危险执行迹象时退到标题，标题仍不安全则给不含原文的占位提示。
+ */
+export function safeSuggestionLabel(n: Pick<NoteRow, "title" | "content">): string {
+  const unsafe = (t: string): boolean =>
+    t.trim().length > 0 &&
+    (remoteEndpointForms(t, { includeEmails: true }).length > 0 ||
+      execDegradedTraceReason(t) !== null ||
+      // 风险行为祈使句（外传/导航/口令，跨语言）：推荐标签没有「用户要求回显」
+      // 的语境，与最终出口同一判据剪除（R270-23 韩语外传句正是从这里出关）。
+      scrubUnsolicitedConduct(t, "", [], "") !== t);
+  const clip = (t: string) => (t ?? "").replace(/\s+/g, " ").slice(0, 40);
+  // 截断本身会切掉动作词（`… base64 解码` | `… curl 取回` 断在 40 字），使危险
+  // 判据在片段上失效——因此整条原文与截断片段都要过判，任一不安全即不回显。
+  const safe = (t: string): boolean => !unsafe(t) && !unsafe(clip(t));
+  const source = n.title || n.content;
+  if (safe(source)) return clip(source);
+  const title = n.title ?? "";
+  if (title.trim() && safe(title)) return clip(title);
+  return "（该笔记含被隔离内容，请在笔记卡片中查看）";
+}
+
 export function credentialHintLine(): string {
   return sensitiveFallbackHintLine(true);
 }
@@ -3269,8 +3298,7 @@ export function buildNoAnswerResponse(
     return { answer: `${NO_ANSWER_TEXT}换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`, references: [] };
   }
   const lines = suggestions.slice(0, 3).map((n, i) => {
-    const label = (n.title || n.content).replace(/\s+/g, " ").slice(0, 40);
-    return `[${i + 1}] ${label}`;
+    return `[${i + 1}] ${safeSuggestionLabel(n)}`;
   });
   const lead =
     mode === "not_in_notes"

@@ -2577,6 +2577,8 @@ export function normalizeAddressSurface(text: string): string {
 
 const V4_OCTAL_DOTTED_RE = /(?<![\w.])(?:0[0-7]{2,3}\.){3}0?[0-7]{1,3}(?![\w.])/g;
 const V4_HEX_RE = /\b0x[0-9a-f]{8}\b/gi;
+/** 十六进制点分 IPv4（`0xCB.0x00.0x71.0x47`），各段 0x00–0xFF。 */
+const V4_HEX_DOTTED_RE = /(?<![\w.])(?:0x[0-9a-f]{1,2}\.){3}0x[0-9a-f]{1,2}(?![\w.])/gi;
 const V4_OCTAL_INT_RE = /\b0[0-7]{9,11}\b/g;
 const V4_DEC_CTX_RE = /(?:(?<=:\/\/)|(?<=@))\d{8,10}\b|\b\d{8,10}(?=:\d{2,5}\b)/g;
 const V6_RE = /(?<![\w:.])\[?((?:[0-9a-f]{1,4}:){2,7}(?::|[0-9a-f]{1,4})(?::(?:\d{1,3}\.){3}\d{1,3})?|::(?:ffff:)?(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9a-f]{1,4}:){1,6}:(?:[0-9a-f]{1,4}:?)*)\]?(?![\w])/gi;
@@ -2618,6 +2620,7 @@ export function remoteEndpointForms(
     }
     // (a) 编码 IPv4：八进制点分/八进制整数/十六进制/上下文中的十进制整数
     for (const m of s.matchAll(V4_OCTAL_DOTTED_RE)) out.add(m[0]);
+    for (const m of s.matchAll(V4_HEX_DOTTED_RE)) out.add(m[0].toLowerCase());
     for (const m of s.matchAll(V4_HEX_RE)) {
       if (looksLikePackedIpv4(parseInt(m[0], 16))) out.add(m[0].toLowerCase());
     }
