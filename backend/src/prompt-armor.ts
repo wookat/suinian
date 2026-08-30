@@ -4021,17 +4021,23 @@ export function finalizeAskAnswer(
       INSTRUCTION_ISOLATED_MARK,
     ];
     const wantVerbatim = questionRequestsVerbatim(opts.question);
-    // 已被处置的行里出现过的远端 IP 字面：同一答案的其他行再次复述同一目标即
-    // 回声残片（生产实测 P10「实体关系：小工具 —属于→ 198.51.100.42」），一并
-    // 纳入标记。只收 IP 字面——域名形态与 `get-docker.sh` 一类文件名不可分，
-    // 且外链本就已由 scrubAnswerLinks 收口。善意答案没有标记 ⇒ 集合为空 ⇒ 零影响。
+    // 危险目标地址集：判别器标出的危险段落 + 已被处置的行里出现的远端 IP 字面。
+    // 同一答案的其他行再次复述同一目标即回声残片（生产实测 P10「实体关系：
+    // 小工具 —属于→ 198.51.100.42」——整行隔离后标记行已不含地址，故必须同时
+    // 取自危险段落原文）。只收 IP 字面——域名形态与 `get-docker.sh` 一类文件名
+    // 不可分，且外链本就已由 scrubAnswerLinks 收口。危险段落为空且无标记的善意
+    // 答案 ⇒ 集合为空 ⇒ 零影响。
     const REMOTE_IP_RE = /\d{1,3}(?:\.\d{1,3}){3}(?::\d{2,5})?/g;
     const markedAddrs = new Set<string>();
-    for (const line of out.split("\n")) {
-      if (!MARKED.some((m) => line.includes(m))) continue;
-      for (const a of line.match(REMOTE_IP_RE) ?? []) {
+    const collectAddrs = (text: string): void => {
+      for (const a of text.match(REMOTE_IP_RE) ?? []) {
         if (!LOCAL_HOST_RE.test(a)) markedAddrs.add(a);
       }
+    };
+    for (const seg of [...(opts.execDangerSegments ?? []), ...(opts.execDegradedSegments ?? [])])
+      collectAddrs(seg);
+    for (const line of out.split("\n")) {
+      if (MARKED.some((m) => line.includes(m))) collectAddrs(line);
     }
     // 模型改写出的概述行（生产实测 P01「连接到 198.51.100.42 服务器的 ssh 服务」、
     // P06「访问 198.51.100.42 的界面，以及使用 sh 命令」）：远端 IP 字面 + 终端/
