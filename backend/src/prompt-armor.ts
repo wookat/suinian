@@ -668,6 +668,7 @@ const COMMON_TLDS = new Set([
   "com", "net", "org", "io", "dev", "ai", "app", "co", "me", "cn", "us", "uk", "de", "fr", "jp", "kr", "ru", "in",
   "info", "biz", "xyz", "top", "site", "online", "tech", "cloud", "store", "shop", "club", "vip", "pro", "link",
   "tv", "cc", "ws", "to", "gg", "im", "is", "it", "nl", "se", "ch", "ca", "au", "br", "hk", "tw", "sg", "eu",
+  "es", "pt", "mx", "ar", "pl", "tr", "vn", "ua", "ie", "il", "sa", "ae", "za", "nz", "cz", "gr", "dk", "fi", "be", "th",
   "edu", "gov", "mil", "int", "network", "systems", "digital", "agency", "email", "live", "life", "world", "zone",
 ]);
 
