@@ -73,7 +73,8 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     return aheadMs > 60 * 86400_000 ? sh.getUTCFullYear() - 1 : sh.getUTCFullYear();
   };
 
-  if (/今天|今日/.test(q)) return { start: toUtcSql(shanghaiMidnight(now, 0)), end: null, phrase: "今天" };
+  // 「到今天为止/截至今天」是上界措辞，不是「今天」单日窗（audit-r295 §6 #17）。
+  if (/(?<![到至截])(?:今天|今日)/.test(q)) return { start: toUtcSql(shanghaiMidnight(now, 0)), end: null, phrase: "今天" };
   if (/昨天|昨日/.test(q))
     return { start: toUtcSql(shanghaiMidnight(now, -1)), end: toUtcSql(shanghaiMidnight(now, 0)), phrase: "昨天" };
   if (/前天/.test(q))
@@ -113,8 +114,9 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
   if (/上个?月/.test(q))
     return { start: toUtcSql(shanghaiMonthStart(now, 1)), end: toUtcSql(shanghaiMonthStart(now, 0)), phrase: "上个月" };
 
-  // N 个月前 / N 个多月前: a window around that time (fuzzy human memory)
-  if ((m = q.match(/(\d+|[一两二三四五六七八九十]{1,2})\s*个?多?月(?:多)?(?:之|以)?前/))) {
+  // N 个月前 / N 个多月前: a window around that time (fuzzy human memory)。
+  // 必须带「个/多」——「三月之前」是日历月上界（audit-r295 §6 #8），不是模糊窗。
+  if ((m = q.match(/(\d+|[一两二三四五六七八九十]{1,2})\s*(?:个多?|多)月(?:多)?(?:之|以)?前/))) {
     const n = parseNum(m[1]);
     if (n !== null) {
       const center = n * 30;
@@ -186,6 +188,46 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     };
   }
 
+  // 「(YYYY年)M月 到 (YYYY年)M月」月份区间（audit-r295 §6 #14：跨年区间被
+  // 截断成起始月）：闭区间按日历月，缺省结束年份=起始年份（结束月更小则跨年+1）。
+  if (
+    (m = q.match(
+      /(?:((?:19|20)\d{2})\s*年\s*)?(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份)?\s*(?:一直)?(?:到|至|~|～|—|-)\s*(?:((?:19|20)\d{2})\s*年\s*)?(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份)?(?!\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])/
+    ))
+  ) {
+    const mon1 = parseNum(m[2]);
+    const mon2 = parseNum(m[4]);
+    if (mon1 !== null && mon2 !== null && mon1 >= 1 && mon1 <= 12 && mon2 >= 1 && mon2 <= 12) {
+      const sh = new Date(now.getTime() + SH_OFFSET_MS);
+      const y1 = m[1] ? parseInt(m[1], 10) : bareYear(sh, mon1);
+      let y2 = m[3] ? parseInt(m[3], 10) : y1;
+      if (!m[3] && y2 === y1 && mon2 < mon1) y2 = y1 + 1;
+      const start = new Date(Date.UTC(y1, mon1 - 1, 1) - SH_OFFSET_MS);
+      const end = new Date(Date.UTC(y2, mon2, 1) - SH_OFFSET_MS);
+      if (end.getTime() > start.getTime())
+        return { start: toUtcSql(start), end: toUtcSql(end), phrase: `${y1}年${mon1}月至${y2}年${mon2}月` };
+    }
+  }
+
+  // 「X月之前/以前」日历月上界（audit-r295 §6 #8：被当成检索关键词 + 错误
+  // 模糊窗）：终点为该月 1 日零点（不含该月），起点开放；年份与裸「X月」同口径。
+  if (
+    (m = q.match(
+      /(?:(今年|去年|(?:19|20)\d{2}\s*年)\s*)?(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份)?\s*(?:之前|以前)(?!\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])/
+    ))
+  ) {
+    const mon = parseNum(m[2]);
+    if (mon !== null && mon >= 1 && mon <= 12) {
+      const sh = new Date(now.getTime() + SH_OFFSET_MS);
+      const y = absYear(m[1]) ?? (m[1] === "去年" ? sh.getUTCFullYear() - 1 : m[1] === "今年" ? sh.getUTCFullYear() : bareYear(sh, mon));
+      return {
+        start: null,
+        end: toUtcSql(new Date(Date.UTC(y, mon - 1, 1) - SH_OFFSET_MS)),
+        phrase: `${y}年${mon}月之前（不含${mon}月）`,
+      };
+    }
+  }
+
   // 「今年X月/去年X月」（R246 F-6，audit-r245）：必须先于宽泛「今年/去年」
   // 分支，否则被整年窗吞掉、不按具体月份窗执行。
   // 「今年8月10号」带具体日，不在本分支收口（负向前瞻只拒「N号/日」
@@ -218,7 +260,14 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
   }
   if (/今年/.test(q)) {
     const sh = new Date(now.getTime() + SH_OFFSET_MS);
-    return { start: toUtcSql(new Date(Date.UTC(sh.getUTCFullYear(), 0, 1) - SH_OFFSET_MS)), end: null, phrase: "今年" };
+    // 「今年到目前为止/至今/不要算未来」上界压到 now（audit-r295 §6 #15/#17：
+    // 自然年开放窗把未来事件时间计入）。
+    const capped = /[到至截]\s*(?:目前|今天|今日|现在)|至今|为止|不(?:要|用|想)?(?:计|算)\s*未来|别算未来/.test(q);
+    return {
+      start: toUtcSql(new Date(Date.UTC(sh.getUTCFullYear(), 0, 1) - SH_OFFSET_MS)),
+      end: capped ? toUtcSql(now) : null,
+      phrase: capped ? "今年至今" : "今年",
+    };
   }
 
   // 裸「YYYY年」整年窗（R250 P2-1）：后面紧跟月/季度/半年时不在此收口
@@ -253,7 +302,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
       return {
         start: null,
         end: toUtcSql(new Date(Date.UTC(y, mon - 1, day) - SH_OFFSET_MS)),
-        phrase: m[0].trim(),
+        phrase: `${yAbs === null ? `${y}年` : ""}${m[0].trim()}（不含当日）`,
       };
     }
   }
@@ -273,7 +322,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
       return {
         start: toUtcSql(new Date(Date.UTC(y, mon - 1, day) - SH_OFFSET_MS)),
         end: null,
-        phrase: m[0].trim(),
+        phrase: `${yAbs === null ? `${y}年` : ""}${m[0].trim()}（含当日）`,
       };
     }
   }
@@ -357,7 +406,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
       return {
         start: toUtcSql(new Date(Date.UTC(y, n - 1, 1) - SH_OFFSET_MS)),
         end: null,
-        phrase: m[1].trim(),
+        phrase: `${y}年${m[1].trim()}`,
       };
     }
   }
@@ -368,10 +417,12 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     if (n !== null && n >= 1 && n <= 12) {
       const sh = new Date(now.getTime() + SH_OFFSET_MS);
       const y = bareYear(sh, n);
+      // 裸「X月」显式回写生效年份（audit-r295 §6 #4/#5：静默回退去年，与
+      // 「去年12月」输出一字不差，用户无法分辨）。
       return {
         start: toUtcSql(new Date(Date.UTC(y, n - 1, 1) - SH_OFFSET_MS)),
         end: toUtcSql(new Date(Date.UTC(y, n, 1) - SH_OFFSET_MS)),
-        phrase: m[0].trim(),
+        phrase: `${y}年${m[0].trim()}`,
       };
     }
   }
@@ -394,7 +445,7 @@ const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|�
 // meaningful text remains means the question is about a specific item
 // ("买咖啡花了多少钱"), not an overall aggregate — fall through to normal ask.
 const STRIP_RES: RegExp[] = [
-  /(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?(?:之间|期间|以内|之内|前后|左右|之前|以前|之后|以后)?|今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|(?:今年|去年)?\s*(?:上上个?|上一?个?|下一?个?|本|这一?个?|当前)季度|(?:今年|去年)?\s*第?\s*[一二三四1-4]\s*季度|[Qq][1-4]|(?:今年|去年)?\s*[上前下后]半年|(?:今年|去年)\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底|\s*[上中下]旬)?|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底|\s*[上中下]旬)?|(?:一直)?[到至]\s*(?:现在|今天|目前(?:为止)?)|至今|以来|(?:19|20)\d{2}\s*年/g,
+  /(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?(?:之间|期间|以内|之内|前后|左右|之前|以前|之后|以后)?|今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|(?:今年|去年)?\s*(?:上上个?|上一?个?|下一?个?|本|这一?个?|当前)季度|(?:今年|去年)?\s*第?\s*[一二三四1-4]\s*季度|[Qq][1-4]|(?:今年|去年)?\s*[上前下后]半年|(?:今年|去年|(?:19|20)\d{2}\s*年)?\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份)?\s*(?:一直)?(?:到|至|~|～|—|-)\s*(?:今年|去年|(?:19|20)\d{2}\s*年)?\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份)?|(?:今年|去年)\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底|\s*[上中下]旬)?(?:之前|以前)?|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底|\s*[上中下]旬)?(?:之前|以前)?|(?:一直)?[到至]\s*(?:现在|今天|目前)(?:为止)?|至今|为止|以来|不(?:要|用|想)?(?:计|算)\s*未来的?|别算未来的?|(?:19|20)\d{2}\s*年/g,
   /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
   /总?(?:花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|净剩|收支|余额)|(?:工资|薪水)(?:到账|发了?)之?后|花了?|记了?账|账单|赚了?|挣了?|用掉|还了|还款|收款|[收拿][到了]|到手|[缴交用]了?/g,
   /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|？|\?|，|,|。|、|\s/g,
@@ -440,9 +491,15 @@ function stripFinanceWording(text: string): string {
   return out.replace(/[\ue000-\ue0ff]/g, (ch) => kept[ch.charCodeAt(0) - 0xe000] ?? "");
 }
 
+// 名词式账目问法（「X月的支出」「今年到今天为止的支出」）：没有「一共/多少」
+// 等聚合措辞，但剥掉时间与财务措辞后一无所剩，问的就是账本级合计
+//（audit-r295 §6 #13/#17：这类问法漂移到 AI 路径，路由不稳且会答错）。
+const FINANCE_NOUN_RE = /支出|收支|开支|开销|花销|花费|消费|收入|进账|结余/;
+
 /** True when the question asks for an overall finance aggregate (not a specific item's price). */
 export function isFinanceAggQuestion(question: string): boolean {
-  if (!FINANCE_WORD_RE.test(question) || !AGG_WORD_RE.test(question)) return false;
+  if (!FINANCE_WORD_RE.test(question)) return false;
+  if (!AGG_WORD_RE.test(question) && !FINANCE_NOUN_RE.test(question)) return false;
   return stripFinanceWording(question).length < 2;
 }
 

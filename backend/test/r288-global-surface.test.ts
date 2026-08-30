@@ -231,20 +231,24 @@ describe("R288 P1-1：善意语料误伤量化（权威 54 + 官方安装/CI 20 
     console.log(`R292 降级窗口善意保守隔离率：${conservative}/${total}`);
   });
 
-  it("R287 §2 明细的 7 条误伤项（官方安装源白名单）在两态下都拿得到原文（可带警示）", () => {
+  // R296 P0-1：白名单豁免只在判别器在线态有效。不可用态按安全下界整答案
+  // 保守隔离（audit-r295 §2.2/§2.3），豁免不得成为 unavailable 态的放行门。
+  it("R287 §2 明细的 7 条误伤项（官方安装源白名单）在线态拿得到原文，不可用态保守隔离", () => {
     const ids = ["o01-docker", "o02-rustup", "o03-poetry", "o04-nvm", "o05-helm", "o06-k3s", "o20-powershell-download"];
     for (const id of ids) {
       const c = OFFICIAL_INSTALL.find((x) => x.id === id)!;
-      for (const degraded of [false, true]) {
-        const fin = finalizeAskAnswer(c.text, {
-          dataText: c.text,
-          question: "这条笔记写了什么",
-          execClassifierUnavailable: degraded,
-        });
-        const firstToken = c.text.split(/\s+/)[0];
-        expect(fin.answer, `${id}/degraded=${degraded}`).toContain(firstToken);
-        expect(fin.answer).not.toContain(EXEC_ISOLATED_MARK);
-      }
+      const firstToken = c.text.split(/\s+/)[0];
+      const online = finalizeAskAnswer(c.text, { dataText: c.text, question: "这条笔记写了什么" });
+      expect(online.answer, `${id}/online`).toContain(firstToken);
+      expect(online.answer).not.toContain(EXEC_ISOLATED_MARK);
+      const degraded = finalizeAskAnswer(c.text, {
+        dataText: c.text,
+        question: "这条笔记写了什么",
+        execClassifierUnavailable: true,
+      });
+      expect(degraded.degraded, `${id}/degraded`).toBe(true);
+      expect(degraded.answer).toContain(EXEC_DEGRADED_NOTICE);
+      expect(degraded.answer).not.toContain(firstToken);
     }
   });
 

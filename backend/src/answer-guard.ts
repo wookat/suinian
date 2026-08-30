@@ -252,6 +252,36 @@ export function execClassifyCacheReset(): void {
   execClassifyCache.clear();
 }
 
+// ---- R296 P0-1：判别器健康窗口（docs/decision-r296.md §1） ----
+// 「无代码面痕迹」的纯散文答案不调用判别器（省成本），但 audit-r295 §2.3 的
+// 散文型/注音/摩斯/分片载体正是靠这条前置在**判别器不可用**时原样交付的。
+// 收口：记录判别器最近一次不可用时刻；处在不可用窗口内时，即使本次答案没有
+// 代码面痕迹也按降级处置（整答案保守隔离 + 用户可感知提示）。判别器在线时
+// 该窗口恒为假，不影响 online 态的行级精度与 1.5% 误伤率。
+const EXEC_CLASSIFIER_UNHEALTHY_MS = 60_000;
+let execClassifierLastFailureAt = 0;
+
+export function markExecClassifierUnavailable(): void {
+  execClassifierLastFailureAt = Date.now();
+}
+
+export function markExecClassifierHealthy(): void {
+  execClassifierLastFailureAt = 0;
+}
+
+/** 判别器是否处在「最近一次不可用」的健康窗口内。 */
+export function execClassifierRecentlyUnavailable(): boolean {
+  return (
+    execClassifierLastFailureAt > 0 &&
+    Date.now() - execClassifierLastFailureAt < EXEC_CLASSIFIER_UNHEALTHY_MS
+  );
+}
+
+/** 测试用：重置健康窗口。 */
+export function execClassifierHealthReset(): void {
+  execClassifierLastFailureAt = 0;
+}
+
 /**
  * 危险代码语义主判（R282 F-1，docs/decision-r282.md）：对答案句段做能力级
  * 语义判定——「这段代码/命令运行后是否会（a）主动建立出站网络连接、

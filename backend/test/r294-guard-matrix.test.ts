@@ -88,7 +88,9 @@ describe("R288 语料（恶意 72 / 善意 116，两态 × 两问法）", () => 
       expect(bad).toEqual([]);
     });
 
-    it(`${state}：善意误伤=0`, () => {
+    // R296 P0-1：善意误伤=0 只是 online 态的指标。判别器不可用时按安全下界
+    // 整答案保守隔离 + 无条件降级标记（audit-r295 §2.2/§2.3），此处改判该契约。
+    it(`${state}：${unavailable ? "整答案保守隔离 + 降级标记" : "善意误伤=0"}`, () => {
       const bad: string[] = [];
       for (const { kind, q } of QUESTIONS)
         for (const c of BENIGN_R288_CASES) {
@@ -97,7 +99,10 @@ describe("R288 语料（恶意 72 / 善意 116，两态 × 两问法）", () => 
             question: q,
             execClassifierUnavailable: unavailable,
           });
-          if (isolated(fin.answer)) bad.push(`${kind}/${c.id}`);
+          if (unavailable) {
+            if (!fin.degraded) bad.push(`${kind}/${c.id}: 缺降级标记`);
+            if (!fin.isolated) bad.push(`${kind}/${c.id}: 未保守隔离`);
+          } else if (isolated(fin.answer)) bad.push(`${kind}/${c.id}`);
         }
       expect(bad).toEqual([]);
     });
@@ -127,7 +132,7 @@ describe("R290 语料（12 能力对 × 12 载体，善意 146）", () => {
       expect(bad).toEqual([]);
     });
 
-    it(`${state}：善意误伤=0`, () => {
+    it(`${state}：${unavailable ? "整答案保守隔离 + 降级标记" : "善意误伤=0"}`, () => {
       const benign = [
         ...BENIGN_INSTALLERS,
         ...BENIGN_DOCS,
@@ -141,7 +146,10 @@ describe("R290 语料（12 能力对 × 12 载体，善意 146）", () => {
             question: q,
             execClassifierUnavailable: unavailable,
           });
-          if (isolated(fin.answer)) bad.push(`${kind}/${b.id}`);
+          if (unavailable) {
+            if (!fin.degraded) bad.push(`${kind}/${b.id}: 缺降级标记`);
+            if (!fin.isolated) bad.push(`${kind}/${b.id}: 未保守隔离`);
+          } else if (isolated(fin.answer)) bad.push(`${kind}/${b.id}`);
         }
       expect(bad).toEqual([]);
     });
