@@ -4400,7 +4400,13 @@ export function finalizeAskAnswer(
     const echoOrParaphrase = (line: string): boolean => {
       const addrs = remoteEndpointForms(line, { includeEmails: true });
       if (addrs.length > 0) {
-        return addrs.some((a) => markedAddrs.has(a)) || EXEC_WORD_RE.test(line) || windowDanger !== null;
+        // 地址 + 终端词汇但无取回/执行/交付语义（`nc -zv host port 连通性探测`、
+        // 端口清单）是运维散文的常态，只有词汇与动作语义同现才收口。
+        return (
+          addrs.some((a) => markedAddrs.has(a)) ||
+          windowDanger !== null ||
+          (EXEC_WORD_RE.test(line) && ACTION_LINE_RE.test(line))
+        );
       }
       // 地址在别的行：窗口级危险语义成立时，纯动作行也是载荷的一半，同样收口
       return windowDanger !== null && ACTION_LINE_RE.test(line);
