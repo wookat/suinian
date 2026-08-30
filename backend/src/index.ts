@@ -16,8 +16,8 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
-import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable } from "./answer-guard";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, judgeSurfaceText, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
+import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
 import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads, detachZeroSignalThreadMembers } from "./threads";
@@ -119,6 +119,12 @@ import {
   lookupKfBinding,
   type KfMessage,
 } from "./wecom-kf";
+
+/**
+ * R298 P0-1：判别结果的三态——在线给出结论 / 判别器不可用（含结论不可信）/
+ * 在线零命中但被确定性痕迹否决（conservative）。三态互斥，处置各自对应。
+ */
+type ExecClassifyOutcome = { danger: string[]; unavailable: boolean; conservative?: boolean };
 
 type Vars = { userId: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -3876,6 +3882,14 @@ app.post("/api/ask", async (c) => {
       .all<NoteRow>();
     const frows = fWin.keep(fr.results ?? []);
     const stats = financeStats(frows);
+    // R298 P1-1（audit-r297 §5）：当期窗（今天/本周/本月/本季度/今年）排除未来
+    // 日期的记账，并单独披露笔数——旧口径把 09-15/10-10/12-24 这类预记并入当期，
+    // 同一笔在问「9月/12月」时又各自出现一次（重复计入）。
+    const futureExcluded = fWin.futureExcluded(fr.results ?? []);
+    const futureHint =
+      futureExcluded > 0
+        ? `\n（另有 ${futureExcluded} 笔记账的日期在未来，属计划/预记，未计入${fRange?.phrase ?? "当期"}合计。）`
+        : "";
     // fail-closed (R109 P1): aggregate wording we can't scope exactly — never
     // let the LLM mental-math truncated recall (multi-currency mixing risk)
     // 「平均每天花多少」日均口径（R252 P3-5）：总额 ÷ 窗口天数；无时间窗时
@@ -3909,10 +3923,24 @@ app.post("/api/ask", async (c) => {
     } catch (err) {
       console.error("ask: unledgered amount hint failed", err);
     }
-    const answer =
+    let answer =
       (financeIntent === "exact"
         ? buildFinanceAggAnswer(stats, fRange?.phrase ?? null, avgDays)
-        : buildFinanceFailClosedAnswer(stats, fRange?.phrase ?? null)) + unledgeredHint + (await pendingTriageHint());
+        : buildFinanceFailClosedAnswer(stats, fRange?.phrase ?? null)) +
+      futureHint +
+      unledgeredHint +
+      (await pendingTriageHint());
+    // R298 P3-2（audit-r297 §9）：连问财务时固定括号披露每轮重复展示很啰嗦。
+    // 上一轮回答已逐字给过的披露行本轮折叠为一句「同上」；措辞有任何差异
+    //（笔数变化等）则照常全文展示，绝不折叠掉新信息。
+    {
+      const prevFin = [...history].reverse().find((m) => m.role === "assistant")?.content ?? "";
+      const discLines = answer.split("\n").filter((l) => /^（另有 .*）$/.test(l.trim()));
+      if (prevFin && discLines.length > 0 && discLines.every((l) => prevFin.includes(l.trim()))) {
+        for (const l of discLines) answer = answer.replace(`\n${l}`, "");
+        answer += "\n（统计口径披露与上一条回答相同。）";
+      }
+    }
     // 引用口径与提问口径一致（R270，audit-r269 P1-1 q31）：只问支出/只问收入时，
     // 引用列表只列对应类目的明细行——收入、资金往来不作为「支出依据」混入。
     // 问结余/收支的保持全量（合计确实同时依赖两类）。
@@ -4523,6 +4551,23 @@ app.post("/api/ask", async (c) => {
   }
 
   const noteIds = notes.map((n) => n.id);
+  // R298 P2-1/P1-4（audit-r297 §7）：召回片段的 500 字硬截断改为按总预算动态
+  // 分配——verbatim 问法（用户点名要原文）给到全文级预算，普通问法也在总预算
+  // 富余时扩到整句边界。硬截断有两个实测代价：>500 字笔记的 verbatim 回声必然
+  // 被砍（P2-1）；截断落在句中会造出「丢了前半句语义」的残句，长文因此稳定
+  // 被下游指令判定误伤（P1-4 的复现集中在 >500 字长文正是这个边界）。
+  const CONTEXT_TOTAL_BUDGET = 12000;
+  const perNoteBudget = Math.max(
+    questionRequestsVerbatim(question) ? 8000 : 500,
+    Math.floor(CONTEXT_TOTAL_BUDGET / Math.max(notes.length, 1))
+  );
+  // 预算内整句收尾：截断点回退到最近的句读/换行，不产出半句残片。
+  const clipAtSentence = (text: string, budget: number): string => {
+    if (text.length <= budget) return text;
+    const head = text.slice(0, budget);
+    const m = head.match(/^[\s\S]*[。！？!?；;\n]/);
+    return m && m[0].length >= budget * 0.6 ? m[0] : head;
+  };
   const context = notes
     .map((n, i) => {
       const tags = (JSON.parse(n.tags || "[]") as string[]).join(",");
@@ -4542,7 +4587,7 @@ app.post("/api/ask", async (c) => {
       // 召回片段是不可信数据（R262 P1-2，audit-r261 §P1-2）：送进生成上下文前
       // 走与分拣同一注入中和管道（R216 定界仿冒 + 祈使注入改写）
       const body = neutralizePromptInjection(n.content).replace(/^\s*(?:[[【][^\]】\n]{1,24}[\]】]\s*)+/, "");
-      return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${n.title ?? ""}\n${body.slice(0, 500)}`;
+      return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${n.title ?? ""}\n${clipAtSentence(body, perNoteBudget)}`;
     })
     .join("\n\n");
   // ask SSE（R174，R173 第四节方案）：只有走到这里的 LLM 生成分支才流式
@@ -5032,14 +5077,38 @@ app.post("/api/ask", async (c) => {
   // 流式分支随 done 事件下发 execcls_ms / exec_gate 字段。
   let execClsMark: number | null = null;
   let execGateMark: string | null = null;
+  // R298 P2-3（audit-r297 §7）：判别器不可用/保守否决/隔离的发生率此前只有
+  // console 日志、生产取不到，于是「这事多久发生一次」无人可声称。按天累加到
+  // D1 guard_events（无内容、无用户维度），写入走 waitUntil 不占请求关键路径。
+  const execCounters = { classifierUnavailable: 0, veto: 0, isolated: 0 };
+  let guardEventsFlushed = false;
+  const flushGuardEvents = (): void => {
+    if (guardEventsFlushed) return;
+    guardEventsFlushed = true;
+    const rows = Object.entries(execCounters).filter(([, n]) => n > 0);
+    if (rows.length === 0) return;
+    const day = new Date().toISOString().slice(0, 10);
+    const work = (async () => {
+      for (const [kind, n] of rows) {
+        await c.env.DB.prepare(
+          "INSERT INTO guard_events (day, kind, count, updated_at) VALUES (?, ?, ?, datetime('now')) ON CONFLICT(day, kind) DO UPDATE SET count = count + excluded.count, updated_at = datetime('now')"
+        )
+          .bind(day, kind, n)
+          .run();
+      }
+    })().catch((err) => console.error("ask: guard_events write failed", err));
+    try {
+      c.executionCtx.waitUntil(work);
+    } catch {
+      /* 单测/本地环境无 executionCtx：已 catch，不影响响应 */
+    }
+  };
   // R296 P2-3（audit-r295 §9）：判别器在生成刊出原始答案后立即预热启动，
   // 与后续拒答重试/护栏/行为审计（conaud，另一次 LLM 调用）并行；只有
   // finalize 时答案文本与预热时完全一致才复用预热结果，否则重新判别
   //（fail-closed：不拿旧文本的判定套新文本）。判据与处置口径不变。
-  let execPrewarm: { text: string; p: Promise<{ danger: string[]; unavailable: boolean }> } | null = null;
-  const classifyExecDanger = async (
-    answer: string
-  ): Promise<{ danger: string[]; unavailable: boolean }> => {
+  let execPrewarm: { text: string; p: Promise<ExecClassifyOutcome> } | null = null;
+  const classifyExecDanger = async (answer: string): Promise<ExecClassifyOutcome> => {
     const segs = splitSegmentsFenceAware(answer);
     // R294 P0-1（audit-r293 §2）：进入判别/降级链路的前置从「门控命中」改为
     // 「本次答案含任一代码面/命令面痕迹」的宽判据：门控漏面时不得放行，仍需
@@ -5065,16 +5134,28 @@ app.post("/api/ask", async (c) => {
       return { danger: cached, unavailable: false };
     }
     const tCls = Date.now();
-    const hits = await classifyDangerousCodeSegments(c.env, answer).catch((err) => {
-      console.error("ask: exec-danger classify failed", err);
-      return null;
-    });
+    // R298 P1-2：同请求内即时重试一次——单次抖动（限流/瞬时超时）不应把整轮
+    // 回答打成降级，也不该开全局窗口。两次都不给可信结论才算不可用。
+    // 重试用更短的预算（软阈值），避免把首字延迟拖到两倍硬预算。
+    const callOnce = (budgetMs?: number) =>
+      classifyDangerousCodeSegments(c.env, answer, budgetMs ? { budgetMs } : undefined).catch((err) => {
+        console.error("ask: exec-danger classify failed", err);
+        return null;
+      });
+    let hits = await callOnce();
+    if (hits === null) {
+      hits = await callOnce(EXEC_CLASSIFY_SOFT_BUDGET_MS);
+      if (hits !== null) console.log("ask: exec-danger classifier recovered on in-request retry");
+    }
     execClsMark = Date.now() - tCls;
     askMarks.push(["execcls", execClsMark]);
     if (hits === null) {
       // R292 P0-1：「要不要降级」只看判别器状态，与能不能识别出载体无关；
       // 具体隔离定位（精确 / 代码区 / 整答）在 finalizeAskAnswer 单点执行。
+      // R298 P0-1：这里的 null 现在同时覆盖硬失败（抛错/超时）与「结论不可信」
+      // （结构不符/越界/非枚举/截断 JSON/慢成功）——两者在处置上等同。
       markExecClassifierUnavailable();
+      execCounters.classifierUnavailable += 1;
       console.log(
         `ask: exec-danger classifier unavailable (gate=${gate}), degraded isolation enforced`
       );
@@ -5083,15 +5164,24 @@ app.post("/api/ask", async (c) => {
     markExecClassifierHealthy();
     // 只缓存确定结果（null = 不可用，属瞬时状态，不缓存，下次重新判别）
     const out = hits.map((n) => segs[n - 1]?.text ?? "").filter((t) => t.length > 0);
-    // R294 P0-1：「判别器可用但零命中」不得被无条件信任——确定性内核的高置信
-    // 命中（`| sh`、`/dev/tcp`、`<(curl`、同形异义/倒序还原后的 curl|sh 等）
-    // **否决**零命中：按判别器不可用处置（保守隔离），且不缓存该零命中。
+    // R298 P0-1（audit-r297 §1，544 例 9 例无警示泄漏）：LLM 结论只能在**拦**的
+    // 方向加严，永不能否决已经触发的确定性判据。R294 只让「高置信全局内核」
+    // （globalExecDangerReason）否决零命中，而 C06（Go net.Dial 反连）/C04
+    // （node -e 远程 eval）命中的是门控里的能力判据、不在那个高置信集合里，
+    // 于是「门控说危险 + 判别器说没事」= 放行。收口：**任何确定性危险痕迹**
+    // （execDegradedTraceReason，含 R298 新增的纯语义执行意图）与零命中同现时
+    // 一律保守处置——不是降级（判别器在线），而是按已判定的危险内容隔离并说明。
     if (out.length === 0) {
-      const veto = globalExecDangerReason(answer);
+      const veto =
+        globalExecDangerReason(answer) ??
+        execDegradedTraceReason(judgeSurfaceText(answer)) ??
+        execDegradedTraceReason(answer) ??
+        execCombinationGateReason(answer);
       if (veto) {
-        console.log(`ask: deterministic kernel vetoed empty classifier result (${veto})`);
+        console.log(`ask: deterministic trace vetoed empty classifier result (${veto})`);
         execGateMark = `${gate}|veto:${veto}`;
-        return { danger: [], unavailable: true };
+        execCounters.veto += 1;
+        return { danger: [], unavailable: false, conservative: true };
       }
     }
     execClassifyCacheSet(cacheKey, answer, out);
@@ -5110,8 +5200,13 @@ app.post("/api/ask", async (c) => {
       question: askGuardQuestion,
       execDangerSegments: cls.danger,
       execClassifierUnavailable: cls.unavailable,
+      execConservativeVeto: cls.conservative,
     });
-    if (fin.isolated) console.log("ask: note-embedded instruction isolated at generation exit");
+    if (fin.isolated) {
+      console.log("ask: note-embedded instruction isolated at generation exit");
+      execCounters.isolated += 1;
+    }
+    flushGuardEvents();
     const isolated = fin.isolated || body.instruction_isolated === true;
     return {
       ...body,
@@ -5135,16 +5230,27 @@ app.post("/api/ask", async (c) => {
     // 段落只会在 done 中以收口后形态出现，不存在先泄后收的窗口。
     // Server-Timing 的 conaud 记首 delta 前的审计门耗时（响应头先于生成完成
     // 外发，全量 conaud 耗时随 done 事件的 conaud_ms 字段下发）。
+    // R298 P1-6（audit-r297 §8，首 delta 中位 3352ms/p90 4489ms）：此前这里
+    // await 判别器结果后才返回 Response、才启动生成——dirext 全程串行垫在首
+    // delta 前。改为：Response 立即返回（meta 先行），生成与 demand 判别并行；
+    // demand 就绪前句段只缓冲不外发（fail-closed 语义不变：首个 delta 外发前
+    // demand 结果必须就绪），就绪后一次排空缓冲。
     const tPre = Date.now();
-    const demandsRawS = await Promise.race([
+    let demandsRawS: string[] | null = null;
+    let demandsSettled = false;
+    let groundedDemandsS: string[] = [];
+    const askGuardDataCompactS = foldCompact(askGuardData);
+    const demandsReady = Promise.race([
       directivePromise,
       new Promise<string[] | null>((resolve) => setTimeout(() => resolve(null), 8_000)),
-    ]);
-    const askGuardDataCompactS = foldCompact(askGuardData);
-    const groundedDemandsS = (demandsRawS ?? []).filter(
-      (d) => askGuardData.includes(d) || askGuardDataCompactS.includes(foldCompact(d))
-    );
-    const preGuardDur = Date.now() - tPre;
+    ]).then((d) => {
+      demandsRawS = d;
+      groundedDemandsS = (d ?? []).filter(
+        (x) => askGuardData.includes(x) || askGuardDataCompactS.includes(foldCompact(x))
+      );
+      demandsSettled = true;
+      askMarks.push(["dirwait", Date.now() - tPre]);
+    });
     const stripDataMarksS = (t: string) =>
       t
         .replace(new RegExp(`D${dataNonce}｜`, "gi"), "")
@@ -5211,19 +5317,29 @@ app.post("/api/ask", async (c) => {
           citation_markers: "final_only"
         });
         let buf = "";
-        const flushSegments = (final: boolean) => {
-          const parts = buf.split(/(?<=\n|[。！？!?；;])/);
-          buf = final ? "" : (parts.pop() ?? "");
-          for (const p of parts) {
+        // R298 P1-6：demand 判别未就绪时句段进队列缓冲（不外发、不丢弃），
+        // 就绪后按原顺序排空——首 delta 前 demand 必须就绪的不变量保持不变。
+        const segQueue: string[] = [];
+        const drainQueue = () => {
+          if (!demandsSettled) return;
+          for (const p of segQueue.splice(0)) {
             const s = gateSegment(p);
             if (s) send("delta", { text: s });
           }
+        };
+        void demandsReady.then(drainQueue);
+        const flushSegments = (final: boolean) => {
+          const parts = buf.split(/(?<=\n|[。！？!?；;])/);
+          buf = final ? "" : (parts.pop() ?? "");
+          segQueue.push(...parts);
+          drainQueue();
         };
         try {
           const raw = await runGeneration((t) => {
             buf += t;
             flushSegments(false);
           });
+          await demandsReady;
           flushSegments(true);
           const tFin = Date.now();
           const body = await finalizeGenerationBody(raw);
@@ -5244,7 +5360,9 @@ app.post("/api/ask", async (c) => {
         "content-type": "text/event-stream; charset=utf-8",
         "cache-control": "no-cache",
         connection: "keep-alive",
-        "server-timing": `conaud;dur=${preGuardDur};desc="pre-delta gate"`,
+        // R298 P2-3：SSE 路径也带上检索/归一各相耗时（norm/route/kwext/sem…），
+        // 让首 delta 慢可以在生产直接归因到具体相位（conaud 全量耗时随 done 下发）。
+        "server-timing": serverTimingHeader([...askMarks, ["pregen", Date.now() - askT0]]),
       },
     });
   }

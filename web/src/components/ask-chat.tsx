@@ -455,7 +455,7 @@ export function AskChat({
                 ) : (
                   <>
                     {m.guardDegraded ? (
-                      <div className="space-y-1.5 rounded-lg bg-sky-500/10 px-2.5 py-1.5 text-xs leading-relaxed text-sky-700 dark:text-sky-400">
+                      <div className="min-w-0 space-y-1.5 rounded-lg bg-sky-500/10 px-3 py-2 text-xs leading-relaxed text-sky-700 [overflow-wrap:anywhere] dark:text-sky-400">
                         <div className="flex items-start gap-1.5">
                           <ShieldQuestion className="mt-0.5 size-3.5 shrink-0" />
                           <span>安全判别暂不可用，代码/命令已暂时隐去，稍后重试可看到完整内容。</span>
@@ -485,9 +485,9 @@ export function AskChat({
                         ? (targetNote.title || targetNote.content).replace(/\s+/g, " ").slice(0, 12)
                         : null
                       return (
-                        <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700 [overflow-wrap:anywhere] dark:text-amber-400">
                           <ShieldAlert className="size-3.5 shrink-0" />
-                          <span>
+                          <span className="min-w-0 flex-1">
                             {loc
                               ? `回答第 ${loc.para} 段中的内容已被安全隔离，未采纳${noteLabel ? `（关于「${noteLabel}」的那条笔记）` : ""}；笔记原文仍在，未被修改。`
                               : "部分内容已被安全隔离，未采纳；笔记原文仍在，未被修改。"}

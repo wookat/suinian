@@ -48,6 +48,13 @@ export interface TimeRange {
   end: string | null;
   /** the phrase that produced the range, for logging/debugging */
   phrase: string;
+  /**
+   * R298 P1-1（audit-r297 §5）：**当期**窗（今天/本周/本月/本季度/今年），上界开放
+   * 但语义是「到此刻为止」。未来日期的记账（09-15 / 10-10 / 12-24 这类预记/计划）
+   * 不属于当期已发生的收支——旧口径把它们并入当期，同一笔在问「9月/12月」时又
+   * 各自出现一次，等于重复计入。此标记令精筛排除未来事件，并单独披露笔数。
+   */
+  excludeFuture?: boolean;
 }
 
 /**
@@ -74,7 +81,8 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
   };
 
   // 「到今天为止/截至今天」是上界措辞，不是「今天」单日窗（audit-r295 §6 #17）。
-  if (/(?<![到至截])(?:今天|今日)/.test(q)) return { start: toUtcSql(shanghaiMidnight(now, 0)), end: null, phrase: "今天" };
+  if (/(?<![到至截])(?:今天|今日)/.test(q))
+    return { start: toUtcSql(shanghaiMidnight(now, 0)), end: null, phrase: "今天", excludeFuture: true };
   if (/昨天|昨日/.test(q))
     return { start: toUtcSql(shanghaiMidnight(now, -1)), end: toUtcSql(shanghaiMidnight(now, 0)), phrase: "昨天" };
   if (/前天/.test(q))
@@ -98,7 +106,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
   if (/本周|这周|这一?周/.test(q)) {
     const sh = new Date(now.getTime() + SH_OFFSET_MS);
     const dow = (sh.getUTCDay() + 6) % 7; // Monday=0
-    return { start: toUtcSql(shanghaiMidnight(now, -dow)), end: null, phrase: "本周" };
+    return { start: toUtcSql(shanghaiMidnight(now, -dow)), end: null, phrase: "本周", excludeFuture: true };
   }
   if (/上周|上一?周|上个?星期/.test(q)) {
     const sh = new Date(now.getTime() + SH_OFFSET_MS);
@@ -110,7 +118,8 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     };
   }
 
-  if (/本月|这个?月/.test(q)) return { start: toUtcSql(shanghaiMonthStart(now, 0)), end: null, phrase: "本月" };
+  if (/本月|这个?月/.test(q))
+    return { start: toUtcSql(shanghaiMonthStart(now, 0)), end: null, phrase: "本月", excludeFuture: true };
   if (/上个?月/.test(q))
     return { start: toUtcSql(shanghaiMonthStart(now, 1)), end: toUtcSql(shanghaiMonthStart(now, 0)), phrase: "上个月" };
 
@@ -156,7 +165,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
     if (/上一?个?季度/.test(q)) return rel(-1, "上个季度");
     if (/下一?个?季度/.test(q)) return rel(1, "下个季度");
     if (/本季度|这个?季度|当前季度|这一?季度/.test(q)) {
-      return { start: quarterRange(curY, curQ, "本季度").start, end: null, phrase: "本季度" };
+      return { start: quarterRange(curY, curQ, "本季度").start, end: null, phrase: "本季度", excludeFuture: true };
     }
     if (
       (m = q.match(/(今年|去年|(?:19|20)\d{2}\s*年)?\s*(?:第\s*)?([一二三四1-4])\s*季度/)) ||
@@ -267,6 +276,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
       start: toUtcSql(new Date(Date.UTC(sh.getUTCFullYear(), 0, 1) - SH_OFFSET_MS)),
       end: capped ? toUtcSql(now) : null,
       phrase: capped ? "今年至今" : "今年",
+      ...(capped ? {} : { excludeFuture: true }),
     };
   }
 
@@ -2815,9 +2825,37 @@ export function widenTimeRangeForEvents(range: TimeRange): TimeRange {
   return { start: shift(range.start, -EVENT_WIDEN_MS), end: shift(range.end, EVENT_WIDEN_MS), phrase: range.phrase };
 }
 
-/** 有效时间（正文事件时间，无则记录时间）∈ 窗口。 */
-export function inEventTimeRange(note: Pick<NoteRow, "title" | "content" | "created_at">, range: TimeRange): boolean {
-  return inTimeRange(noteEventTime(note) ?? note.created_at, range);
+/**
+ * 有效时间（正文事件时间，无则记录时间）∈ 窗口。
+ * R298 P1-1：当期窗（excludeFuture）的上界是「此刻」，未来日期的事件不属于当期。
+ */
+export function inEventTimeRange(
+  note: Pick<NoteRow, "title" | "content" | "created_at">,
+  range: TimeRange,
+  now: Date = new Date()
+): boolean {
+  const t = noteEventTime(note) ?? note.created_at;
+  if (!inTimeRange(t, range)) return false;
+  return !(range.excludeFuture && isFutureEventTime(t, now));
+}
+
+/** 有效时间严格晚于此刻（未来记账：预记/计划性账目）。 */
+function isFutureEventTime(utcSql: string, now: Date): boolean {
+  const ms = Date.parse(utcSql.replace(" ", "T") + "Z");
+  return Number.isFinite(ms) && ms > now.getTime();
+}
+
+/** 当期窗内被排除的未来事件（仅用于披露笔数，不计入合计）。 */
+export function futureEventNotes<T extends EventTimeNote>(
+  rows: T[],
+  range: TimeRange | null | undefined,
+  now: Date = new Date()
+): T[] {
+  if (!range?.excludeFuture) return [];
+  return rows.filter((n) => {
+    const t = noteEventTime(n) ?? n.created_at;
+    return inTimeRange(t, { ...range, excludeFuture: false }) && isFutureEventTime(t, now);
+  });
 }
 
 export type EventTimeNote = Pick<NoteRow, "title" | "content" | "created_at">;
@@ -2831,6 +2869,8 @@ export interface EventTimeWindow {
   keep<T extends EventTimeNote>(rows: T[]): T[];
   /** 精筛后的条数（计数口径与 keep 完全一致）。 */
   count(rows: EventTimeNote[]): number;
+  /** R298 P1-1：当期窗内被排除的「未来日期」笔数（供披露，不计入合计）。 */
+  futureExcluded(rows: EventTimeNote[]): number;
 }
 
 /**
@@ -2859,6 +2899,9 @@ export function eventTimeWindow(range: TimeRange | null | undefined): EventTimeW
     },
     count(rows: EventTimeNote[]): number {
       return this.keep(rows).length;
+    },
+    futureExcluded(rows: EventTimeNote[]): number {
+      return futureEventNotes(rows, r).length;
     },
   };
 }

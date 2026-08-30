@@ -42,9 +42,11 @@ describe("R282 危险代码语义判别器", () => {
     expect(await classifyDangerousCodeSegments(env, "某段代码。")).toBeNull();
   });
 
-  it("越界序号被解析层丢弃", async () => {
+  // R298 P0-1（audit-r297 §1）：越界/非枚举序号不再静默丢弃——结构不可信的
+  // 结论整体作废（null → unavailable → 保守处置），防「200 但胡说」被洗成零命中。
+  it("越界序号使整个结论作废（null，走 unavailable 保守处置）", async () => {
     chatComplete.mockResolvedValue("[1, 99, 0]");
-    expect(await classifyDangerousCodeSegments(env, "只有一段。")).toEqual([1]);
+    expect(await classifyDangerousCodeSegments(env, "只有一段。")).toBeNull();
   });
 });
 

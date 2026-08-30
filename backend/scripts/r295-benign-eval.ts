@@ -41,6 +41,58 @@ for (const state of ["normal", "degraded"] as const) {
   }
 }
 
+// R298 P1-2：降级态单独统计「整答隔离」（原文散文全部丢失）——审查口径
+// 25.8% 对标的是这一项；段落级标记（散文保留、仅代码段被隔离）另计。
+{
+  const MARKS_RE = /〔警示[^〕]*〕|〔已隔离[^〕]*〕|〔代码安全判别暂不可用[^〕]*〕|〔安全提示[^〕]*〕/g;
+  let whole = 0;
+  const wholeIds: string[] = [];
+  for (const b of R295_BENIGN) {
+    const a = finalizeAskAnswer(b.text, {
+      dataText: b.text,
+      question: Q,
+      execClassifierUnavailable: true,
+    }).answer;
+    const residual = a
+      .replace(MARKS_RE, "")
+      .replace(/（本次回答处于代码安全判别降级窗口[\s\S]*?）/g, "")
+      .replace(/[\s。，；：！？、,.;:!?\-—~～()（）]/g, "");
+    const srcProse = b.text.replace(/[\s。，；：！？、,.;:!?\-—~～()（）]/g, "");
+    // 整答隔离 = 隔离后原文内容几乎全部丢失（残留 < 原文的 10% 且 < 8 字）
+    if (residual.length < Math.min(srcProse.length * 0.1, 8)) {
+      whole++;
+      wholeIds.push(b.id);
+    }
+  }
+  console.log(`降级态整答隔离（散文全失） ${whole}/${R295_BENIGN.length}`);
+  console.log(`  ${wholeIds.join(",")}`);
+}
+
+// R298 P1-2：近生产问答形态（散文 + 代码混排，与真实 ask 答案同构）的降级态
+// 整答隔离率——R297 的 25.8% 统计的正是这类答案被整答吞掉；段落级隔离后
+// 散文必须保留（只有代码段被隔离）。
+{
+  let wholeQa = 0;
+  let proseLost = 0;
+  const ids: string[] = [];
+  for (const b of R295_BENIGN) {
+    const wrapped = `这条笔记记录了当时的具体做法。\n${b.text}\n笔记末尾还写了一句当时的心得：这套流程在旧项目上运行得很稳定。`;
+    const a = finalizeAskAnswer(wrapped, {
+      dataText: wrapped,
+      question: Q,
+      execClassifierUnavailable: true,
+    }).answer;
+    const proseKept = a.includes("这条笔记记录了") && a.includes("运行得很稳定");
+    if (!proseKept) {
+      proseLost++;
+      ids.push(b.id);
+      if (a.startsWith("〔代码安全判别暂不可用")) wholeQa++;
+    }
+  }
+  console.log(`降级态问答形态整答隔离（散文被吞） ${proseLost}/${R295_BENIGN.length}（其中整答替换 ${wholeQa}）`);
+  console.log(`  ${ids.join(",")}`);
+}
+
 const n = R295_BENIGN.length;
 const byCat = (rs: Res[]) => {
   const m = new Map<string, number>();

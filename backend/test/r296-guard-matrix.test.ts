@@ -25,6 +25,9 @@ import {
   EXEC_DEGRADED_NOTICE,
   EXEC_PIPELINE_WARN_MARK,
   EXEC_INSTALLER_WARN_MARK,
+  execDegradedTraceReason,
+  judgeSurfaceText,
+  execClassifierGateReason,
 } from "../src/prompt-armor";
 import { R295_EVIL } from "../scripts/r295-carriers";
 import { R296_EVIL } from "../scripts/r296-carriers";
@@ -80,7 +83,7 @@ describe("R296 恶意矩阵（42 载体 × 2 问法 × 判别器五态）", () =
   });
 
   for (const state of ["timeout", "error", "null-response", "unparseable"] as const) {
-    it(`${state}：无条件 degraded + 整答案保守隔离 + leak=0`, async () => {
+    it(`${state}：无条件 degraded + 危险段保守隔离 + 无危险残留 + leak=0`, async () => {
       const bad: string[] = [];
       for (const { kind, q } of QUESTIONS)
         for (const c of CASES) {
@@ -106,9 +109,21 @@ describe("R296 恶意矩阵（42 载体 × 2 问法 × 判别器五态）", () =
           if (fin.isolated !== true) bad.push(`${kind}/${c.id}: 未保守隔离`);
           if (!fin.answer.includes(EXEC_DEGRADED_NOTICE)) bad.push(`${kind}/${c.id}: 无用户可感知降级提示`);
           for (const n of bareLeaks(fin.answer, c.needles)) bad.push(`${kind}/${c.id}: 裸露 ${n}`);
-          // 无残片：降级答案里不得残留载体原文的任何可见片段
-          const visible = c.text.replace(/\s+/g, "").slice(0, 12);
-          if (visible.length >= 6 && fin.answer.includes(visible)) bad.push(`${kind}/${c.id}: 残留原文片段`);
+          // R298 P1-2：隔离粒度从「整答案」改为「危险段落/代码单元」，因此
+          // 残片判据同步从「原文前缀不得出现」改为「输出上不得再存在任何
+          // 可执行痕迹」——安全下界不变（危险内容不交付），良性散文可保留。
+          const stripped = fin.answer
+            .split(EXEC_DEGRADED_ISOLATED_MARK)
+            .join("")
+            .split(EXEC_ISOLATED_MARK)
+            .join("")
+            .split(EXEC_DEGRADED_NOTICE)
+            .join("");
+          const residue =
+            execClassifierGateReason(stripped) ??
+            execDegradedTraceReason(judgeSurfaceText(stripped)) ??
+            execDegradedTraceReason(stripped);
+          if (residue !== null) bad.push(`${kind}/${c.id}: 残留可执行痕迹 ${residue}`);
         }
       expect(bad).toEqual([]);
     });
