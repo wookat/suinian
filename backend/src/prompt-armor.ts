@@ -2633,7 +2633,10 @@ function cjkDigitsToAscii(s: string): string {
 
 /** 地址判定面的确定性归一（仅判定用，不改用户可见文本）。 */
 export function normalizeAddressSurface(text: string): string {
-  let s = foldHomoglyphs(stripInvisibleCarriers(text)).normalize("NFKC");
+  // R302 P0-3：类折叠先在**原始面**做一遍——部分分隔符（U+FFE3 等）的 NFKC
+  // 兼容分解是「空格+组合符」，先归一会把分隔符信息丢成空白，折不回点。
+  const raw = text.replace(/(?<=[A-Za-z0-9])[^\p{L}\p{N}\s\-_./:@%|+~](?=[A-Za-z0-9])/gu, ".");
+  let s = foldHomoglyphs(stripInvisibleCarriers(raw)).normalize("NFKC");
   s = s.normalize("NFD").replace(/\p{Mn}/gu, "");
   // 百分号编码分隔符（%2E → . / %2D → - / %2F → / / %3A → : / %40 → @）：
   // 地址可用编码形态投放（pct%2Ddrop%2Eexample%2Ecom），判定面先解码。
@@ -2755,8 +2758,10 @@ export function remoteEndpointForms(
       const port = /:(\d{2,5})$/.exec(raw)?.[1];
       const host = raw.replace(/:\d{2,5}$/, "").replace(/^www\./, "");
       const tld = host.slice(host.lastIndexOf(".") + 1);
-      if (!port && FILE_EXT_PSEUDO_TLD.has(tld)) continue;
       const schemed = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)$/i.test(s.slice(0, m.index));
+      // R302 P0-3：带协议头的主机不吃文件扩展名伪 TLD 豁免——`https://x.sh/…`
+      // 是真域（bun.sh 类 TLD 与脚本扩展名重合），文件名不会带协议头。
+      if (!port && !schemed && FILE_EXT_PSEUDO_TLD.has(tld)) continue;
       const punycode = host.split(".").some((l) => l.startsWith("xn--"));
       if (!schemed && !raw.startsWith("www.") && !punycode && !port && !COMMON_TLDS.has(tld)) continue;
       if (hostAllowed(host)) continue;
