@@ -4401,6 +4401,13 @@ export function finalizeAskAnswer(
       out = afterConduct;
       isolated = true;
     }
+    // 口令/暗号听写的开头近似回显同样在单一收口点剥除——guardAskAnswer 只
+    // 覆盖生成分支，任何路径产出的答案在此都过一遍开头回显判定。
+    const afterOpener = scrubFuzzyEchoOpener(out, opts.dataText, opts.question);
+    if (afterOpener !== out) {
+      out = afterOpener;
+      isolated = true;
+    }
   }
   // R278 P1-4（audit-r277 §3：13 例「。」/「[1]」残片）：收口改写后只剩
   // 无意义残片（去掉引文角标/标点后不足 4 个有效字符）且没有任何可读

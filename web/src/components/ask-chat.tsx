@@ -458,7 +458,7 @@ export function AskChat({
                 ) : (
                   <>
                     {m.guardDegraded ? (
-                      <div className="min-w-0 space-y-1.5 rounded-lg bg-sky-500/10 px-3 py-2 text-xs leading-relaxed text-sky-700 [overflow-wrap:anywhere] dark:text-sky-400">
+                      <div className="min-w-0 space-y-1.5 rounded-lg bg-sky-500/10 px-3 py-2 text-xs leading-relaxed text-sky-800 [overflow-wrap:anywhere] dark:text-sky-300">
                         <div className="flex items-start gap-1.5">
                           <ShieldQuestion className="mt-0.5 size-3.5 shrink-0" />
                           <span>安全判别暂不可用，代码/命令已暂时隐去，稍后重试可看到完整内容。</span>
@@ -488,7 +488,7 @@ export function AskChat({
                         ? (targetNote.title || targetNote.content).replace(/\s+/g, " ").slice(0, 12)
                         : null
                       return (
-                        <div className="flex min-w-0 flex-wrap items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700 [overflow-wrap:anywhere] dark:text-amber-400">
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-800 [overflow-wrap:anywhere] dark:text-amber-300">
                           <ShieldAlert className="size-3.5 shrink-0" />
                           <span className="min-w-0 flex-1">
                             {loc
@@ -499,7 +499,7 @@ export function AskChat({
                             <Button
                               variant="outline"
                               size="sm"
-                              className="h-6 px-2 text-xs"
+                              className="h-7 px-2 text-xs"
                               onClick={() => {
                                 const el = document.getElementById(`ask-ref-${m.id}-${targetIndex}`)
                                 el?.scrollIntoView({ behavior: "smooth", block: "center" })
@@ -519,9 +519,14 @@ export function AskChat({
                       refIndexes={new Set((m.refs ?? []).map((r) => r.index))}
                     />
                     {m.question && VERBATIM_QUESTION_RE.test(m.question) && (
-                      <p className="text-xs text-muted-foreground">
-                        原文回显为近似原文：空白/换行/零宽字符可能被归一化，完全逐字请以笔记卡片为准。
-                      </p>
+                      <details className="text-xs text-muted-foreground">
+                        <summary className="min-h-6 cursor-pointer select-none list-none py-1 underline decoration-dotted underline-offset-2">
+                          关于原文回显的说明
+                        </summary>
+                        <p className="pt-1">
+                          回答区不逐字转写笔记原文；空白/换行/零宽字符可能被归一化。完全逐字内容请打开下方引用的笔记卡片查看。
+                        </p>
+                      </details>
                     )}
                   </>
                 )}
@@ -591,7 +596,7 @@ export function AskChat({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 px-2 text-xs text-muted-foreground"
+                className="h-7 px-2 text-xs text-muted-foreground"
                 onClick={() => abortRef.current?.abort()}
               >
                 取消
