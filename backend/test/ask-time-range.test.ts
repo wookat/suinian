@@ -35,6 +35,11 @@ describe("parseTimeRange", () => {
     // 2026-08-08 is Saturday → Monday is 08-03
     const thisWeek = parseTimeRange("本周的待办", NOW)!;
     expect(thisWeek.start).toBe("2026-08-02 16:00:00");
+    const thisWeek2 = parseTimeRange("这个星期我花了多少钱", NOW)!;
+    expect(thisWeek2.start).toBe("2026-08-02 16:00:00");
+    expect(thisWeek2.excludeFuture).toBe(true);
+    const lastWeekWord = parseTimeRange("上个星期买了什么", NOW)!;
+    expect(lastWeekWord.start).toBe("2026-07-26 16:00:00");
     const lastWeek = parseTimeRange("上周去哪了", NOW)!;
     expect(lastWeek.start).toBe("2026-07-26 16:00:00");
     expect(lastWeek.end).toBe("2026-08-02 16:00:00");

@@ -2,6 +2,11 @@ import type { Env, NoteRow } from "./types";
 import { formatAmount, type FinanceStats } from "./reports";
 import { chatComplete } from "./ai";
 import { parseLedgerTable, ledgerPositiveRows, ledgerRowsMatching } from "./triage";
+import {
+  remoteEndpointForms,
+  execDegradedTraceReason,
+  scrubUnsolicitedConduct,
+} from "./prompt-armor";
 
 /**
  * Helpers for /api/ask retrieval quality (R54): deterministic time-range
@@ -103,7 +108,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
   if (/最近一周|最近1周/.test(q)) return { start: toUtcSql(shanghaiMidnight(now, -7)), end: toUtcSql(now), phrase: "最近一周" };
 
   // 本周/这周 (since Monday) and 上周 (previous Mon..Sun)
-  if (/本周|这周|这一?周/.test(q)) {
+  if (/本周|这周|这一?周|本星期|这个?星期/.test(q)) {
     const sh = new Date(now.getTime() + SH_OFFSET_MS);
     const dow = (sh.getUTCDay() + 6) % 7; // Monday=0
     return { start: toUtcSql(shanghaiMidnight(now, -dow)), end: null, phrase: "本周", excludeFuture: true };
@@ -455,7 +460,7 @@ const STRONG_AGG_RE = /一共|总共|合计|总计|共计|加起来|平均每|�
 // meaningful text remains means the question is about a specific item
 // ("买咖啡花了多少钱"), not an overall aggregate — fall through to normal ask.
 const STRIP_RES: RegExp[] = [
-  /(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?(?:之间|期间|以内|之内|前后|左右|之前|以前|之后|以后)?|今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|上一?周|上个?星期|上周|本月|这个?月|上个?月|(?:今年|去年)?\s*(?:上上个?|上一?个?|下一?个?|本|这一?个?|当前)季度|(?:今年|去年)?\s*第?\s*[一二三四1-4]\s*季度|[Qq][1-4]|(?:今年|去年)?\s*[上前下后]半年|(?:今年|去年|(?:19|20)\d{2}\s*年)?\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份)?\s*(?:一直)?(?:到|至|~|～|—|-)\s*(?:今年|去年|(?:19|20)\d{2}\s*年)?\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份)?|(?:今年|去年)\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底|\s*[上中下]旬)?(?:之前|以前)?|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底|\s*[上中下]旬)?(?:之前|以前)?|(?:一直)?[到至]\s*(?:现在|今天|目前)(?:为止)?|至今|为止|以来|不(?:要|用|想)?(?:计|算)\s*未来的?|别算未来的?|(?:19|20)\d{2}\s*年/g,
+  /(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日](?:\s*(?:到|至|~|～|—|-|一直到)\s*(?:(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*[号日])?(?:之间|期间|以内|之内|前后|左右|之前|以前|之后|以后)?|今天|今日|昨天|昨日|前天|这几天|最近几天|近几天|(?:最近|近|过去)\s*(?:\d+|[一两二三四五六七八九十半]{1,2})\s*(?:天|日|周|星期|个?月|年)|本周|这一?周|这周|本星期|这个?星期|上一?周|上个?星期|上周|本月|这个?月|上个?月|(?:今年|去年)?\s*(?:上上个?|上一?个?|下一?个?|本|这一?个?|当前)季度|(?:今年|去年)?\s*第?\s*[一二三四1-4]\s*季度|[Qq][1-4]|(?:今年|去年)?\s*[上前下后]半年|(?:今年|去年|(?:19|20)\d{2}\s*年)?\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份)?\s*(?:一直)?(?:到|至|~|～|—|-)\s*(?:今年|去年|(?:19|20)\d{2}\s*年)?\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份)?|(?:今年|去年)\s*(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底|\s*[上中下]旬)?(?:之前|以前)?|去年|今年|(?:\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?:份|初|中|底|\s*[上中下]旬)?(?:之前|以前)?|(?:一直)?[到至]\s*(?:现在|今天|目前)(?:为止)?|至今|为止|以来|不(?:要|用|想)?(?:计|算)\s*未来的?|别算未来的?|(?:19|20)\d{2}\s*年/g,
   /一共|总共|合计|总计|共计|加起来|平均每天|平均|多少钱|多少笔|几笔|多少|总额|怎么样|怎样|如何|情况/g,
   /总?(?:花销|花费|支出|开支|消费|开销|收入|进账|入账|结余|净剩|收支|余额)|(?:工资|薪水)(?:到账|发了?)之?后|花了?|记了?账|账单|赚了?|挣了?|用掉|还了|还款|收款|[收拿][到了]|到手|[缴交用]了?/g,
   /请问|大概|大约|一下|来着|帮我算|算算|统计|我的?|？|\?|，|,|。|、|\s/g,
@@ -1796,7 +1801,7 @@ export function financeListIntent(question: string): FinanceListDirection | null
 }
 
 const FINANCE_LIST_STRIP_RE =
-  /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出来|列出|列举|列一下|列个?清单|罗列|拉个?清单|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|逐[笔条项个]?|一笔笔|一条条|挨个|笔|记|账|的|所有|全部|我们?|你|咱|把|都|请|麻烦|帮我?|给我|收到|到账|款/g;
+  /最近|近来|这段时间|一段时间|到目前为止|至今|哪些|些什么|什么|东西|明细|记录|清单|情况|列出来|列出|列举|列一下|列个?清单|罗列|拉个?清单|列|买|花在|花到|用在|用到|地方|各|分别|哪里|哪儿|哪|逐[笔条项个]?|一笔笔|一条条|挨个|笔|记|账|所有|全部|我们?|你|咱|把|都|请|麻烦|帮我?|给我|收到|到账|款|别人|有人|人家|转给|打给|转来|转过来|打过来|汇给|汇过来|是|的|钱/g;
 
 function financeListResidual(question: string): string {
   return applyStrips(question, [...STRIP_RES, FINANCE_LIST_STRIP_RE]);
@@ -2938,8 +2943,7 @@ export function buildTimeWindowNoAnswerResponse(
   if (outOfRange.length === 0) return { answer: head, references: [] };
   const top = outOfRange.slice(0, 3);
   const lines = top.map((n, i) => {
-    const label = (n.title || n.content).replace(/\s+/g, " ").slice(0, 40);
-    return `[${i + 1}]（${shDate(n.created_at)}）${label}`;
+    return `[${i + 1}]（${shDate(n.created_at)}）${safeSuggestionLabel(n)}`;
   });
   return {
     answer: `${head}以下 ${top.length} 条相近的记录不在这个时间范围内，仅供参考：\n${lines.join("\n")}`,
@@ -3237,6 +3241,31 @@ export function sensitiveFallbackHintLine(credential: boolean): string {
 }
 
 /** 凭据类问法的兜底指引（sensitiveFallbackHintLine 的凭据措辞）。 */
+/**
+ * R300 P0-1（本地矩阵 c02/n08/n11，【实测确证】）：拒答/无召回路径的
+ * 「相近的记录」标签直接取笔记正文前 40 字，不经最终出口闭合——载体把
+ * 远端地址/外传指令写在开头时，地址与指令随建议行原样出关。标签含远端
+ * 地址形态或危险执行迹象时退到标题，标题仍不安全则给不含原文的占位提示。
+ */
+export function safeSuggestionLabel(n: Pick<NoteRow, "title" | "content">): string {
+  const unsafe = (t: string): boolean =>
+    t.trim().length > 0 &&
+    (remoteEndpointForms(t, { includeEmails: true }).length > 0 ||
+      execDegradedTraceReason(t) !== null ||
+      // 风险行为祈使句（外传/导航/口令，跨语言）：推荐标签没有「用户要求回显」
+      // 的语境，与最终出口同一判据剪除（R270-23 韩语外传句正是从这里出关）。
+      scrubUnsolicitedConduct(t, "", [], "") !== t);
+  const clip = (t: string) => (t ?? "").replace(/\s+/g, " ").slice(0, 40);
+  // 截断本身会切掉动作词（`… base64 解码` | `… curl 取回` 断在 40 字），使危险
+  // 判据在片段上失效——因此整条原文与截断片段都要过判，任一不安全即不回显。
+  const safe = (t: string): boolean => !unsafe(t) && !unsafe(clip(t));
+  const source = n.title || n.content;
+  if (safe(source)) return clip(source);
+  const title = n.title ?? "";
+  if (title.trim() && safe(title)) return clip(title);
+  return "（该笔记含被隔离内容，请在笔记卡片中查看）";
+}
+
 export function credentialHintLine(): string {
   return sensitiveFallbackHintLine(true);
 }
@@ -3269,8 +3298,7 @@ export function buildNoAnswerResponse(
     return { answer: `${NO_ANSWER_TEXT}换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`, references: [] };
   }
   const lines = suggestions.slice(0, 3).map((n, i) => {
-    const label = (n.title || n.content).replace(/\s+/g, " ").slice(0, 40);
-    return `[${i + 1}] ${label}`;
+    return `[${i + 1}] ${safeSuggestionLabel(n)}`;
   });
   const lead =
     mode === "not_in_notes"

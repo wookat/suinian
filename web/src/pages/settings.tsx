@@ -1269,7 +1269,7 @@ export function SettingsPage() {
         <div>
           <h2 className="text-sm font-medium">导出数据</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            导出全部笔记（含待分拣）/线索/周报。敏感笔记默认脱敏（正文打码，其语音/图片/文件原件也不打包），勾选后才会明文导出
+            导出全部笔记（含待分拣）/线索/周报。敏感笔记默认脱敏（正文打码，其语音/图片/文件原件也不打包），勾选后才会明文导出。正文为近似原文：空白/换行/零宽字符可能被归一化
           </p>
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-sm">

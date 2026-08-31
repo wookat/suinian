@@ -17,7 +17,7 @@ import {
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
 import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, judgeSurfaceText, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
-import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
+import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
 import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads, detachZeroSignalThreadMembers } from "./threads";
@@ -4653,8 +4653,12 @@ app.post("/api/ask", async (c) => {
     // 生成温度取 0：同一问题在 REST 与 SSE 两次独立请求间答案可复现，
     // 一致性不依赖采样随机性（审计/护栏本就 temperature 0）。
     temperature: 0,
-    max_tokens: 800,
-    timeout_ms: 40_000,
+    // R300 P1-1（audit-r299 §6：2636 字 verbatim 只回 40 字）：verbatim 问法的
+    // 8000 字上下文预算必须贯通到生成侧输出长度，否则原文进得来、答不出去。
+    max_tokens: questionRequestsVerbatim(question) ? 8192 : 800,
+    // verbatim 8192 token 的产出在真实 provider 上远超 40s（实测 6000+ 字回显
+    // 需 90s+），预算随输出上限放大，否则流在中途被本端主动掐断
+    timeout_ms: questionRequestsVerbatim(question) ? 150_000 : 40_000,
     messages: [
       {
         role: "system",
@@ -4733,6 +4737,21 @@ app.post("/api/ask", async (c) => {
         return { danger: [], unavailable: true };
       }),
     };
+    // R300 P1-4（audit-r299：首 delta p50 2690ms）：行为审计（conaud）也预热启动，
+    // 与下方的指令抽取等待/拒答重试/确定性护栏并行；只有到审计点时答案文本
+    // 与预热时完全一致才复用（句段编号依赖文本），否则重新审计——不拿旧文本
+    // 的判定套新文本（与 exec 预热同一 fail-closed 口径）。
+    conductPrewarm = {
+      text: preText,
+      p: auditAnswerConduct(c.env, {
+        question: askGuardQuestion,
+        answer: preText,
+        dataText: askGuardData,
+      }).catch((err) => {
+        console.error("ask: conduct audit prewarm failed", err);
+        return null;
+      }),
+    };
     // 等判别器收尾（与生成并行启动，通常已完成）；到预算仍未回按判别
     // 失败处理，确定性兜底照常生效
     const demandsRaw = await Promise.race([
@@ -4792,14 +4811,17 @@ app.post("/api/ask", async (c) => {
     // 答案（仅来源引用 + 提示查看原文）。
     if (answer2 !== "没找到") {
       const tAud = Date.now();
-      const verdict = await auditAnswerConduct(c.env, {
-        question: askGuardQuestion,
-        answer: answer2,
-        dataText: askGuardData,
-      }).catch((err) => {
-        console.error("ask: conduct audit failed", err);
-        return null;
-      });
+      const verdict =
+        conductPrewarm && conductPrewarm.text === answer2
+          ? await conductPrewarm.p
+          : await auditAnswerConduct(c.env, {
+              question: askGuardQuestion,
+              answer: answer2,
+              dataText: askGuardData,
+            }).catch((err) => {
+              console.error("ask: conduct audit failed", err);
+              return null;
+            });
       askMarks.push(["conaud", Date.now() - tAud]);
       if (verdict === null && (demands?.length ?? 0) > 0) {
         console.log("ask: fail-closed conservative answer (demands present, audit unavailable)");
@@ -5046,7 +5068,26 @@ app.post("/api/ask", async (c) => {
       console.error("ask: finance recall gap check failed", err);
     }
   }
-  return { answer: finalAnswer + recallGapHint, references, notes: refNotes, ...(genIsolated ? { instruction_isolated: true } : {}) };
+  // R300 P1-1：verbatim 回声完整性告知——答案未覆盖被引用笔记的结尾时，
+  // 明确告诉用户回显不完整、去笔记卡片看全文（用户不可感知的静默截断是
+  // audit-r299 §6 的核心问题）。
+  let verbatimTruncHint = "";
+  if (questionRequestsVerbatim(question)) {
+    // 生成被输出上限截断时，结尾的引文角标也一并丢失，references 可能为空——
+    // 完整性判定回退到召回集，否则最需要告知的场景（截断）反而不出提示。
+    const cited = (references.length > 0 ? references.map((r) => byId.get(r.note_id)) : notes).filter(
+      (n): n is NoteRow => !!n && !n.is_sensitive
+    );
+    const target = cited.sort((a, b) => b.content.length - a.content.length)[0];
+    if (target && target.content.length > 400) {
+      const fa = foldCompact(finalAnswer);
+      const tail = foldCompact(target.content.trim().slice(-48));
+      if (tail.length >= 8 && !fa.includes(tail))
+        verbatimTruncHint =
+          "\n\n（原文较长，以上回显不完整；完整原文请打开引用的笔记卡片查看。）";
+    }
+  }
+  return { answer: finalAnswer + recallGapHint + verbatimTruncHint, references, notes: refNotes, ...(genIsolated ? { instruction_isolated: true } : {}) };
   };
 
   // R276 P0-1：生成分支的唯一出口——与确定性路由共用同一个 finalizeAskAnswer
@@ -5085,8 +5126,14 @@ app.post("/api/ask", async (c) => {
   const flushGuardEvents = (): void => {
     if (guardEventsFlushed) return;
     guardEventsFlushed = true;
-    const rows = Object.entries(execCounters).filter(([, n]) => n > 0);
-    if (rows.length === 0) return;
+    // R300 P2-3（audit-r299：零值不写行→不可用率三轮悬空）：每次请求都写
+    // total_requests 分母，并保证 classifierUnavailable 当日行存在（哪怕 +0），
+    // 不可用率 = classifierUnavailable / total_requests 可直接计算。
+    const rows: Array<[string, number]> = [
+      ["total_requests", 1],
+      ["classifierUnavailable", execCounters.classifierUnavailable],
+      ...Object.entries(execCounters).filter(([k, n]) => k !== "classifierUnavailable" && n > 0),
+    ];
     const day = new Date().toISOString().slice(0, 10);
     const work = (async () => {
       for (const [kind, n] of rows) {
@@ -5108,6 +5155,8 @@ app.post("/api/ask", async (c) => {
   // finalize 时答案文本与预热时完全一致才复用预热结果，否则重新判别
   //（fail-closed：不拿旧文本的判定套新文本）。判据与处置口径不变。
   let execPrewarm: { text: string; p: Promise<ExecClassifyOutcome> } | null = null;
+  // R300 P1-4：conaud 预热句柄（见生成分支内的启动点），复用条件同 execPrewarm。
+  let conductPrewarm: { text: string; p: Promise<number[] | null> } | null = null;
   const classifyExecDanger = async (answer: string): Promise<ExecClassifyOutcome> => {
     const segs = splitSegmentsFenceAware(answer);
     // R294 P0-1（audit-r293 §2）：进入判别/降级链路的前置从「门控命中」改为
@@ -5142,10 +5191,16 @@ app.post("/api/ask", async (c) => {
         console.error("ask: exec-danger classify failed", err);
         return null;
       });
-    let hits = await callOnce();
+    // R300 P2-1（audit-r299：timeout 态整请求 11.365s 穿透 8s 预算）：硬止损——
+    // 首次 + 重试的总耗时不得超过单次硬预算：首次只给「硬预算 − 重试保留」，
+    // 重试只用剩余预算（不足时直接降级，不再发起）。
+    let hits = await callOnce(EXEC_CLASSIFY_BUDGET_MS - EXEC_CLASSIFY_SOFT_BUDGET_MS);
     if (hits === null) {
-      hits = await callOnce(EXEC_CLASSIFY_SOFT_BUDGET_MS);
-      if (hits !== null) console.log("ask: exec-danger classifier recovered on in-request retry");
+      const remaining = EXEC_CLASSIFY_BUDGET_MS - (Date.now() - tCls);
+      if (remaining > 500) {
+        hits = await callOnce(Math.min(remaining, EXEC_CLASSIFY_SOFT_BUDGET_MS));
+        if (hits !== null) console.log("ask: exec-danger classifier recovered on in-request retry");
+      }
     }
     execClsMark = Date.now() - tCls;
     askMarks.push(["execcls", execClsMark]);
@@ -5316,6 +5371,16 @@ app.post("/api/ask", async (c) => {
           delta_contract: "preview_ordered_fragments",
           citation_markers: "final_only"
         });
+        // SSE 心跳注释帧：长生成/终审期间可能几十秒无事件（provider 重试、
+        // finalize 审计），中间层与客户端的空闲超时会掐断连接——每 15s 发一条
+        // 注释行保活（SSE 规范注释帧，客户端解析器天然忽略）。
+        const heartbeat = setInterval(() => {
+          try {
+            ctrl.enqueue(enc.encode(": keepalive\n\n"));
+          } catch {
+            clearInterval(heartbeat);
+          }
+        }, 15_000);
         let buf = "";
         // R298 P1-6：demand 判别未就绪时句段进队列缓冲（不外发、不丢弃），
         // 就绪后按原顺序排空——首 delta 前 demand 必须就绪的不变量保持不变。
@@ -5351,6 +5416,7 @@ app.post("/api/ask", async (c) => {
           console.error("ask stream failed", err);
           send("error", { message: "生成失败，请重试" });
         }
+        clearInterval(heartbeat);
         ctrl.close();
       },
     });
