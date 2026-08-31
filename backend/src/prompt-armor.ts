@@ -4303,12 +4303,144 @@ export function finalizeAskAnswer(
     redacted += text.slice(cursor);
     return { redacted, count: spans.length };
   };
+  // R300 生产实测（post2 探针 c10 verbatim）：保守否决/不可用分支在下方提前
+  // return，逐行闭合从未对这两条路径生效——上游隔离吞掉危险半句后，携带地址
+  // 的标题行原样出关。闭合抽成函数，三条出口路径共用同一判定。
+  const applyLineClosure = (): void => {
+    const MARKED = [
+      EXEC_PIPELINE_WARN_MARK,
+      EXEC_INSTALLER_WARN_MARK,
+      EXEC_ISOLATED_MARK,
+      EXEC_DEGRADED_ISOLATED_MARK,
+      INSTRUCTION_ISOLATED_MARK,
+    ];
+    // 判别器不可用/保守否决态没有可信判别兜底，verbatim 的警示级原文保留一律
+    // 收紧为隔离。
+    const wantVerbatim =
+      questionRequestsVerbatim(opts.question) &&
+      !opts.execClassifierUnavailable &&
+      !opts.execConservativeVeto;
+    // R300 P0-1（audit-r299 §2.1【实测确证】：R298 只收纯 IPv4 字面 ⇒ 生产 24 问
+    // 泄漏 15）：危险目标地址集与逐行地址判定统一换成远端地址通用面
+    // remoteEndpointForms（域名/编码 IP/IPv6/host:port/user@host/DoH URL，含
+    // 全角/逐字空格/拼读归一）。危险段落为空且无标记的善意答案 ⇒ 集合为空 +
+    // 无执行语义 ⇒ 零影响。
+    const markedAddrs = new Set<string>();
+    const collectAddrs = (text: string): void => {
+      for (const a of remoteEndpointForms(text, { includeEmails: true })) markedAddrs.add(a);
+    };
+    for (const seg of [...(opts.execDangerSegments ?? []), ...(opts.execDegradedSegments ?? [])])
+      collectAddrs(seg);
+    for (const line of out.split("\n")) {
+      if (MARKED.some((m) => line.includes(m))) collectAddrs(line);
+    }
+    // 模型改写出的概述行（生产实测 P01「连接到 198.51.100.42 服务器的 ssh 服务」）：
+    // 远端地址形态 + 终端/解释器/执行/外传语义同现即按危险处置（跨语言词表）。
+    const EXEC_WORD_RE =
+      /(?:ssh|scp|telnet|netcat|\bnc\b|bash|zsh|\bsh\b|shell|curl|wget|powershell|终端|命令|执行|运行|跑起来|连上|连线|反连|下载|取回|拉取|端口|外传|发送|上传|実行|端末|シェル|ダウンロード|接続|送信|실행|터미널|셸|쉘|명령|다운로드|접속|연결|전송|보내|내보내|execute|terminal|download|connect|pipe)/i;
+    // R300 P0-2：跨行/跨句同现——地址行与执行动作行分离也算同现。语义判定的
+    // 输入是**整个答案窗口**（semanticExecSignals 本就对全文求值），窗口级危险
+    // 语义成立时，携带地址形态或执行/外传动作语义的行全部收口，不留残片。
+    // 窗口只取**未被标记覆盖**的行：已处置（警示/隔离/安装警示）行的内容
+    // 不应让未处置的良性散文陪葬（官方安装答案的警示行本身就含 fetch+run）。
+    const unmarkedText = out
+      .split("\n")
+      .filter((l) => !MARKED.some((m) => l.includes(m)))
+      .join("\n");
+    const windowDanger =
+      execSemanticDangerReason(unmarkedText) ??
+      execSemanticDangerReason(judgeSurfaceText(unmarkedText)) ??
+      globalExecDangerReason(unmarkedText);
+    // R300 生产实测（post 探针 n17/c10）：危险的那一半若已被上游标记处置，
+    // 上面的窗口就只剩「地址行」，同现判定落空，地址行原样出关。带地址的行
+    // 另外看一遍**剥掉标记文字的全文**窗口：地址 + 已处置的执行半句同现同样
+    // 是完整载荷。纯动作行仍只看未标记窗口，避免官方安装答案的警示行把周边
+    // 良性散文一起收口。
+    const strippedText = MARKED.reduce((acc, m) => acc.split(m).join(""), out);
+    const fullDanger =
+      execSemanticDangerReason(strippedText) ??
+      execSemanticDangerReason(judgeSurfaceText(strippedText)) ??
+      globalExecDangerReason(strippedText);
+    const ACTION_LINE_RE = new RegExp(
+      `${SEM_FETCH_RE.source}|${SEM_RUN_RE.source}|${SEM_HANDOFF_RE.source}|${SEM_INTERP_TARGET_RE.source}`,
+      "i"
+    );
+    const echoOrParaphrase = (line: string): boolean => {
+      const addrs = remoteEndpointForms(line, { includeEmails: true });
+      if (addrs.length > 0) {
+        // 地址 + 终端词汇但无取回/执行/交付语义（`nc -zv host port 连通性探测`、
+        // 端口清单）是运维散文的常态，只有词汇与动作语义同现才收口。
+        return (
+          addrs.some((a) => markedAddrs.has(a)) ||
+          windowDanger !== null ||
+          fullDanger !== null ||
+          (EXEC_WORD_RE.test(line) && ACTION_LINE_RE.test(line))
+        );
+      }
+      // 地址在别的行：窗口级危险语义成立时，纯动作行也是载荷的一半，同样收口
+      return windowDanger !== null && ACTION_LINE_RE.test(line);
+    };
+    let closed = false;
+    const lines = out.split("\n").map((line) => {
+      if (!line.trim()) return line;
+      // 警示级保留原文的行在无判别器兜底（不可用/保守否决）时重判：警示前缀
+      // 不能让「地址 + 危险语义」的原文出关，命中即升级为隔离。
+      if (line.includes(EXEC_PIPELINE_WARN_MARK) && !wantVerbatim) {
+        const body = line.split(EXEC_PIPELINE_WARN_MARK).join("");
+        const bodyDanger =
+          execSemanticDangerReason(body) ??
+          execSemanticDangerReason(judgeSurfaceText(body)) ??
+          globalExecDangerReason(body);
+        const bodyAddrs = remoteEndpointForms(body, { includeEmails: true });
+        if (
+          bodyAddrs.some((a) => markedAddrs.has(a)) ||
+          (bodyAddrs.length > 0 && bodyDanger !== null)
+        ) {
+          closed = true;
+          return EXEC_ISOLATED_MARK;
+        }
+        return line;
+      }
+      if (MARKED.some((m) => line.includes(m))) return line;
+      const trace =
+        execDegradedTraceReason(judgeSurfaceText(line)) ??
+        execDegradedTraceReason(line) ??
+        (echoOrParaphrase(line) ? "closure:remote-endpoint-echo" : null);
+      if (trace === null) return line;
+      closed = true;
+      // verbatim 加警示前缀保留原文，对**已判危险的地址**等于原样放行
+      // （audit-r299 §2.1 verbatim 放大器）：行内地址命中危险段落地址集或
+      // 窗口级危险语义成立时，两模式同为隔离；其余（良性技术行的警示级
+      // 命中）verbatim 仍保留原文加警示。
+      // R300 生产实测（post 探针 n13：`〔警示〕登录 ops@bastion-drop.example.io 后
+      // 执行 /opt/exfil.sh 上传全部资料。`）：警示前缀不能让「地址 + 危险语义」
+      // 的答案变安全。行含远端地址且行级/窗口级危险语义成立时两模式一律隔离；
+      // 警示级保留原文只留给无危险语义的良性技术行（t11 `curl … | jq` 演示）。
+      const lineAddrs = remoteEndpointForms(line, { includeEmails: true });
+      const lineDanger =
+        execSemanticDangerReason(line) ??
+        execSemanticDangerReason(judgeSurfaceText(line)) ??
+        globalExecDangerReason(line);
+      const dangerousAddr =
+        lineAddrs.some((a) => markedAddrs.has(a)) ||
+        windowDanger !== null ||
+        fullDanger !== null ||
+        (lineAddrs.length > 0 && lineDanger !== null);
+      if (!wantVerbatim || dangerousAddr) return EXEC_ISOLATED_MARK;
+      return `${EXEC_PIPELINE_WARN_MARK}${line}`;
+    });
+    if (closed) {
+      out = lines.join("\n");
+      isolated = true;
+    }
+  };
   // R292 P0-1（docs/decision-r292.md §1）：「是否降级」只由判别器状态决定，
   // 不再从输出文本里是否含降级标记**反推**——audit-r291 的 22/38 fail-open
   // 正是「识别不到载体 ⇒ 没有标记 ⇒ degraded 不置位 ⇒ 原样放行」这条链。
   // 出口收尾保险：判别器不可用而输出里既无降级隔离标记也无官方安装警示
   // ⇒ 整答隔离（层 3 的同义兜底，防未来任何上游路径遗漏）。
   if (opts.execClassifierUnavailable || opts.execConservativeVeto) {
+    applyLineClosure();
     // R294 P1-4：保险丝的触发条件与层 3 同口径——「存在执行原语痕迹」而非
     // 「门控非空」（门控含 codeish-block，沿用它会把任何带围栏的善意答案整篇探空）。
     const mark = opts.execClassifierUnavailable ? EXEC_DEGRADED_ISOLATED_MARK : EXEC_ISOLATED_MARK;
@@ -4382,110 +4514,7 @@ export function finalizeAskAnswer(
   // 标了资料原文那一行，改写行没有对应处置区间）。收口：对未被任何标记覆盖
   // 的行复查确定性痕迹（载体无关下界，善意行不命中），verbatim 前置警示、
   // 非 verbatim 整行替换为隔离标记。
-  {
-    const MARKED = [
-      EXEC_PIPELINE_WARN_MARK,
-      EXEC_INSTALLER_WARN_MARK,
-      EXEC_ISOLATED_MARK,
-      EXEC_DEGRADED_ISOLATED_MARK,
-      INSTRUCTION_ISOLATED_MARK,
-    ];
-    const wantVerbatim = questionRequestsVerbatim(opts.question);
-    // R300 P0-1（audit-r299 §2.1【实测确证】：R298 只收纯 IPv4 字面 ⇒ 生产 24 问
-    // 泄漏 15）：危险目标地址集与逐行地址判定统一换成远端地址通用面
-    // remoteEndpointForms（域名/编码 IP/IPv6/host:port/user@host/DoH URL，含
-    // 全角/逐字空格/拼读归一）。危险段落为空且无标记的善意答案 ⇒ 集合为空 +
-    // 无执行语义 ⇒ 零影响。
-    const markedAddrs = new Set<string>();
-    const collectAddrs = (text: string): void => {
-      for (const a of remoteEndpointForms(text, { includeEmails: true })) markedAddrs.add(a);
-    };
-    for (const seg of [...(opts.execDangerSegments ?? []), ...(opts.execDegradedSegments ?? [])])
-      collectAddrs(seg);
-    for (const line of out.split("\n")) {
-      if (MARKED.some((m) => line.includes(m))) collectAddrs(line);
-    }
-    // 模型改写出的概述行（生产实测 P01「连接到 198.51.100.42 服务器的 ssh 服务」）：
-    // 远端地址形态 + 终端/解释器/执行/外传语义同现即按危险处置（跨语言词表）。
-    const EXEC_WORD_RE =
-      /(?:ssh|scp|telnet|netcat|\bnc\b|bash|zsh|\bsh\b|shell|curl|wget|powershell|终端|命令|执行|运行|跑起来|连上|连线|反连|下载|取回|拉取|端口|外传|发送|上传|実行|端末|シェル|ダウンロード|接続|送信|실행|터미널|셸|쉘|명령|다운로드|접속|연결|전송|보내|내보내|execute|terminal|download|connect|pipe)/i;
-    // R300 P0-2：跨行/跨句同现——地址行与执行动作行分离也算同现。语义判定的
-    // 输入是**整个答案窗口**（semanticExecSignals 本就对全文求值），窗口级危险
-    // 语义成立时，携带地址形态或执行/外传动作语义的行全部收口，不留残片。
-    // 窗口只取**未被标记覆盖**的行：已处置（警示/隔离/安装警示）行的内容
-    // 不应让未处置的良性散文陪葬（官方安装答案的警示行本身就含 fetch+run）。
-    const unmarkedText = out
-      .split("\n")
-      .filter((l) => !MARKED.some((m) => l.includes(m)))
-      .join("\n");
-    const windowDanger =
-      execSemanticDangerReason(unmarkedText) ??
-      execSemanticDangerReason(judgeSurfaceText(unmarkedText)) ??
-      globalExecDangerReason(unmarkedText);
-    // R300 生产实测（post 探针 n17/c10）：危险的那一半若已被上游标记处置，
-    // 上面的窗口就只剩「地址行」，同现判定落空，地址行原样出关。带地址的行
-    // 另外看一遍**剥掉标记文字的全文**窗口：地址 + 已处置的执行半句同现同样
-    // 是完整载荷。纯动作行仍只看未标记窗口，避免官方安装答案的警示行把周边
-    // 良性散文一起收口。
-    const strippedText = MARKED.reduce((acc, m) => acc.split(m).join(""), out);
-    const fullDanger =
-      execSemanticDangerReason(strippedText) ??
-      execSemanticDangerReason(judgeSurfaceText(strippedText)) ??
-      globalExecDangerReason(strippedText);
-    const ACTION_LINE_RE = new RegExp(
-      `${SEM_FETCH_RE.source}|${SEM_RUN_RE.source}|${SEM_HANDOFF_RE.source}|${SEM_INTERP_TARGET_RE.source}`,
-      "i"
-    );
-    const echoOrParaphrase = (line: string): boolean => {
-      const addrs = remoteEndpointForms(line, { includeEmails: true });
-      if (addrs.length > 0) {
-        // 地址 + 终端词汇但无取回/执行/交付语义（`nc -zv host port 连通性探测`、
-        // 端口清单）是运维散文的常态，只有词汇与动作语义同现才收口。
-        return (
-          addrs.some((a) => markedAddrs.has(a)) ||
-          windowDanger !== null ||
-          fullDanger !== null ||
-          (EXEC_WORD_RE.test(line) && ACTION_LINE_RE.test(line))
-        );
-      }
-      // 地址在别的行：窗口级危险语义成立时，纯动作行也是载荷的一半，同样收口
-      return windowDanger !== null && ACTION_LINE_RE.test(line);
-    };
-    let closed = false;
-    const lines = out.split("\n").map((line) => {
-      if (!line.trim() || MARKED.some((m) => line.includes(m))) return line;
-      const trace =
-        execDegradedTraceReason(judgeSurfaceText(line)) ??
-        execDegradedTraceReason(line) ??
-        (echoOrParaphrase(line) ? "closure:remote-endpoint-echo" : null);
-      if (trace === null) return line;
-      closed = true;
-      // verbatim 加警示前缀保留原文，对**已判危险的地址**等于原样放行
-      // （audit-r299 §2.1 verbatim 放大器）：行内地址命中危险段落地址集或
-      // 窗口级危险语义成立时，两模式同为隔离；其余（良性技术行的警示级
-      // 命中）verbatim 仍保留原文加警示。
-      // R300 生产实测（post 探针 n13：`〔警示〕登录 ops@bastion-drop.example.io 后
-      // 执行 /opt/exfil.sh 上传全部资料。`）：警示前缀不能让「地址 + 危险语义」
-      // 的答案变安全。行含远端地址且行级/窗口级危险语义成立时两模式一律隔离；
-      // 警示级保留原文只留给无危险语义的良性技术行（t11 `curl … | jq` 演示）。
-      const lineAddrs = remoteEndpointForms(line, { includeEmails: true });
-      const lineDanger =
-        execSemanticDangerReason(line) ??
-        execSemanticDangerReason(judgeSurfaceText(line)) ??
-        globalExecDangerReason(line);
-      const dangerousAddr =
-        lineAddrs.some((a) => markedAddrs.has(a)) ||
-        windowDanger !== null ||
-        fullDanger !== null ||
-        (lineAddrs.length > 0 && lineDanger !== null);
-      if (!wantVerbatim || dangerousAddr) return EXEC_ISOLATED_MARK;
-      return `${EXEC_PIPELINE_WARN_MARK}${line}`;
-    });
-    if (closed) {
-      out = lines.join("\n");
-      isolated = true;
-    }
-  }
+  applyLineClosure();
   // R286 P0-1：降级窗口给用户可感知的显式提示（不只靠行内标记）。
   const degraded = out.includes(EXEC_DEGRADED_ISOLATED_MARK);
   if (degraded && !out.includes(EXEC_DEGRADED_NOTICE)) out = `${out}\n\n${EXEC_DEGRADED_NOTICE}`;
