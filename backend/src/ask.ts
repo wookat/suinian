@@ -108,7 +108,7 @@ export function parseTimeRange(question: string, now: Date = new Date()): TimeRa
   if (/最近一周|最近1周/.test(q)) return { start: toUtcSql(shanghaiMidnight(now, -7)), end: toUtcSql(now), phrase: "最近一周" };
 
   // 本周/这周 (since Monday) and 上周 (previous Mon..Sun)
-  if (/本周|这周|这一?周/.test(q)) {
+  if (/本周|这周|这一?周|本星期|这个?星期/.test(q)) {
     const sh = new Date(now.getTime() + SH_OFFSET_MS);
     const dow = (sh.getUTCDay() + 6) % 7; // Monday=0
     return { start: toUtcSql(shanghaiMidnight(now, -dow)), end: null, phrase: "本周", excludeFuture: true };
