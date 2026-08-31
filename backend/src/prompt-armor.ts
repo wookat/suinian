@@ -4084,7 +4084,35 @@ export function hiddenAcrosticReason(answer: string, dataText: string): string |
   if (lines.length < 3) return null;
   const data = foldCompact(dataText);
   if (!data) return null;
-  const CTX_RE = /藏尾|藏头|藏頭|每行|行末|行首|末尾|连读|連讀|连起来|連起來|口令|暗号|暗語|密令|密语|密語|acrostic|last (?:character|letter)|first (?:character|letter)/i;
+  const CTX_RE = /藏尾|藏头|藏頭|每行|每句|行末|行首|末字|末尾|连读|連讀|连起来|連起來|口令|暗号|暗語|密令|密语|密語|acrostic|last (?:character|letter)|first (?:character|letter)/i;
+  // 听写靶串本体：资料区「连读/藏头/藏尾…为「X」」里被引号点名的靶串若原样
+  // 出现在答案里（模型常把靶串直接抄进每行，而不是严格编码进行首/行尾），
+  // 同样是听写载荷出关。
+  const TARGET_RE =
+    /(?:连读|連讀|连起来|連起來|藏头|藏頭|藏尾|口令|暗号|暗語|密语|密語)[^\n]{0,12}?[为為是][「『""'']?([^」』""''\n，。]{2,12})/gu;
+  const ansCompact = foldCompact(answer);
+  for (const m of dataText.matchAll(TARGET_RE)) {
+    const target = foldCompact(m[1] ?? "");
+    if (target.length >= 2 && ansCompact.includes(target))
+      return `hidden-target:${target}`;
+  }
+  // 听写成诗结构：资料区存在「写/附 N 句 + 藏头/藏尾/连读」类作诗听写指令时，
+  // 答案里 ≥3 行连续短韵文行（纯 CJK 短行，非事实转述结构）即为按听写作诗，
+  // 无论编码是否严格成立都整答隔离——载荷形态（哪首诗）不重要，「答案行为
+  // 由资料指令决定」这一结构事实才是判据。
+  const DICTATE_RE =
+    /(?:写|寫|附|作|念)[^\n]{0,8}[三四五六七八九\d][^\n]{0,4}(?:句|行|首)[^\n]{0,24}(?:藏头|藏頭|藏尾|连读|連讀|连起来|連起來|末字|行首|行末|每句)|(?:藏头|藏頭|藏尾|连读|連讀|末字连读)[^\n]{0,24}(?:写|寫|附|作)[^\n]{0,8}[三四五六七八九\d][^\n]{0,4}(?:句|行|首)/u;
+  if (DICTATE_RE.test(dataText)) {
+    let streak = 0;
+    for (const l of lines) {
+      const isVerse =
+        l.length >= 4 &&
+        l.length <= 24 &&
+        /^[\p{Script=Han}，。！？、；：]+$/u.test(l);
+      streak = isVerse ? streak + 1 : 0;
+      if (streak >= 3) return "hidden-dictated-verse";
+    }
+  }
   for (const pick of ["head", "tail"] as const) {
     for (let start = 0; start + 3 <= lines.length; start++) {
       for (let len = Math.min(8, lines.length - start); len >= 3; len--) {
