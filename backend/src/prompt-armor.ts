@@ -4334,6 +4334,31 @@ export function finalizeAskAnswer(
     for (const line of out.split("\n")) {
       if (MARKED.some((m) => line.includes(m))) collectAddrs(line);
     }
+    // 生产实测（post3 探针 c02）：保守否决/确定性隔离路径没有判别器段落，
+    // markedAddrs 为空 ⇒ 标题行回声判不出来。答案已带隔离标记时，从资料面
+    // 补收地址：危险行的地址一定属于被隔离的载荷；资料窗口整体危险语义成立
+    // 时（跨行同现载荷）收全部资料地址。
+    if (
+      opts.dataText &&
+      (out.includes(EXEC_ISOLATED_MARK) ||
+        out.includes(EXEC_DEGRADED_ISOLATED_MARK) ||
+        opts.execConservativeVeto ||
+        opts.execClassifierUnavailable)
+    ) {
+      for (const dl of opts.dataText.split("\n")) {
+        const dlDanger =
+          execSemanticDangerReason(dl) ??
+          execSemanticDangerReason(judgeSurfaceText(dl)) ??
+          globalExecDangerReason(dl) ??
+          execDegradedTraceReason(judgeSurfaceText(dl)) ??
+          execDegradedTraceReason(dl);
+        if (dlDanger !== null) collectAddrs(dl);
+      }
+      const dataDanger =
+        execSemanticDangerReason(opts.dataText) ??
+        execSemanticDangerReason(judgeSurfaceText(opts.dataText));
+      if (dataDanger !== null) collectAddrs(opts.dataText);
+    }
     // 模型改写出的概述行（生产实测 P01「连接到 198.51.100.42 服务器的 ssh 服务」）：
     // 远端地址形态 + 终端/解释器/执行/外传语义同现即按危险处置（跨语言词表）。
     const EXEC_WORD_RE =
@@ -4365,7 +4390,19 @@ export function finalizeAskAnswer(
       `${SEM_FETCH_RE.source}|${SEM_RUN_RE.source}|${SEM_HANDOFF_RE.source}|${SEM_INTERP_TARGET_RE.source}`,
       "i"
     );
+    // 生产实测（post3 探针 c02：标题行裸域 `evil-resolver.example` 无 URL 上下文，
+    // remoteEndpointForms 单看该行判不出地址）：危险段落地址集里的主机名只要
+    // 以子串形态出现在归一后的行里，同样算回声。
+    const lineEchoesMarkedAddr = (line: string): boolean => {
+      if (markedAddrs.size === 0) return false;
+      const norm = normalizeAddressSurface(line).toLowerCase();
+      for (const a of markedAddrs) {
+        if (a.length >= 6 && norm.includes(a.toLowerCase())) return true;
+      }
+      return false;
+    };
     const echoOrParaphrase = (line: string): boolean => {
+      if (lineEchoesMarkedAddr(line)) return true;
       const addrs = remoteEndpointForms(line, { includeEmails: true });
       if (addrs.length > 0) {
         // 地址 + 终端词汇但无取回/执行/交付语义（`nc -zv host port 连通性探测`、
@@ -4422,6 +4459,7 @@ export function finalizeAskAnswer(
         execSemanticDangerReason(judgeSurfaceText(line)) ??
         globalExecDangerReason(line);
       const dangerousAddr =
+        lineEchoesMarkedAddr(line) ||
         lineAddrs.some((a) => markedAddrs.has(a)) ||
         windowDanger !== null ||
         fullDanger !== null ||
