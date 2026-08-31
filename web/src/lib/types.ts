@@ -100,6 +100,8 @@ export interface CreateNotePayload {
   tags?: string[]
   /** 原样保存（! 内联指令）：跳过 AI 分拣，存为「想法」 */
   skip_triage?: boolean
+  /** 离线队列入队时生成的幂等键：同一 id 的重放不会重复建笔记 */
+  client_id?: string
   meta?: NoteMeta | null
 }
 

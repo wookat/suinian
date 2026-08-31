@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, judgeSurfaceText, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, dataTextHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, judgeSurfaceText, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -1564,7 +1564,16 @@ async function createNote(
 // ---- POST /api/notes ----
 app.post("/api/notes", async (c) => {
   const body = await c.req
-    .json<{ source?: string; raw_type?: string; content?: string; url?: string; tags?: string[]; skip_triage?: boolean; meta?: NoteMeta | null }>()
+    .json<{
+      source?: string;
+      raw_type?: string;
+      content?: string;
+      url?: string;
+      tags?: string[];
+      skip_triage?: boolean;
+      client_id?: string;
+      meta?: NoteMeta | null;
+    }>()
     .catch(() => null);
   // 非字符串 content（数字/对象/数组）必须是 400 而不是下游 500（R120 P2）
   if (!body || typeof body.content !== "string" || !body.content.trim()) {
@@ -1589,11 +1598,26 @@ app.post("/api/notes", async (c) => {
       .first<NoteRow>();
     if (dup) return c.json({ note: await noteToJsonDecrypted(c.env, dup), deduped: true }, 200);
   }
+  // 离线补发幂等（R302 P0-4，生产实测：断网入队 → 刷新 → 联网后同一条笔记
+  // 被建了两次）：客户端入队时生成 client_id，同 id 的重放返回已建笔记。
+  // 与 /api/ingest/media 同口径；格式限死为 uuid 形态，meta 不成为明文旁路。
+  const clientId = typeof body.client_id === "string" && /^[0-9a-fA-F-]{8,64}$/.test(body.client_id) ? body.client_id : null;
+  if (clientId) {
+    const dup = await c.env.DB.prepare(
+      "SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND json_extract(meta, '$.client_id') = ? LIMIT 1"
+    )
+      .bind(userId, clientId)
+      .first<NoteRow>();
+    if (dup) return c.json({ note: await noteToJsonDecrypted(c.env, dup), deduped: true }, 200);
+  }
   // skip_triage (`!` inline command): store as-is, never re-sorted
   const skipTriage = body.skip_triage === true;
   // 客户端 meta 白名单（R126 P1-1）：只收标记位，不收任何可携带明文的
   // 自由文本字段（否则 meta.* 成为绕过敏感管道的明文旁路）
-  const clientMeta: NoteMeta | null = body.meta?.from_ask === true ? { from_ask: true } : null;
+  const clientMeta: NoteMeta | null =
+    body.meta?.from_ask === true || clientId
+      ? { ...(body.meta?.from_ask === true ? { from_ask: true } : {}), ...(clientId ? { client_id: clientId } : {}) }
+      : null;
   // returns immediately; triage + link fetch + clustering backfill asynchronously
   const { note } = await createNote(c, userId, { ...body, meta: clientMeta }, (p) => c.executionCtx.waitUntil(p), { syncTriage: false, skipTriage });
   return c.json({ note: await noteToJsonDecrypted(c.env, note) }, 201);
@@ -4792,7 +4816,13 @@ app.post("/api/ask", async (c) => {
     });
     // R278 P1-4：任何实质性安全改写（行为剥除/指令要求物剥除/保守降级/
     // 审计剥除）都置结构化 instruction_isolated，用户可区分「答错」与「被隔离」。
-    if (g.conductScrubbed || g.markerScrubbed || g.spanScrubbed || g.directiveScrubbed) genIsolated = true;
+    // R302 P0-5（生产实测：4600 字善意长文 verbatim 问出现虚假隔离横幅）：
+    // span 剥除对「资料无任何指令/危险执行意图」的纯善意资料只是 verbatim
+    // 改道（原文走笔记卡片），不是安全隔离，不置 instruction_isolated；
+    // 资料含 demand 或可隔离内容时维持 fail-closed 置位不变。
+    const spanScrubIsIsolation =
+      g.spanScrubbed && ((demands?.length ?? 0) > 0 || demands === null || dataTextHasIsolatableContent(askGuardData));
+    if (g.conductScrubbed || g.markerScrubbed || spanScrubIsIsolation || g.directiveScrubbed) genIsolated = true;
     if (g.linkScrubbed) console.log("ask: external link scrubbed from answer");
     if (g.conductScrubbed) console.log("ask: unsolicited conduct scrubbed from answer");
     if (g.markerScrubbed) console.log("ask: data-derived marker scrubbed from answer");

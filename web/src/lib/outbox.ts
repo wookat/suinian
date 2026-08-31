@@ -135,7 +135,10 @@ export async function outboxCount(): Promise<number> {
 /** 网络失败的写入进队列；入队成功返回 true（失败时调用方退回输入框兜底）。 */
 export async function enqueueNote(payload: CreateNotePayload): Promise<boolean> {
   try {
-    await tx("readwrite", (s) => s.add({ payload, queued_at: new Date().toISOString() }))
+    // 入队即定幂等键：重放的响应丢失、或刷新后重放与上次重放叠加，服务端都按
+    // client_id 返回已建笔记（R302 P0-4 生产实测重复建笔记的收口）。
+    const withId: CreateNotePayload = { ...payload, client_id: payload.client_id ?? crypto.randomUUID() }
+    await tx("readwrite", (s) => s.add({ payload: withId, queued_at: new Date().toISOString() }))
     void notifyCount()
     return true
   } catch {
