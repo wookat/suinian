@@ -4656,7 +4656,9 @@ app.post("/api/ask", async (c) => {
     // R300 P1-1（audit-r299 §6：2636 字 verbatim 只回 40 字）：verbatim 问法的
     // 8000 字上下文预算必须贯通到生成侧输出长度，否则原文进得来、答不出去。
     max_tokens: questionRequestsVerbatim(question) ? 8192 : 800,
-    timeout_ms: 40_000,
+    // verbatim 8192 token 的产出在真实 provider 上远超 40s（实测 6000+ 字回显
+    // 需 90s+），预算随输出上限放大，否则流在中途被本端主动掐断
+    timeout_ms: questionRequestsVerbatim(question) ? 150_000 : 40_000,
     messages: [
       {
         role: "system",
@@ -5071,9 +5073,11 @@ app.post("/api/ask", async (c) => {
   // audit-r299 §6 的核心问题）。
   let verbatimTruncHint = "";
   if (questionRequestsVerbatim(question)) {
-    const cited = references
-      .map((r) => byId.get(r.note_id))
-      .filter((n): n is NoteRow => !!n && !n.is_sensitive);
+    // 生成被输出上限截断时，结尾的引文角标也一并丢失，references 可能为空——
+    // 完整性判定回退到召回集，否则最需要告知的场景（截断）反而不出提示。
+    const cited = (references.length > 0 ? references.map((r) => byId.get(r.note_id)) : notes).filter(
+      (n): n is NoteRow => !!n && !n.is_sensitive
+    );
     const target = cited.sort((a, b) => b.content.length - a.content.length)[0];
     if (target && target.content.length > 400) {
       const fa = foldCompact(finalAnswer);
@@ -5367,6 +5371,16 @@ app.post("/api/ask", async (c) => {
           delta_contract: "preview_ordered_fragments",
           citation_markers: "final_only"
         });
+        // SSE 心跳注释帧：长生成/终审期间可能几十秒无事件（provider 重试、
+        // finalize 审计），中间层与客户端的空闲超时会掐断连接——每 15s 发一条
+        // 注释行保活（SSE 规范注释帧，客户端解析器天然忽略）。
+        const heartbeat = setInterval(() => {
+          try {
+            ctrl.enqueue(enc.encode(": keepalive\n\n"));
+          } catch {
+            clearInterval(heartbeat);
+          }
+        }, 15_000);
         let buf = "";
         // R298 P1-6：demand 判别未就绪时句段进队列缓冲（不外发、不丢弃），
         // 就绪后按原顺序排空——首 delta 前 demand 必须就绪的不变量保持不变。
@@ -5402,6 +5416,7 @@ app.post("/api/ask", async (c) => {
           console.error("ask stream failed", err);
           send("error", { message: "生成失败，请重试" });
         }
+        clearInterval(heartbeat);
         ctrl.close();
       },
     });

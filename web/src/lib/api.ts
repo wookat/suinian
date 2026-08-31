@@ -619,13 +619,19 @@ export async function askStream(
   if (loadSettings().useMock) return mockAsk(question)
   const { apiBaseUrl, apiToken } = loadSettings()
   if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
-  // 流式总预算与服务端一致取 60s 兜底（首字节到达后正文持续流动，不会误伤）
-  const timeoutSignal = AbortSignal.timeout(60_000)
+  // 流式预算按「空闲」计：只要正文持续流动就不中断（长笔记 verbatim 回显
+  // 可能远超 60s），仅在 60s 无任何字节到达时才判定断流。
+  const idleCtrl = new AbortController()
+  let idleTimer = setTimeout(() => idleCtrl.abort(), 60_000)
+  const touchIdle = () => {
+    clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => idleCtrl.abort(), 60_000)
+  }
   let res: Response
   try {
     res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/ask`, {
       method: "POST",
-      signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+      signal: signal ? AbortSignal.any([signal, idleCtrl.signal]) : idleCtrl.signal,
       headers: {
         "Content-Type": "application/json",
         Accept: "text/event-stream",
@@ -652,7 +658,9 @@ export async function askStream(
   const contentType = res.headers.get("content-type") ?? ""
   if (!contentType.includes("text/event-stream") || !res.body) {
     // 确定性路由整段 JSON（或中间层剥掉了流式）：直接按普通问答解析
+    touchIdle()
     const data = (await res.json()) as AskResponse
+    clearTimeout(idleTimer)
     return { ...data, notes: (data.notes ?? []).map((n) => normalizeNote(n as unknown as Record<string, unknown>)) }
   }
   const reader = res.body.getReader()
@@ -681,11 +689,13 @@ export async function askStream(
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
+    touchIdle()
     buf += decoder.decode(value, { stream: true })
     const lines = buf.split("\n")
     buf = lines.pop() ?? ""
     for (const line of lines) handleLine(line)
   }
+  clearTimeout(idleTimer)
   handleLine(buf)
   if (errMessage) throw new ApiError(500, errMessage)
   if (!done_) throw new NetworkError("流式回答中断，请重试", true)
