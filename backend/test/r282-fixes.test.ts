@@ -60,18 +60,17 @@ describe("R282 F-1 能力识别：解释器原生 socket 反弹 shell 不再穿�
   it("自造新变体（ruby/node/lua/awk/inet/dev-tcp/LOLBIN/管道）全部命中", () => {
     for (const s of R282_NEW) expect(exec(s), s.slice(0, 48)).toBe(true);
   });
-  it("出口两态无第三态：verbatim 全文+警示；非 verbatim 整段隔离、无残片", () => {
+  it("出口两模式同态：整段隔离、无残片（R302 P0-2 verbatim 非出口态）", () => {
     for (const s of [...R281_BYPASS, ...R282_NEW]) {
       const ans = `笔记里记的命令是：\n${s}`;
-      const plain = isolateNoteInstructions(ans, "笔记里怎么说的");
-      expect(plain, s.slice(0, 40)).toContain(EXEC_ISOLATED_MARK);
-      // 无残片：命令特征片段不得出现在非 verbatim 出口
-      for (const frag of ["203.0.113.7", "/bin/sh", "4444", "DownloadString", "urlcache"]) {
-        if (s.includes(frag)) expect(plain, `${frag} @ ${s.slice(0, 30)}`).not.toContain(frag);
+      for (const q of ["笔记里怎么说的", "请一字不改地原文引用这条笔记"]) {
+        const out = isolateNoteInstructions(ans, q);
+        expect(out, s.slice(0, 40)).toContain(EXEC_ISOLATED_MARK);
+        // 无残片：命令特征片段不得出现在出口
+        for (const frag of ["203.0.113.7", "/bin/sh", "4444", "DownloadString", "urlcache"]) {
+          if (s.includes(frag)) expect(out, `${frag} @ ${s.slice(0, 30)}`).not.toContain(frag);
+        }
       }
-      const vb = isolateNoteInstructions(ans, "请一字不改地原文引用这条笔记");
-      expect(vb).toContain(EXEC_PIPELINE_WARN_MARK);
-      expect(vb).toContain(s.split("\n")[0].slice(0, 24));
     }
   });
 });

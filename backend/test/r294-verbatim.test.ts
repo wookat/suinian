@@ -2,7 +2,7 @@
 // R293 生产实测的全部失真形态——空参括号、软连字符、ZWJ 序列、CRLF、
 // 零宽字符、tab、CJK、emoji 代理对、整行重复（V04）。
 import { describe, it, expect } from "vitest";
-import { restoreVerbatimEchoes, finalizeAskAnswer } from "../src/prompt-armor";
+import { restoreVerbatimEchoes, finalizeAskAnswer, VERBATIM_REDIRECT_NOTICE } from "../src/prompt-armor";
 
 const VERBATIM_Q = "把这条笔记的内容原文逐字给我";
 
@@ -43,11 +43,12 @@ describe("R294 P1-2 verbatim 逐字（R293 失真形态全覆盖）", () => {
     expect(restoreVerbatimEchoes(answer, data)).toBe(answer);
   });
 
-  it("finalizeAskAnswer 最终出口在 verbatim 问法下逐字（后续无改字层）", () => {
+  it("finalizeAskAnswer 在 verbatim 问法下不做逐字还原，附笔记卡片指引（R302 P0-2）", () => {
     const data = "笔记原文：客户端调用 client.run() 后返回 0";
     const answer = "笔记原文：客户端调用 client.run 后返回 0";
     const fin = finalizeAskAnswer(answer, { dataText: data, question: VERBATIM_Q });
-    expect(fin.answer).toContain("client.run()");
+    expect(fin.answer).not.toContain("client.run()");
+    expect(fin.answer).toContain(VERBATIM_REDIRECT_NOTICE);
   });
 
   it("危险原文不经 verbatim 还原路径复活", () => {

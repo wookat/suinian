@@ -3,7 +3,7 @@ import { Send, Loader2, Paperclip, Sparkles, Lock, Tag, CloudOff, ChevronDown, C
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { ApiError, NetworkError, createNote, ingestMedia, MAX_MEDIA_BYTES, mediaTooLargeText, SUPPORTED_FILE_EXTS } from "@/lib/api"
-import { enqueueMedia, enqueueNote, flushOutbox, onOutboxCount, onOutboxFlushed, outboxPreviews, startOutboxAutoFlush } from "@/lib/outbox"
+import { enqueueMedia, enqueueNote, flushOutbox, onOutboxCount, onOutboxDropped, onOutboxFlushed, outboxPreviews, startOutboxAutoFlush } from "@/lib/outbox"
 import type { OutboxPreview } from "@/lib/outbox"
 import { VoiceRecorder, voiceSupported } from "@/components/voice-recorder"
 import { loadSettings } from "@/lib/settings"
@@ -79,9 +79,15 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
     startOutboxAutoFlush()
     const offCount = onOutboxCount(setPendingSync)
     const offFlushed = onOutboxFlushed(onCreated)
+    // R302 P0-4：补发被服务端永久拒绝的条目不静默丢——内容退回输入框并提示。
+    const offDropped = onOutboxDropped((label, reason) => {
+      setValue((v) => (v.trim() ? `${label}\n${v}` : label))
+      setError(`有 1 条离线记录补发被拒（${reason}），内容已退回输入框。`)
+    })
     return () => {
       offCount()
       offFlushed()
+      offDropped()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -115,24 +121,31 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
     setValue("")
     setError(null)
     setSavingCount((n) => n + 1)
+    const payload =
+      cmd?.kind === "raw"
+        ? { source: "web" as const, raw_type: "text" as const, content: cmd.content, skip_triage: true }
+        : cmd?.kind === "tags" && cmd.content
+          ? { source: "web" as const, raw_type: "text" as const, content: cmd.content, tags: cmd.tags }
+          : { source: "web" as const, raw_type: "text" as const, content }
     try {
-      const note =
-        cmd?.kind === "raw"
-          ? await createNote({ source: "web", raw_type: "text", content: cmd.content, skip_triage: true })
-          : cmd?.kind === "tags" && cmd.content
-            ? await createNote({ source: "web", raw_type: "text", content: cmd.content, tags: cmd.tags })
-            : await createNote({ source: "web", raw_type: "text", content })
+      // R302 P0-4：已知离线时不先打网络再等失败——直接入队（入队失败才回退
+      // 到网络尝试），确保断网速记确实落进 IndexedDB。
+      if (!navigator.onLine && !loadSettings().useMock) {
+        if (await enqueueNote(payload)) {
+          setError(null)
+          return
+        }
+      }
+      const note = await createNote(payload)
       onCreated(note)
     } catch (e) {
-      // 网络失败（离线/超时）：进 IndexedDB 离线队列，联网后自动补发，
-      // 多条离线速记全部保住；入队失败才退回输入框兕底
-      if (e instanceof NetworkError && !loadSettings().useMock) {
-        const payload =
-          cmd?.kind === "raw"
-            ? { source: "web" as const, raw_type: "text" as const, content: cmd.content, skip_triage: true }
-            : cmd?.kind === "tags" && cmd.content
-              ? { source: "web" as const, raw_type: "text" as const, content: cmd.content, tags: cmd.tags }
-              : { source: "web" as const, raw_type: "text" as const, content }
+      // 网络失败（离线/超时）与服务端瞬时故障（429/5xx）：进 IndexedDB 离线
+      // 队列，联网后自动补发；入队失败才退回输入框兕底
+      const transient =
+        e instanceof NetworkError ||
+        (e instanceof ApiError && (e.status === 429 || e.status >= 500)) ||
+        !navigator.onLine
+      if (transient && !loadSettings().useMock) {
         if (await enqueueNote(payload)) {
           setError(null)
           return
@@ -170,7 +183,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
     } catch (e) {
       // 离线/网络失败：图片与文件同文本/语音一样进 IndexedDB 离线队列，
       // 联网后自动补传，不再失败即丢
-      if (e instanceof NetworkError && !loadSettings().useMock) {
+      if ((e instanceof NetworkError || !navigator.onLine) && !loadSettings().useMock) {
         if (await enqueueMedia(file, isImage ? "image" : "file", file.name)) return
       }
       setError(e instanceof Error ? e.message : String(e))
@@ -191,7 +204,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
       onCreated(note)
     } catch (e) {
       // 离线/网络失败：录音进 IndexedDB 离线队列，联网后自动补传转写
-      if (e instanceof NetworkError && !loadSettings().useMock) {
+      if ((e instanceof NetworkError || !navigator.onLine) && !loadSettings().useMock) {
         if (await enqueueMedia(file, "audio", file.name)) return
       }
       setError(e instanceof Error ? e.message : String(e))

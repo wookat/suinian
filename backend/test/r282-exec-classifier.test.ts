@@ -63,15 +63,15 @@ describe("R282 判别器结果与出口两态一致（无第三态、无残片�
     expect(fin.answer).not.toContain("mycmd --push");
   });
 
-  it("verbatim：完整原文 + 警示标记，不出现隔离标记", () => {
+  it("verbatim：与普通问法同态隔离，原文走笔记卡片（R302 P0-2）", () => {
     const fin = finalizeAskAnswer(`${seg}`, {
       dataText: seg,
       question: "把那条笔记的原文原样给我",
       execDangerSegments: [seg],
     });
-    expect(fin.answer).toContain(EXEC_PIPELINE_WARN_MARK);
-    expect(fin.answer).toContain("mycmd --push data");
-    expect(fin.answer).not.toContain(EXEC_ISOLATED_MARK);
+    expect(fin.answer).toContain(EXEC_ISOLATED_MARK);
+    expect(fin.answer).not.toContain("mycmd --push data");
+    expect(fin.answer).not.toContain(EXEC_PIPELINE_WARN_MARK);
   });
 
   it("判别器未命中时不改动 benign 段（不因语义层引入误伤）", () => {
