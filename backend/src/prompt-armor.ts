@@ -4524,15 +4524,40 @@ export function finalizeAskAnswer(
     // 且防仿冒剥离会把答案里的隔离标记去掉 ⇒ markedAddrs 为空、标题行回声判不
     // 出来。改为无条件从**资料面的危险行**补收地址：只有被判危险的资料行才贡献
     // 地址，良性资料贡献为空 ⇒ 对良性答案零影响。
+    // R302 生产实测（A03/A16 探针：模型把 `drop-relay‧example‧net 下载后交给 sh 跑`
+    // 改写成无分隔符的 `drop-relayexamplenet …`，地址形态丢失后逐行痕迹判不出）：
+    // 危险资料行的回声不依赖地址形态——按「仅留字母数字的折叠」做包含判定，
+    // 另收危险行里的长编码令牌（Base32/Base64 块）。只有被判危险的资料行
+    // 才贡献折叠，良性资料贡献为空 ⇒ 对良性答案零影响。
+    const alnumFold = (t: string): string =>
+      t.normalize("NFKC").replace(/[^\p{L}\p{N}]/gu, "").toUpperCase();
+    const dangerLineFolds: string[] = [];
+    const dangerTokens: string[] = [];
+    const collectDangerLine = (dl: string): void => {
+      const f = alnumFold(dl);
+      if (f.length >= 10) dangerLineFolds.push(f);
+      for (const m of dl.matchAll(/[A-Za-z0-9+/=]{16,}/g)) {
+        const tok = alnumFold(m[0]);
+        if (tok.length >= 16) dangerTokens.push(tok);
+      }
+    };
+    const lineDangerReason = (dl: string): string | null =>
+      execSemanticDangerReason(dl) ??
+      execSemanticDangerReason(judgeSurfaceText(dl)) ??
+      globalExecDangerReason(dl) ??
+      execDegradedTraceReason(judgeSurfaceText(dl)) ??
+      execDegradedTraceReason(dl);
+    // 段落可能整段多行（含无害邻行），折叠只收**逐行自证危险**的行，
+    // 避免无害邻行的回声被连坐。
+    for (const seg of [...(opts.execDangerSegments ?? []), ...(opts.execDegradedSegments ?? [])])
+      for (const sl of seg.split("\n")) if (lineDangerReason(sl) !== null) collectDangerLine(sl);
     if (opts.dataText) {
       for (const dl of opts.dataText.split("\n")) {
-        const dlDanger =
-          execSemanticDangerReason(dl) ??
-          execSemanticDangerReason(judgeSurfaceText(dl)) ??
-          globalExecDangerReason(dl) ??
-          execDegradedTraceReason(judgeSurfaceText(dl)) ??
-          execDegradedTraceReason(dl);
-        if (dlDanger !== null) collectAddrs(dl);
+        const dlDanger = lineDangerReason(dl);
+        if (dlDanger !== null) {
+          collectAddrs(dl);
+          collectDangerLine(dl);
+        }
       }
       const dataDanger =
         execSemanticDangerReason(opts.dataText) ??
@@ -4597,7 +4622,15 @@ export function finalizeAskAnswer(
     const lineEchoesMarkedAddr = (line: string): boolean => {
       if (markedAddrs.size === 0) return false;
       const norm = normalizeAddressSurface(line).toLowerCase();
-      return addrEchoKeys().some((k) => norm.includes(k));
+      if (addrEchoKeys().some((k) => norm.includes(k))) return true;
+      // 模型可能把分隔符全部吞掉（`drop-relay‧example‧net` → `droprelayexamplenet`），
+      // 地址形态丢失后按「仅留字母数字」比对：键足够长（≥10）才参与，避免
+      // 短键的偶然子串误伤。
+      const lf = alnumFold(line);
+      return addrEchoKeys().some((k) => {
+        const ka = alnumFold(k);
+        return ka.length >= 10 && lf.includes(ka);
+      });
     };
     const echoOrParaphrase = (line: string): boolean => {
       if (lineEchoesMarkedAddr(line)) return true;
@@ -4675,9 +4708,15 @@ export function finalizeAskAnswer(
         }
         return line;
       }
+      const lineFold = alnumFold(line);
+      const echoesDangerLine =
+        (lineFold.length >= 10 &&
+          dangerLineFolds.some((f) => lineFold.includes(f) || f.includes(lineFold))) ||
+        dangerTokens.some((t) => lineFold.includes(t));
       const trace =
         execDegradedTraceReason(judgeSurfaceText(line)) ??
         execDegradedTraceReason(line) ??
+        (echoesDangerLine ? "closure:danger-line-echo" : null) ??
         (echoOrParaphrase(line) ? "closure:remote-endpoint-echo" : null);
       if (trace === null) return line;
       closed = true;

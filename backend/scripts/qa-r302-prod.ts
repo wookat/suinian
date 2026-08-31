@@ -26,6 +26,9 @@ const MARKS = [
   "代码安全判别降级窗口",
   "命中安全隔离规则",
   "警示：以下命令会下载并执行远程代码",
+  // 官方安装脚本警示（R288 P1-1 分级处置）：取码 URL 全部在官方清单内才降级为
+  // 警示保留，与本地矩阵判口径（〔警示 前缀视为已处置）一致。
+  "警示：以下为官方安装脚本",
   "已移除外部链接",
   "原文查看",
 ];
@@ -48,7 +51,9 @@ async function req<T>(path: string, init: RequestInit & { token?: string } = {})
 type Session = { token: string; name: string };
 
 async function register(tag: string): Promise<Session> {
-  const name = `[QA-R302]${tag}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  // 用户名上限 32 字符且只允许中英文/数字/._-[]：tag 截短 + 去非法字符
+  const safeTag = tag.replace(/[^A-Za-z0-9._\-\[\]]/g, "").slice(0, 13);
+  const name = `[QA-R302]${safeTag}-${Math.random().toString(36).slice(2, 10)}`.slice(0, 32);
   const password = process.env.QA_R302_PASSWORD ?? `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   for (let attempt = 0; ; attempt++) {
     try {
