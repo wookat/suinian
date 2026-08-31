@@ -4334,17 +4334,11 @@ export function finalizeAskAnswer(
     for (const line of out.split("\n")) {
       if (MARKED.some((m) => line.includes(m))) collectAddrs(line);
     }
-    // 生产实测（post3 探针 c02）：保守否决/确定性隔离路径没有判别器段落，
-    // markedAddrs 为空 ⇒ 标题行回声判不出来。答案已带隔离标记时，从资料面
-    // 补收地址：危险行的地址一定属于被隔离的载荷；资料窗口整体危险语义成立
-    // 时（跨行同现载荷）收全部资料地址。
-    if (
-      opts.dataText &&
-      (out.includes(EXEC_ISOLATED_MARK) ||
-        out.includes(EXEC_DEGRADED_ISOLATED_MARK) ||
-        opts.execConservativeVeto ||
-        opts.execClassifierUnavailable)
-    ) {
+    // 生产实测（post3/post4 探针 c02）：保守否决/确定性隔离路径没有判别器段落，
+    // 且防仿冒剥离会把答案里的隔离标记去掉 ⇒ markedAddrs 为空、标题行回声判不
+    // 出来。改为无条件从**资料面的危险行**补收地址：只有被判危险的资料行才贡献
+    // 地址，良性资料贡献为空 ⇒ 对良性答案零影响。
+    if (opts.dataText) {
       for (const dl of opts.dataText.split("\n")) {
         const dlDanger =
           execSemanticDangerReason(dl) ??
@@ -4393,13 +4387,31 @@ export function finalizeAskAnswer(
     // 生产实测（post3 探针 c02：标题行裸域 `evil-resolver.example` 无 URL 上下文，
     // remoteEndpointForms 单看该行判不出地址）：危险段落地址集里的主机名只要
     // 以子串形态出现在归一后的行里，同样算回声。
+    // 载荷地址与答案里的形态可能只差层级（载荷 `doh.evil-resolver.example`，
+    // 答案 `evil-resolver.example`）：地址本身与其去掉前缀标签后的父域（保留
+    // ≥2 段）都算同一目标。
+    const addrEchoKeys = (): string[] => {
+      const keys: string[] = [];
+      for (const a of markedAddrs) {
+        const lower = a.toLowerCase();
+        if (lower.length >= 6) keys.push(lower);
+        const labels = lower.split(".");
+        for (let i = 1; i + 2 <= labels.length; i++) {
+          const parent = labels.slice(i).join(".");
+          if (
+            parent.length >= 6 &&
+            !PACKAGE_DOC_HOSTS.has(parent) &&
+            !OFFICIAL_INSTALL_HOSTS.has(parent)
+          )
+            keys.push(parent);
+        }
+      }
+      return keys;
+    };
     const lineEchoesMarkedAddr = (line: string): boolean => {
       if (markedAddrs.size === 0) return false;
       const norm = normalizeAddressSurface(line).toLowerCase();
-      for (const a of markedAddrs) {
-        if (a.length >= 6 && norm.includes(a.toLowerCase())) return true;
-      }
-      return false;
+      return addrEchoKeys().some((k) => norm.includes(k));
     };
     const echoOrParaphrase = (line: string): boolean => {
       if (lineEchoesMarkedAddr(line)) return true;
