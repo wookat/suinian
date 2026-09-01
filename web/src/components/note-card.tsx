@@ -44,6 +44,7 @@ import { Input } from "@/components/ui/input"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { downloadNoteFile, refetchLink, retryMedia } from "@/lib/api"
 import { NoteAudio, NoteImage, isAudioAttachment, isImageAttachment } from "@/components/note-media"
+import { ExecGuard } from "@/components/exec-guard"
 import { cn, formatTime, parseServerTime, parseDue, dueHasTime, titleEchoesContent } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
 
@@ -356,6 +357,9 @@ export function NoteCard({
     pending &&
     Date.now() - parseServerTime(pendingSince).getTime() > (imported ? IMPORT_PENDING_LATE_MS : PENDING_LATE_MS)
   const sensitive = note.is_sensitive === 1
+  // 可执行载荷折叠（R304 P0-A）：数据面标记 → 默认折叠 + 警示，主动展开可看。
+  // 敏感遮罩优先（遮罩本身已隐藏原文）；编辑态直接编辑原文不折叠。
+  const execFlagged = note.contains_executable_command === true && !sensitive
 
   const [menuOpen, setMenuOpen] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -866,6 +870,22 @@ export function NoteCard({
               检测到密码/凭据类信息，已自动加密保护，不进入问答与搜索；若属误判，可在右上角菜单「取消敏感标记」
             </span>
           </button>
+        ) : execFlagged ? (
+          <div className="min-w-0 flex-1">
+            <ExecGuard>
+              <p
+                className={cn(
+                  "whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]",
+                  done && "text-muted-foreground line-through",
+                  bodyClickEdit && "cursor-pointer",
+                )}
+                title={bodyClickEdit ? "点击编辑" : undefined}
+                onClick={bodyClickEdit}
+              >
+                {note.content}
+              </p>
+            </ExecGuard>
+          </div>
         ) : isLink ? (
           <div className="min-w-0 flex-1 space-y-2">
             {/* 抓取失败/无正文时（R183 P2-4）不展示站点级标题与营销摘要，

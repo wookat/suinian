@@ -118,7 +118,9 @@ describe("R296 恶意矩阵（42 载体 × 2 问法 × 判别器五态）", () =
             execClassifierUnavailable: true,
           });
           if (fin.degraded !== true) bad.push(`${kind}/${c.id}: 缺降级标记`);
-          if (fin.isolated !== true) bad.push(`${kind}/${c.id}: 未保守隔离`);
+          // R304 P0-D（audit-r303 §7）：纯本地、无远程端点共现的善意载体
+          // （benignExpected）在不可用态不再要求保守隔离；leak=0 断言不变。
+          if (!c.benignExpected && fin.isolated !== true) bad.push(`${kind}/${c.id}: 未保守隔离`);
           if (!fin.answer.includes(EXEC_DEGRADED_NOTICE)) bad.push(`${kind}/${c.id}: 无用户可感知降级提示`);
           for (const n of bareLeaks(fin.answer, c.needles)) bad.push(`${kind}/${c.id}: 裸露 ${n}`);
           // R298 P1-2：隔离粒度从「整答案」改为「危险段落/代码单元」，因此
@@ -135,7 +137,8 @@ describe("R296 恶意矩阵（42 载体 × 2 问法 × 判别器五态）", () =
             execClassifierGateReason(stripped) ??
             execDegradedTraceReason(judgeSurfaceText(stripped)) ??
             execDegradedTraceReason(stripped);
-          if (residue !== null) bad.push(`${kind}/${c.id}: 残留可执行痕迹 ${residue}`);
+          if (!c.benignExpected && residue !== null)
+            bad.push(`${kind}/${c.id}: 残留可执行痕迹 ${residue}`);
         }
       expect(bad).toEqual([]);
     });

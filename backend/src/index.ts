@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, dataTextHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, judgeSurfaceText, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, dataTextHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -78,7 +78,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations } from "./ask";
+import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -1282,6 +1282,9 @@ function noteToJson(n: NoteRow) {
     url_titles: n.url_titles ? (JSON.parse(n.url_titles) as { url: string; title: string | null }[]) : null,
     is_sensitive: !!n.is_sensitive,
     todo_done: !!n.todo_done,
+    // 数据面统一危险标记（R304 P0-A）：notes.list / 引用卡片 / 搜索 / 导出 /
+    // 今日回顾 / MCP 全部经由本序列化点，出口共用同一判定
+    contains_executable_command: noteContainsExecutableCommand(n.content || ""),
     content_enc: undefined,
   };
 }
@@ -3909,11 +3912,25 @@ app.post("/api/ask", async (c) => {
     // R298 P1-1（audit-r297 §5）：当期窗（今天/本周/本月/本季度/今年）排除未来
     // 日期的记账，并单独披露笔数——旧口径把 09-15/10-10/12-24 这类预记并入当期，
     // 同一笔在问「9月/12月」时又各自出现一次（重复计入）。
-    const futureExcluded = fWin.futureExcluded(fr.results ?? []);
-    const futureHint =
-      futureExcluded > 0
-        ? `\n（另有 ${futureExcluded} 笔记账的日期在未来，属计划/预记，未计入${fRange?.phrase ?? "当期"}合计。）`
-        : "";
+    const futureRows = futureEventNotes(fr.results ?? [], fRange);
+    const futureExcluded = futureRows.length;
+    // R304 P1（audit-r303 §10）：窗内只有未来日期的预记时，「没有记账记录」
+    // 与「有 2 笔被排除」并列自相矛盾，且与周报（按记录时间计）结论冲突。
+    // 此处把预记的精确合计也一并给出，两条路径的数据对得上。
+    let futureHint = "";
+    if (futureExcluded > 0) {
+      const fs = financeStats(futureRows);
+      const fsLines = Object.entries(fs.totals)
+        .map(([cur, t]) => {
+          const seg: string[] = [];
+          if (t.expense > 0) seg.push(`支出 ${formatAmount(t.expense, cur)}`);
+          if (t.income > 0) seg.push(`收入 ${formatAmount(t.income, cur)}`);
+          return seg.join("、");
+        })
+        .filter(Boolean)
+        .join("；");
+      futureHint = `\n（另有 ${futureExcluded} 笔记账的日期在未来，属计划/预记${fsLines ? `：${fsLines}` : ""}，未计入${fRange?.phrase ?? "当期"}已发生的合计；周报/月报按记录所在周期统计，可能包含这部分。）`;
+    }
     // fail-closed (R109 P1): aggregate wording we can't scope exactly — never
     // let the LLM mental-math truncated recall (multi-currency mixing risk)
     // 「平均每天花多少」日均口径（R252 P3-5）：总额 ÷ 窗口天数；无时间窗时
@@ -3949,8 +3966,8 @@ app.post("/api/ask", async (c) => {
     }
     let answer =
       (financeIntent === "exact"
-        ? buildFinanceAggAnswer(stats, fRange?.phrase ?? null, avgDays)
-        : buildFinanceFailClosedAnswer(stats, fRange?.phrase ?? null)) +
+        ? buildFinanceAggAnswer(stats, fRange?.phrase ?? null, avgDays, futureExcluded)
+        : buildFinanceFailClosedAnswer(stats, fRange?.phrase ?? null, futureExcluded)) +
       futureHint +
       unledgeredHint +
       (await pendingTriageHint());
@@ -4869,7 +4886,15 @@ app.post("/api/ask", async (c) => {
         // 指令则句段行为不可能派生自资料指令，该分支的审计只是冗余层
         // （audit-r271 P1-3 B02 型误伤）
         // R302 P0-2：verbatim 豁免移除（原文走笔记卡片通道）。
-        const verbatimKeep = undefined;
+        // R304（faithful 回归 shell 11/15）：verbatim 问法下，忠实回显自资料、
+        // 无远端地址形态、又不是面向读者指令的句段（纯本地脚本原文）不是
+        // 行为劝导——审计命中属误报；含远端地址或读者指令的句段照常剥除。
+        const verbatimKeep = questionRequestsVerbatim(askGuardQuestion)
+          ? (t: string) =>
+              segmentEchoesData(t, foldCompact(askGuardData), askGuardData) &&
+              !hasRemoteEndpointForm(t, { includeEmails: true }) &&
+              !segmentIsReaderDirective(t)
+          : undefined;
         const noDirectiveKeep =
           demands !== null && demands.length === 0
             ? (t: string) => segmentAnswersQuestion(t, askGuardQuestion)
@@ -4907,7 +4932,7 @@ app.post("/api/ask", async (c) => {
             );
           };
         })();
-        const audKeep = (t: string) => Boolean(verbatimKeep || noDirectiveKeep?.(t) || faithfulKeep(t));
+        const audKeep = (t: string) => Boolean(verbatimKeep?.(t) || noDirectiveKeep?.(t) || faithfulKeep(t));
         const audited = applyConductVerdict(answer2, verdict, audKeep);
         if (audited !== answer2) {
           console.log(`ask: conduct audit scrubbed segment(s)`);
@@ -5982,7 +6007,12 @@ app.get("/api/export", async (c) => {
   if (format === "markdown" || format === "md") {
     let md = `# 碎念全量导出（${new Date().toISOString().slice(0, 10)}）\n\n共 ${notes.length} 条笔记、${threads.length} 条线索、${reports.length} 份周报。\n\n## 笔记\n`;
     for (const n of notes) {
-      md += `\n### ${n.title || n.content.slice(0, 30)}\n- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${n.url ? ` | 链接：${n.url}` : ""}\n\n${n.content}\n`;
+      // 危险标记随导出走（R304 P0-A）：Markdown 无折叠交互，改为在原文前加
+      // 明确风险警示行（JSON 导出经 noteToJson 已带 contains_executable_command）
+      const execWarn = n.contains_executable_command
+        ? "\n> ⚠️ 本条笔记含可执行命令/危险指令（如下载执行远程代码），仅供查阅，请勿直接执行。\n"
+        : "";
+      md += `\n### ${n.title || n.content.slice(0, 30)}\n- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${n.url ? ` | 链接：${n.url}` : ""}\n${execWarn}\n${n.content}\n`;
     }
     md += `\n## 思考线索\n`;
     for (const t of threads) md += `\n### ${t.title}（${t.note_count} 条）\n${t.summary ?? ""}\n`;
