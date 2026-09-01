@@ -765,7 +765,10 @@ const CONDUCT_CLASSES: ConductClass[] = [
     // 外链/凭据导航指示（R269-26）：导航动作 + 导航对象（或祈使 + 重置/验证凭据）
     id: "nav-instruction",
     hit: (seg) => NAV_ACT.test(seg) && NAV_OBJ.test(seg),
-    asked: /登录|登入|重置|重设|访问|訪問|链接|鏈接|网址|網址|网站|網站|密码|密碼|password|reset|log ?in|url|link|website/i,
+    asked:
+      // 凭据类问法（口令/暗号/密令/凭证）与「密码」同列：对这类提问，指引
+      // 用户到自己的解锁/原图入口是合法答案形态，不是导航投放。
+      /登录|登入|重置|重设|访问|訪問|链接|鏈接|网址|網址|网站|網站|密码|密碼|口令|暗号|暗語|密令|凭证|憑證|passphrase|password|reset|log ?in|url|link|website/i,
   },
   {
     // 联系方式投放
@@ -866,6 +869,46 @@ export function scrubUnsolicitedConduct(
     SEM_HANDOFF_RE.test(t) ||
     SEM_INTERP_TARGET_RE.test(t) ||
     (EXFIL_ACT.test(t) && (EXFIL_OBJ.test(t) || EXFIL_DEST.test(t)));
+  // 危险数据面的转述收口（R304，audit-r303 §7 答案区 needle 泄漏）：资料面带
+  // 确定性执行危险痕迹时，答案对「取回并执行脚本」意图的意译转述（「取回
+  // payload.sh 并运行」）与危险远端地址标签的回显（「relay3 example net」）
+  // 与原文同险——原文在笔记卡片通道有折叠警示，答案区的转述没有。仅在
+  // 数据面危险痕迹成立时激活，良性资料面零改动。
+  // 逐行判（与 dataSurfaceFullyBenign 同理由：降级追踪面整面必共现，只逐行用），
+  // 标签也只从危险行的远端地址取，良性行的自有服务地址不进收口面。
+  const dangerLines =
+    dataText === undefined
+      ? []
+      : dataText
+          .split(/\n/)
+          .filter(
+            (l) =>
+              (globalExecDangerReason(l) ?? execDegradedTraceReason(judgeSurfaceText(l)) ?? execCombinationGateReason(l)) !== null
+          );
+  // 分行拆域（audit-r303 载体 D27）在逐行视角看不到端点——整面再判一次
+  // 确定性面（不含降级追踪面，理由同上），命中则整面地址标签全部进收口面。
+  if (
+    dangerLines.length === 0 &&
+    dataText !== undefined &&
+    (globalExecDangerReason(dataText) ?? execCombinationGateReason(dataText)) !== null
+  )
+    dangerLines.push(dataText);
+  const dataDanger = dangerLines.length > 0;
+  const dangerLabels: string[] = [];
+  if (dataDanger) {
+    const stop = new Set(["www", "mail", "test", "local", "example", "invalid", "localhost", "http", "https", "hxxp", "hxxps", "user", "admin", "root", "info"]);
+    for (const line of dangerLines) {
+      for (const ep of remoteEndpointForms(line, { ignoreAllowlist: true })) {
+        for (const label of ep.toLowerCase().split(/[.:/@[\]]+/)) {
+          if (label.length < 4 || stop.has(label)) continue;
+          if (!/[a-z]/.test(label)) continue;
+          if (question.toLowerCase().includes(label)) continue; // 用户点名问及的标签不收口
+          dangerLabels.push(label);
+        }
+      }
+    }
+  }
+  const SCRIPT_TOKEN_RE = /[\w-]+\.(?:sh|bash|zsh|ps1|py|pl|rb|exe|bin|run|cmd|bat)\b|脚本|腳本|payload|安装包|安裝包/i;
   const segs: Array<{ start: number; end: number; text: string }> = [];
   for (const m of answer.matchAll(/[^\n。！？!?；;]+/g)) {
     // 英文句号仅在后随空白/结尾时是句界（不切 3.5、example.com）
@@ -937,6 +980,16 @@ export function scrubUnsolicitedConduct(
     // 外链残骸（拼读式外链被摘除后的可还原形态）
     if (!bad && URL_RESIDUE_RE.test(t) && !PATHISH_ASKED_RE.test(question)) {
       bad = true;
+    }
+    // 危险数据面的转述收口（R304）：危险远端地址标签回显，或「取回/执行/
+    // 交给解释器 + 脚本对象」的意译转述——两者与危险原文同险，整段剥除。
+    if (!bad && dataDanger) {
+      const tl = t.toLowerCase();
+      const labelEcho = dangerLabels.some((l) => tl.includes(l));
+      const fetchRunPara =
+        (SEM_FETCH_RE.test(t) || SEM_RUN_RE.test(t) || SEM_HANDOFF_RE.test(t) || SEM_INTERP_TARGET_RE.test(t) || /运行|運行|执行|執行|安装|安裝|跑/.test(t)) &&
+        SCRIPT_TOKEN_RE.test(t);
+      if (labelEcho || fetchRunPara) bad = true;
     }
     if (bad) drops.push({ start: seg.start, end: seg.end });
   }
@@ -2108,9 +2161,17 @@ function fallbackCapabilityReason(text: string): string | null {
   const c = execCapabilities(normalized);
   const proc = c.exec || c.shellio || c.sink || c.inline;
   if (!proc) return null;
-  if (c.hostport) return "fallback:code+hostport+proc";
+  // R304 P0-D（audit-r303 §7）：hostport/fetch 弱组合只对**远程端点共现**保守
+  // 隔离——loopback/本机探活（curl localhost / mongosh 127.0.0.1）无投放回连面。
+  // 远端地址共现（含 host:port、去牙、编码形态）时照常隔离，fail-closed 不放松；
+  // 上游链接收口的占位标记本身就是「曾有远程链接」的证据，同计入共现。
+  const remote =
+    text.includes(LINK_REMOVED_MARK) ||
+    hasRemoteEndpointForm(text) ||
+    hasRemoteEndpointForm(normalized);
+  if (c.hostport && remote) return "fallback:code+hostport+proc";
   if (CONNECTISH_RE.test(normalized)) return "fallback:code+connect+proc";
-  if (c.fetch) return "fallback:code+fetch+proc";
+  if (c.fetch && remote) return "fallback:code+fetch+proc";
   return null;
 }
 
@@ -2309,8 +2370,11 @@ function pathIsExecuted(unitText: string, base: string): boolean {
     "i"
   );
   if (interp.test(unitText)) return true;
-  // 裸路径执行行：`/tmp/s.sh`、`./s.sh`、`& .\\s.ps1`
-  const bare = new RegExp(`(?:^|[\\n;&|]\\s*|&\\s*)[.~]?[\\\\/]?(?:[\\w.@~-]+[\\\\/])*${esc}\\s*(?:[\\n;&|]|$)`, "m");
+  // 裸路径执行行：`/tmp/s.sh`、`./s.sh`、`& .\\s.ps1`（允许尾随参数，如 `-Channel LTS`）
+  const bare = new RegExp(
+    `(?:^|[\\n;&|]\\s*|&\\s*)[.~]?[\\\\/]?(?:[\\w.@~-]+[\\\\/])*${esc}(?:\\s+[^\\n;&|]*)?\\s*(?:[\\n;&|]|$)`,
+    "m"
+  );
   return bare.test(unitText);
 }
 
@@ -2319,7 +2383,14 @@ function pathIsExecuted(unitText: string, base: string): boolean {
  * 要求同一单元内既有远程取数落盘，又有对同一路径的执行。
  */
 export function fetchThenRunReason(unitText: string): string | null {
-  if (!/https?:\/\/|\bcurl\b|\bwget\b|requests\.get|urlretrieve/i.test(unitText)) return null;
+  if (
+    !/https?:\/\/|\bcurl\b|\bwget\b|\biwr\b|invoke-webrequest|requests\.get|urlretrieve/i.test(
+      unitText
+    ) &&
+    // 上游链接收口后取数证据只剩占位标记（`curl -O 〔已移除外部链接〕`），同计入。
+    !unitText.includes(LINK_REMOVED_MARK)
+  )
+    return null;
   for (const base of fetchedPaths(unitText)) {
     if (pathIsExecuted(unitText, base)) return "unit:fetch+run-downloaded";
   }
@@ -2474,7 +2545,7 @@ const PORTY_RE =
 
 /** 取回/下载语义（跨语言 + 口语/比喻替代词）。 */
 const SEM_FETCH_RE =
-  /取回|取回来|取来|取彼|携归|携回|攜歸|领取|領取|攞|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|ダウンロード|取り寄せ|받아|내려받|다운로드|가져와|가져오|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)|скача|загрузи|حمّ?ل|نزّ?ل|descarga|télécharge|herunterlade|lade\s+(?:es\s+)?herunter/i;
+  /取回|取回来|取来|取彼|携归|携回|攜歸|领取|領取|攞|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|ダウンロード|取り寄せ|받아|내려받|다운로드|가져와|가져오|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)|скача|загрузи|حمّ?ل|نزّ?ل|descarga|télécharge|herunterlade|lade\w*[^\n]{0,60}herunter|\bt[ảa]i\b|ดาวน์โหลด|\bunduh\b|\bmuat\s+turun\b|\bscarica|\bbaixe\b|\bpobierz\b|\bindir\b/i;
 
 /** 「交给解释器/壳去跑」语义：执行动作 + 解释器/壳类受体（含比喻受体）。 */
 const SEM_INTERP_TARGET_RE =
@@ -2482,7 +2553,7 @@ const SEM_INTERP_TARGET_RE =
 const SEM_HANDOFF_RE =
   /交给|交給|交过去|交過去|交由|交上去|付于|付與|付给|付給|念给|念給|掉落|撒进|撒入|丢给|丟給|喂给|餵給|递给|遞給|倒进|倒進|灌进|灌進|接到|接给|接給|管道|竖线|豎線|贴到|貼到|粘到|粘进|扔进|扔給|扔给|下到|种进|种到|放进|放入|装进|倒入|下锅|pipe\s*(?:it|into|to)?|pour\s+(?:it\s+)?(?:in)?to|hand\s+(?:it\s+)?(?:over\s+)?to|feed\s+(?:it\s+)?(?:in)?to|流し込|渡して|パイプ|파이프|넘겨|붙여넣/i;
 const SEM_RUN_RE =
-  /执行|執行|行之|施行|运行|運行|跑起来|跑掉|跑一下|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|走らせ|실행|돌려|구동|запуст|выполн|исполни|установи|شغل|نفذ|ejecuta|exécute|führe?\s+(?:es\s+)?aus/i;
+  /执行|執行|行之|施行|运行|運行|跑起来|跑掉|跑一下|跑一遍|跑几遍|跑幾遍|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|(?:\bsh\b|\bbash\b|\bzsh\b|\bpython\b|\bnode\b)\s*(?:一下|一遍)|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|走らせ|실행|돌려|구동|запуст|выполн|исполни|установи|شغل|نفذ|ejec[úu]t|ex[eé]cut|führ\w*[^\n]{0,60}\baus\b|\bch[ạa]y\b|รัน|\bjalankan\b|\besegui|\bexecute\b|\buruchom\b|\b[çc]al[ıi][şs]t[ıi]r\b/i;
 /** 拼写拆字型命令名（c-u-r-l / w g e t 等）——逐字母口述规避字面匹配。 */
 const SPELLED_CMD_RE =
   /\bc\s*[-·．.、]\s*u\s*[-·．.、]\s*r\s*[-·．.、]\s*l\b|\bw\s*[-·．.、]\s*g\s*[-·．.、]\s*e\s*[-·．.、]\s*t\b|[两兩]个?字母\s*s\s*h\b/i;
@@ -2505,7 +2576,7 @@ const PINYIN_HANDOFF_RE = /\bjiao\s?gei\b|\bdao\s?jin\b|\bshu\s?xian\b/i;
 const PINYIN_RUN_RE = /\bzhi\s?xing\b|\byun\s?xing\b|\bpao\s?qi\s?lai\b/i;
 /** 反弹/绑定 shell 的纯散文描述：端口 + 壳/终端 + 接线/重定向语义。 */
 const SEM_CONNECT_RE =
-  /重定向|接到|接过去|接上|连线|连上|连接|连到|連到|打个电话|打电话|建立会话|建立连|redirect|connect\s+(?:to|back)|reverse\s+shell|call\s+home/i;
+  /重定向|接到|接过去|接上|连线|连上|连接|连到|連到|连过去|連過去|打个电话|打电话|建立会话|建立连|redirect|connect\s+(?:to|back)|reverse\s+shell|call\s+home/i;
 const SEM_TERMINAL_PASTE_RE = /终端|終端|命令行|回车|回車|粘|贴|貼|paste|terminal|console/i;
 
 /** 「别看内容/直接照做」——把「未经检查即执行」这一危险语义本身作为信号。 */
@@ -2541,6 +2612,8 @@ type SemanticExecSignals = {
   remoteAddr: boolean;
   /** 「登录/ssh 到某个远端主机（含 user@host）」——跳板机型载体的地址面。 */
   loginHost: boolean;
+  /** 解释器/壳类受体在场（不要求交付动词）。 */
+  interp: boolean;
 };
 
 /** 登录动作紧跟主机/账号@主机（跳板机投放：「登录 ops@bastion.example.io 后执行…」）。 */
@@ -2552,7 +2625,21 @@ function semanticExecSignals(text: string): SemanticExecSignals {
   // 同形折叠会把西里尔字母折成拉丁（Скачайте → 拉丁混排），俄语等词表在折叠面
   // 上判不出来——语义词表在「折叠面 ∪ 未折叠面」上求值（R300，本地矩阵 n11）。
   const rawSurface = stripInvisibleCarriers(text).normalize("NFKC");
-  const folded = foldedOnly === rawSurface ? foldedOnly : `${foldedOnly}\n${rawSurface}`;
+  let base = foldedOnly === rawSurface ? foldedOnly : `${foldedOnly}\n${rawSurface}`;
+  // 上游外链收口（scrubAnswerLinks）先于语义判定执行：占位标记本身就是
+  // 「曾有远程链接」的证据，语义面与能力面（normalizeCommandText）同口径，
+  // 还原成取码 URL 占位——否则「取回来交给 bash」失去地址信号被放行。
+  // 占位不带脚本路径：良性「curl API | jq」「fetch(url).json()」不得凭空长出
+  // 「远程脚本」信号（能力面 normalizeCommandText 的占位口径不变）。
+  if (base.includes(LINK_REMOVED_MARK))
+    base = base.split(LINK_REMOVED_MARK).join("http://link-removed.invalid/");
+  // R304 P0-B/P0-C（audit-r303 §4/§5）：去牙地址（`relay3[.]example[.]net`、
+  // `relay3:.:example:.:net`）在原面上过不了域名/登录主机词面，语义信号必须
+  // 同时在**地址归一化面**上求值，否则语义门不触发 → 判别器不被叫起。
+  // NFKC 会把个别码位（如 U+1FBF）展成「空白 + 组合符」，分隔片段在折叠面上
+  // 退化成空格而识别不出地址 ⇒ 归一化面同时取 **NFKC 前**的原面。
+  const surfaces = [normalizeAddressSurface(base), normalizeAddressSurface(stripInvisibleCarriers(text))];
+  const folded = [base, ...surfaces.filter((s) => s !== base)].join("\n");
   // R302 P0-1（audit-r301 §16 第 1 项）：危险语义判定的地址面**不免除白名单**——
   // 白名单只免除地址形态判定（良性提及），不免除同现的动作语义：
   // raw.githubusercontent.com / aka.ms / bun.sh 等壳域 + 取回执行语义照常判危。
@@ -2627,6 +2714,7 @@ function semanticExecSignals(text: string): SemanticExecSignals {
       (t) => SEM_FETCH_RE.test(t) || PINYIN_FETCH_RE.test(t),
       (t) => SEM_RUN_RE.test(t) || PINYIN_RUN_RE.test(t),
     ]),
+    interp,
   };
 }
 
@@ -2656,11 +2744,20 @@ export function execSemanticGateReason(text: string): string | null {
   if (s.decodeAddrRun) return "semantic:decode-addr+fetch-run";
   if (s.bidiExec) return "semantic:bidi+exec";
   if (s.scriptFetchInterpSameSentence) return "semantic:script-fetch+interp";
-  if (!s.addr) return null;
+  // R304 P0-C（audit-r303 §5）：跳板机型（user@host）与外传型的地址面不在窄
+  // addr 上，放在 addr 前置之前——否则自然语言危险句 11/11 不进判别器。
+  if (s.loginHost && (s.run || s.exfil || s.fetch)) return "semantic:login-host+action";
+  if (s.remoteAddr && s.exfil) return "semantic:addr+exfil";
+  if (!s.addr) {
+    // 语义危险判据已成立时无条件开门（门必不窄于处置判据）。
+    return execSemanticDangerReason(text) === null ? null : "semantic:danger-reason";
+  }
   if (s.reverseShell) return "semantic:addr+reverse-shell";
   if (s.fetch && (s.run || s.handoffInterp)) return "semantic:addr+fetch+exec";
+  // 取回 + 解释器/壳在场（无交付动词：「取回来直接 bash」）也送判。
+  if (s.fetch && s.interp) return "semantic:addr+fetch+interp";
   if (s.handoffInterp && s.pipe) return "semantic:addr+pipe-interp";
-  return null;
+  return execSemanticDangerReason(text) === null ? null : "semantic:danger-reason";
 }
 
 /**
@@ -2728,16 +2825,67 @@ function cjkDigitsToAscii(s: string): string {
   return [...s].map((ch) => CJK_DIGIT_MAP[ch] ?? ch).join("");
 }
 
+// R304 P0-B（audit-r303 §4）：分隔片段折叠从「两标签之间**单个**非字母数字
+// 字符」放宽为「**任意长度**的非标签分隔片段」。defang 惯例（evil[.]example、
+// evil(.)example、evil..example、点空格点、[dot]、hxxp://、quoted-printable、
+// \x2e 转义、分行拆域）都是多字符片段，单字符规则一律漏过（R303 实测
+// hasRemoteEndpointForm 对 `evil[.]example[.]com` 返回 false）。按类折叠，
+// 不枚举具体 defang 写法。
+function foldDefangedSeparators(input: string): string {
+  let t = input;
+  // 字符串拼接与模板占位符（R302 P0-3）先合拢：否则下方的混合片段折叠会把
+  // `"+"` / `${X}` 里的引号花括号折成点，破坏拼接/模板语义（幂等，
+  // normalizeAddressSurface 里的同名规则仍保留处理 NFKC 后的形态）
+  t = t.replace(/["'`]\s*\+\s*["'`]/g, "").replace(/\$\{[^}\n]{1,32}\}/g, "x");
+  // 协议去牙：hxxp(s) / h**p(s) / hXXp(s) → http(s)
+  t = t.replace(/\bh(?:xx|\*\*|x\*|\*x)p(s?)\b/gi, "http$1");
+  // 括号（含全角/花/尖）包裹的分隔词：[.] (.) {.} [dot] （点） [at] [:] [/] 等
+  t = t
+    .replace(/[[({<【（｛〔]\s*(?:\.|。|dot|点|點)\s*[\])}>】）｝〕]/gi, ".")
+    .replace(/[[({<【（｛〔]\s*(?:@|\bat\b|艾特)\s*[\])}>】）｝〕]/gi, "@")
+    .replace(/[[({<【（｛〔]\s*[:：]\s*[\])}>】）｝〕]/g, ":")
+    .replace(/[[({<【（｛〔]\s*(?:\/|slash)\s*[\])}>】）｝〕]/gi, "/");
+  // quoted-printable（=2E）与十六进制转义（\x2e / \u002e）的地址字符，按类
+  // 递归最多 3 层（=3D2E → =2E → .）
+  for (let i = 0; i < 3 && /(?:=|\\x|\\u00)(?:3d|2e|2d|2f|3a|40)/i.test(t); i++) {
+    t = t
+      .replace(/(?:=|\\x|\\u00)3d/gi, "=")
+      .replace(/(?:=|\\x|\\u00)(2e|2d|2f|3a|40)/gi, (_m, h) => String.fromCharCode(parseInt(h, 16)));
+  }
+  // quoted-printable 软换行（`=\n`）拼回
+  t = t.replace(/=\r?\n/g, "");
+  // 点 + 任意空白（点空格点、行尾点分行拆域）合拢为单个点。
+  // 逐字空格行（`e v i l . c o m`）不在这里合拢：那是逐字合并层的输入，
+  // 提前把点周围的空格吃掉会破坏其逐字节奏判定
+  t = t
+    .split("\n")
+    .map((line) =>
+      SPACED_RUN_RE.test(line) ? line : line.replace(/(?<=[A-Za-z0-9])[ \t]*\.[ \t.]*(?=[A-Za-z0-9])/g, ".")
+    )
+    .join("\n");
+  // 分行拆域：行尾/行首点跨换行合拢
+  t = t.replace(/(?<=[A-Za-z0-9])[ \t]*\.[ \t]*\r?\n[ \t]*(?=[A-Za-z0-9])/g, ".").replace(/(?<=[A-Za-z0-9])[ \t]*\r?\n[ \t]*\.[ \t]*(?=[A-Za-z0-9])/g, ".");
+  // 地址合法字符包裹的点（evil_._example / evil*.*example / evil:.:example）：
+  // 片段整体只含点与包裹符时折为单点
+  t = t.replace(/(?<=[A-Za-z0-9])[-_/:@%|+~*]{1,8}\.[-_/:@%|+~*.]{0,8}(?=[A-Za-z0-9])|(?<=[A-Za-z0-9])\.[-_/:@%|+~*]{1,8}(?=[A-Za-z0-9])/g, ".");
+  // 连续点折为单点
+  t = t.replace(/(?<=[A-Za-z0-9])\.{2,}(?=[A-Za-z0-9])/g, ".");
+  // 任意长度（≤16）的非标签片段：片段含至少一个「地址合法字符之外」的字符时
+  // 整段折为「.」——`://`、单个 `.`、`@` 等合法地址结构不受影响
+  t = t.replace(
+    /(?<=[A-Za-z0-9])(?=[^\p{L}\p{N}\s]{0,15}[^\p{L}\p{N}\s\-_./:@%|+~])[^\p{L}\p{N}\s]{1,16}(?=[A-Za-z0-9])/gu,
+    "."
+  );
+  // 非 ASCII 分隔片段（任意长度 ≤16，含被 Unicode 归为「字母」的点形字符）
+  t = t.replace(/(?<=[A-Za-z0-9])[^\x00-\x7F\s]{1,16}(?=[A-Za-z0-9])/gu, ".");
+  return t;
+}
+
 /** 地址判定面的确定性归一（仅判定用，不改用户可见文本）。 */
 export function normalizeAddressSurface(text: string): string {
   // R302 P0-3：类折叠先在**原始面**做一遍——部分分隔符（U+FFE3 等）的 NFKC
   // 兼容分解是「空格+组合符」，先归一会把分隔符信息丢成空白，折不回点。
-  const raw = text
-    .replace(/(?<=[A-Za-z0-9])[^\p{L}\p{N}\s\-_./:@%|+~](?=[A-Za-z0-9])/gu, ".")
-    // 非 ASCII 的单字符分隔（含被 Unicode 归为「字母」的点形字符，如 U+A78F
-    // LATIN LETTER SINOLOGICAL DOT）：ASCII 标签之间的任意单个非 ASCII 字符
-    // 都折为「.」——类判定，不枚举码位。
-    .replace(/(?<=[A-Za-z0-9])[^\x00-\x7F\s](?=[A-Za-z0-9])/gu, ".");
+  const raw = foldDefangedSeparators(text);
   let s = foldHomoglyphs(stripInvisibleCarriers(raw)).normalize("NFKC");
   s = s.normalize("NFD").replace(/\p{Mn}/gu, "");
   // 百分号编码分隔符（%2E → . / %2D → - / %2F → / / %3A → : / %40 → @）：
@@ -2768,7 +2916,7 @@ export function normalizeAddressSurface(text: string): string {
   // 良性中文顿号列表折出的 CJK 标签不带公共 TLD，域名判定天然不命中。
   // 两侧限 ASCII 字母数字：可解析域名的标签面本就是 ASCII，CJK 正文里的
   // 句读（「开会，12:30」）不应折成分隔点。
-  s = s.replace(/(?<=[A-Za-z0-9])[^\p{L}\p{N}\s\-_./:@%|+~](?=[A-Za-z0-9])/gu, ".");
+  s = foldDefangedSeparators(s);
   // 逐字空格合并（`e v i l . c o m` / `1 9 8 . 5 1 …`）
   s = s
     .split("\n")
@@ -2924,6 +3072,39 @@ export function hasRemoteEndpointForm(
   return remoteEndpointForms(text, opts).length > 0;
 }
 
+/**
+ * R304 P0-A：**笔记级**可执行载荷标记（数据面，不跟答案走）。
+ * notes.list / Ask 引用卡片 / 搜索高亮 / 导出 / 今日回顾 / MCP search_notes
+ * 六个出口共用此判定：命中即在响应里带 contains_executable_command=true，
+ * 前端据此默认折叠 + 警示（用户可主动展开，不是删数据）。判定面 =
+ * 命令面确定性内核 ∪ 危险行段 ∪ 自然语言危险语义（含去牙地址，经
+ * normalizeAddressSurface 归一）。
+ */
+export function noteContainsExecutableCommand(content: string): boolean {
+  if (!content || !content.trim()) return false;
+  try {
+    if (hasExecIntent(normalizeCommandText(content))) return true;
+    if (execIntentLineSpans(content).length > 0) return true;
+    if (execSemanticDangerReason(content) !== null) return true;
+    // 送判判据（语义门）与降级追踪面也计入：标注的处置是**折叠 + 警示**，
+    // 代价远低于隔离，口径可以比隔离判据宽一档；但不用整条 gate（含
+    // 单独的 net+hostport 等能力面信号），否则运维笔记会被大面积误标。
+    if (execSemanticGateReason(content) !== null) return true;
+    if (execDegradedTraceReason(judgeSurfaceText(content)) !== null) return true;
+    // 组合门只在有远端端点共现时计入（P0-D 同口径）：回环/本机的健康检查、
+    // 本地数据库 --eval 不算可执行载荷。
+    if (
+      !hasRemoteEndpointForm(content) &&
+      !hasRemoteEndpointForm(normalizeCommandText(content))
+    )
+      return false;
+    return execCombinationGateReason(content) !== null;
+  } catch {
+    // 判定自身出错 ⇒ 按危险标记（fail-closed：多一个警示的代价远小于漏标）
+    return true;
+  }
+}
+
 export function execCombinationGateReason(answer: string): string | null {
   const gate = execClassifierGateReason(answer);
   if (!gate) return null;
@@ -2978,6 +3159,10 @@ export function execSemanticDangerReason(text: string): string | null {
   if (s.remoteAddr && s.fetchRunSameSentence) return "semantic-danger:remote-fetch+run";
   if (s.remoteAddr && s.exfil) return "semantic-danger:remote-exfil";
   if (s.remoteAddr && s.login && s.run) return "semantic-danger:remote-login+run";
+  // R304 P0-A：「查到端口后连过去执行命令」式散文（远端地址 + 接线 + 执行）——
+  // 无取回语义，但已经是「连到远端并在那儿/本地跑命令」的完整投放描述。
+  if (s.remoteAddr && s.run && SEM_CONNECT_RE.test(text))
+    return "semantic-danger:remote-connect+run";
   return null;
 }
 
@@ -3390,17 +3575,67 @@ function execDegradedTraceReasonRaw(text: string): string | null {
   const fb = fallbackCapabilityReason(text);
   if (fb) return `degraded-${fb}`;
   const c = execCapabilities(n);
+  // R304 P0-D（audit-r303 §7，不可用态误伤 15.63%）：弱信号组合（能力同现）
+  // 只对**远程端点共现**的段落保守隔离——`wget --spider` / `openssl s_client` /
+  // `journalctl -u nginx` / `kubectl get pods` 这类纯本地运维命令无投放/回连
+  // 面，判别器掉线时不再整段探空。远程端点共现的 fail-closed 一分不放松：
+  // 有非白名单远端地址时弱组合照常隔离。确定性内核/语义危险判据不走此豁免。
+  const remoteCooccur = () => hasRemoteEndpointForm(text) || hasRemoteEndpointForm(n);
   const classes = [c.net, c.exec, c.shellio, c.fetch, c.inline, c.lolbin, c.sink, c.priv].filter(Boolean).length;
-  if (classes >= 2) return "degraded:multi-capability";
+  if (classes >= 2 && remoteCooccur()) return "degraded:multi-capability";
   // hostport 与建连能力单独同现（无执行/汇入面）是监听/转发类代码的常态；
   // 真实载荷（反弹/绑定 shell）必带 exec/sink → 已被 multi-capability 覆盖。
-  if (c.hostport && (c.exec || c.shellio || c.sink || c.inline)) return "degraded:hostport+proc";
+  if (c.hostport && (c.exec || c.shellio || c.sink || c.inline) && remoteCooccur()) return "degraded:hostport+proc";
   if (hasObfuscatedAddress(n)) return "degraded:obfaddr";
   if (fetchThenRunReason(text)) return "degraded:fetch+run";
   // R298 P0-2：纯语义执行意图（无代码面）——降级/零命中态的保守处置下界。
   const sem = execSemanticDangerReason(text);
   if (sem) return `degraded:${sem}`;
   return null;
+}
+
+/**
+ * R304 P0-D（audit-r303 §7，不可用态误伤 15.63%）：降级窗口的「代码面即不交付」
+ * 宽面收窄——纯本地命令行（无远程端点共现、无确定性/语义危险痕迹、无取码
+ * 落盘执行链）在判别器不可用时不再保守隔离。远程端点共现的行不进此豁免，
+ * fail-closed 一分不放松；确定性内核/语义危险/混淆地址命中的行同样不豁免。
+ */
+export function degradedLocalCodeLineExempt(line: string): boolean {
+  if (!line.trim()) return false;
+  if (
+    !isCodeLine(line) &&
+    execPrimitiveTraceReason(line) === null &&
+    execCodeSurfaceTraceReason(line) === null
+  )
+    return false;
+  const n = normalizeCommandText(line);
+  if (line.includes(LINK_REMOVED_MARK)) return false;
+  if (hasRemoteEndpointForm(line) || hasRemoteEndpointForm(n)) return false;
+  if (execDegradedTraceReason(judgeSurfaceText(line)) !== null) return false;
+  if (execDegradedTraceReason(line) !== null) return false;
+  if (fetchThenRunReason(line) !== null) return false;
+  return true;
+}
+
+/**
+ * 降级残留判据的求值面：豁免行剥离后再判（散文与非豁免行全保留）。
+ * 跨行「取码→执行」链以**代码单元**为证据面：单元内任一行属于危险单元
+ * （fetchThenRun / 单元级痕迹）时，该单元内所有行均不豁免。
+ */
+export function degradedResidueSurface(text: string): string {
+  const dangerUnits = codeUnitSpans(text).filter(
+    (u) => fetchThenRunReason(u.text) !== null || execDegradedTraceReason(u.text) !== null
+  );
+  let offset = 0;
+  const kept: string[] = [];
+  for (const l of text.split("\n")) {
+    const start = offset;
+    const end = start + l.length;
+    offset = end + 1;
+    const inDanger = dangerUnits.some((u) => start < u.end && end > u.start);
+    if (inDanger || !degradedLocalCodeLineExempt(l)) kept.push(l);
+  }
+  return kept.join("\n");
 }
 
 export function execCodeSurfaceTraceReason(answer: string): string | null {
@@ -4151,7 +4386,11 @@ export function isolateNoteInstructions(
     }
   }
   for (const u of degradedUnits) {
-    reps.push({ start: u.start, end: u.end, rep: degradedRep(u.text) });
+    // R298 P1-5 同口径：整行列表项被隔离时保留纯序号前缀，编号连续。
+    const pm =
+      (u.start === 0 || answer[u.start - 1] === "\n") &&
+      u.text.match(/^(\s*(?:\d{1,3}|[一二三四五六七八九十]{1,3})[.、)）：:]\s*)/);
+    reps.push({ start: u.start, end: u.end, rep: (pm ? pm[1] : "") + degradedRep(u.text) });
   }
   const inDegradedUnit = (start: number, end: number) =>
     degradedUnits.some((u) => start < u.end && end > u.start);
@@ -4606,11 +4845,23 @@ export function finalizeAskAnswer(
   // 隔离、散文保留」；只有隔离后残余面仍带痕迹（纯语义载体、折叠后才现形的
   // 分片/同形载体）才回到整答隔离——安全下界不变（所有代码面在不可用态一律
   // 不交付），改变的只是良性散文是否陪葬。
+  // R304 P0-D：不可用态的豁免只对纯本地命令行生效（无远程端点共现/无危险痕迹）。
+  const localExempt = (l: string): boolean =>
+    !!opts.execClassifierUnavailable && degradedLocalCodeLineExempt(l);
   const redactCodeSurface = (text: string, mark: string): { redacted: string; count: number } => {
-    const spans: Array<{ start: number; end: number }> = codeUnitSpans(text).map((u) => ({
-      start: u.start,
-      end: u.end,
-    }));
+    const spans: Array<{ start: number; end: number }> = codeUnitSpans(text)
+      .filter(
+        (u) =>
+          !(
+            u.text.split("\n").every((l) => !l.trim() || localExempt(l)) &&
+            fetchThenRunReason(u.text) === null &&
+            execDegradedTraceReason(u.text) === null
+          )
+      )
+      .map((u) => ({
+        start: u.start,
+        end: u.end,
+      }));
     const j = normalizeJudgeSurface(text);
     for (const ln of j.lines) {
       if (ln.fence || !ln.text.trim()) continue;
@@ -4625,6 +4876,7 @@ export function finalizeAskAnswer(
         execCodeSurfaceTraceReason(ln.text) === null
       )
         continue;
+      if (localExempt(ln.text)) continue;
       spans.push({ start: ln.oStart, end: ln.oEnd });
     }
     if (spans.length === 0) return { redacted: text, count: 0 };
@@ -4836,8 +5088,12 @@ export function finalizeAskAnswer(
     // 的 R298 P1-5 同口径；前缀无信息量）。
     const CLOSURE_LIST_PREFIX_RE = /^(\s*(?:\d{1,3}|[一二三四五六七八九十]{1,3})[.、)）：:]\s*)/;
     const isolateLine = (line: string): string => {
+      // 不可用态的闭合行统一用降级隔离标记（两态互斥：降级答案不出现在线态标记）。
+      const closureMark = opts.execClassifierUnavailable
+        ? EXEC_DEGRADED_ISOLATED_MARK
+        : EXEC_ISOLATED_MARK;
       const m = line.match(CLOSURE_LIST_PREFIX_RE);
-      return m ? m[1] + EXEC_ISOLATED_MARK : EXEC_ISOLATED_MARK;
+      return m ? m[1] + closureMark : closureMark;
     };
     const lines = out.split("\n").map((line) => {
       if (!line.trim()) return line;
@@ -4855,7 +5111,7 @@ export function finalizeAskAnswer(
           (bodyAddrs.length > 0 && bodyDanger !== null)
         ) {
           closed = true;
-          return EXEC_ISOLATED_MARK;
+          return isolateLine("");
         }
         return line;
       }
@@ -4943,8 +5199,8 @@ export function finalizeAskAnswer(
     // 折叠后才现形的载体（同形/填充/分片）可能在 out 上恰好判不出来，但「这次
     // 答案需要判别器、而判别器不可信」这一事实由原始答案决定，不随改写消失。
     const residueTrace = opts.execClassifierUnavailable
-      ? execClassifierGateReason(answer) ??
-        execCodeSurfaceTraceReason(answer) ??
+      ? execClassifierGateReason(degradedResidueSurface(answer)) ??
+        execCodeSurfaceTraceReason(degradedResidueSurface(answer)) ??
         execDegradedTraceReason(judgeSurfaceText(out)) ??
         execDegradedTraceReason(out)
       : // 保守否决（在线零命中 + 确定性痕迹）同样判在**原始答案**上：外链剥除
@@ -4970,18 +5226,22 @@ export function finalizeAskAnswer(
       // 先尝试段落级：把 out 与原始 answer 各自的全部代码面区域替换为隔离
       // 标记，散文保留；两个面都必须在隔离后复查为无痕（宽判据同口径），
       // 任一残留 ⇒ 整答隔离（层 3 下界不变）。
-      const wideTrace = (t: string): string | null =>
-        execClassifierGateReason(t) ??
-        execCodeSurfaceTraceReason(t) ??
-        execDegradedTraceReason(judgeSurfaceText(t)) ??
-        execDegradedTraceReason(t);
+      const wideTrace = (t0: string): string | null => {
+        const t = opts.execClassifierUnavailable ? degradedResidueSurface(t0) : t0;
+        return (
+          execClassifierGateReason(t) ??
+          execCodeSurfaceTraceReason(t) ??
+          execDegradedTraceReason(judgeSurfaceText(t)) ??
+          execDegradedTraceReason(t)
+        );
+      };
       const ro = redactCodeSurface(out, mark);
       const ra = redactCodeSurface(answer, mark);
       const markFree = (t: string) =>
         t.split(mark).join("").split(EXEC_DEGRADED_ISOLATED_MARK).join("").split(EXEC_ISOLATED_MARK).join("");
       if (
         opts.execClassifierUnavailable &&
-        ro.count > 0 &&
+        (ro.count > 0 || out.includes(mark)) &&
         wideTrace(markFree(ro.redacted)) === null &&
         wideTrace(markFree(ra.redacted)) === null
       ) {

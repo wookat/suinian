@@ -636,7 +636,7 @@ export function financeDualWindowIntent(question: string, now: Date = new Date()
 // 后走财务子集同一套主题词剥离流水线（subsetTopicExtract），无主题时返回
 // null、行为与既有纯时间窗对比完全一致。
 const DUAL_WINDOW_FRAME_STRIP_RE =
-  /哪段|哪个时间段|哪个时期|哪半年|哪个季度|哪个月份?|哪一?[年月周天]|还是|相比(?:之下)?|[花支][得的出]了?(?:更)?[多少]|开销(?:更)?大|支出(?:更)?[多高]|[赚挣][得的]了?(?:更)?[多少]|更[多少]|分别|各自?|[花支][了出]了?多少|几笔/g;
+  /哪段|哪个时间段|哪个时期|哪半年|哪个季度|哪个月份?|哪一?[年月周天]|还是|相比(?:之下)?|[花支][得的出]了?(?:更)?(?:多少|[多少])|开销(?:更)?大|支出(?:更)?[多高]|[赚挣][得的]了?(?:更)?(?:多少|[多少])|更[多少]|分别|各自?|[花支][了出]了?多少|几笔/g;
 
 /** 双窗对比问法里的主题限定词（「哪个月买书花得多」→ [买书]）；无主题返回 null。 */
 export function financeDualWindowTopicTerms(question: string): string[] | null {
@@ -656,7 +656,9 @@ export function financeCaliberNote(phrase: string | null | undefined, keyword = 
     if (/之前|以前/.test(phrase)) parts.push("「之前」不含当日");
     if (/之后|以后|以来|起/.test(phrase)) parts.push("「以后」含当日");
   }
-  if (parts.length === 0) return "";
+  // 无时间短语的全量聚合同样明示口径对齐：同一份数据在 Ask 与周报/月报两条
+  // 路径必须可对账（audit-r303 §10 q60/q66/q94），只是不附时间划定细则。
+  if (parts.length === 0) return "\n\n（口径与周报/月报一致。）";
   return `\n\n（口径与周报/月报一致；${parts.join("；")}。）`;
 }
 
@@ -2680,10 +2682,10 @@ export function noteHitsTopic(
 }
 
 /** Fail-closed answer: no arithmetic on the qualified subset, exact overall stats instead. */
-export function buildFinanceFailClosedAnswer(stats: FinanceStats, phrase: string | null): string {
+export function buildFinanceFailClosedAnswer(stats: FinanceStats, phrase: string | null, futureExcluded = 0): string {
   return (
     "这个合计问题带有额外限定条件，暂不支持按限定条件精确合计；为避免估算出错（尤其多币种不能直接相加），我不做心算合计。\n\n" +
-    `${buildFinanceAggAnswer(stats, phrase)}\n\n` +
+    `${buildFinanceAggAnswer(stats, phrase, null, futureExcluded)}\n\n` +
     "如需细看某一项，可在时间流搜索关键词逐条查看，或到「报告」页查看周报/月报的分类统计。"
   );
 }
@@ -2701,11 +2703,20 @@ export function timeRangeAvgDays(range: TimeRange | null, now: Date = new Date()
 export const FINANCE_AVG_PER_DAY_RE = /平均每天|每天平均|日均/;
 
 /** Deterministic answer for finance aggregate questions, built from financeStats (report口径). */
-export function buildFinanceAggAnswer(stats: FinanceStats, phrase: string | null, avgDays: number | null = null): string {
+export function buildFinanceAggAnswer(
+  stats: FinanceStats,
+  phrase: string | null,
+  avgDays: number | null = null,
+  // R304 P1（audit-r303 §10）：窗内全是未来日期的预记时，「没有记账记录」
+  // 与同答案里「另有 N 笔被排除」字面矛盾，也与周报（按记录所在周期）冲突。
+  // 只收紧措辞为「没有**已发生**的记账」，口径本身不变。
+  futureExcluded = 0
+): string {
   const scope = phrase ?? "全部笔记";
   if (stats.expenseCount === 0 && stats.incomeCount === 0) {
     const transferNote = stats.transferCount > 0 ? `另有 ${stats.transferCount} 笔资金往来（内转/提现/借还），不计入收支。` : "";
-    return `${scope}没有记账记录（支出/收入均为 0 笔）。${transferNote}${financeCaliberNote(phrase)}`;
+    const head = futureExcluded > 0 ? `${scope}没有已发生的记账记录` : `${scope}没有记账记录`;
+    return `${head}（支出/收入均为 0 笔）。${transferNote}${financeCaliberNote(phrase)}`;
   }
   const lines = Object.entries(stats.totals).map(
     ([cur, t]) =>

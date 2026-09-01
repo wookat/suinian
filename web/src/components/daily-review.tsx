@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import { CalendarClock, ChevronDown, ChevronRight, Eye, EyeOff, Sparkles } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { ExecGuard } from "@/components/exec-guard"
 import { getTodayReview } from "@/lib/api"
 import { onReviewNotesChanged } from "@/lib/review-bus"
 import { useSettingsVersion } from "@/lib/settings"
@@ -131,6 +132,12 @@ export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void
                   <Eye className="size-3" /> 敏感内容，点击查看
                 </span>
               </button>
+            ) : item.note.contains_executable_command ? (
+              <ExecGuard compact>
+                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:5] overflow-hidden">
+                  {item.note.content}
+                </p>
+              </ExecGuard>
             ) : (
               <>
                 <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:5] overflow-hidden">

@@ -62,6 +62,8 @@ export interface Note {
   tags: string[]
   thread_id: string | null
   is_sensitive: number
+  /** 含可执行命令/危险指令（R304 P0-A）：展示层默认折叠 + 风险警示 */
+  contains_executable_command?: boolean
   todo_due: string | null
   todo_done: number | null
   done_at?: string | null

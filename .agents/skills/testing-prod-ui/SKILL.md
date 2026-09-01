@@ -93,6 +93,13 @@ description: How to run browser UI / accessibility / cache-identity tests agains
 - Devin-managed Chrome (port 29229) can crash mid-session; relaunch by rebuilding the exact argv list (see the /proc cmdline note above) with `subprocess.Popen` under DISPLAY=:0 — localStorage state survives. After relaunch the first page may render blank ("Untitled"); one F5 fixes it.
 - Day1 timings measured R215 (fresh account, prod): /api/auth/register ~1.0s, POST /api/notes ~0.2s, triage badge ~8s, /api/ask ~1.5s. Useful as regression baselines.
 
+## R304 exec-command guard testing
+- Dangerous-command notes (`contains_executable_command`) render an ExecGuard: collapsed pill 「含可执行命令，已折叠」+「展开查看」; expanded state shows 「含可执行命令，请勿直接复制执行」+ full original text + 收起. Same guard appears in timeline cards, search results, Ask citation cards, and today-review (compact, no explanation line). Sensitive masking takes precedence over the exec guard.
+- Ask answers over dangerous notes include an isolation marker like 〔已隔离危险命令（会下载执行远程代码或建立外连），未展示；原文可在引用的笔记卡片中查看〕 — assert the raw command string is absent from the answer text, not that the note is uncited.
+- Today-review only picks unfinished todos due within 2 days (backend review.ts); to get a dangerous note into 今日回顾, edit it in the UI and set a due date ≤2 days out (date input needs the React native-setter + input/change events; direct typing garbles the value).
+- Password-like memo content (e.g. 「WiFi 访客密码…」) auto-flags sensitive and is excluded from search/Ask — plan Day1 marker notes to avoid credential semantics or add extra normal notes.
+- Account deletion via UI: pasting 「注销」 with Ctrl+V works if the clipboard actually holds it — the confirm button stays disabled on any other text (e.g. leftover username in clipboard); re-set clipboard and paste again. Post-deletion, saved tokens → GET /api/auth/me = 401.
+
 ## R2 对象存在性/删除验证（R262）
 - 验证 R2 对象是否存在/已删时，绝不要重复 GET `api.cloudflare.com/.../r2/buckets/<bucket>/objects/<key>`——该端点走 CDN 缓存，已删除对象可继续返回旧字节 30 分钟以上（`CF-Cache-Status: HIT`）。以带 `prefix` 的 list 端点（不缓存）为准，或仅信首次 GET（`CF-Cache-Status: MISS`）。
 

@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Env } from "./types";
 import { authenticateToken } from "./auth";
-import { hasExecIntent, normalizeCommandText, execIntentLineSpans } from "./prompt-armor";
+import { noteContainsExecutableCommand } from "./prompt-armor";
 
 type Vars = { userId: string };
 type App = Hono<{ Bindings: Env; Variables: Vars }>;
@@ -56,9 +56,10 @@ type ExecFlaggable = { content?: unknown; is_sensitive?: unknown; contains_execu
 export function flagExecNotes<T extends ExecFlaggable>(notes: T[]): { notes: T[]; anyExec: boolean } {
   let anyExec = false;
   const out = notes.map((n) => {
-    if (typeof n.content !== "string" || n.is_sensitive) return n;
+    if (n.is_sensitive) return n;
     const dangerous =
-      hasExecIntent(normalizeCommandText(n.content)) || execIntentLineSpans(n.content).length > 0;
+      n.contains_executable_command === true ||
+      (typeof n.content === "string" && noteContainsExecutableCommand(n.content));
     if (!dangerous) return n;
     anyExec = true;
     return { ...n, contains_executable_command: true };
