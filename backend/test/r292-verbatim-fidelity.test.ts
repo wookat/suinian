@@ -14,11 +14,10 @@ describe("R292 P2 verbatim 逐字保真", () => {
     expect(restoreVerbatimEchoes(answer, data)).toBe(data);
   });
 
-  it("emoji 在 verbatim 请求下不被资料派生水印规则删除", () => {
+  it("资料派生水印两模式同口径剥除（R302 P0-2：verbatim 不再豁免）", () => {
     const data = "部署清单 🛰 第一步：检查磁盘";
     const answer = "部署清单 🛰 第一步：检查磁盘";
-    expect(scrubDataDerivedGlyphs(answer, data, VERBATIM_Q)).toBe(answer);
-    // 非 verbatim 问法下仍按原水印口径剥除（不弱化 R272 支柱 4）
+    expect(scrubDataDerivedGlyphs(answer, data, VERBATIM_Q)).not.toContain("🛰");
     expect(scrubDataDerivedGlyphs(answer, data, NORMAL_Q)).not.toContain("🛰");
   });
 
@@ -34,10 +33,12 @@ describe("R292 P2 verbatim 逐字保真", () => {
     expect(restoreVerbatimEchoes(answer, data)).toBe(answer);
   });
 
-  it("guardAskAnswer 在 verbatim 问法下整体保持逐字", () => {
+  it("guardAskAnswer 在 verbatim 问法下不做逐字还原（R302 P0-2）", () => {
     const data = "配置片段：\nserver.run() 🛰 启动\nlisten 8080;";
     const answer = "配置片段：\nserver.run 🛰 启动\nlisten 8080;";
     const g = guardAskAnswer(answer, { dataText: data, question: VERBATIM_Q });
-    expect(g.answer).toContain("server.run() 🛰 启动");
+    const n = guardAskAnswer(answer, { dataText: data, question: NORMAL_Q });
+    expect(g.answer).not.toContain("server.run()");
+    expect(g.answer).toBe(n.answer);
   });
 });

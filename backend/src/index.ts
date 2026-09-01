@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, judgeSurfaceText, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, dataTextHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, judgeSurfaceText, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -1564,7 +1564,16 @@ async function createNote(
 // ---- POST /api/notes ----
 app.post("/api/notes", async (c) => {
   const body = await c.req
-    .json<{ source?: string; raw_type?: string; content?: string; url?: string; tags?: string[]; skip_triage?: boolean; meta?: NoteMeta | null }>()
+    .json<{
+      source?: string;
+      raw_type?: string;
+      content?: string;
+      url?: string;
+      tags?: string[];
+      skip_triage?: boolean;
+      client_id?: string;
+      meta?: NoteMeta | null;
+    }>()
     .catch(() => null);
   // 非字符串 content（数字/对象/数组）必须是 400 而不是下游 500（R120 P2）
   if (!body || typeof body.content !== "string" || !body.content.trim()) {
@@ -1589,11 +1598,26 @@ app.post("/api/notes", async (c) => {
       .first<NoteRow>();
     if (dup) return c.json({ note: await noteToJsonDecrypted(c.env, dup), deduped: true }, 200);
   }
+  // 离线补发幂等（R302 P0-4，生产实测：断网入队 → 刷新 → 联网后同一条笔记
+  // 被建了两次）：客户端入队时生成 client_id，同 id 的重放返回已建笔记。
+  // 与 /api/ingest/media 同口径；格式限死为 uuid 形态，meta 不成为明文旁路。
+  const clientId = typeof body.client_id === "string" && /^[0-9a-fA-F-]{8,64}$/.test(body.client_id) ? body.client_id : null;
+  if (clientId) {
+    const dup = await c.env.DB.prepare(
+      "SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL AND json_extract(meta, '$.client_id') = ? LIMIT 1"
+    )
+      .bind(userId, clientId)
+      .first<NoteRow>();
+    if (dup) return c.json({ note: await noteToJsonDecrypted(c.env, dup), deduped: true }, 200);
+  }
   // skip_triage (`!` inline command): store as-is, never re-sorted
   const skipTriage = body.skip_triage === true;
   // 客户端 meta 白名单（R126 P1-1）：只收标记位，不收任何可携带明文的
   // 自由文本字段（否则 meta.* 成为绕过敏感管道的明文旁路）
-  const clientMeta: NoteMeta | null = body.meta?.from_ask === true ? { from_ask: true } : null;
+  const clientMeta: NoteMeta | null =
+    body.meta?.from_ask === true || clientId
+      ? { ...(body.meta?.from_ask === true ? { from_ask: true } : {}), ...(clientId ? { client_id: clientId } : {}) }
+      : null;
   // returns immediately; triage + link fetch + clustering backfill asynchronously
   const { note } = await createNote(c, userId, { ...body, meta: clientMeta }, (p) => c.executionCtx.waitUntil(p), { syncTriage: false, skipTriage });
   return c.json({ note: await noteToJsonDecrypted(c.env, note) }, 201);
@@ -4556,11 +4580,11 @@ app.post("/api/ask", async (c) => {
   // 富余时扩到整句边界。硬截断有两个实测代价：>500 字笔记的 verbatim 回声必然
   // 被砍（P2-1）；截断落在句中会造出「丢了前半句语义」的残句，长文因此稳定
   // 被下游指令判定误伤（P1-4 的复现集中在 >500 字长文正是这个边界）。
+  // R302 P0-2/P0-5：verbatim 不再走答案通道（原文由笔记卡片展示），召回预算
+  // 两模式统一——verbatim 问法的 8000 字超长上下文是 R301 首 delta 回归与长文
+  // 塔陷的放大器，概述式回答不需要全文级预算。
   const CONTEXT_TOTAL_BUDGET = 12000;
-  const perNoteBudget = Math.max(
-    questionRequestsVerbatim(question) ? 8000 : 500,
-    Math.floor(CONTEXT_TOTAL_BUDGET / Math.max(notes.length, 1))
-  );
+  const perNoteBudget = Math.max(500, Math.floor(CONTEXT_TOTAL_BUDGET / Math.max(notes.length, 1)));
   // 预算内整句收尾：截断点回退到最近的句读/换行，不产出半句残片。
   const clipAtSentence = (text: string, budget: number): string => {
     if (text.length <= budget) return text;
@@ -4655,10 +4679,12 @@ app.post("/api/ask", async (c) => {
     temperature: 0,
     // R300 P1-1（audit-r299 §6：2636 字 verbatim 只回 40 字）：verbatim 问法的
     // 8000 字上下文预算必须贯通到生成侧输出长度，否则原文进得来、答不出去。
-    max_tokens: questionRequestsVerbatim(question) ? 8192 : 800,
+    // R302 P0-2：verbatim 与普通问法同一生成预算——逐字原文不走答案通道，
+    // 8192 token 长回显预算（R300）与其 150s 超时一并撤销。
+    max_tokens: 800,
     // verbatim 8192 token 的产出在真实 provider 上远超 40s（实测 6000+ 字回显
     // 需 90s+），预算随输出上限放大，否则流在中途被本端主动掐断
-    timeout_ms: questionRequestsVerbatim(question) ? 150_000 : 40_000,
+    timeout_ms: 40_000,
     messages: [
       {
         role: "system",
@@ -4790,7 +4816,13 @@ app.post("/api/ask", async (c) => {
     });
     // R278 P1-4：任何实质性安全改写（行为剥除/指令要求物剥除/保守降级/
     // 审计剥除）都置结构化 instruction_isolated，用户可区分「答错」与「被隔离」。
-    if (g.conductScrubbed || g.markerScrubbed || g.spanScrubbed || g.directiveScrubbed) genIsolated = true;
+    // R302 P0-5（生产实测：4600 字善意长文 verbatim 问出现虚假隔离横幅）：
+    // span 剥除对「资料无任何指令/危险执行意图」的纯善意资料只是 verbatim
+    // 改道（原文走笔记卡片），不是安全隔离，不置 instruction_isolated；
+    // 资料含 demand 或可隔离内容时维持 fail-closed 置位不变。
+    const spanScrubIsIsolation =
+      g.spanScrubbed && ((demands?.length ?? 0) > 0 || demands === null || dataTextHasIsolatableContent(askGuardData));
+    if (g.conductScrubbed || g.markerScrubbed || spanScrubIsIsolation || g.directiveScrubbed) genIsolated = true;
     if (g.linkScrubbed) console.log("ask: external link scrubbed from answer");
     if (g.conductScrubbed) console.log("ask: unsolicited conduct scrubbed from answer");
     if (g.markerScrubbed) console.log("ask: data-derived marker scrubbed from answer");
@@ -4836,12 +4868,8 @@ app.post("/api/ask", async (c) => {
         // （demands === []）时，含提问关键词的正常答题句也豁免——资料无
         // 指令则句段行为不可能派生自资料指令，该分支的审计只是冗余层
         // （audit-r271 P1-3 B02 型误伤）
-        const verbatimKeep = questionRequestsVerbatim(askGuardQuestion)
-          ? (() => {
-              const dataCompact = foldCompact(askGuardData);
-              return (t: string) => segmentEchoesData(t, dataCompact, askGuardData);
-            })()
-          : undefined;
+        // R302 P0-2：verbatim 豁免移除（原文走笔记卡片通道）。
+        const verbatimKeep = undefined;
         const noDirectiveKeep =
           demands !== null && demands.length === 0
             ? (t: string) => segmentAnswersQuestion(t, askGuardQuestion)
@@ -4879,8 +4907,7 @@ app.post("/api/ask", async (c) => {
             );
           };
         })();
-        const audKeep = (t: string) =>
-          Boolean(verbatimKeep?.(t) || noDirectiveKeep?.(t) || faithfulKeep(t));
+        const audKeep = (t: string) => Boolean(verbatimKeep || noDirectiveKeep?.(t) || faithfulKeep(t));
         const audited = applyConductVerdict(answer2, verdict, audKeep);
         if (audited !== answer2) {
           console.log(`ask: conduct audit scrubbed segment(s)`);
@@ -5071,23 +5098,10 @@ app.post("/api/ask", async (c) => {
   // R300 P1-1：verbatim 回声完整性告知——答案未覆盖被引用笔记的结尾时，
   // 明确告诉用户回显不完整、去笔记卡片看全文（用户不可感知的静默截断是
   // audit-r299 §6 的核心问题）。
-  let verbatimTruncHint = "";
-  if (questionRequestsVerbatim(question)) {
-    // 生成被输出上限截断时，结尾的引文角标也一并丢失，references 可能为空——
-    // 完整性判定回退到召回集，否则最需要告知的场景（截断）反而不出提示。
-    const cited = (references.length > 0 ? references.map((r) => byId.get(r.note_id)) : notes).filter(
-      (n): n is NoteRow => !!n && !n.is_sensitive
-    );
-    const target = cited.sort((a, b) => b.content.length - a.content.length)[0];
-    if (target && target.content.length > 400) {
-      const fa = foldCompact(finalAnswer);
-      const tail = foldCompact(target.content.trim().slice(-48));
-      if (tail.length >= 8 && !fa.includes(tail))
-        verbatimTruncHint =
-          "\n\n（原文较长，以上回显不完整；完整原文请打开引用的笔记卡片查看。）";
-    }
-  }
-  return { answer: finalAnswer + recallGapHint + verbatimTruncHint, references, notes: refNotes, ...(genIsolated ? { instruction_isolated: true } : {}) };
+  // R302 P0-2/P0-5：截断推断式告知撤销——verbatim 问法的统一指引改由
+  // finalizeAskAnswer 末尾附 VERBATIM_REDIRECT_NOTICE（固定文案，不再做
+  // 量级可能失真的「以上回显不完整」推断）。
+  return { answer: finalAnswer + recallGapHint, references, notes: refNotes, ...(genIsolated ? { instruction_isolated: true } : {}) };
   };
 
   // R276 P0-1：生成分支的唯一出口——与确定性路由共用同一个 finalizeAskAnswer
@@ -5129,10 +5143,16 @@ app.post("/api/ask", async (c) => {
     // R300 P2-3（audit-r299：零值不写行→不可用率三轮悬空）：每次请求都写
     // total_requests 分母，并保证 classifierUnavailable 当日行存在（哪怕 +0），
     // 不可用率 = classifierUnavailable / total_requests 可直接计算。
+    // R302 P2-1（audit-r301：isolated=503 > total_requests=77，量纲错乱）：全部
+    // 改按「请求数」计——每个 kind 每请求至多 +1（*_requests 命名），且零值
+    // 也写行，四个发生率 = kind_requests / total_requests 直接可算。旧 kind
+    // （classifierUnavailable/veto/isolated，按次数计）停写，历史行保留。
     const rows: Array<[string, number]> = [
       ["total_requests", 1],
-      ["classifierUnavailable", execCounters.classifierUnavailable],
-      ...Object.entries(execCounters).filter(([k, n]) => k !== "classifierUnavailable" && n > 0),
+      ["classifier_unavailable_requests", execCounters.classifierUnavailable > 0 ? 1 : 0],
+      ["degraded_requests", execCounters.classifierUnavailable > 0 ? 1 : 0],
+      ["veto_requests", execCounters.veto > 0 ? 1 : 0],
+      ["isolated_requests", execCounters.isolated > 0 ? 1 : 0],
     ];
     const day = new Date().toISOString().slice(0, 10);
     const work = (async () => {
@@ -5374,13 +5394,20 @@ app.post("/api/ask", async (c) => {
         // SSE 心跳注释帧：长生成/终审期间可能几十秒无事件（provider 重试、
         // finalize 审计），中间层与客户端的空闲超时会掐断连接——每 15s 发一条
         // 注释行保活（SSE 规范注释帧，客户端解析器天然忽略）。
+        // R302 P2-2：连接建立即发首帧注释（≤1.5s 进度指示的传输面证据），
+        // 心跳周期 15s → 10s，短回答也能在抓包里观察到 keepalive 帧。
+        try {
+          ctrl.enqueue(enc.encode(": keepalive\n\n"));
+        } catch {
+          /* stream 已关闭 */
+        }
         const heartbeat = setInterval(() => {
           try {
             ctrl.enqueue(enc.encode(": keepalive\n\n"));
           } catch {
             clearInterval(heartbeat);
           }
-        }, 15_000);
+        }, 10_000);
         let buf = "";
         // R298 P1-6：demand 判别未就绪时句段进队列缓冲（不外发、不丢弃），
         // 就绪后按原顺序排空——首 delta 前 demand 必须就绪的不变量保持不变。

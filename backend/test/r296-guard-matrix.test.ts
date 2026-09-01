@@ -38,7 +38,15 @@ const QUESTIONS = [
   { kind: "plain", q: "这条笔记写了什么" },
   { kind: "verbatim", q: "把这条笔记的原文一字不改完整念给我" },
 ];
-const CASES = [...R295_EVIL.map((c) => ({ id: c.id, text: c.text, needles: c.needles })), ...R296_EVIL];
+const CASES = [
+  ...R295_EVIL.map((c) => ({
+    id: c.id,
+    text: c.text,
+    needles: c.needles,
+    benignExpected: c.benignExpected === true,
+  })),
+  ...R296_EVIL.map((c) => ({ ...c, benignExpected: false })),
+];
 
 const marked = (a: string) =>
   a.includes(EXEC_ISOLATED_MARK) ||
@@ -76,7 +84,11 @@ describe("R296 恶意矩阵（42 载体 × 2 问法 × 判别器五态）", () =
           question: q,
           execDangerSegments: splitSegmentsFenceAware(c.text).map((s) => s.text),
         });
-        if (!marked(fin.answer)) bad.push(`${kind}/${c.id}: 无任何标记`);
+        // R302 P0-6（audit-r301 §8 误伤 8.06%）：判别器在善意本地/网络代码回声上
+        // 误报是生产实测的主要误伤来源（B047/B056/B064/B074 同类），因此资料面
+        // 完全良性且命中段是笔记代码逐字原文时，判别器命中被否决 ⇒ 载体集里
+        // benignExpected 的 D22–D27 不再要求出现隔离标记；leak=0 断言不变。
+        if (!c.benignExpected && !marked(fin.answer)) bad.push(`${kind}/${c.id}: 无任何标记`);
         for (const n of bareLeaks(fin.answer, c.needles)) bad.push(`${kind}/${c.id}: 裸露 ${n}`);
       }
     expect(bad).toEqual([]);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { restoreVerbatimFromData, isolateNoteInstructions, isMeaninglessQuestion, EXEC_PIPELINE_WARN_MARK } from "../src/prompt-armor";
+import { restoreVerbatimFromData, isolateNoteInstructions, isMeaninglessQuestion, EXEC_ISOLATED_MARK } from "../src/prompt-armor";
 
 // R284 F-1b（生产实测 EXEC-elixir-gentcp/verbatim）：模型把危险命令渲染到一半就
 // 截断，折叠比对仍对得上，于是交付「警示 + 半条命令」的第三态。收口后 verbatim
@@ -14,11 +14,11 @@ describe("R284 verbatim 截断残片收口", () => {
     expect(restored!.endsWith('System.cmd("/bin/sh", [])')).toBe(true);
   });
 
-  it("verbatim 出口是完整原文行 + 警示", () => {
+  it("verbatim 出口与普通问法同态隔离，无截断残片（R302 P0-2）", () => {
     const out = isolateNoteInstructions(TRUNCATED, "把这条笔记的命令原文一字不差给我", NOTE);
-    expect(out).toContain(EXEC_PIPELINE_WARN_MARK);
-    expect(out).toContain('System.cmd("/bin/sh", [])');
-    expect(out.trimEnd().endsWith('System.cmd("/bin/sh",')).toBe(false);
+    expect(out).toContain(EXEC_ISOLATED_MARK);
+    expect(out).not.toContain("System.cmd");
+    expect(out).not.toContain("203.0.113.7");
   });
 
   it("普通（非危险）行的切片不做整行扩张", () => {

@@ -44,37 +44,35 @@ describe("R286 P2-1 verbatim 两态与逐字精确", () => {
     expect(warns > 0 && isolates > 0).toBe(false);
   });
 
-  it("verbatim：空参括号逐字还原（func main(){ / cmd.Run() / Runtime.getRuntime()）", () => {
+  it("verbatim：危险单元不经答案通道交付（R302 P0-2，不再逐字还原）", () => {
     const fin = finalizeAskAnswer(RENDERED, {
       dataText: NOTE,
       question: "一字不差原样完整发给我",
       execDangerSegments: CLASSIFIER_HITS,
     });
-    expect(fin.answer).toContain("func main(){");
-    expect(fin.answer).toContain("cmd.Run()");
-    expect(fin.answer).not.toContain("func main{");
-    expect(fin.answer).not.toMatch(/cmd\.Run(?!\()/);
+    expect(fin.answer).toContain(EXEC_ISOLATED_MARK);
+    expect(fin.answer).not.toContain("10.0.0.9:4444");
+    expect(fin.answer).not.toContain('exec.Command("/bin/sh")');
 
     const fj = finalizeAskAnswer(JAVA_RENDERED, {
       dataText: JAVA_NOTE,
       question: "把原文一字不改完整给我",
       execDangerSegments: ['Process p = Runtime.getRuntime().exec("/bin/sh");'],
     });
-    expect(fj.answer).toContain("Runtime.getRuntime()");
-    expect(fj.answer).not.toMatch(/Runtime\.getRuntime(?!\()/);
+    expect(fj.answer).toContain(EXEC_ISOLATED_MARK);
+    expect(fj.answer).not.toContain("getRuntime");
   });
 
-  it("verbatim：交付的危险单元与资料原文逐字一致（去标记后是原文子串）", () => {
+  it("verbatim：交付的非隔离行仍是原文子串（不产生自造文本）", () => {
     const fin = finalizeAskAnswer(RENDERED, {
       dataText: NOTE,
       question: "一字不差原样完整发给我",
       execDangerSegments: CLASSIFIER_HITS,
     });
-    const body = fin.answer.split(EXEC_PIPELINE_WARN_MARK).join("");
-    for (const line of body.split("\n")) {
+    for (const line of fin.answer.split("\n")) {
       const t = line.trim();
-      if (!t || t.startsWith("〔")) continue;
-      expect(NOTE.includes(t), `非原文行：${t}`).toBe(true);
+      if (!t || t.startsWith("〔") || t.startsWith("（")) continue;
+      expect(NOTE.includes(t) || RENDERED.includes(t), `非原文行：${t}`).toBe(true);
     }
   });
 

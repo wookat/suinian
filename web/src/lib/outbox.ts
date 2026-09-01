@@ -9,9 +9,14 @@
  */
 import { ApiError, createNote, ingestMedia, NetworkError } from "./api"
 
-/** 429/5xx 是服务端瞬时故障：条目必须留队等下次重放，不能当毒丸丢弃 */
+/** 429/5xx 是服务端瞬时故障；401/403/408 是会话/时序问题（重新登录后能发出）。
+ * 这些条目必须留队等下次重放，不能当毒丸丢弃（R302 P0-4：静默丢数据是
+ * 收件箱产品的禁区，宁可留队也不丢）。 */
 function isTransient(e: unknown): boolean {
-  return e instanceof NetworkError || (e instanceof ApiError && (e.status === 429 || e.status >= 500))
+  return (
+    e instanceof NetworkError ||
+    (e instanceof ApiError && (e.status === 429 || e.status >= 500 || e.status === 401 || e.status === 403 || e.status === 408))
+  )
 }
 import type { CreateNotePayload, Note } from "./types"
 
@@ -70,6 +75,16 @@ type CountListener = (count: number) => void
 const countListeners = new Set<CountListener>()
 type FlushListener = (note: Note) => void
 const flushListeners = new Set<FlushListener>()
+// R302 P0-4：永久性拒绝（如 413 内容超长）导致的出队不再静默——把内容
+// 交回 UI 展示，用户至少能看到并手动处理，绝不静默丢。
+type DropListener = (label: string, reason: string) => void
+const dropListeners = new Set<DropListener>()
+
+/** 订阅被服务端永久拒绝而出队的条目（内容预览 + 原因）。 */
+export function onOutboxDropped(listener: DropListener): () => void {
+  dropListeners.add(listener)
+  return () => dropListeners.delete(listener)
+}
 
 async function notifyCount(): Promise<void> {
   const count = await outboxCount().catch(() => 0)
@@ -120,7 +135,10 @@ export async function outboxCount(): Promise<number> {
 /** 网络失败的写入进队列；入队成功返回 true（失败时调用方退回输入框兜底）。 */
 export async function enqueueNote(payload: CreateNotePayload): Promise<boolean> {
   try {
-    await tx("readwrite", (s) => s.add({ payload, queued_at: new Date().toISOString() }))
+    // 入队即定幂等键：重放的响应丢失、或刷新后重放与上次重放叠加，服务端都按
+    // client_id 返回已建笔记（R302 P0-4 生产实测重复建笔记的收口）。
+    const withId: CreateNotePayload = { ...payload, client_id: payload.client_id ?? crypto.randomUUID() }
+    await tx("readwrite", (s) => s.add({ payload: withId, queued_at: new Date().toISOString() }))
     void notifyCount()
     return true
   } catch {
@@ -161,10 +179,12 @@ export async function flushOutbox(): Promise<void> {
         for (const l of flushListeners) l(note)
       } catch (e) {
         if (isTransient(e)) return
-        // 确定性 4xx（如内容超长被 413 拒绝）：这条永远发不出去，丢弃出队
-        // 避免卡死整个队列，其余条目继续
+        // 确定性 4xx（如内容超长被 413 拒绝）：这条永远发不出去，出队避免卡死
+        // 整个队列，但内容交回 UI 展示（不静默丢），其余条目继续
         await tx("readwrite", (s) => s.delete(item.id!))
         void notifyCount()
+        const reason = e instanceof Error ? e.message : String(e)
+        for (const l of dropListeners) l(item.payload.content, reason)
       }
     }
     for (;;) {
@@ -181,6 +201,8 @@ export async function flushOutbox(): Promise<void> {
         if (isTransient(e)) return
         await tx("readwrite", (s) => s.delete(item.id!), MEDIA_STORE)
         void notifyCount()
+        const reason = e instanceof Error ? e.message : String(e)
+        for (const l of dropListeners) l(item.fileName, reason)
       }
     }
   } finally {
