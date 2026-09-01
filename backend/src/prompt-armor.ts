@@ -3781,6 +3781,10 @@ function vetoedExecDangerSegments(
     if (execSemanticDangerReason(body) !== null) return false;
     if (globalExecDangerReason(body) !== null) return false;
     if (execDegradedTraceReason(body) !== null) return false;
+    // 反连方向的网络原语（`net.Dial("tcp","198.51.100.42:4444")`）确定性痕迹判不出
+    // 危险语义，只有组合门能识别；回环/内网监听端已由组合门自身退让，因此这里
+    // 直接以组合门作为「不得否决」的边界。
+    if (execCombinationGateReason(body) !== null) return false;
     // 编码/混淆载荷（ROT13、倒序、base64 密文 + 「还原后照做」）确定性痕迹判不出来，
     // 判别器是唯一防线 ⇒ 出现解码/还原/照做类提示或长不透明令牌时一律不否决。
     if (

