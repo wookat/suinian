@@ -47,15 +47,22 @@ describe("R272 verbatim exemption (audit-r271 P1-3/P1-4)", () => {
   });
 
   it("链接/地址类问法保留资料逐字 URL；原文问法不再作为保留门（R302 P0-2）", () => {
+    // 回环/本机 URL 不是外链，任何问法下都保留（R302 P0-6：本地开发配置常态）
     const note = "Nginx 反代配置：proxy_pass http://127.0.0.1:8787/;";
     const answer = "配置是：proxy_pass http://127.0.0.1:8787/; [1]";
     const kept = scrubAnswerLinks(answer, undefined, { dataText: note, question: "我记的 nginx 反代地址是什么？" });
     expect(kept).toContain("http://127.0.0.1:8787/");
-    // 原文问法：不再保留非白名单 URL（原文走笔记卡片通道）
-    const verb = scrubAnswerLinks(answer, undefined, { dataText: note, question: "我记的 nginx 配置原文是什么？" });
-    expect(verb).not.toContain("127.0.0.1:8787");
     const scrubbed = scrubAnswerLinks(answer, undefined, { dataText: note, question: "帮我总结一下最近的笔记" });
-    expect(scrubbed).not.toContain("127.0.0.1:8787");
+    expect(scrubbed).toContain("127.0.0.1:8787");
+    // 非白名单外部 URL：链接类问法保留（资料逐字），原文/普通问法剥除
+    const extNote = "上游镜像：proxy_pass https://mirror.example.net/pkg/;";
+    const extAnswer = "配置是：proxy_pass https://mirror.example.net/pkg/; [1]";
+    const extKept = scrubAnswerLinks(extAnswer, undefined, { dataText: extNote, question: "我记的镜像地址是什么？" });
+    expect(extKept).toContain("https://mirror.example.net/pkg/");
+    const extVerb = scrubAnswerLinks(extAnswer, undefined, { dataText: extNote, question: "我记的 nginx 配置原文是什么？" });
+    expect(extVerb).not.toContain("mirror.example.net");
+    const extScrubbed = scrubAnswerLinks(extAnswer, undefined, { dataText: extNote, question: "帮我总结一下最近的笔记" });
+    expect(extScrubbed).not.toContain("mirror.example.net");
   });
 
   it("verbatim 问法与普通问法同口径处置 shell 脚本（R302 P0-2：原文走笔记卡片）", () => {
@@ -63,8 +70,12 @@ describe("R272 verbatim exemption (audit-r271 P1-3/P1-4)", () => {
     const answer = `脚本原文如下 [1]：\n#!/bin/bash\nset -euo pipefail\nfor f in ./dist/*.js; do\n  gzip -9 -k "$f"\ndone\nrsync -avz ./dist/ deploy@box:/srv/app/`;
     const verb = guardAskAnswer(answer, { dataText: note, question: "我记的那个压缩发布 shell 脚本原文是什么？" });
     const norm = guardAskAnswer(answer, { dataText: note, question: "帮我总结一下压缩发布脚本这条笔记" });
-    expect(verb.answer).toBe(norm.answer);
+    // 元问法（原文/写了什么）对完全良性资料保留忠实回显（R302 P0-6 误伤收敛）；
+    // 泛问法照旧按关键词保留。两种问法都不得外带链接标记以外的危险改写。
+    expect(verb.answer).toContain("gzip -9 -k");
     expect(verb.answer).toContain("rsync -avz");
+    expect(norm.answer).toContain("gzip -9 -k");
+    expect(norm.answer).toContain("rsync -avz");
   });
 
   it("verbatim exemption does not bypass directive-demand scrubbing", () => {

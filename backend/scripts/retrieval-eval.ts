@@ -7,7 +7,7 @@
  *
  * 目的：把「关键词抽取正则流水线导致的系统性召回缺口」从个案叙述变成可量化指标。
  * 方法：
- *  - 独立 [QA-R296] 账号，导入固定语料（每条一个 key），等 embedding/金额就绪；
+ *  - 独立 [QA-R302] 账号，导入固定语料（每条一个 key），等 embedding/金额就绪；
  *  - 每个问题记：是否召回到期望笔记（recall）、引用集里期望笔记占比（precision）、
  *    是否落入「精确匹配没有找到」型确定性零命中（failClosed）、答案是否含期望文字、
  *    以及是否回显了垃圾关键词（regexLeak，audit-r267 P1-2 的用户可见症状）；
@@ -132,7 +132,7 @@ const GARBAGE_TERMS = ["钱是别人打给", "是别人转给", "从宝转出", 
 
 async function ensureAccount(): Promise<void> {
   if (token) return;
-  accountName = `[QA-R296]retr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  accountName = `[QA-R302]retr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const res = await api<{ api_token: string; user: { id: string } }>("/api/auth/register", {
     method: "POST",
     body: JSON.stringify({ name: accountName, password: `Qa!${Math.random().toString(36).slice(2, 12)}A9` }),
