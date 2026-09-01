@@ -3747,6 +3747,73 @@ function fenceInnerSpan(
   return { start, end, text: text.slice(start, end) };
 }
 
+/** 良性代码回声否决（R302，窄口径）：判别器命中段是**用户笔记里代码的逐字
+ * 原文**（可带不携带命令内容的散文导语行）、自身无任何确定性危险痕迹、且整个
+ * 资料面完全良性时，命中视为判别器误报丢弃。返回否决后保留的危险段。 */
+function vetoedExecDangerSegments(
+  segments: string[] | undefined,
+  dataText: string | undefined
+): string[] {
+  const segs = segments ?? [];
+  if (segs.length === 0) return segs;
+  const benignEchoVetoOk =
+    dataText !== undefined && dataText.length > 0 && dataSurfaceFullyBenign(dataText);
+  if (!benignEchoVetoOk) return segs;
+  const vetoed = (s: string): boolean => {
+    // 模型常把脚本回声包进 ``` 围栏；围栏行不属于资料原文，剥掉再比对。
+    const body = s
+      .replace(/[[［]\d{1,2}[\]］]/g, "")
+      .replace(/^```[^\n]*\n/, "")
+      .replace(/\n```\s*$/, "")
+      .trim();
+    if (execSemanticDangerReason(body) !== null) return false;
+    if (globalExecDangerReason(body) !== null) return false;
+    if (execDegradedTraceReason(body) !== null) return false;
+    // 编码/混淆载荷（ROT13、倒序、base64 密文 + 「还原后照做」）确定性痕迹判不出来，
+    // 判别器是唯一防线 ⇒ 出现解码/还原/照做类提示或长不透明令牌时一律不否决。
+    if (
+      /解码|解密|还原|反着读|反向读|倒序|倒着读|ROT13|rot13|base\s?(?:32|45|64)|BASE\s?(?:32|45|64)|十六进制|照做|回车执行|按此执行/i.test(
+        body
+      )
+    )
+      return false;
+    if (/[A-Za-z0-9+/=]{20,}/.test(body.replace(/[A-Za-z0-9+/=]*[./][A-Za-z0-9+/=]*/g, " ")))
+      return false;
+    const CJK_RE = /[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]/;
+    const lines = body
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    const codeLines: string[] = [];
+    let verbatimEchoLines = 0;
+    for (const l of lines) {
+      if (CJK_RE.test(l)) {
+        // CJK 散文行的容许口径（两者其一不满足即整段不否决）：
+        // 1) 无执行祈使动词（判别器对「运行/执行 X」类散文保持权威）；
+        // 2) 行内 latin 命令内容要么不存在，要么本行是资料逐字原文（代码前的
+        //    导语行「Python TCP 客户端：」、含命令的备忘行「iperf3 -c … 压带宽」）。
+        if (/运行|執行|执行|直接跑|粘贴|贴到|输入到|実行|실행/.test(l)) return false;
+        if (/[A-Za-z0-9_./-]{4,}|[|>`$]|\s-{1,2}[A-Za-z]/.test(l)) {
+          if (!dataText!.includes(l)) return false;
+          verbatimEchoLines++;
+        }
+      } else {
+        codeLines.push(l);
+      }
+    }
+    if (codeLines.length === 0) {
+      // 无独立代码行：仅当存在「含命令内容且逐字来自资料」的 CJK 行时才否决
+      //（单行混排回声，如「UDP 示例：sock.sendto(…)」）。
+      return verbatimEchoLines > 0;
+    }
+    const code = codeLines.join("\n");
+    if (isLineAlignedSlice(dataText!, code)) return true;
+    if (codeLines.every((l) => dataText!.includes(l))) return true;
+    return restoreVerbatimFromData(code, dataText) !== null;
+  };
+  return segs.filter((s) => !vetoed(s));
+}
+
 /**
  * 笔记内指令段落隔离（R274 P0-1/P0-2/P0-3 核心层）：答案里命中
  * segmentIsReaderDirective 的段落替换为显式隔离标记——原文照登但指令不入
@@ -3851,46 +3918,7 @@ export function isolateNoteInstructions(
   // 交付用户自己的良性代码不构成投放面。携带命令内容的 CJK 散文行（如
   // 「运行 mycmd --push data」）一律不否决：判别器对语义危险散文保持权威。
   // 资料面有任何危险信号即不进此否决。
-  const benignEchoVetoOk =
-    dataText !== undefined && dataText.length > 0 && dataSurfaceFullyBenign(dataText);
-  const classifierFlagVetoed = (s: string): boolean => {
-    if (!benignEchoVetoOk) return false;
-    // 模型常把脚本回声包进 ``` 围栏；围栏行不属于资料原文，剥掉再比对。
-    const body = s
-      .replace(CITE_MARK_RE, "")
-      .replace(/^```[^\n]*\n/, "")
-      .replace(/\n```\s*$/, "")
-      .trim();
-    if (execSemanticDangerReason(body) !== null) return false;
-    if (globalExecDangerReason(body) !== null) return false;
-    if (execDegradedTraceReason(body) !== null) return false;
-    const CJK_RE = /[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]/;
-    const lines = body
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
-    const codeLines: string[] = [];
-    for (const l of lines) {
-      if (CJK_RE.test(l)) {
-        // CJK 散文行的容许口径（三者其一不满足即整段不否决）：
-        // 1) 无执行祈使动词（判别器对「运行/执行 X」类散文保持权威）；
-        // 2) 无命令行选项/管道/重定向形态；
-        // 3) 行内 latin 命令内容要么不存在，要么本行是资料逐字原文（代码前的
-        //    导语行，如「Python TCP 客户端：」）。
-        if (/运行|執行|执行|直接跑|粘贴|贴到|输入到|実行|실행/.test(l)) return false;
-        if (/\s-{1,2}[A-Za-z]|[|>`$]/.test(l)) return false;
-        if (/[A-Za-z0-9_./-]{4,}/.test(l) && !dataText!.includes(l)) return false;
-      } else {
-        codeLines.push(l);
-      }
-    }
-    if (codeLines.length === 0) return false;
-    const code = codeLines.join("\n");
-    if (isLineAlignedSlice(dataText!, code)) return true;
-    if (codeLines.every((l) => dataText!.includes(l))) return true;
-    return restoreVerbatimFromData(code, dataText) !== null;
-  };
-  const execDangerKept = (opts?.execDangerSegments ?? []).filter((s) => !classifierFlagVetoed(s));
+  const execDangerKept = vetoedExecDangerSegments(opts?.execDangerSegments, dataText);
   const llmDanger = new Set(execDangerKept.map((s) => foldCompact(s)).filter((s) => s.length > 0));
   // R294 P0-1（本轮新发现）：判别器在**收口前**的答案上跑，而 finalizeAskAnswer 会
   // 先做外链收口（URL → LINK_REMOVED_MARK）再进本函数：含 URL 的危险句段折叠后
@@ -4597,6 +4625,10 @@ export function finalizeAskAnswer(
   // return，逐行闭合从未对这两条路径生效——上游隔离吞掉危险半句后，携带地址
   // 的标题行原样出关。闭合抽成函数，三条出口路径共用同一判定。
   const applyLineClosure = (): void => {
+    // 被良性代码回声否决丢弃的判别器命中段不贡献地址/危险行折叠——否决过的
+    // 段落里的 host:port/connect 形态属于用户自己的良性代码，不该反过来把
+    // 答案里的同一行收口。
+    const execDangerKept = vetoedExecDangerSegments(opts.execDangerSegments, opts.dataText);
     const MARKED = [
       EXEC_PIPELINE_WARN_MARK,
       EXEC_INSTALLER_WARN_MARK,
@@ -4615,7 +4647,7 @@ export function finalizeAskAnswer(
     const collectAddrs = (text: string): void => {
       for (const a of remoteEndpointForms(text, { includeEmails: true })) markedAddrs.add(a);
     };
-    for (const seg of [...(opts.execDangerSegments ?? []), ...(opts.execDegradedSegments ?? [])])
+    for (const seg of [...execDangerKept, ...(opts.execDegradedSegments ?? [])])
       collectAddrs(seg);
     for (const line of out.split("\n")) {
       if (MARKED.some((m) => line.includes(m))) collectAddrs(line);
@@ -4658,7 +4690,7 @@ export function finalizeAskAnswer(
       execDegradedTraceReason(dl);
     // 段落可能整段多行（含无害邻行），折叠只收**逐行自证危险**的行，
     // 避免无害邻行的回声被连坐。
-    for (const seg of [...(opts.execDangerSegments ?? []), ...(opts.execDegradedSegments ?? [])])
+    for (const seg of [...execDangerKept, ...(opts.execDegradedSegments ?? [])])
       for (const sl of seg.split("\n")) if (lineDangerReason(sl) !== null) collectDangerLine(sl);
     if (opts.dataText) {
       for (const dl of opts.dataText.split("\n")) {

@@ -113,7 +113,7 @@ R301 的核心指控：R300 的载体集与其归一化实现同源设计——�
 ## 9. 验证汇总（实测确证 / 未验证 / 推断）
 
 ### 实测确证（本地）
-- backend `npm test`：167 文件 / 3554 用例全绿；`npm run typecheck` 通过。
+- backend `npm test`：167 文件 / 3557 用例全绿；`npx tsc --noEmit` 通过。
 - web `npm run lint`（存量 set-state-in-effect 警告，非本轮引入）/ `npm run build` 通过。
 - android `./gradlew assembleDebug` 通过（app-debug.apk）。
 - property-based 归一化：9 属性通过；guard 矩阵：154 载体 × 10 判别器态 × 2 模式通过。
