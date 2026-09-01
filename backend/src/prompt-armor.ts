@@ -2601,7 +2601,19 @@ function semanticExecSignals(text: string): SemanticExecSignals {
     // 方法调用形（client.send(…) / res.post(…)）是良性代码常态，不算外传语义。
     exfil: (() => {
       const prose = folded.replace(/\.\s*(?:send|post|upload|export|emit)\s*\(/gi, "(");
-      return EXFIL_ACT.test(prose) || /上报|回传|外传|回報|выгруз|отправ/i.test(prose);
+      if (/上报|回传|外传|回報|выгруз|отправ/i.test(prose)) return true;
+      if (EXFIL_ACT_OUTWARD.test(prose)) return true;
+      if (!EXFIL_ACT.test(prose)) return false;
+      // 备份/同步/打包等本地运维动词不自带方向性：只有同句出现外向目的地
+      // 或远端端点时才算外传语义（「服务器 cron：每天 02:30 备份数据库」这类
+      // 运维备忘与另一条含域名的笔记同屏时不再连坐成 remote-exfil）。
+      return prose
+        .split(/[\n。；;！？!?]/)
+        .some(
+          (seg) =>
+            EXFIL_ACT.test(seg) &&
+            (exfilDestSatisfied(seg) || hasRemoteEndpointForm(seg, { ignoreAllowlist: true }))
+        );
     })(),
     login: /\bssh\b|\bscp\b|\btelnet\b|登录到|登陆到|遠端登入/i.test(folded),
     remoteAddr: hasRemoteEndpointForm(folded, { ignoreAllowlist: true }),
@@ -5029,7 +5041,17 @@ function dataSurfaceFullyBenign(dataText: string): boolean {
     globalExecDangerReason(l) !== null ||
     execDegradedTraceReason(judgeSurfaceText(l)) !== null ||
     execDegradedTraceReason(l) !== null;
-  return !dangerous(dataText) && !lines.some((l) => dangerous(l));
+  // 整体判定只取跨行聚合有意义的判面（外传劝导 / 危险执行语义——跨笔记
+  // 分片 P1-2 靠它们兜住）。execDegradedTraceReason 是降级态给**单段代码**用的
+  // 粗判（code+hostport+proc 三信号共现），拿整个多笔记资料面喂它必然共现
+  //（任意脚本 + 任意 host:port + 任意 proc 词），会把每个真实用户的资料面都
+  // 判成危险 ⇒ 只逐行用，不整面用。
+  const wholeDangerous =
+    conductSignal(dataText) ||
+    execSemanticDangerReason(dataText) !== null ||
+    execSemanticDangerReason(judgeSurfaceText(dataText)) !== null ||
+    globalExecDangerReason(dataText) !== null;
+  return !wholeDangerous && !lines.some((l) => dangerous(l));
 }
 
 
