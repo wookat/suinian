@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-08-29（R290）
+> 最后更新：2026-08-31（R302）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -61,6 +61,8 @@
 
 - R290：落实 R289 审查（audit-r289.md，NO-GO 第十五轮）——核心是**取消「代码面抽取」这一单点**：①P0-1/P0-2 全文归一化判定面：`normalizeJudgeSurface`（prompt-armor.ts）把整个答案剥围栏/行内码/引用/列表编号/表格竖线/HTML 标签实体/JSON-YAML 转义/日志前缀 + 全角→半角 + 零宽剔除 + 续行合并，逐行保留原文 offset 映射；`globalExecDangerReason`/`execClassifierGateReason`/`execDegradedIsolationUnits` 全部改为「归一化全文 ∨ 原文」双面判定（归一化漏某载体时原文面兜底），不再依赖先识别「哪块是代码」；verbatim 出口维持两态互斥且危险多行每个非空行加警示前缀（P0-4 R274-G05 复发修复），行级对齐 `isLineAlignedSlice`；②P0-3 缓存重做：SHA-256(版本\0用户ID\0归一化全文) 为键、只缓存危险结论、命中时再校验完整 surface、TTL 10 分钟、R289 meet-in-the-middle 碰撞手法自测不再放行（test/r290-cache-collision.test.ts）；③P1：同一问答全部引用笔记并入单一判定面（askGuardData）；官方安装上下文（rustup/Homebrew 等）警示+保留原文但网络回连/编码地址/stdio 接管/LOLBin 仍整段隔离；财务时间窗按**正文事件日期**（noteEventTime，无日期回退记录时间），新增「N 日之前/上中下旬」解析；退款确定性直答「支出冲减」（financeCaliberAnswer）；`execcls`/`execgate` 进 Server-Timing 与 JSON/SSE done；SSE 新增 `sse_held` 扣段归因（实测 R289「单 delta」系短答案自然形态非退化）。本地：3246 用例全过、恶意 576 例 0 违规、善意 146 例四态误伤 0；生产：injection-eval 240 变体/498 问 泄露 0、执行 1（R272-17 图谱实体名提及注入产品名、无安装建议无链接，复测 3/3 过，判定为 LLM 随机措辞的 P2 残留，见 PR #320 评论）；SSE 20 抓包一致 20/20 先泄后收 0/20；REST P50 4.28s/P95 10.6s（与 R289 基线 4.3s/8.1s 同阶，P95 尾部为 execcls 触发问）；QA 收尾 users 仅剩 u_boss、15 表 orphan 全 0、R2 0 对象。决策论证见 `docs/decision-r290.md`，PR #320
 
+- R302：落实 R301 审查（audit-r301.md，NO-GO 复评）——**方法论整改 + verbatim 解耦**：①§18 方法论：归一化改按类 property-based（fast-check，test/r302-normalization.test.ts 9 属性）；回归集 = R295/R296/R298 全部历史载体 + R301 等价重建 73 载体 + 新造 26 类（test/r302-guard-matrix.test.ts，154 载体 × 10 判别器态 × 2 模式）；R301 原脚本机已回收，按 §15 等价重建（如实标注非逐字节重跑）；②P0-2 verbatim 与安全闭合解耦（采纳 R301 建议）：答案区摘要 + VERBATIM_REDIRECT_NOTICE 指引，原文走引用笔记卡片；移除 restoreVerbatimEchoes/verbatim 豁免；③P0-1 白名单只免地址形态不免动作语义；④P0-3 分隔符整类折 `.` + percent 递归解码 + 拼接/模板/IP 各形态/Base32⁄45/ROT13/hex 逐类；⑤P0-4 离线 outbox 真写 IndexedDB（suinian-outbox v2）+ client_id 幂等补发（生产 UI exactly-once 实测）；⑥P0-5 虚假隔离横幅修复（span 剥除不再无差别置隔离位）；⑦P0-6 地址×动作同句共现 + 邮箱/常见端口退让，benign 整段误隔离 0/130、部分标记 3/130；⑧P1 藏头/口令词闭合、跨笔记分片聚合；P2 guard_events 新增 `*_requests` 请求级计数、SSE keepalive 帧（生产 20/20 实测）、验收口径改【≤1.5s 进度指示 + ≤4s 首 delta】；P3 对比度/375px 收敛/目标尺寸。生产：evil 308 问泄漏 1（N02/plain 随机性残余，复测 4/4 隔离）、split 0、injection 240/498 执行 0 泄漏 0、ask 136/141、忠实 30/30、财务 4/4、shell 13/15（聚焦复测 5/5）、Lighthouse 96⁄100+100⁄100、axe 0。未解决：进度指示 >1.5s 11/20；wrangler routes API code 10000（用 deployment API + 端点实测交叉确认）。详见 docs/decision-r302.md
+
 ## Android/Web 功能奇偶性缺口计划（R129 清单，R130 评估）
 - 今日回顾时间流卡片（Android 降级）：需新增 Compose 卡片 + `/api/reviews/today` 接入与点评交互，估 1 个子会话；与下方导出/导入合并一轮 Android 对齐专项更划算
 - JSON/Markdown 导出（Android 缺失，仅备份 zip）：后端接口现成（`/api/export?format=json|md`），Android 需加设置页入口 + SAF 保存，低成本但非找回主线，并入对齐专项
@@ -89,7 +91,7 @@
 - 【R85】公众号资源：注册公众号（个人订阅号即可起步）、提供 AppID/AppSecret、在公众号后台回填服务器配置（URL/Token/EncodingAESKey）；开发验证可微信扫码领测试号。清单见 docs/wechat-integration.md 第五节
 
 ## 测试约定
-- 测试数据一律 `[QA-R290]`（按轮次改前缀，R290 收尾已核对 users 仅剩 u_boss、15 表 orphan 全 0、R2 suinian-media 0 对象）；历史示例 `[QA-R88]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
+- 测试数据一律 `[QA-R302]`（R302 收尾已核对 [QA-%] users=0、孤儿 embeddings/attachments=0、R2 object_count=0）（按轮次改前缀，R290 收尾已核对 users 仅剩 u_boss、15 表 orphan 全 0、R2 suinian-media 0 对象）；历史示例 `[QA-R88]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
 - QA 账号命名建议：用户名允许字符为中英文、数字、`._-[]`（2-32 字符，R60 起支持 `[]`）。建议 QA 账号命名 `[QA-R<轮次>]-<用途>`（如 `[QA-R60]-migrate-a`），**务必记录密码**，测完自助注销；若密码遗失需手动用 wrangler d1 按 `backend/src/account.ts` 的级联口径清理（children 先删，附前后 SQL 证据）
 - **QA 账号清单核对（收尾强制步骤）**：每轮 QA 收尾时，除逐表验证自己账号级联清零外，必须再跑一次 `SELECT id, name FROM users` 全量核对，确认只剩 `u_boss / Thomas`；发现任何 `[QA-*]` 残留账号（如 R91 发现的 `[QA-R88]-repro`，系该轮会话未执行注销、非注销接口缺陷——账号所有 children 与 users 行均完整保留，说明 `DELETE /api/auth/me` 从未被调用），按 account.ts 级联口径手动清理（children 先删，附前后 SQL 证据）并在报告中注明
 - 老板测试 token 由老板在会话中提供附件，勿写入仓库/日志

@@ -108,23 +108,45 @@ R301 的核心指控：R300 的载体集与其归一化实现同源设计——�
   分布见 §9。keepalive 帧以生产抓包为准，无正向证据不声称。
 - P3 无障碍：隔离/降级横幅对比度提升（amber-800/sky-800）；375px 三层文案
   收敛为单个 `<details>` 展开项；`查看原文` 按钮 28px。生产实测：axe serious 0，
-  Lighthouse mobile 95/100（perf/a11y）、desktop 100/100，375px 无横向滚动。
+  Lighthouse mobile 96/100（perf/a11y）、desktop 100/100，375px 无横向滚动。
 
 ## 9. 验证汇总（实测确证 / 未验证 / 推断）
 
 ### 实测确证（本地）
-- backend `npm test`：167 文件 / 3557 用例全绿；`npx tsc --noEmit` 通过。
+- backend `npm test`：167 文件 / 3561 用例全绿（最终修订，含本轮新增回归）；`tsc --noEmit` 通过。
 - web `npm run lint`（存量 set-state-in-effect 警告，非本轮引入）/ `npm run build` 通过。
 - android `./gradlew assembleDebug` 通过（app-debug.apk）。
 - property-based 归一化：9 属性通过；guard 矩阵：154 载体 × 10 判别器态 × 2 模式通过。
 
-### 实测确证（生产，真实模型）
-- （待本轮全量跑完后回填：evil 矩阵 / benign 310 / long / split / SSE / injection-eval /
-  retrieval-eval / faithfulness / shell / finance / sensitive / attachment / 软删 /
-  备份 / 注销级联 / D1-R2 核查——见 PR 描述逐项数字）
+### 实测确证（生产，真实模型，最终部署 version 96846746-6df3-42cc-ae08-0b8b2b0d54e3）
+- evil 矩阵：154 载体 × 2 问法 = 308 问，泄漏 1（N02/plain；同载体独立复测 4/4 全部隔离，
+  判为模型输出随机性残余而非确定性旁路，如实计入不归零）。split SP1–SP4 leak=0。
+- benign 语料：130 例，整段误隔离 0/130（0%）；部分标记（行级警示/移除标记）3/130
+  （2.3%，B056/B074/B109）。目标 <3% 达成（含部分标记口径）。
+- 长文：4784 字善意长文 verbatim 问 isolated=0，答案 945 字 + 原文卡片完整。
+- injection-eval：240 变体 / 498 问，执行 0、泄漏 0、benign 误伤 0。
+- retrieval-eval：召回率 95.5%，必过题未过 0。
+- ask-eval：136/141（96%），引用完整性 141/141。
+- 忠实性 30/30（含此前缺失的 7A 座位号）；财务 4/4；shell 13/15
+  （备份脚本 2/5 轮次被误隔离——全语料上下文下判别器随机误报残余，聚焦复测 5/5 通过；如实记录）。
+- SSE 20 请求：keepalive 20/20；有 delta 样本 4 个，首 delta 中位 3593ms、>4s=0；
+  进度指示中位 1741ms、>1.5s=11（进度指示 ≤1.5s 未稳定达标，如实记录）；16/20 无 delta
+  （final-only 短答案路径）。
+- 敏感附件密文：R2 对象头 SNE1、明文泄漏 false。
+- 软删/恢复：DELETE → trash 可见 → restore 200 → 原文恢复。
+- 备份/导出脱敏：/api/backup、/api/export 均不含敏感卡号明文。
+- 注销级联：全部 QA 账号 DELETE /api/auth/me 后旧 token 401。
+- D1 权威核查：users/notes/api_tokens/threads/edges/entities/daily_reviews/push_subscriptions
+  QA 残留 0；note_embeddings/attachments 孤儿 0。R2 权威列举：bucket object_count=0，零残留。
+- 生产 UI（录屏）：PWA 离线 outbox exactly-once（IndexedDB suinian-outbox、client_id、
+  联网补发 +2 不重复）；375px 披露收敛单个 details、无横向滚动；axe violations 0
+  （color-contrast serious 0）；Lighthouse mobile 96/100、desktop 100/100（perf/a11y）；
+  4 个真实浏览器账号全流程并全部注销（旧 token 401）。
 
 ### 未验证
-- keepalive 帧行为（以 SSE 抓包结果为准，若 0 帧则口径中不声称 keepalive）。
+- 进度指示 ≤1.5s 的稳定达标（本轮实测 11/20 超 1.5s，需下一轮优化）。
+- Wrangler route 列表 API 持续返回 code 10000（权限），route 激活以 deployment API
+  100% + 生产 endpoint 实测交叉确认，非 wrangler 权威输出。
 - 旧缓存 bundle 客户端的离线条目幂等性（§5 已知边界）。
 
 ### 推断
