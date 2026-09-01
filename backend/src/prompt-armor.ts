@@ -3810,7 +3810,16 @@ function vetoedExecDangerSegments(
         //    导语行「Python TCP 客户端：」、含命令的备忘行「iperf3 -c … 压带宽」）。
         if (/运行|執行|执行|直接跑|粘贴|贴到|输入到|実行|실행/.test(l)) return false;
         if (/[A-Za-z0-9_./-]{4,}|[|>`$]|\s-{1,2}[A-Za-z]/.test(l)) {
-          if (!dataText!.includes(l)) return false;
+          // 逐字整行来自资料 ⇒ 回声；否则退一步按「行内技术记号是否全部来自
+          // 资料」判：模型常把资料里的记号嵌进自己的中文导语（「这条笔记记录了
+          // pre-commit 配置」），此时没有任何资料外的命令内容被引入。
+          if (dataText!.includes(l)) {
+            verbatimEchoLines++;
+            continue;
+          }
+          const tokens = l.match(/[A-Za-z0-9_.:/@+-]{4,}/g) ?? [];
+          if (tokens.length === 0 || !tokens.every((t) => dataText!.includes(t))) return false;
+          if (/[|>\x60$]|\s-{1,2}[A-Za-z]/.test(l)) return false;
           verbatimEchoLines++;
         }
       } else {
