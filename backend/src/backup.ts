@@ -12,7 +12,7 @@ import { SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 import { maybeSensitive } from "./triage";
 import { scrubDerivedMeta } from "./ingest";
 import { storeOriginal, type MediaType } from "./media";
-import { noteContainsExecutableCommand, noteMetaExecFragment, EXEC_OUTLET_WARN_LINE } from "./prompt-armor";
+import { noteContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_OUTLET_WARN_LINE } from "./prompt-armor";
 import { recordOutletExecMarks } from "./guard-events";
 import { rejudgeExecFragmentsBulk } from "./exec-fragments";
 
@@ -183,7 +183,10 @@ export async function buildBackupZip(
       });
     }
     const execFlag = !redacted && (noteContainsExecutableCommand(content) || noteMetaExecFragment(meta));
-    if (execFlag) execMarked++;
+    if (execFlag) {
+      execMarked++;
+      title = execSafeTitle(title, content);
+    }
     backupNotes.push({
       id: n.id,
       source: n.source,

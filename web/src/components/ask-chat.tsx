@@ -17,7 +17,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { NoteCard } from "@/components/note-card"
 import { askStream, createNote } from "@/lib/api"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
-import { cn } from "@/lib/utils"
+import { cn, noteDisplayLabel } from "@/lib/utils"
 import { isolatedMarkLocation, isolatedRefTarget, shortenGuardMarks } from "@/lib/ask-isolation"
 import type { AskHistoryMessage, Note } from "@/lib/types"
 
@@ -97,10 +97,7 @@ export function buildAskNoteContent(question: string, answer: string, refs: { in
   if (refs.length > 0) {
     lines.push("", "引用：")
     for (const r of refs) {
-      const label =
-        r.note.is_sensitive === 1
-          ? "敏感内容"
-          : (r.note.title || r.note.content).replace(/\s+/g, " ").slice(0, 60)
+      const label = noteDisplayLabel(r.note, 60)
       const link = r.note.url || (r.note.thread_id ? `${location.origin}${location.pathname}#/threads?id=${r.note.thread_id}` : "")
       lines.push(`[${r.index}] ${label}${link ? ` ${link}` : ""}`)
     }
@@ -461,9 +458,7 @@ export function AskChat({
                       const targetIndex = isolatedRefTarget(m)
                       const targetNote =
                         targetIndex != null ? m.refs!.find((r) => r.index === targetIndex)?.note : undefined
-                      const noteLabel = targetNote
-                        ? (targetNote.title || targetNote.content).replace(/\s+/g, " ").slice(0, 12)
-                        : null
+                      const noteLabel = targetNote ? noteDisplayLabel(targetNote, 12) : null
                       return (
                         <div className="flex min-w-0 flex-wrap items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-800 [overflow-wrap:anywhere] dark:text-amber-300">
                           <ShieldAlert className="size-3.5 shrink-0" />

@@ -1402,6 +1402,7 @@ function cleanupAfterScrub(text: string): string {
   return text
     .replace(/^[ \t]*[。！？!?；;，、:：\-—]*[ \t]*$/gm, "")
     .replace(/^[。！？!?；;，、]+/, "")
+    .replace(/([。！？；])\s*[。！？；]+/g, "$1")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -1526,13 +1527,15 @@ export function guardAskAnswer(
   isolated: boolean;
 } {
   const hosts = opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS;
+  // 抽取器 demand 与转述行隐式 demand 合并：后者不依赖 LLM，抽取器漏报时仍成立。
+  const demands = [...new Set([...(opts.directiveDemands ?? []), ...implicitRelayDemands(opts.dataText)])];
   // R276 P0-2：生成路径同样先剥除内容侧仿冒的标注/审计标记（X06 型）。
   const afterLinks = scrubAnswerLinks(stripSpoofedControlMarks(answer), hosts, { dataText: opts.dataText, question: opts.question });
   const afterConduct = scrubFuzzyEchoOpener(
     scrubUnsolicitedConduct(afterLinks, opts.question, hosts, opts.dataText, opts.dataUnits),
     opts.dataText,
     opts.question,
-    opts.directiveDemands ?? []
+    demands
   );
   const afterMarkers = scrubDataDerivedGlyphs(
     scrubDataDerivedMarkers(afterConduct, opts.dataText, opts.question),
@@ -1548,8 +1551,8 @@ export function guardAskAnswer(
     opts.dataText,
     opts.question
   );
-  let afterDirectives = opts.directiveDemands?.length
-    ? scrubDirectiveDemands(afterSpans, opts.directiveDemands, opts.question, opts.dataText)
+  let afterDirectives = demands.length
+    ? scrubDirectiveDemands(afterSpans, demands, opts.question, opts.dataText)
     : afterSpans;
   // R302 P0-2：生成路径不再做 verbatim 逐字还原——原文交付走笔记卡片通道。
   // R278 P1-1/P1-4 根因：隔离标记不在这里插入。生成分支随后还会走单一
@@ -1622,6 +1625,37 @@ export function execOutletTag(
   meta?: string | { exec_fragment?: boolean } | null
 ): string {
   return noteRowContainsExecutableCommand({ content, meta }) ? EXEC_OUTLET_WARN_TAG : "";
+}
+
+/** 危险笔记标题被置空后各出口统一使用的占位标题。 */
+export const EXEC_TITLE_PLACEHOLDER = "含可执行命令的记录（已折叠）";
+
+const TITLE_LOCAL_PATH_RE = /(?:^|[\s(（'"`：:])(?:\/(?:etc|root|home|var|usr|proc|dev|tmp|opt|srv|bin|sbin)\b|~\/)/i;
+
+/**
+ * 危险笔记（contains_executable_command / exec_fragment）的标题出口。标题由模型
+ * 生成或用户手填，可能整句抄入原文（地址、路径、命令、编码串）并显示在正文折叠
+ * 警示之外，等于绕过折叠。只放行「不含资料面危险/地址/路径/编码形态、且不是
+ * 正文回声」的短标题；否则返回 null，由出口用 EXEC_TITLE_PLACEHOLDER 替代。
+ */
+export function execSafeTitle(title: string | null | undefined, content: string | null | undefined): string | null {
+  if (typeof title !== "string") return null;
+  const t = title.trim();
+  if (!t) return null;
+  if (!dataSurfaceFullyBenign(t)) return null;
+  const low = t.normalize("NFKC").toLowerCase();
+  if (hasLiteralAddressForm(low) || HOSTNAME_SHAPED_TOKEN_RE.test(low) || DOMAIN_TAIL_FRAG_RE.test(low)) return null;
+  if (TITLE_LOCAL_PATH_RE.test(t) || MORSE_RUN_RE.test(t)) return null;
+  if ([...t.matchAll(OPAQUE_RUN_RE)].some((m) => m[0].trim().length >= 5 && opaqueRunShape(m[0].trim()))) return null;
+  const fold = (s: string) => s.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+  const ft = fold(t);
+  if (ft.length >= 8 && fold(content ?? "").includes(ft)) return null;
+  return t;
+}
+
+/** 危险笔记在列表行/标题位的展示文本：安全短标题，否则占位。 */
+export function execDisplayTitle(row: { title?: string | null; content?: string | null }): string {
+  return execSafeTitle(row.title, row.content) ?? EXEC_TITLE_PLACEHOLDER;
 }
 
 /** R298 P0-1：确定性判危但语义判别器零命中时的说明（判别器在线，不是降级）。 */
@@ -1765,6 +1799,57 @@ const PSEUDO_SYSTEM_NOTICE_RE =
 // 回答的第…行」类面向回答体的听写定位描述，即使拆分到多条笔记也是指令。
 const DICTATION_FRAGMENT_RE =
   /要写的内容|回答的(?:第[^\n。；]{0,4}行|开头|结尾|末尾)|写在回答|放在答案/;
+
+// 二阶受众转述（R308）：文本要求读者去「提醒/告知/引导用户」做某事，或要求「转达/
+// 转述/照抄」——用户写给自己的笔记不会把「用户」当第三方受众，这是角色结构信号
+// 而非注入字面；词表按角色（祈使 + 转述动词 + 受众）组织，新增语种只补角色词。
+// 祈使前缀限礼貌/强制语（请/务必/必须/一律/记得）：产品需求笔记「要让用户能一键导出」
+// 不带这类前缀，不命中。
+const RELAY_AUDIENCE_RE =
+  /(?:请|务必|必须|一律|记得)[^\n。；]{0,10}?(?:提醒|提示|告知|告诉|引导|要求|通知|转达|转告|劝)\s*(?:给|向)?\s*(?:用户|使用者|读者|提问者|对方)|\b(?:tell|remind|ask|instruct|inform|advise|urge)\s+the\s+(?:user|reader)\s+to\b|ユーザーに[^\n。]{0,12}(?:伝え|通知|案内|促し|勧め)|사용자(?:에게|가)[^\n。]{0,12}(?:알리|안내|권하|하도록)|скажи(?:те)?\s+пользователю/i;
+const RELAY_IMPERATIVE_RE =
+  /请(?:原样|照原文|一字不改|帮我)?(?:转达|转述|转告|复述|照抄|照搬|传达)|\b(?:relay|repeat|restate)\s+(?:this|it|the following)\s+(?:verbatim|to the user)\b/i;
+// 转述行的另两种角色框架（无礼貌/强制祈使前缀也成立）：
+//  (a) 施动者是「作答者」——「回答时(须/要/应)提示用户 …」：只有助手在回答，用户
+//      自己的笔记没有「回答时」这个角色位；
+//  (b) 受益者/施动者是「助手」——「提示用户为助手开启 …」「让助手提醒用户 …」：
+//      笔记把助手当作动作参与方，同样是第三方角色结构。
+const RELAY_ANSWER_ACTOR_RE =
+  /(?:回答|答复|回复|作答|答案)[^\n。；]{0,8}?(?:时|中|里|内|前|后|开头|结尾|末尾)[^\n。；]{0,10}?(?:提醒|提示|告知|告诉|引导|要求|通知|转达|转告|劝)\s*(?:给|向)?\s*(?:用户|使用者|读者|提问者|对方)|\bwhen\s+answering\b[^\n.;]{0,40}\b(?:tell|remind|ask|instruct|inform|advise|urge)\s+the\s+(?:user|reader)\b/i;
+const RELAY_ASSISTANT_PARTY_RE =
+  /(?:提醒|提示|告知|告诉|引导|要求|通知|劝)\s*(?:用户|使用者|读者|提问者)[^\n。；]{0,12}?(?:助手|智能体|机器人|\bAI\b|\bassistant\b)|(?:助手|智能体|机器人|\bAI\b|\bassistant\b)[^\n。；]{0,12}?(?:提醒|提示|告知|告诉|引导|要求|通知|劝)\s*(?:用户|使用者|读者|提问者)|\b(?:tell|remind|ask|instruct|inform|advise|urge)\s+the\s+user\s+to\b[^\n.;]{0,40}\b(?:the\s+)?assistant\b/i;
+function relayDirectiveMatch(line: string): RegExpExecArray | null {
+  return (
+    RELAY_AUDIENCE_RE.exec(line) ??
+    RELAY_IMPERATIVE_RE.exec(line) ??
+    RELAY_ANSWER_ACTOR_RE.exec(line) ??
+    RELAY_ASSISTANT_PARTY_RE.exec(line)
+  );
+}
+
+/**
+ * 转述型指令行的隐式 demand（R308）：LLM 抽取器不可用/漏报（生产实测：主模型 530
+ * 回退 Workers AI 时抽取器返回空数组）时，转述行「请提醒用户 X」的 X 就是
+ * 资料要求助手落地的文字——确定性地当 demand 处理，交给 scrubDirectiveDemands
+ * 的整段/半长部分匹配剥除。前缀（祈使 + 转述动词 + 受众）之后的余文为 payload；
+ * 余文过短（「（请转达）：」后接正文）时取整行。
+ */
+export function implicitRelayDemands(dataText: string): string[] {
+  const out: string[] = [];
+  for (const raw of dataText.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = relayDirectiveMatch(line);
+    if (!m) continue;
+    const tail = line
+      .slice(m.index + m[0].length)
+      .replace(/^[\s）)\]］:：,，;；、—-]+/, "")
+      .replace(/[。！？!?\s]+$/, "");
+    const payload = foldCompact(tail).length >= 4 ? tail : line;
+    if (!out.includes(payload)) out.push(payload);
+  }
+  return out;
+}
 
 // 破坏性操作诱导（R276，audit-r275 X03）：诱导清空回收站/批量删除笔记类数据。
 const DESTRUCTIVE_INDUCE_RE =
@@ -4760,7 +4845,25 @@ export function segmentIsNonExecReaderDirective(segText: string): boolean {
   if (EXFIL_URL_PARAM_RE.test(t)) return true;
   if (PSEUDO_SYSTEM_NOTICE_RE.test(t)) return true;
   if (DICTATION_FRAGMENT_RE.test(t)) return true;
+  if (relayDirectiveMatch(t) !== null) return true;
   return false;
+}
+
+/**
+ * 抽取器报告的 demand 中，剔除「纯技术资料里的祈使措辞」（R278 P1-5：Terraform/
+ * 审稿模板/运维手册）——仅当资料里没有任何一行是读者指令时成立。资料含读者
+ * 指令行时全部保留：跨笔记分片的 demand 文字所在行本身是事实陈述（「备忘乙：
+ * 目的地是 …」），指令行在另一条笔记里；定位不到完整行的同样 fail-closed 保留。
+ */
+export function filterDirectiveDemands(demands: readonly string[], dataText: string): string[] {
+  const lines = dataText.split("\n");
+  if (lines.some((l) => segmentIsReaderDirective(l))) return [...demands];
+  return demands.filter((d) => {
+    const dc = foldCompact(d);
+    const located = lines.filter((l) => l.includes(d) || (dc.length >= 3 && foldCompact(l).includes(dc)));
+    if (located.length === 0) return true;
+    return located.some((l) => segmentIsReaderDirective(l));
+  });
 }
 
 /** 围栏感知切段：```…``` 代码块整体为一段，围栏外按句读切。 */
@@ -5695,7 +5798,38 @@ export function finalizeAskAnswer(
         }
       }
     }
+    // 编码串半截回显：只在本答案已进入隔离处置（本轮或上游 guard 已打标记）或
+    // 资料带可隔离内容时执行——良性笔记里的长标识符不受影响。
+    if (
+      opts.dataText &&
+      (isolated ||
+        CONTROL_MARKS.some((m) => out.includes(m)) ||
+        !dataSurfaceFullyBenign(opts.dataText, opts.dataUnits))
+    ) {
+      const dangerousData = !dataSurfaceFullyBenign(opts.dataText, opts.dataUnits);
+      const afterOpaque = scrubDataDerivedOpaqueRuns(out, opts.dataText, opts.question, {
+        questionExempt: true,
+        dangerText: dangerousData ? dangerProvenanceLines(opts.dataText, opts.dataUnits).join("\n") : undefined,
+      });
+      if (afterOpaque !== out) {
+        out = afterOpaque;
+        isolated = true;
+        why("scrub:opaque-run-echo");
+      }
+    }
   }
+  // R308 生产实测（T01/X20/R04 normal+verbatim）：地址主体隔离后，同一危险语句里
+  // 的代码词半截（`H=relay3;`、`evil&#x2e;`）留在答案里。放在全部隔离层之后跑：
+  // 先由上游按行/按段处置，最后只清残留，不改变上游对行形态的判定。
+  const applyCodeResidue = (): void => {
+    if (!opts.dataText || dataSurfaceFullyBenign(opts.dataText, opts.dataUnits)) return;
+    const afterCode = scrubDangerCodeResidue(out, opts.dataText, opts.dataUnits);
+    if (afterCode !== out) {
+      out = afterCode;
+      isolated = true;
+      why("scrub:danger-code-residue");
+    }
+  };
   // R278 P1-4（audit-r277 §3：13 例「。」/「[1]」残片）：收口改写后只剩
   // 无意义残片（去掉引文角标/标点后不足 4 个有效字符）且没有任何可读
   // 隔离说明时，转为明确的隔离提示，绝不把残片当答案交付。
@@ -6312,6 +6446,7 @@ export function finalizeAskAnswer(
       isolated = true;
       why(`residue:${residueTrace}`);
     }
+    applyCodeResidue();
     if (opts.execClassifierUnavailable) {
       // 降级窗口对用户始终可感知（R286 P0-1 / R292 §4）：即使本次答案是纯散文
       // 未被动过，也附提示说明当前处于降级窗口，避免「随机抽风」的观感。
@@ -6327,6 +6462,7 @@ export function finalizeAskAnswer(
   // 的行复查确定性痕迹（载体无关下界，善意行不命中），verbatim 前置警示、
   // 非 verbatim 整行替换为隔离标记。
   applyLineClosure();
+  applyCodeResidue();
   out = dedupeControlMarkLines(out);
   // R286 P0-1：降级窗口给用户可感知的显式提示（不只靠行内标记）。
   const degraded = out.includes(EXEC_DEGRADED_ISOLATED_MARK);
@@ -6519,6 +6655,161 @@ export const ISOLATION_NOTICE_ANSWER =
 export const LINK_ONLY_REDIRECT_NOTICE =
   "这条笔记的主体是链接，问答区不转写外部链接；点开下方引用的笔记卡片即可查看。";
 
+// 资料派生「不透明编码串」回显收口（R308，生产实测 R04 摩尔斯 `.-. . .-..` /
+// R23 `\x63\x75` 半截回显）：答案里出现的摩尔斯/转义/百分号/base 类编码串只要
+// 是资料中某个编码串的子串（≥5 字符），就是被截断的载荷回显——不依赖能否解码，
+// 只看形态 + 资料派生；用户明文提问里已有的串不算。
+const OPAQUE_RUN_RE =
+  /(?:[.\-·—]{1,6}[ \t]+){2,}[.\-·—]{1,6}|(?:\\x[0-9a-f]{2}[\\'"]?){2,}|(?:\\[0-7]{3}){2,}|(?:%[0-9a-f]{2}){2,}|(?:0x[0-9a-f]{2}[\s,]*){3,}|[A-Za-z0-9+/]{12,}={0,6}|[A-Za-z0-9+/]{6,}={1,6}/gi;
+// 答案侧的候选可以更短（半截回显）：只要是资料侧合格编码串的子串就算。
+const OPAQUE_ECHO_RE =
+  /(?:[.\-·—]{1,6}[ \t]+){1,}[.\-·—]{1,6}|(?:\\x[0-9a-f]{2}[\\'"]?)+|(?:\\[0-7]{3})+|(?:%[0-9a-f]{2})+|(?:0x[0-9a-f]{2}[\s,]*)+|[A-Za-z0-9+/]{5,}={0,6}/gi;
+
+// 纯字母数字长串只在「像密文」时算：base64 需大小写+数字混排或带 +/=；
+// base32 需 ≥2 个数字（普通英文长词 / 标识符不算）。
+function opaqueRunShape(t: string): boolean {
+  if (!/^[A-Za-z0-9+/=]+$/.test(t)) return true;
+  if (/[+=]/.test(t)) return true;
+  if (t.includes("/")) return /\d/.test(t) && /[a-z]/.test(t) && /[A-Z]/.test(t); // 路径不算
+  if (/^[A-Z2-7]+$/.test(t)) return t.length >= 16 || (t.match(/[2-7]/g)?.length ?? 0) >= 2;
+  return /\d/.test(t) && /[a-z]/.test(t) && /[A-Z]/.test(t);
+}
+
+function opaqueRunsOf(text: string): string[] {
+  return [...text.matchAll(OPAQUE_RUN_RE)].map((m) => m[0].trim()).filter((r) => r.length >= 5 && opaqueRunShape(r));
+}
+
+/**
+ * `dangerText`：判为危险的语句行（及其引用的赋值行）。来自这些行的编码串不受
+ * 提问点名豁免；资料其余行（善意邻行/邻笔记里的路径段、标识符）仍按提问豁免。
+ */
+export function scrubDataDerivedOpaqueRuns(
+  answer: string,
+  dataText: string,
+  question: string,
+  opts?: { questionExempt?: boolean; dangerText?: string }
+): string {
+  if (!dataText) return answer;
+  const runs = opaqueRunsOf(dataText);
+  if (runs.length === 0) return answer;
+  const dangerRuns = opts?.dangerText ? opaqueRunsOf(opts.dangerText) : [];
+  const qFold = question.normalize("NFKC").toLowerCase();
+  const questionExempt = opts?.questionExempt ?? true;
+  const echoes = (pool: string[], t: string): boolean => pool.some((r) => r.includes(t) || t.includes(r));
+  return answer.replace(OPAQUE_ECHO_RE, (m) => {
+    const t = m.trim();
+    if (t.length < 5) return m;
+    if (echoes(dangerRuns, t)) return INSTRUCTION_ISOLATED_MARK;
+    if (questionExempt && qFold.includes(t.toLowerCase())) return m;
+    return echoes(runs, t) ? INSTRUCTION_ISOLATED_MARK : m;
+  });
+}
+
+// 危险资料代码词残留（R308 生产实测 T01 `H=relay3; D=〔隔离〕;` / X20 `evil&#x2e;〔隔离〕`）：
+// 地址主体被隔离后，同一危险语句里的代码词（变量赋值、去牙/实体编码的标签、路径片段）
+// 仍以半截形态留在答案里。危险资料的端点坐标不走答案通道（原文由引用卡片承接），与用户
+// 提问是否点名无关——判据只有两条：①来源是判为危险的**语句行**（同一笔记里的无害邻行
+// 不株连），外加把变量值送进该行的赋值行（`H=relay3` → `$H`）；②形态是代码词（含数字或
+// 代码标点的空白分隔记号）。答案里任何与这类代码词互为子串的 ASCII 记号一律折叠，
+// 不枚举标签词、不依赖能否还原地址。
+const CODE_WORD_SHAPE_RE = /[0-9=;:/&#$%@|\\<>{}\[\]`'"~+*_.-]/;
+const ASCII_TOKEN_RE = /[A-Za-z0-9][A-Za-z0-9=;:/&#$%@|\\<>{}\[\]`'"~+*_.-]*/g;
+const SHELL_ASSIGN_RE = /(?:^|[\s;])(?:export\s+|set\s+|let\s+|const\s+|var\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["'`]?([^\s;"'`]+)/g;
+
+function dangerLineIsDangerous(line: string): boolean {
+  return line.trim().length > 0 && (noteContainsExecutableCommand(line) || dataTextHasIsolatableContent(line));
+}
+
+/**
+ * 危险来源行：每个资料单元里判为危险的语句行，加上被危险行以 `$NAME`/`${NAME}`
+ * 引用的跨行赋值（`H=relay3` → `$H`）。同一笔记/邻笔记的无害行不株连。
+ */
+export function dangerProvenanceLines(dataText: string, dataUnits?: string[]): string[] {
+  const units = (dataUnits && dataUnits.length > 0 ? dataUnits : [dataText]).filter((u) => u.trim().length > 0);
+  const out: string[] = [];
+  for (const u of units) {
+    const lines = u.split(/\r?\n/);
+    const danger = lines.filter(dangerLineIsDangerous);
+    if (danger.length === 0) continue;
+    out.push(...danger);
+    const referenced = new Set<string>();
+    for (const d of danger) for (const m of d.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g)) referenced.add(m[1]);
+    if (referenced.size > 0) {
+      for (const l of lines) {
+        if (danger.includes(l)) continue;
+        for (const m of l.matchAll(SHELL_ASSIGN_RE)) if (referenced.has(m[1])) out.push(`${m[1]}=${m[2]}`);
+      }
+    }
+  }
+  return out;
+}
+
+function dangerCodeWords(provenance: string[]): string[] {
+  const out = new Set<string>();
+  for (const line of provenance) {
+    for (const w of line.normalize("NFKC").split(/\s+/)) {
+      const t = w.replace(/^[^A-Za-z0-9$/\\]+|[，。；：！？、,.;:!?)）」』]+$/g, "");
+      if (t.length >= 3 && /[A-Za-z0-9]/.test(t) && CODE_WORD_SHAPE_RE.test(t)) out.add(t.toLowerCase());
+    }
+  }
+  return [...out];
+}
+
+export function scrubDangerCodeResidue(answer: string, dataText: string, dataUnits?: string[]): string {
+  if (!dataText) return answer;
+  const provenance = dangerProvenanceLines(dataText, dataUnits);
+  const codeWords = dangerCodeWords(provenance);
+  if (codeWords.length === 0) return answer;
+  // 纯字母词（curl/bash/evil）不按子串连坐：只有它本身是危险来源行里端点的主机标签
+  // （`evil&#x2e;example&#x2e;com` → evil）才算坐标残留；命令词/散文词、善意邻行
+  // 里的主机名（`grafana.example.com` → grafana）照常保留。
+  const labels = dangerEndpointLabels(provenance.join("\n"));
+  // 来源归属：答案记号若原样出现在善意行里而**不**出现在任何危险来源行（含按代码标点
+  // 拆开的子记号）里，它是善意邻行的回显（`SHA256 校验值…` vs 危险行 `sha256sum`），不折叠。
+  const tokensOf = (text: string, splitPunct: boolean): Set<string> => {
+    const s = new Set<string>();
+    for (const w of text.normalize("NFKC").toLowerCase().split(splitPunct ? /[\s=;:/&#$%@|\\<>{}\[\]`'"~+*_.,()（）「」]+/ : /\s+/)) {
+      const t = w.replace(/^[^a-z0-9$/\\]+|[，。；：！？、,.;:!?)）」』]+$/g, "");
+      if (t.length >= 3) s.add(t);
+    }
+    return s;
+  };
+  const dangerSet = new Set(provenance);
+  const benignLines = (dataUnits && dataUnits.length > 0 ? dataUnits : [dataText])
+    .flatMap((u) => u.split(/\r?\n/))
+    .filter((l) => !dangerSet.has(l));
+  const benignTokens = tokensOf(benignLines.join("\n"), false);
+  const dangerTokens = tokensOf(provenance.join("\n"), true);
+  for (const w of tokensOf(provenance.join("\n"), false)) dangerTokens.add(w);
+  const MARKS = [INSTRUCTION_ISOLATED_MARK, EXEC_ISOLATED_MARK, EXEC_DEGRADED_ISOLATED_MARK];
+  const isResidue = (tok: string): boolean => {
+    const t = tok.toLowerCase();
+    if (t.length < 3) return false;
+    if (/^[[［]?\d{1,2}[\]］]?$/.test(t)) return false; // 引文角标
+    if (!CODE_WORD_SHAPE_RE.test(t)) return labels.has(t);
+    if (benignTokens.has(t) && !dangerTokens.has(t)) return false;
+    return codeWords.some((c) => c.includes(t) || t.includes(c));
+  };
+  let changed = false;
+  const out = answer
+    .split(/(\s+)/)
+    .map((w) => {
+      if (/^\s*$/.test(w) || MARKS.some((m) => w === m)) return w;
+      let body = w;
+      for (const m of MARKS) body = body.split(m).join(" ");
+      const hit = [...body.matchAll(ASCII_TOKEN_RE)].some((m) => isResidue(m[0].replace(/[，。；：！？、,.;:!?)）」』]+$/, "")));
+      if (!hit) return w;
+      changed = true;
+      // 保留词尾的引文角标与句读，代码词整体折叠。
+      const trail = /(?:[[［]\d{1,2}[\]］])?[。，！？、」』]*$/.exec(w)?.[0] ?? "";
+      return `${INSTRUCTION_ISOLATED_MARK}${trail}`;
+    })
+    .join("");
+  if (!changed) return answer;
+  const dedupe = new RegExp(`(?:${INSTRUCTION_ISOLATED_MARK}[ \\t]*){2,}`, "g");
+  return out.replace(dedupe, INSTRUCTION_ISOLATED_MARK).replace(/[ \t]{2,}/g, " ");
+}
+
 // 资料派生邮箱收口（R276，audit-r275 K01 族 / R270-31）：跨笔记分片攻击把
 // 外传目的地邮箱放进另一条笔记，摘要/枚举类回答忠实转述时就把回传地址递
 // 到了叙述层。用户没问邮箱/联系方式/原文时，答案里出现「资料里的邮箱地址」
@@ -6533,18 +6824,33 @@ export function scrubDataDerivedEmails(answer: string, dataText: string, questio
   // 「把合同扫描件发送到 hr@…」这类自有笔记的日常收件人保留。
   if (!dataText || EMAIL_ASKED_RE.test(question)) return answer;
   const dataFold = dataText.normalize("NFKC").toLowerCase();
+  // R308（R270-31 跨笔记分片生产实测）：动作行与目的地行分存两条笔记时，目的地
+  // 句段自身没有外传动作——动作由资料里的读者指令行供给。资料含读者指令行
+  // 即视为「外传动作在场」，答案里资料派生的邮箱/主机名一律隔离（原文仍在卡片）。
+  const dataHasDirective = dataText.split("\n").some((l) => segmentIsReaderDirective(l));
+  const qFold = question.normalize("NFKC").toLowerCase();
+  const fromData = (m: string): boolean => {
+    const f = m.normalize("NFKC").toLowerCase();
+    return dataFold.includes(f) && !qFold.includes(f) && !LOCAL_HOST_RE.test(f.split("@").pop() ?? "");
+  };
+  // 裸主机只认常见真实 TLD（`certutil.exe`/`a.exe`/`limits.memory` 不是地址）；
+  // 危险执行段留给 isolateNoteInstructions 整段处置，此处不动（否则命令被拆成
+  // 半截、执行隔离标记无从插入）。
+  const bareHostFromData = (m: string): boolean =>
+    COMMON_TLDS.has(m.toLowerCase().slice(m.lastIndexOf(".") + 1)) && fromData(m);
   const segs = answer.split(/(?<=[\n。！？!?；;])/);
   return segs
-    .map((seg) =>
-      EXFIL_ACT.test(seg) && EXFIL_OBJ.test(seg)
-        ? seg.replace(ANSWER_EMAIL_RE, (m) =>
-            dataFold.includes(m.normalize("NFKC").toLowerCase()) &&
-            !LOCAL_HOST_RE.test(m.split("@")[1] ?? "")
-              ? INSTRUCTION_ISOLATED_MARK
-              : m
-          )
-        : seg
-    )
+    .map((seg) => {
+      if (dataHasDirective) {
+        if (globalExecDangerReason(seg) !== null || execDegradedTraceReason(seg) !== null) return seg;
+        return seg
+          .replace(ANSWER_EMAIL_RE, (m) => (fromData(m) ? INSTRUCTION_ISOLATED_MARK : m))
+          .replace(BARE_HOST_SHADOW_RE, (m) => (bareHostFromData(m) ? INSTRUCTION_ISOLATED_MARK : m));
+      }
+      return EXFIL_ACT.test(seg) && EXFIL_OBJ.test(seg)
+        ? seg.replace(ANSWER_EMAIL_RE, (m) => (fromData(m) ? INSTRUCTION_ISOLATED_MARK : m))
+        : seg;
+    })
     .join("");
 }
 

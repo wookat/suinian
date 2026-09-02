@@ -9,7 +9,7 @@ import {
   type SimulationNodeDatum,
 } from "d3-force"
 import { Maximize2, RotateCcw } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn, noteDisplayLabel } from "@/lib/utils"
 import type { Note, ThreadGraph } from "@/lib/types"
 
 const MAX_ENTITIES = 20
@@ -58,7 +58,7 @@ interface ThreadGraphViewProps {
 
 function noteLabel(n: Note): string {
   if (n.is_sensitive === 1) return "敏感内容"
-  const t = (n.title || n.content || "").replace(/\s+/g, " ").trim()
+  const t = noteDisplayLabel(n, Infinity)
   return t.length > 14 ? `${t.slice(0, 14)}…` : t || "碎片"
 }
 

@@ -2,8 +2,13 @@ import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { DEFAULT_TZ, loadUserTz, tzOffsetMs, tzOffsetMinutes, tzSqlModifier } from "./triage";
 import { localDateOf, parseCreatedAt } from "./stats";
-import { scrubAnswerLinks, execOutletTag, noteContainsExecutableCommand, noteRowContainsExecutableCommand, EXEC_OUTLET_WARN_TAG } from "./prompt-armor";
+import { scrubAnswerLinks, execOutletTag, execDisplayTitle, noteContainsExecutableCommand, noteRowContainsExecutableCommand, EXEC_OUTLET_WARN_TAG } from "./prompt-armor";
 import { bumpGuardEvents } from "./guard-events";
+
+/** 列表行标题：危险行只出安全短标题/占位，其余照旧 title→content 回落。 */
+function rowTitle(n: Pick<NoteRow, "title" | "content" | "meta">, max: number): string {
+  return (noteRowContainsExecutableCommand(n) ? execDisplayTitle(n) : n.title || n.content).slice(0, max);
+}
 
 /** R306 P0-1：周报/月报行级危险标注（audit-r305 §3：周报原样带出 curl|bash 无警示）。 */
 function execLinePrefix(n: Pick<NoteRow, "content" | "meta">): string {
@@ -176,7 +181,7 @@ export async function todoStatsForWeek(
     .bind(userId, tzModifier, weekStart, tzModifier, weekEnd)
     .all<NoteRow>();
   const done = (doneRows.results ?? []).filter((n) => !n.is_sensitive);
-  const title = (n: NoteRow) => `${execLinePrefix(n)}${escapeMdText((n.title || n.content).slice(0, 40))}`;
+  const title = (n: NoteRow) => `${execLinePrefix(n)}${escapeMdText(rowTitle(n, 40))}`;
   return {
     created: todos.length,
     createdDone: todos.filter((n) => n.todo_done).length,
@@ -296,7 +301,7 @@ export function fallbackMarkdown(
   for (const [cat, rows] of byCat) {
     md += `\n## ${CATEGORY_LABEL[cat] ?? cat}（${counts.get(cat) ?? rows.length}）\n`;
     const hidden = rows.filter((n) => n.is_sensitive).length;
-    for (const n of rows.filter((n) => !n.is_sensitive)) md += `- ${execLinePrefix(n)}${escapeMdText((n.title || n.content).slice(0, 60))}\n`;
+    for (const n of rows.filter((n) => !n.is_sensitive)) md += `- ${execLinePrefix(n)}${escapeMdText(rowTitle(n, 60))}\n`;
     if (hidden > 0) md += `- （另有 ${hidden} 条敏感记录，内容不展示）\n`;
   }
   return md;
@@ -425,7 +430,7 @@ export async function generatePeriodReport(
           // 日期按用户时区展示，与报告期段边界同口径（R107 P2-2：原始 UTC 日期错位）
           const ms = parseCreatedAt(n.created_at);
           const day = Number.isNaN(ms) ? n.created_at.slice(0, 10) : localDateOf(ms, offsetMin);
-          return `${i + 1}. [${cat}]${amt} (${day}) ${execLinePrefix(n)}${(n.title || n.content).slice(0, 200)}`;
+          return `${i + 1}. [${cat}]${amt} (${day}) ${execLinePrefix(n)}${rowTitle(n, 200)}`;
         })
         .join("\n");
       const label = label0;

@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -1403,8 +1403,11 @@ export function normalizeStoredTodoDue(v: string | null): string | null {
 }
 
 function noteToJson(n: NoteRow) {
+  const exec = noteRowContainsExecutableCommand(n);
   return {
     ...n,
+    // 危险笔记的标题显示在正文折叠警示之外：抄入原文/地址/编码串的标题一律置空
+    title: exec ? execSafeTitle(n.title, n.content) : n.title,
     todo_due: normalizeStoredTodoDue(n.todo_due),
     tags: JSON.parse(n.tags || "[]") as string[],
     meta: parseNoteMeta(n.meta),
@@ -1414,7 +1417,7 @@ function noteToJson(n: NoteRow) {
     // 数据面统一危险标记（R304 P0-A）：notes.list / 引用卡片 / 搜索 / 导出 /
     // 今日回顾 / MCP 全部经由本序列化点，出口共用同一判定
     // R308 P0-1：分片投放（meta.exec_fragment）与内容判定同口径。
-    contains_executable_command: noteRowContainsExecutableCommand(n),
+    contains_executable_command: exec,
     content_enc: undefined,
   };
 }
@@ -4997,14 +5000,10 @@ app.post("/api/ask", async (c) => {
     // 行都能定位且无一行命中 segmentIsReaderDirective 时，该 demand 只是技术
     // 正文里的祈使措辞（prompt 模板/运维手册），不是对回答行为的指令，
     // 确定性剔除；定位不到完整行（跨行/跨笔记拼接）时 fail-closed 保留。
-    const askGuardLines = askGuardData.split("\n");
-    const demandLineIsDirective = (d: string) => {
-      const dc = foldCompact(d);
-      const lines = askGuardLines.filter((l) => l.includes(d) || (dc.length >= 3 && foldCompact(l).includes(dc)));
-      if (lines.length === 0) return true; // 定位不到：fail-closed 保留
-      return lines.some((l) => segmentIsReaderDirective(l));
-    };
-    const demands = grounded === null ? null : grounded.filter(demandLineIsDirective);
+    const demands = grounded === null ? null : filterDirectiveDemands(grounded, askGuardData);
+    // 两层 LLM 判别器（抽取器 + 审计）同时不可用时的确定性兜底信号：资料任一行是
+    // 读者指令即按「资料含指令」处置，不因上游故障退化为无闸门放行。
+    const askGuardDataHasDirective = askGuardData.split("\n").some((l) => segmentIsReaderDirective(l));
     if (grounded !== null && demands !== null && demands.length < grounded.length)
       console.log(`ask: ${grounded.length - demands.length} non-directive technical demand(s) dropped`);
     const g = guardAskAnswer(answer2, {
@@ -5064,9 +5063,9 @@ app.post("/api/ask", async (c) => {
               return null;
             });
       askMarks.push(["conaud", Date.now() - tAud]);
-      if (verdict === null && (demands?.length ?? 0) > 0) {
+      if (verdict === null && ((demands?.length ?? 0) > 0 || (demands === null && askGuardDataHasDirective))) {
         console.log("ask: fail-closed conservative answer (demands present, audit unavailable)");
-        isolateGen("audit:unavailable+demands");
+        isolateGen(demands === null ? "audit:unavailable+directive-line" : "audit:unavailable+demands");
         answer2 =
           "相关笔记中包含试图影响回答的指令，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
           notes.slice(0, 3).map((_n, i) => `[${i + 1}]`).join(" ");
@@ -5593,9 +5592,10 @@ app.post("/api/ask", async (c) => {
       new Promise<string[] | null>((resolve) => setTimeout(() => resolve(null), 8_000)),
     ]).then((d) => {
       demandsRawS = d;
-      groundedDemandsS = (d ?? []).filter(
-        (x) => askGuardData.includes(x) || askGuardDataCompactS.includes(foldCompact(x))
-      );
+      groundedDemandsS = [
+        ...(d ?? []).filter((x) => askGuardData.includes(x) || askGuardDataCompactS.includes(foldCompact(x))),
+        ...implicitRelayDemands(askGuardData),
+      ];
       demandsSettled = true;
       askMarks.push(["dirwait", Date.now() - tPre]);
     });
@@ -6299,8 +6299,10 @@ app.get("/api/export", async (c) => {
     for (const n of notes) {
       // 危险标记随导出走（R304 P0-A）：Markdown 无折叠交互，改为在原文前加
       // 明确风险警示行（JSON 导出经 noteToJson 已带 contains_executable_command）
+      // 警示行紧跟标题、先于元数据；危险笔记的链接字段不单列（地址只在警示之后的原文里出现）
       const execWarn = n.contains_executable_command ? `\n> ${EXEC_OUTLET_WARN_LINE}\n` : "";
-      md += `\n### ${exportMdHeading(n)}\n- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${n.url ? ` | 链接：${n.url}` : ""}\n${execWarn}\n${n.content}\n`;
+      const link = n.url && !n.contains_executable_command ? ` | 链接：${n.url}` : "";
+      md += `\n### ${exportMdHeading(n)}\n${execWarn}- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${link}\n\n${n.content}\n`;
     }
     md += `\n## 思考线索\n`;
     for (const t of threads) md += `\n### ${t.title}（${t.note_count} 条）\n${t.summary ?? ""}\n`;
@@ -6324,7 +6326,8 @@ app.get("/api/export", async (c) => {
  * 把标题撕成代码块、警示行落进围栏；N01/N02/X25 标题不可定位）：只取首个非空
  * 行、剥掉 Markdown 结构字符、限长，空则回落到笔记 id，保证每条都有可定位标题。
  */
-export function exportMdHeading(n: { id: string; title: string | null; content: string }): string {
+export function exportMdHeading(n: { id: string; title: string | null; content: string; contains_executable_command?: boolean }): string {
+  if (n.contains_executable_command) return `${execSafeTitle(n.title, n.content) ?? EXEC_TITLE_PLACEHOLDER}（${n.id}）`;
   const first = (n.title || n.content || "")
     .split("\n")
     .map((l) => l.replace(/[`#>*_\[\]|]/g, "").trim())
