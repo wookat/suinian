@@ -61,8 +61,11 @@ export function isolatedRefTarget(m: IsolationAttributionInput): number | null {
   const refIndexes = new Set((m.refs ?? []).map((r) => r.index))
   const fromServer = (m.isolatedRefs ?? []).find((n) => refIndexes.has(n))
   if (fromServer !== undefined) return fromServer
+  const flagged = (m.refs ?? []).find((r) => r.note.contains_executable_command)
+  // 危险命令隔离标记：数据面判危的引用比标记邻近的 [n] 更可信（邻近角标可能
+  // 只是同段落里幸存的善意引用）
+  if (flagged && /〔已隔离危险命令|〔代码安全判别暂不可用/.test(m.content)) return flagged.index
   const loc = isolatedMarkLocation(m.content)
   if (loc?.refIndex != null && refIndexes.has(loc.refIndex)) return loc.refIndex
-  const flagged = (m.refs ?? []).find((r) => r.note.contains_executable_command)
   return flagged ? flagged.index : null
 }

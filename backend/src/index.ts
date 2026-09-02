@@ -80,7 +80,7 @@ import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
 import { recordOutletExecMarks } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
-import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes } from "./ask";
+import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -4948,6 +4948,7 @@ app.post("/api/ask", async (c) => {
   const askScrubSource = `${question}\n${recallQuestion}\n${scrubBodies}\n${graphTriples.join("\n")}`;
   // 输出侧防执行护栏（R264 P1 层 4）：结构控制 token/不可见字符不外带
   if (answer2) answer2 = scrubModelOutputInjectionArtifacts(stripDataMarks(answer2));
+  const preGuardAnswer = answer2 ?? "";
   // R266 输出侧收口：外链零输出（回传通道）+ 资料派生 marker 剥除（执行痕迹）。
   // 与变体形态无关：不猜哪句是注入，只封死攻击必需的外带通道。
   if (answer2) {
@@ -5294,6 +5295,17 @@ app.post("/api/ask", async (c) => {
       references.push({ index: references.length + 1, note_id: id });
     }
   }
+  // R308 P1-1：生成侧隔离剥掉的句段所引笔记不能从 references 消失（横幅归因 +
+  // 「原文可在引用的笔记卡片中查看」都要落在真实卡片上）。
+  const isolatedRefs = genIsolated
+    ? attachIsolatedSources(
+        references,
+        preGuardAnswer,
+        negScrubbed,
+        noteIds,
+        notes.filter((n) => !weakIds.has(n.id) && noteRowContainsExecutableCommand(n)).map((n) => n.id)
+      )
+    : [];
   const byId = new Map(notes.map((n) => [n.id, n]));
   const refNotes = await Promise.all(
     references.map((r) => noteToJsonDecrypted(c.env, byId.get(r.note_id)!))
@@ -5340,6 +5352,7 @@ app.post("/api/ask", async (c) => {
     notes: refNotes,
     ...(genIsolated ? { instruction_isolated: true } : {}),
     ...(genIsolated && genIsolatedReason !== null ? { isolation_reason: genIsolatedReason } : {}),
+    ...(isolatedRefs.length > 0 ? { isolated_refs: isolatedRefs } : {}),
   };
   };
 
@@ -5532,7 +5545,12 @@ app.post("/api/ask", async (c) => {
     }
     const { isolation_reason: _dropped, ...bodyOut } = body;
     void _dropped;
-    const isolatedRefs = isolated ? isolatedReferenceIndexes(body.answer, fin.answer, body) : [];
+    const genIsolatedRefs = Array.isArray(body.isolated_refs)
+      ? body.isolated_refs.filter((n): n is number => typeof n === "number")
+      : [];
+    const isolatedRefs = isolated
+      ? [...new Set([...genIsolatedRefs, ...isolatedReferenceIndexes(body.answer, fin.answer, body)])]
+      : [];
     // R306 P1-2（audit-r305 §11：4/4 隔离态答案区无字面标记）：结构化 isolated
     // 与答案区字面 〔…〕 标记必须同现——保守答案/审计剥空等在 finalize 之前
     // 成形的隔离文案不携带控制标记（携带会被防仿冒剥除），在唯一出口补齐。
