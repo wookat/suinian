@@ -2,7 +2,7 @@ import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { findGraphThreadMate } from "./graph";
 import { ensureNoteEmbedding, cosineSim, noteHasSemanticSignal } from "./semantic";
-import { execOutletTag, noteContainsExecutableCommand, EXEC_OUTLET_WARN_TAG } from "./prompt-armor";
+import { execOutletTag, noteContainsExecutableCommand, noteRowContainsExecutableCommand, EXEC_OUTLET_WARN_TAG } from "./prompt-armor";
 import { recordOutletExecMarks } from "./guard-events";
 
 // re-export for existing consumers (graph.ts, tests); the implementation
@@ -85,18 +85,18 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
   try {
 
     const { results: notes } = await env.DB.prepare(
-      "SELECT title, content, created_at FROM notes WHERE thread_id = ? ORDER BY created_at ASC LIMIT 50"
+      "SELECT title, content, meta, created_at FROM notes WHERE thread_id = ? ORDER BY created_at ASC LIMIT 50"
     )
       .bind(threadId)
-      .all<{ title: string | null; content: string; created_at: string }>();
+      .all<{ title: string | null; content: string; meta: string | null; created_at: string }>();
     const rows = notes ?? [];
     if (rows.length === 0) return;
     // R306 P0-1：摘要生成前对危险笔记打标（模型可见），摘要落库时再加警示兜底
-    const dangerous = rows.filter((n) => noteContainsExecutableCommand(n.content || "")).length;
+    const dangerous = rows.filter((n) => noteRowContainsExecutableCommand(n)).length;
     recordOutletExecMarks(env, "thread", dangerous);
     const digest = rows
       .map((n, i) => {
-        const tag = execOutletTag(n.content);
+        const tag = execOutletTag(n.content, n.meta);
         return `${i + 1}. (${n.created_at.slice(0, 10)}) ${tag ? `${tag} ` : ""}${(n.title || n.content).slice(0, 200)}`;
       })
       .join("\n");

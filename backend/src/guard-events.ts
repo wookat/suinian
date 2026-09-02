@@ -7,9 +7,9 @@ import type { Env } from "./types";
  * `outlet_<x>_requests` 与 `outlet_<x>_exec_marked_requests`，
  * 标注率 = exec_marked_requests / requests 可直接计算。无用户维度、无内容。
  */
-export type GuardOutlet = "report" | "backup" | "export" | "push" | "thread" | "mcp" | "ask_ref";
+export type GuardOutlet = "report" | "backup" | "export" | "push" | "thread" | "mcp" | "ask_ref" | "fragment" | "list" | "search" | "review";
 
-export async function bumpGuardEvents(env: Env, rows: Array<[string, number]>): Promise<void> {
+export async function bumpGuardEvents(env: Pick<Env, "DB">, rows: Array<[string, number]>): Promise<void> {
   const day = new Date().toISOString().slice(0, 10);
   for (const [kind, n] of rows) {
     await env.DB.prepare(
@@ -21,7 +21,7 @@ export async function bumpGuardEvents(env: Env, rows: Array<[string, number]>): 
 }
 
 export function recordOutletExecMarks(
-  env: Env,
+  env: Pick<Env, "DB">,
   outlet: GuardOutlet,
   markedNotes: number,
   waitUntil?: (p: Promise<unknown>) => void

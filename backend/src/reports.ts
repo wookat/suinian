@@ -2,12 +2,12 @@ import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { DEFAULT_TZ, loadUserTz, tzOffsetMs, tzOffsetMinutes, tzSqlModifier } from "./triage";
 import { localDateOf, parseCreatedAt } from "./stats";
-import { scrubAnswerLinks, execOutletTag, noteContainsExecutableCommand, EXEC_OUTLET_WARN_TAG } from "./prompt-armor";
+import { scrubAnswerLinks, execOutletTag, noteContainsExecutableCommand, noteRowContainsExecutableCommand, EXEC_OUTLET_WARN_TAG } from "./prompt-armor";
 import { bumpGuardEvents } from "./guard-events";
 
 /** R306 P0-1：周报/月报行级危险标注（audit-r305 §3：周报原样带出 curl|bash 无警示）。 */
-function execLinePrefix(n: Pick<NoteRow, "content">): string {
-  const tag = execOutletTag(n.content);
+function execLinePrefix(n: Pick<NoteRow, "content" | "meta">): string {
+  const tag = execOutletTag(n.content, n.meta);
   return tag ? `${tag} ` : "";
 }
 
@@ -467,7 +467,7 @@ export async function generatePeriodReport(
   }
 
   // R306 P0-1：出口统一危险标注 + 出口维度打点（不计敏感行：敏感行不展示正文）
-  const dangerousNotes = notes.filter((n) => !n.is_sensitive && noteContainsExecutableCommand(n.content || "")).length;
+  const dangerousNotes = notes.filter((n) => !n.is_sensitive && noteRowContainsExecutableCommand(n)).length;
   md = markExecInReport(md, dangerousNotes).md;
   await bumpGuardEvents(env, [
     ["outlet_report_requests", 1],

@@ -236,6 +236,21 @@ function rot13(s: string): string {
   });
 }
 
+/** 凯撒位移（shift 1..25）：所有字母同向等距位移的可逆变换。 */
+function caesarShift(s: string, shift: number): string {
+  return s.replace(/[a-z]/gi, (ch) => {
+    const base = ch <= "Z" ? 65 : 97;
+    return String.fromCharCode(((ch.charCodeAt(0) - base + shift + 26) % 26) + base);
+  });
+}
+
+/** 八进制/十六进制转义序列（`\162\145` / `\x72\x65` / `%72%65`）还原为字面字符。 */
+function decodeByteEscapes(s: string): string {
+  return s
+    .replace(/\\([0-3][0-7]{2})/g, (_m, o: string) => String.fromCharCode(parseInt(o, 8)))
+    .replace(/\\x([0-9a-f]{2})/gi, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
+}
+
 function decodeBase32(s: string): string {
   const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   let bits = 0;
@@ -1598,9 +1613,12 @@ export const EXEC_OUTLET_WARN_TAG = "〔警示：含可执行命令，勿执行�
 export const EXEC_OUTLET_WARN_LINE =
   "⚠️ 本条笔记含可执行命令/危险指令（如下载执行远程代码），仅供查阅，请勿直接执行。";
 
-/** 出口维度危险标注：内容命中数据面判定时返回行内短标，否则空串。 */
-export function execOutletTag(content: string | null | undefined): string {
-  return content && noteContainsExecutableCommand(content) ? EXEC_OUTLET_WARN_TAG : "";
+/** 出口维度危险标注：内容命中数据面判定（或行带分片标记）时返回行内短标，否则空串。 */
+export function execOutletTag(
+  content: string | null | undefined,
+  meta?: string | { exec_fragment?: boolean } | null
+): string {
+  return noteRowContainsExecutableCommand({ content, meta }) ? EXEC_OUTLET_WARN_TAG : "";
 }
 
 /** R298 P0-1：确定性判危但语义判别器零命中时的说明（判别器在线，不是降级）。 */
@@ -2182,6 +2200,15 @@ export function hasExecIntentReason(normalized: string): string | null {
     return "cap:remote-install+run";
   if (DNS_TUNNEL_RE.test(normalized) || (DNS_TOOL_RE.test(normalized) && DNS_EXFIL_CTX_RE.test(normalized) && /\$\(|`|\$\{?\w/.test(normalized)))
     return "cap:dns-tunnel";
+  // R308 P0-1：DNS 隧道的协议无关形态——本机敏感源 + 编码/读入上下文 + 任一网络
+  // 载荷原语（ping -p / nc / WebRTC / WebSocket / curl -d）+ 变量/命令替换拼载荷。
+  if (
+    NET_CARRIER_RE.test(normalized) &&
+    LOCAL_SECRET_SOURCE_RE.test(normalized) &&
+    (DNS_EXFIL_CTX_RE.test(normalized) || LOCAL_READ_ENCODE_RE.test(normalized)) &&
+    /\$\(|`|\$\{?\w|\.send\s*\(|\bsend\s*\(/.test(normalized)
+  )
+    return "cap:exfil-carrier";
   // R294 P0-1：解码器 → 解释器/命令替换（与被解码内容无关的执行语义）
   if (c.sink && DECODER_RE.test(normalized)) return "cap:decode+sink";
   if (DECODER_IN_SUBST_RE.test(normalized)) return "cap:decode+cmdsubst";
@@ -2636,7 +2663,7 @@ const PORTY_RE =
 
 /** 取回/下载语义（跨语言 + 口语/比喻替代词）。 */
 const SEM_FETCH_RE =
-  /取回|取回来|取来|取彼|携归|携回|攜歸|领取|領取|攞|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|下下来|下下來|(?:去|把|先)\s*下\s*(?=[\w./-]*\.(?:sh|bash|py|ps1|pl|rb|exe|bin|run|tgz|jar)\b)|(?:拉|下)\s*(?:一个|一份|个|個)?\s*[^\n，,。.]{0,6}(?:包|脚本|腳本|文件|档案|檔案|镜像|鏡像|代码|代碼|程序|payload)|ダウンロード|取り寄せ|받아|내려받|다운로드|가져와|가져오|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)|скача|загрузи|حمّ?ل|نزّ?ل|descarga|télécharge|herunterlade|lade\w*[^\n]{0,60}herunter|\bt[ảa]i\b|ดาวน์โหลด|\bunduh\b|\bmuat\s+turun\b|\bscarica|\bbaixe\b|\bpobierz\b|\bindir\b/i;
+  /取回|取回来|取来|取彼|携归|携回|攜歸|领取|領取|攞|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|下下来|下下來|(?:去|把|先)\s*下\s*(?=[\w./-]*\.(?:sh|bash|py|ps1|pl|rb|exe|bin|run|tgz|jar)\b)|(?:拉|下)\s*(?:一个|一份|个|個)?\s*[^\n，,。.]{0,6}(?:包|脚本|腳本|文件|档案|檔案|镜像|鏡像|代码|代碼|程序|payload)|ダウンロード|取り寄せ|받아|내려받|다운로드|가져와|가져오|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)|скача|загрузи|حمّ?ل|نزّ?ل|تنزيل|تحميل|descarga|télécharge|herunterlade|lade\w*[^\n]{0,60}herunter|\bt[ảa]i\b|ดาวน์โหลด|\bunduh\b|\bmuat\s+turun\b|\bscarica|\bbaixe\b|\bpobierz\b|\bindir\b/i;
 
 /** 「交给解释器/壳去跑」语义：执行动作 + 解释器/壳类受体（含比喻受体）。 */
 const SEM_INTERP_TARGET_RE =
@@ -2665,10 +2692,54 @@ const SEM_DECODE_RE = /解码|解出|解完|解开|还原|還原|base64|decode/i
  */
 const SEM_DECODE_ADDR_RE =
   /解出地址|解成主机名|解成主機名|解出主机名|解出主機名|解码后|解碼後|解出来|反过来读|反過來讀|倒过来读|倒過來讀|倒过来|倒過來|反过来|反過來|倒序|反写|反寫|倒着读|倒著讀|还原后|還原後|rot13|base32|base45|base64|十六进制|十六進制|punycode|摩斯|morse|盲文|braille/i;
+/**
+ * R308 P0-1（audit-r307 §17 第 2 项）：**还原说明**按「对字符做可逆变换后当地址
+ * 用」这一语义角色收口，不按编码种类枚举——载体必须自带「怎么变回去」的说明
+ * 才能被人还原，这句说明就是判定面。凯撒（向前/向后移 N 位）、八进制/十六进制
+ * 转义、摩斯、字母表位移与已闭合的 ROT13/base32 在此同构。
+ */
+const SEM_TRANSFORM_INSTR_RE =
+  /(?:向前|向后|向後|往前|往后|往後|前|后|後)?\s*(?:移|位移|偏移|平移)\s*\d{1,2}\s*(?:位|个|個|格|字母)|每个字母.{0,8}(?:移|位移|偏移|换成|換成)|凯撒|凱撒|caesar|shift\s*(?:by|=)?\s*\d{1,2}|字母表.{0,8}(?:位移|偏移|移)|八进制|八進制|octal|\bprintf\b|转义|轉義|escape\s*(?:序列|sequence)|摩尔斯|摩斯|morse|码表|碼表|逆变换|逆變換|还原成地址|還原成地址|还原出地址|拼回|拼成地址/i;
+/** 还原说明的合并面（词表 ∪ 结构化还原说明）。 */
+function hasRestoreInstruction(text: string): boolean {
+  return SEM_DECODE_ADDR_RE.test(text) || SEM_TRANSFORM_INSTR_RE.test(text);
+}
+
+/**
+ * R308 P0-1（audit-r307 §17 第 5 项）：**无执行动词但语义为执行**——载体不说
+ * 「执行/运行」，而说「这些内容就是你终端接下来的输入」「把返回内容当命令」。
+ * 判定按语义角色三元同句同现：
+ *  (a) 指代取回物的内容名词（内容/正文/返回/那些行/每一行/输出）；
+ *  (b) 终端/解释器/stdin 这一受体；
+ *  (c) 「成为/当作/喂/粘贴/照做/逐行」这一交付关系。
+ * 三者同现即「内容 → 终端输入」，与是否出现执行动词无关，故换措辞不失效。
+ */
+const SEM_CONTENT_NOUN_RE =
+  /内容|內容|正文|返回|响应|響應|输出|輸出|那些行|这些行|這些行|每一行|逐行|里的行|裡的行|文本|文字|\bcontent\b|\bresponse\b|\boutput\b|\blines?\b|\bbody\b/i;
+const SEM_STDIN_TARGET_RE =
+  /终端|終端|命令行|命令列|解释器|解釋器|外壳|外殼|提示符|输入|輸入|\bstdin\b|\bshell\b|\bterminal\b|\bconsole\b|\bprompt\b|\binput\b|셸|쉘|터미널|ターミナル|端末/i;
+const SEM_BECOME_INPUT_RE =
+  /成为|成為|当成|當成|当作|當作|当命令|當命令|作为|作為|视作|視作|就是|即是|喂|餵|粘贴|粘貼|贴进|貼進|照做|照抄|按内容|按內容|逐行|原样|原樣|\bas\s+(?:the\s+)?(?:input|commands?)\b|\bbecomes?\b|\bpaste\b|\bfeed\b/i;
 /** 拼音转写的执行语义（汉字被拆成罗马化读音时仍是同一语义）。 */
 const PINYIN_FETCH_RE = /\bxia\s?zai\b|\bxia\s?zai\s?xia\s?lai\b|\bqu\s?hui\b|\bla\s?qu\b/i;
 const PINYIN_HANDOFF_RE = /\bjiao\s?gei\b|\bdao\s?jin\b|\bshu\s?xian\b/i;
 const PINYIN_RUN_RE = /\bzhi\s?xing\b|\byun\s?xing\b|\bpao\s?qi\s?lai\b/i;
+/**
+ * R308 P0-1（audit-r307 §17 第 3 项）：**非 HTTP 外传并入外传门**。DNS 隧道
+ * （dig/nslookup 的查询名带载荷）在结构上与 ICMP 载荷（ping -p）、WebRTC
+ * DataChannel、WebSocket、UDP 直发完全同构：读本机敏感源 → （可选编码）→
+ * 交给一个能把字节送出去的网络原语 → 远端端点。判定按这三个语义角色，
+ * 不按协议枚举：换协议仍要落在「网络载荷原语 + 远端端点」上。
+ */
+const NET_CARRIER_RE =
+  /\b(?:dig|nslookup|host|drill|kdig|delv|ping6?|hping3?|nc|ncat|netcat|socat|tftp|dnscat2?|iodine|nping)\b|\bRTCPeerConnection\b|\bcreateDataChannel\b|\bDataChannel\b|\bnew\s+WebSocket\b|\bWebSocket\s*\(|\bwss?:\/\/|\bsendBeacon\b|\bcurl\b|\bwget\b|\bInvoke-(?:WebRequest|RestMethod)\b|\bsendto\s*\(|\bsendmsg\s*\(/i;
+/** 本机敏感数据源的**读取面**（凭证/口令/会话），不含裸 token 变量引用。 */
+const LOCAL_SECRET_SOURCE_RE =
+  /\/etc\/(?:passwd|shadow|sudoers|gshadow)|(?:~|\$HOME|\/home\/[\w.-]+|\/root)?\/\.(?:ssh|aws|kube|docker|gnupg|netrc)\b|\bid_(?:rsa|dsa|ed25519)\b|\.aws\/credentials|\bcredentials\.json\b|\bdocument\.cookie\b|\b(?:local|session)Storage\b|\.bash_history\b|\bkeychain\b|(?:cat|type|Get-Content|read|dump|tar|zip)\s+[^\n]{0,40}\.env\b|口令表|密码表|密碼表|凭证文件|憑證文件/i;
+/** 读取/编码原语（把数据从本机取出并变成可投递字节的一步）。 */
+const LOCAL_READ_ENCODE_RE =
+  /\b(?:cat|head|tail|type|Get-Content|xxd|od|hexdump|base64|base32|basenc|gzip|tar|zip|strings|awk|sed|read)\b|\bdocument\.cookie\b|\b(?:local|session)Storage\.(?:getItem)?\b|\breadFileSync\b|\bopen\s*\(/i;
+
 /** 反弹/绑定 shell 的纯散文描述：端口 + 壳/终端 + 接线/重定向语义。 */
 const SEM_CONNECT_RE =
   /重定向|接到|接过去|接上|连线|连上|连接|连到|連到|连过去|連過去|打个电话|打电话|建立会话|建立连|redirect|connect\s+(?:to|back)|reverse\s+shell|call\s+home/i;
@@ -2711,7 +2782,33 @@ type SemanticExecSignals = {
   loginHost: boolean;
   /** 解释器/壳类受体在场（不要求交付动词）。 */
   interp: boolean;
+  /**
+   * R308：远端地址**只在归一/解码面上才存在**（原文无任何带点带 TLD 的字面地址）：
+   * 分隔词拼读/去牙/编码/位移才能还原出地址，这本身就是规避信号——自有笔记不会把自己的域名拆开写。
+   */
+  addrEvasion: boolean;
+  /** 「取回物的内容 → 终端/解释器输入」三元同句（无执行动词的执行语义）。 */
+  contentAsInput: boolean;
+  /** 本机敏感源读取 + 网络载荷原语 + 远端端点（协议无关的外传结构）。 */
+  exfilCarrier: boolean;
+  /** 脚本文件名在场（可执行载荷的落地形态）。 */
+  scriptFile: boolean;
 };
+
+/** 原文里是否已有字面地址形态（协议头 / 点分主机名带公共 TLD / 点分 IPv4）。 */
+function hasLiteralAddressForm(text: string): boolean {
+  if (text.includes(LINK_REMOVED_MARK)) return true;
+  if (/[a-z][a-z0-9+.-]*:\/\//i.test(text)) return true;
+  if (/(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/.test(text)) return true;
+  // host:port / user@host / 方括号 IPv6 也是字面端点形态（内网域后缀 .internal:5432 一类）。
+  if (/[A-Za-z0-9][\w.-]*\.[A-Za-z0-9-]+:\d{2,5}\b/.test(text)) return true;
+  if (/[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/.test(text)) return true;
+  if (/\[[0-9a-f:.]{3,45}\]/i.test(text) || /(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{0,4}/i.test(text)) return true;
+  for (const m of text.matchAll(/(?:[A-Za-z0-9-]+\.)+([A-Za-z]{2,24})\b/g)) {
+    if (COMMON_TLDS.has(m[1].toLowerCase())) return true;
+  }
+  return false;
+}
 
 /** 登录动作紧跟主机/账号@主机（跳板机投放：「登录 ops@bastion.example.io 后执行…」）。 */
 const SEM_LOGIN_HOST_RE =
@@ -2739,7 +2836,7 @@ function semanticExecSignals(text: string): SemanticExecSignals {
   // R306 P0-2（B03 ROT13 域 / B04 倒序域）：「先解码再判地址面」——载体必须自带
   // 还原说明（rot13/倒过来/…）才能被人还原，这句说明就是启用解码面的信号；
   // 解码面只在 token 级逆变换落回「带公共 TLD 的主机名」时采信。
-  if (SEM_DECODE_ADDR_RE.test(base) || /\bebg13\b|\brot\s*13\b/i.test(base)) {
+  if (hasRestoreInstruction(base) || /\bebg13\b|\brot\s*13\b/i.test(base)) {
     for (const sf of [...surfaces]) {
       const dec = decodeAddressTokenSurface(sf);
       if (dec !== sf) surfaces.push(dec);
@@ -2758,8 +2855,23 @@ function semanticExecSignals(text: string): SemanticExecSignals {
     hasRemoteEndpointForm(folded, { ignoreAllowlist: true });
   const handoff = SEM_HANDOFF_RE.test(folded) || PINYIN_HANDOFF_RE.test(folded);
   const interp = SEM_INTERP_TARGET_RE.test(folded);
+  const remoteAddr = hasRemoteEndpointForm(folded, { ignoreAllowlist: true });
+  const scriptFile = SCRIPT_FILE_NAME_RE.test(folded);
   return {
     addr,
+    remoteAddr,
+    scriptFile,
+    addrEvasion: remoteAddr && !hasLiteralAddressForm(stripInvisibleCarriers(text).normalize("NFKC")),
+    contentAsInput: sentenceCooccur(folded, [
+      (t) => SEM_CONTENT_NOUN_RE.test(t),
+      (t) => SEM_STDIN_TARGET_RE.test(t),
+      (t) => SEM_BECOME_INPUT_RE.test(t),
+    ]),
+    exfilCarrier:
+      remoteAddr &&
+      LOCAL_SECRET_SOURCE_RE.test(folded) &&
+      LOCAL_READ_ENCODE_RE.test(folded) &&
+      NET_CARRIER_RE.test(folded),
     fetch: SEM_FETCH_RE.test(folded) || PINYIN_FETCH_RE.test(folded),
     handoffInterp: handoff && interp,
     run: SEM_RUN_RE.test(folded) || PINYIN_RUN_RE.test(folded),
@@ -2775,7 +2887,7 @@ function semanticExecSignals(text: string): SemanticExecSignals {
     decodeRun:
       B64_BLOB_RE.test(folded) && SEM_DECODE_RE.test(folded) && SEM_TERMINAL_PASTE_RE.test(folded),
     decodeAddrRun:
-      SEM_DECODE_ADDR_RE.test(folded) &&
+      hasRestoreInstruction(folded) &&
       sentenceCooccur(folded, [
         (t) => SEM_FETCH_RE.test(t) || PINYIN_FETCH_RE.test(t),
         (t) =>
@@ -2822,7 +2934,6 @@ function semanticExecSignals(text: string): SemanticExecSignals {
         );
     })(),
     login: /\bssh\b|\bscp\b|\btelnet\b|登录到|登陆到|遠端登入/i.test(folded),
-    remoteAddr: hasRemoteEndpointForm(folded, { ignoreAllowlist: true }),
     // user@host 也是远端端点（§11 第 1 项），但单独的邮箱地址是自有笔记常态；
     // 只在「登录/ssh 到该主机」这个动作下把它当地址面信号，避免「把合同发到
     // hr@company.com」这类良性待办被误伤（audit-r299 §4）。
@@ -2862,6 +2973,10 @@ export function execSemanticGateReason(text: string): string | null {
   if (s.decodeRun) return "semantic:decode-run";
   if (s.decodeAddrRun) return "semantic:decode-addr+fetch-run";
   if (s.bidiExec) return "semantic:bidi+exec";
+  if (s.exfilCarrier) return "semantic:exfil-carrier";
+  if (s.addrEvasion && (s.scriptFile || s.interp || s.fetch || s.run || s.exfil || s.handoffInterp))
+    return "semantic:evasive-addr+exec-role";
+  if (s.remoteAddr && s.contentAsInput) return "semantic:remote-content-as-input";
   if (s.scriptFetchInterpSameSentence) return "semantic:script-fetch+interp";
   // R304 P0-C（audit-r303 §5）：跳板机型（user@host）与外传型的地址面不在窄
   // addr 上，放在 addr 前置之前——否则自然语言危险句 11/11 不进判别器。
@@ -2998,6 +3113,56 @@ function foldSepWords(s: string): string {
 }
 
 /**
+ * R308 P0-1（audit-r307 §17 第 1 项）：**语言无关的结构判**——不依赖任何
+ * 「点」的词表，只看结构：`标签 <分隔词> 标签 <同一分隔词> 标签` 且末段是
+ * 已知公共 TLD 时，分隔词即「点」。约束保证误伤下界：
+ *  - 标签必须是纯 ASCII 字母数字/连字符（可解析域名的标签面本就如此）；
+ *  - 分隔词必须**不含 ASCII 字母数字**（自然语言的「点」在任何非拉丁书写
+ *    系统里都如此），长度 ≤ 6；
+ *  - 多个分隔词必须**逐字相同**（口述地址时同一个词重复），因此中文正文里
+ *    「在 example 和 net」这类单分隔的偶然结构不命中；
+ *  - 至少 3 个标签且末段 ∈ COMMON_TLDS。
+ * 新语言不需要补词表：任何语言的「点」都落在这个结构里。
+ */
+function foldStructuralSepWords(input: string): string {
+  if (!/[^\s\w.,]/.test(input)) return input;
+  return input.split("\n").map(foldStructuralSepWordsLine).join("\n");
+}
+
+const STRUCT_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/;
+const STRUCT_SEP_RE = /^[^\sA-Za-z0-9]{1,6}$/u;
+
+function foldStructuralSepWordsLine(line: string): string {
+  const toks = [...line.matchAll(/\S+/g)];
+  if (toks.length < 5) return line;
+  let out = "";
+  let cursor = 0;
+  for (let i = 0; i < toks.length; i++) {
+    if (toks[i].index < cursor) continue;
+    if (!STRUCT_LABEL_RE.test(toks[i][0])) continue;
+    const labels = [toks[i][0]];
+    let sep: string | null = null;
+    let j = i + 1;
+    for (; j + 1 < toks.length + 1; j += 2) {
+      const s = toks[j]?.[0];
+      const l = toks[j + 1]?.[0];
+      if (s === undefined || l === undefined) break;
+      if (!STRUCT_SEP_RE.test(s) || (sep !== null && s !== sep)) break;
+      if (!STRUCT_LABEL_RE.test(l)) break;
+      sep = s;
+      labels.push(l);
+    }
+    if (labels.length < 3) continue;
+    if (!COMMON_TLDS.has(labels[labels.length - 1].toLowerCase())) continue;
+    const start = toks[i].index;
+    const end = toks[j - 1].index + toks[j - 1][0].length;
+    out += line.slice(cursor, start) + labels.join(".");
+    cursor = end;
+  }
+  return out + line.slice(cursor);
+}
+
+/**
  * 字面拼接合拢（R302 P0-3 / R306 P0-2 T02、T03）：
  *  - `"exam"+"ple.com"` → `example.com`（引号+加号+引号只是表层语法）；
  *  - 模板占位符里的字面（`${"relay3"}.${"example"}.net`）取字面本身；
@@ -3105,9 +3270,16 @@ export function decodeAddressTokenSurface(text: string): string {
     if (labels.length < 2 || labels.some((l) => l.length === 0)) return false;
     return COMMON_TLDS.has(labels[labels.length - 1]);
   };
-  return text.replace(/[A-Za-z0-9][A-Za-z0-9.=-]{3,79}/g, (tok) => {
+  // R308 P0-1（audit-r307 §2 R05）：逆变换族不再枚举具体编码，而是按【字母表上
+  // 的可逆变换】这一类展开：ROT13 只是 shift=13，凯撒任意位移与它同构；
+  // 取信条件不变（逆变换结果必须落回「带公共 TLD 的主机名」），因此不会把
+  // 普通标识符凭空变成域名：等距位移使全部标签同向位移，随机 token 在 25 个
+  // 位移里同时满足「≥ 2 标签 + 末段是真 TLD」的概率极低。
+  const decoded = decodeByteEscapes(text);
+  return decoded.replace(/[A-Za-z0-9][A-Za-z0-9.=-]{3,79}/g, (tok) => {
     if (plausible(tok)) return tok;
-    const cands = [rot13(tok), [...tok].reverse().join("")];
+    const cands = [[...tok].reverse().join("")];
+    for (let shift = 1; shift <= 25; shift++) cands.push(caesarShift(tok, shift));
     if (/^[A-Z2-7]{8,}={0,6}$/.test(tok)) {
       try {
         cands.push(decodeBase32(tok));
@@ -3148,7 +3320,11 @@ function normalizeAddressSurfaceUncached(text: string): string {
   const decoded = text.replace(/&#(\d{1,5});|&#x([0-9a-f]{1,4});/gi, (_m, d: string | undefined, h: string | undefined) =>
     String.fromCodePoint(d !== undefined ? parseInt(d, 10) : parseInt(h ?? "0", 16))
   );
-  const raw = foldDefangedSeparators(decoded);
+  // R308 P0-1（audit-r307 §2 R01/R02）：自然语言分隔词的折叠必须先在【原面】做。
+  // 下面的同形折叠会把西里尔字母折成拉丁（точка → тocчкa）、NFD 会把谚文音节
+  // 拆成字母（점 → 점），两者都使分隔词在归一面上消失——R306 的多语言词表
+  // 因此对韩/俄整类失效（字表在但匹配不上）。
+  const raw = foldStructuralSepWords(foldSepWords(foldDefangedSeparators(decoded)));
   let s = foldHomoglyphs(stripInvisibleCarriers(raw)).normalize("NFKC");
   s = s.normalize("NFD").replace(/\p{Mn}/gu, "");
   // 百分号编码分隔符（%2E → . / %2D → - / %2F → / / %3A → : / %40 → @）：
@@ -3395,6 +3571,117 @@ export function noteContainsExecutableCommand(content: string): boolean {
   }
 }
 
+/**
+ * 笔记**行**级危险判定：内容判定 ∪ 落库的分片标记（meta.exec_fragment，R308）。
+ * 所有拿到整行（含 meta）的出口都应走这个而不是只看 content——分片投放的
+ * 每一条按内容单看都是无害的，标记只存在于 meta。
+ */
+export function noteRowContainsExecutableCommand(row: {
+  content?: string | null;
+  meta?: string | { exec_fragment?: boolean } | null;
+}): boolean {
+  if (noteContainsExecutableCommand(row.content ?? "")) return true;
+  return noteMetaExecFragment(row.meta ?? null);
+}
+
+/** meta（原始 JSON 串或已解析对象）里是否带分片标记。 */
+export function noteMetaExecFragment(meta: string | { exec_fragment?: boolean } | null): boolean {
+  if (!meta) return false;
+  if (typeof meta === "object") return meta.exec_fragment === true;
+  if (!meta.includes("exec_fragment")) return false;
+  try {
+    const obj = JSON.parse(meta) as { exec_fragment?: boolean } | null;
+    return obj !== null && typeof obj === "object" && obj.exec_fragment === true;
+  } catch {
+    return false;
+  }
+}
+
+// ---- R308 P0-1：跨笔记分片投放（audit-r307 §17 第 4 项） ----
+// 载荷被拆成 3 段分别落在同账号相邻笔记里，每段单看都不含完整地址或完整
+// 命令，逐条判定必然全漏（R18a/b/c 实测 3/3 漏判）。收口不加载体规则，而是
+// 把**判定单元**从「单条笔记」扩到「同账号邻近笔记的有序拼接」：分片投放
+// 要能被用户复原，就必须(a)同账号、(b)时间相邻、(c)可按顺序首尾相接，这
+// 三条正是判定面的构造条件。拼接只用于判定；标记落回参与拼接的每一条。
+//
+// 复杂度上界：窗口 ≤ FRAG_WINDOW 条、组合按滑窗（非全排列），因此是线性的。
+
+/** 参与拼接的邻近笔记条数上界（滑动窗口）。 */
+const FRAG_WINDOW = 6;
+/** 分片必须短——完整命令不会被拆成 3 段各写几百字。 */
+const FRAG_MAX_LEN = 200;
+
+export interface FragmentCandidate {
+  id: string;
+  content: string;
+}
+
+/**
+ * 同账号邻近笔记拼接后的危险判定：返回**需要标记为可执行载荷**的笔记 id 集合。
+ * `notes` 按时间有序（任一方向皆可，两向都试）；单条已命中的不在此列（调用方
+ * 各自已有逐条判定），此函数只补「拼接后才成立」的那一类。
+ */
+export function fragmentExecNoteIds(notes: FragmentCandidate[]): Set<string> {
+  const out = new Set<string>();
+  const frags = notes.filter((n) => {
+    const t = (n.content ?? "").trim();
+    return t.length > 0 && t.length <= FRAG_MAX_LEN;
+  });
+  if (frags.length < 2) return out;
+  for (let i = 0; i < frags.length; i++) {
+    for (let len = 2; len <= FRAG_WINDOW && i + len <= frags.length; len++) {
+      const win = frags.slice(i, i + len);
+      if (win.every((n) => out.has(n.id))) continue;
+      for (const seq of [win, [...win].reverse()]) {
+        if (!stitchedWindowIsDangerous(seq)) continue;
+        // 只标记**最小**拼接子集：夹在分片之间的无关笔记（买菜清单）剔除后
+        // 仍成立时不连坐。
+        let minimal = seq;
+        for (let k = 0; k < minimal.length && minimal.length > 2; ) {
+          const without = minimal.filter((_, idx) => idx !== k);
+          if (stitchedWindowIsDangerous(without)) minimal = without;
+          else k++;
+        }
+        for (const n of minimal) out.add(n.id);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** 一个有序窗口拼起来是否构成危险载荷。 */
+function stitchedWindowIsDangerous(win: FragmentCandidate[]): boolean {
+  for (const stitched of stitchWindow(win)) {
+    // 拼接判定只采信「拼出了原文各段都没有的远端端点」这一情形——否则任意
+    // 两条含地址的良性笔记相邻就会互相连坐。
+    if (!hasRemoteEndpointForm(stitched, { ignoreAllowlist: true })) continue;
+    if (win.some((n) => hasRemoteEndpointForm(n.content, { ignoreAllowlist: true }))) continue;
+    if (noteContainsExecutableCommand(stitched)) return true;
+  }
+  return false;
+}
+
+/**
+ * 分片投放的每条笔记通常是「说明 + 片段」，两者之间有可见分界（连续空白 /
+ * 冒号 / 「是」）——片段本身在字符中间断开，故必须取到分界之后的整段，
+ * 不能只取最后一个词。取「整条」与「分界后片段」两种投影，各按「直接相接」
+ * 与「按空白相接」拼一次（4 种统一拼法，避免投影全组合的指数膨胀）。
+ */
+function fragmentPiece(content: string): string {
+  const t = content.trim();
+  // 贪婪前缀强制取**最后**一个分界（说明可能自带冒号/「是」）。
+  const m = /^[\s\S]*(?:\s{2,}|[:：](?!\/)|\bis\b|是)\s*([^\n]*)$/.exec(t);
+  const piece = (m?.[1] ?? "").trim();
+  return piece.length > 0 ? piece : t;
+}
+
+function stitchWindow(win: FragmentCandidate[]): string[] {
+  const pieces = win.map((n) => fragmentPiece(n.content));
+  const wholes = win.map((n) => n.content.trim());
+  return [pieces.join(""), pieces.join(" "), wholes.join(""), wholes.join(" ")];
+}
+
 export function execCombinationGateReason(answer: string): string | null {
   const gate = execClassifierGateReason(answer);
   if (!gate) return null;
@@ -3422,6 +3709,15 @@ export function execSemanticDangerReason(text: string): string | null {
   if (s.decodeAddrRun) return "semantic-danger:decode-addr+fetch-run";
   if (s.bidiExec) return "semantic-danger:bidi+exec";
   if (s.spelled && (s.run || s.handoffInterp || s.fetch)) return "semantic-danger:spelled-cmd";
+  // R308 P0-1：协议无关的外传结构（本机敏感源 → 网络载荷原语 → 远端）。
+  if (s.exfilCarrier) return "semantic-danger:exfil-carrier";
+  // R308 P0-1：地址只在归一/解码面上存在（拼读/去牙/位移/编码）——规避形态本身
+  // 就是信号；再与任一执行语义角色（脚本文件/解释器/取回/执行/外传）同现即判危，
+  // 不依赖任何语言的动词表（韩/俄/阿等只要写了 payload.sh / bash 就命中）。
+  if (s.addrEvasion && (s.scriptFile || s.interp || s.fetch || s.run || s.exfil || s.handoffInterp))
+    return "semantic-danger:evasive-addr+exec-role";
+  // R308 P0-1：无执行动词的执行语义（「返回内容就是你终端的输入」）+ 远端地址。
+  if (s.remoteAddr && s.contentAsInput) return "semantic-danger:remote-content-as-input";
   // 跳板机型（`登录 ops@bastion.example.io 后执行 …`）的地址面藏在 user@host 里，
   // 不在窄 addr 面上，判定放在 addr 前置之前。
   if (s.loginHost && (s.run || s.exfil)) return "semantic-danger:login-host+run-or-exfil";

@@ -1,6 +1,7 @@
 // Import pipeline: parse Cubox / flomo / Markdown / plain-text export files
 // into normalized note items (content + original created time + tags + url).
 import { prepareNoteInsert } from "./note-store";
+import { rejudgeExecFragmentsBulk } from "./exec-fragments";
 import { storeOriginal } from "./media";
 import { contentFingerprint, decryptContent, IMPORT_FP_VERSION } from "./crypto";
 
@@ -395,6 +396,7 @@ export async function runImport(
   const db = env.DB;
   const stats: ImportStats = { total: items.length, imported: 0, skipped: 0, failed: 0 };
   const failures: ImportFailure[] = [];
+  const insertedIds: string[] = [];
   for (let i = 0; i < items.length; i += CHUNK) {
     const chunk = items.slice(i, i + CHUNK);
     try {
@@ -437,6 +439,7 @@ export async function runImport(
         }
         const id = crypto.randomUUID();
         inserted.push({ id, item });
+        insertedIds.push(id);
         // 导入入库走持久层统一敏感管道（R122 P1-1 / R124 P1-1 收口）：疑似含密的
         // 历史笔记同样 fail-closed 先加密，后续 cron 分拣复判（category NULL 本就待分拣）
         const { stmt } = await prepareNoteInsert(env, db, {
@@ -494,6 +497,8 @@ export async function runImport(
     }
     await opts.onProgress?.(Math.min(i + CHUNK, items.length), items.length);
   }
+  // R308 P0-1：导入笔记保留原始时间，按入库 id 集合做分片拼接复判
+  await rejudgeExecFragmentsBulk(env, insertedIds);
   return { stats, failures };
 }
 

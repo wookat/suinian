@@ -12,8 +12,9 @@ import { SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 import { maybeSensitive } from "./triage";
 import { scrubDerivedMeta } from "./ingest";
 import { storeOriginal, type MediaType } from "./media";
-import { noteContainsExecutableCommand, EXEC_OUTLET_WARN_LINE } from "./prompt-armor";
+import { noteContainsExecutableCommand, noteMetaExecFragment, EXEC_OUTLET_WARN_LINE } from "./prompt-armor";
 import { recordOutletExecMarks } from "./guard-events";
+import { rejudgeExecFragmentsBulk } from "./exec-fragments";
 
 export const BACKUP_FORMAT = "suinian-backup";
 export const BACKUP_VERSION = 1;
@@ -181,7 +182,7 @@ export async function buildBackupZip(
         return { path, name, mime: a.mime, size: a.size };
       });
     }
-    const execFlag = !redacted && noteContainsExecutableCommand(content);
+    const execFlag = !redacted && (noteContainsExecutableCommand(content) || noteMetaExecFragment(meta));
     if (execFlag) execMarked++;
     backupNotes.push({
       id: n.id,
@@ -660,6 +661,8 @@ export async function restoreBackup(
 
   // kick the pipeline for a first batch right away; the 10-minute cron
   // backfills (embeddings / graph / link extracts) cover the rest gradually
+  // R308 P0-1：恢复的笔记保留原始时间，按新 id 集合做分片拼接复判（返回前完成，恢复后的列表已带标）
+  await rejudgeExecFragmentsBulk(env, [...idMap.values()], waitUntil);
   waitUntil(
     (async () => {
       await backfillEmbeddings(env).catch(() => 0);
