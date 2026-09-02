@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -5597,17 +5597,24 @@ app.post("/api/ask", async (c) => {
       heldCounts[reason] = (heldCounts[reason] ?? 0) + 1;
       return null;
     };
+    const weakIdsS = new Set(extraIds.filter((id) => (semScore.get(id) ?? 0) < ASK_CITATION_MIN_SCORE));
     const gateSegment = (segRaw: string): string | null => {
       // fail-closed：判别器超时/失败（demandsRawS 为 null）时 demand 集未知，
       // done 收口时判别器可能已就绪并剥除句段——期间不外发任何 delta，全部
       // 缓冲到 done 一次成型（audit-r277 X05「先泄后收」的另一形态）。
       if (demandsRawS === null) return hold("demand_unavailable");
       const s0 = scrubModelOutputInjectionArtifacts(stripDataMarksS(segRaw));
+      // 悬空引证判定按 done 的同一口径：只有越界/弱源角标才会被剔除并留下悬空
+      // 导言词（reconcileAskCitations）；在界内且非弱源的角标 done 会原样保留
+      // （只重编号），不构成悬空。段首空白不是悬空形态（done 只对整答开头去空）。
+      const survivingMarkers = s0.replace(/[[［](\d{1,2})[\]］]/g, (m, d: string) => {
+        const n = parseInt(d, 10);
+        return n >= 1 && n <= noteIds.length && !weakIdsS.has(noteIds[n - 1]) ? m : "";
+      });
       const s = s0.replace(/\s*[[［]\d{1,2}[\]］]/g, "");
       if (!s.trim()) return null;
-      // 剑指引证收口：done 剔除无效角标时连带清掉悬空导言词（「根据 ，」）；
-      // 去角标后会留悬空形态的句段扣下不外发，只在 done 中以收口后形态出现。
-      if (cleanDanglingCitations(s) !== s) return hold("dangling_citation");
+      const danglingProbe = survivingMarkers.replace(/^[\s　]+/, "");
+      if (cleanDanglingCitations(danglingProbe) !== danglingProbe) return hold("dangling_citation");
       const sc = foldCompact(s);
       if (groundedDemandsS.some((d) => d && sc.includes(foldCompact(d)))) return hold("demand_hit");
       if (scrubDirectiveDemands(s, groundedDemandsS, askGuardQuestion) !== s) return hold("demand_scrub");
@@ -5619,7 +5626,14 @@ app.post("/api/ask", async (c) => {
         execFragmentUnits: askGuardFragmentUnits,
         question: askGuardQuestion,
       });
-      if (fin.isolated || fin.changed || fin.answer !== s) return hold("finalize_rewrite");
+      // 原文问法下 finalize 只在末尾附固定指引（VERBATIM_REDIRECT_NOTICE，done
+      // 整答附一次）而正文逐字未动 ⇒ 句段可外发；任何正文改写/隔离仍整段扣下。
+      if (
+        fin.isolated ||
+        fin.changed ||
+        (fin.answer !== s && fin.answer !== `${s}\n\n${VERBATIM_REDIRECT_NOTICE}`)
+      )
+        return hold("finalize_rewrite");
       if (scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) !== s) return hold("link_scrub");
       // 拒答形句段扣下不外发：整答为拒答时下游会走复问重试/诚实拒答通道整体
       // 替换答案（isRefusalAnswer 分支），先发的拒答 delta 会被 done 撤回。
