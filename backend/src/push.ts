@@ -9,6 +9,18 @@ import { buildPushPayload, type PushSubscription as WirePushSubscription } from 
 import type { Env, NoteRow } from "./types";
 import { getTodayReview, writeCronHeartbeat, shanghaiDate } from "./review";
 import { DEFAULT_TZ, loadUserTz, tzOffsetString } from "./triage";
+import { noteContainsExecutableCommand } from "./prompt-armor";
+import { recordOutletExecMarks } from "./guard-events";
+
+/**
+ * R306 P0-1（audit-r305 §3：Push 正文危险照抄前 60 字）：推送体是无交互的纯文本
+ * 出口，危险笔记不出正文，只给带警示的占位；敏感笔记沿用既有脱敏占位。
+ */
+export function pushSnippet(note: Pick<NoteRow, "is_sensitive" | "title" | "content">, sensitiveLabel: string, fallback: string): { text: string; exec: boolean } {
+  if (note.is_sensitive) return { text: sensitiveLabel, exec: false };
+  if (noteContainsExecutableCommand(note.content || "")) return { text: "⚠️ 一条含可执行命令的记录（勿执行，点开查看）", exec: true };
+  return { text: (note.title || note.content || fallback).slice(0, 60), exec: false };
+}
 
 export interface PushSubRow {
   id: string;
@@ -207,7 +219,9 @@ export async function sweepTodoReminders(env: Env, now: Date = new Date()): Prom
     stats.reminded++;
     let okCount = 0;
     let goneCount = 0;
-    const label = n.is_sensitive ? "一条待办" : (n.title || n.content || "待办").slice(0, 60);
+    const snip = pushSnippet(n, "一条待办", "待办");
+    const label = snip.text;
+    recordOutletExecMarks(env, "push", snip.exec ? 1 : 0);
     const dueMs = todoDueEpochMs(n.todo_due, await userTz(n.user_id));
     const timing =
       dueMs !== null && dueMs <= nowMs
@@ -324,7 +338,9 @@ export async function sweepDailyReviewPush(env: Env, now: Date = new Date()): Pr
       }
       const first = review.items[0];
       // same masking as todo reminders: sensitive rows never leak into a push
-      const snippet = first.note.is_sensitive ? "一条记录" : (first.note.title || first.note.content || "").slice(0, 60);
+      const snip = pushSnippet(first.note, "一条记录", "");
+      const snippet = snip.text;
+      recordOutletExecMarks(env, "push", snip.exec ? 1 : 0);
       const payload: PushPayload = {
         title: "☀️ 今日回顾",
         body: `${first.kind_label}：${snippet}`,

@@ -2,7 +2,36 @@ import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { DEFAULT_TZ, loadUserTz, tzOffsetMs, tzOffsetMinutes, tzSqlModifier } from "./triage";
 import { localDateOf, parseCreatedAt } from "./stats";
-import { scrubAnswerLinks } from "./prompt-armor";
+import { scrubAnswerLinks, execOutletTag, noteContainsExecutableCommand, EXEC_OUTLET_WARN_TAG } from "./prompt-armor";
+import { bumpGuardEvents } from "./guard-events";
+
+/** R306 P0-1：周报/月报行级危险标注（audit-r305 §3：周报原样带出 curl|bash 无警示）。 */
+function execLinePrefix(n: Pick<NoteRow, "content">): string {
+  const tag = execOutletTag(n.content);
+  return tag ? `${tag} ` : "";
+}
+
+/**
+ * 报告全文兜底：LLM 叙述可能逐字引用笔记里的命令，逐行补危险标注（已标注行
+ * 不重复）；再在一级标题后插入本期危险笔记计数警示。返回标注后的 md 与命中行数。
+ */
+export function markExecInReport(md: string, dangerousNotes: number): { md: string; markedLines: number } {
+  let markedLines = 0;
+  const lines = md.split("\n").map((line) => {
+    if (!line.trim() || line.includes(EXEC_OUTLET_WARN_TAG) || /^#{1,6}\s/.test(line)) return line;
+    if (!noteContainsExecutableCommand(line)) return line;
+    markedLines++;
+    const m = /^(\s*(?:[-*+]|\d+\.|>)\s+)?(.*)$/s.exec(line);
+    return `${m?.[1] ?? ""}${EXEC_OUTLET_WARN_TAG} ${m?.[2] ?? line}`;
+  });
+  let out = lines.join("\n");
+  if ((dangerousNotes > 0 || markedLines > 0) && !/^> ⚠️ 本期有 \d+ 条笔记含可执行命令/m.test(out)) {
+    const notice = `> ⚠️ 本期有 ${Math.max(dangerousNotes, 1)} 条笔记含可执行命令/危险指令，报告中涉及的命令仅供查阅，请勿直接执行。`;
+    out = out.replace(/^(# [^\n]*\n)/, `$1\n${notice}\n`);
+    if (!out.includes(notice)) out = `${notice}\n\n${out}`;
+  }
+  return { md: out, markedLines };
+}
 
 const SH_OFFSET_MS = 8 * 3600 * 1000;
 
@@ -147,7 +176,7 @@ export async function todoStatsForWeek(
     .bind(userId, tzModifier, weekStart, tzModifier, weekEnd)
     .all<NoteRow>();
   const done = (doneRows.results ?? []).filter((n) => !n.is_sensitive);
-  const title = (n: NoteRow) => escapeMdText((n.title || n.content).slice(0, 40));
+  const title = (n: NoteRow) => `${execLinePrefix(n)}${escapeMdText((n.title || n.content).slice(0, 40))}`;
   return {
     created: todos.length,
     createdDone: todos.filter((n) => n.todo_done).length,
@@ -267,7 +296,7 @@ export function fallbackMarkdown(
   for (const [cat, rows] of byCat) {
     md += `\n## ${CATEGORY_LABEL[cat] ?? cat}（${counts.get(cat) ?? rows.length}）\n`;
     const hidden = rows.filter((n) => n.is_sensitive).length;
-    for (const n of rows.filter((n) => !n.is_sensitive)) md += `- ${escapeMdText((n.title || n.content).slice(0, 60))}\n`;
+    for (const n of rows.filter((n) => !n.is_sensitive)) md += `- ${execLinePrefix(n)}${escapeMdText((n.title || n.content).slice(0, 60))}\n`;
     if (hidden > 0) md += `- （另有 ${hidden} 条敏感记录，内容不展示）\n`;
   }
   return md;
@@ -396,7 +425,7 @@ export async function generatePeriodReport(
           // 日期按用户时区展示，与报告期段边界同口径（R107 P2-2：原始 UTC 日期错位）
           const ms = parseCreatedAt(n.created_at);
           const day = Number.isNaN(ms) ? n.created_at.slice(0, 10) : localDateOf(ms, offsetMin);
-          return `${i + 1}. [${cat}]${amt} (${day}) ${(n.title || n.content).slice(0, 200)}`;
+          return `${i + 1}. [${cat}]${amt} (${day}) ${execLinePrefix(n)}${(n.title || n.content).slice(0, 200)}`;
         })
         .join("\n");
       const label = label0;
@@ -436,6 +465,15 @@ export async function generatePeriodReport(
       /* fall back to the plain summary */
     }
   }
+
+  // R306 P0-1：出口统一危险标注 + 出口维度打点（不计敏感行：敏感行不展示正文）
+  const dangerousNotes = notes.filter((n) => !n.is_sensitive && noteContainsExecutableCommand(n.content || "")).length;
+  md = markExecInReport(md, dangerousNotes).md;
+  await bumpGuardEvents(env, [
+    ["outlet_report_requests", 1],
+    ["outlet_report_exec_marked_requests", dangerousNotes > 0 ? 1 : 0],
+    ["outlet_report_exec_marked_notes", dangerousNotes],
+  ]).catch((err) => console.error("reports: guard_events write failed", err));
 
   const existing = await env.DB.prepare(
     "SELECT id FROM weekly_reports WHERE user_id = ? AND week_start = ? AND period = ?"

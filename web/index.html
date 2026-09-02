@@ -19,12 +19,12 @@
     <title>碎念 Suinian</title>
     <style>
       /* 首屏内联骨架（R221 P3-1）：JS 包下载/解析期间不再纯白，React 挂载后整体替换 */
-      #root:empty { display: block; min-height: 100vh; background: #fafafa; }
+      #root:empty { display: block; min-height: 100vh; padding-top: 24px; box-sizing: border-box; background: #fafafa; }
       @media (prefers-color-scheme: dark) { #root:empty { background: #18181b; } }
       #root:empty::before {
         content: "";
         display: block;
-        margin: 24px auto 0;
+        margin: 0 auto;
         max-width: 640px;
         height: 264px;
         border-radius: 12px;

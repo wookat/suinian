@@ -6,7 +6,7 @@
  *
  * 七出口：answer / Ask 引用卡片 / 笔记卡片(notes.list) / 搜索 / 导出 /
  * 今日回顾 / MCP search_notes。R303 基线 leak 1/124/78/39/75/主动推首屏/0-of-82。
- * QA 账号一律 [QA-R304] 前缀、口令运行时随机生成，跑完即注销。
+ * QA 账号一律 [QA-R306] 前缀、口令运行时随机生成，跑完即注销。
  */
 import { R295_EVIL } from "./r295-carriers";
 import { R296_EVIL } from "./r296-carriers";
@@ -59,7 +59,7 @@ type Session = { token: string; name: string };
 
 async function register(tag: string): Promise<Session> {
   const safeTag = tag.replace(/[^A-Za-z0-9._\-\[\]]/g, "").slice(0, 13);
-  const name = `[QA-R304]${safeTag}-${Math.random().toString(36).slice(2, 10)}`.slice(0, 32);
+  const name = `[QA-R306]${safeTag}-${Math.random().toString(36).slice(2, 10)}`.slice(0, 32);
   const password = process.env.QA_R304_PASSWORD ?? `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   for (let attempt = 0; ; attempt++) {
     try {

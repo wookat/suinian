@@ -39,7 +39,37 @@ function sourceFiles(dir: string = SRC_DIR): string[] {
 
 /** 提取文件里所有字符串/模板字面量（跨行）。 */
 function stringLiterals(text: string): string[] {
-  return [...text.matchAll(/(["'`])((?:\\.|(?!\1)[\s\S])*?)\1/g)].map((m) => m[2]);
+  // 线性扫描而非回溯正则：`(?:\\.|[\s\S])*?` 在含大量反斜杠的正则源码上会指数回溯
+  const out: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const q = text[i];
+    if (q !== '"' && q !== "'" && q !== "`") {
+      i++;
+      continue;
+    }
+    let j = i + 1;
+    let closed = false;
+    while (j < text.length) {
+      const c = text[j];
+      if (c === "\\") {
+        j += 2;
+        continue;
+      }
+      if (c === q) {
+        closed = true;
+        break;
+      }
+      j++;
+    }
+    if (!closed) {
+      i++;
+      continue;
+    }
+    out.push(text.slice(i + 1, j));
+    i = j + 1;
+  }
+  return out;
 }
 
 /** 命中 notes 写 SQL（含全部等价写法）的字面量。 */

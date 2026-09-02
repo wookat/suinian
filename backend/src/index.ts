@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, dataTextHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -78,7 +78,8 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes } from "./ask";
+import { recordOutletExecMarks } from "./guard-events";
+import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -191,111 +192,208 @@ app.use("*", async (c, next) => {
 // TTL 不改变安全口径，只扩大一致性窗口。
 const ASK_ANSWER_CACHE_TTL_S = 180;
 
-/** SSE 逐事件独立 flush（R278 P1-7）：每个事件单独 enqueue 并让出调度，
- * 客户端观察到真实的多次传输增量，而非一次性字节串。 */
-function sseStreamResponse(events: Array<[string, unknown]>, headers: Headers): Response {
-  const enc = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    async start(ctrl) {
-      for (const [event, data] of events) {
-        ctrl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-        // 让出事件循环，保证逐块 flush 到传输层
-        await new Promise((r) => setTimeout(r, 15));
-      }
-      ctrl.close();
-    },
-  });
-  return new Response(stream, { status: 200, headers });
+
+/**
+ * R306 P1-1（audit-r305 §7 q205 串答）：缓存键除 token + 问题外纳入对话历史
+ * （去噪后逐条 role/content）与 graph 开关——同一问题在不同上下文/模式下是
+ * 不同的请求，不能共享答案。
+ */
+export function askAnswerCacheKeyMaterial(question: string, body: { history?: unknown; graph?: unknown } | null): string {
+  const history = sanitizeAskHistory(body?.history)
+    .map((m) => `${m.role}:${m.content}`)
+    .join("\u241e");
+  const graph = body?.graph === false ? "nograph" : "graph";
+  return `${question}\n${graph}\n${history}`;
 }
 
-async function askAnswerCacheKey(auth: string, question: string): Promise<Request> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${auth}\n${question}`));
+async function askAnswerCacheKey(auth: string, material: string): Promise<Request> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${auth}\n${material}`));
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return new Request(`https://ask-answer-cache.internal/${hex}`);
 }
 
+type AskProduced =
+  | { kind: "json"; outBody: Record<string, unknown>; headers: Headers; status: number }
+  | { kind: "passthrough"; res: Response };
+
 app.use("/api/ask", async (c, next) => {
   const wantsSse = (c.req.header("accept") ?? "").includes("text/event-stream");
-  const reqBody = await c.req.json<{ question?: string }>().catch(() => null);
+  const reqBody = await c.req.json<{ question?: string; history?: unknown; graph?: unknown }>().catch(() => null);
   const question = typeof reqBody?.question === "string" ? reqBody.question : "";
   const auth = c.req.header("authorization") ?? "";
   const cache = typeof caches !== "undefined" ? caches.default : null;
-  const cacheKey = cache && auth && question ? await askAnswerCacheKey(auth, question) : null;
-  let outBody: Record<string, unknown> | null = null;
-  let headers: Headers;
-  let status = 200;
-  if (cacheKey) {
-    const hit = await cache!.match(cacheKey).catch(() => undefined);
-    if (hit) {
-      outBody = (await hit.json().catch(() => null)) as Record<string, unknown> | null;
-      if (outBody && typeof outBody.answer !== "string") outBody = null;
-    }
-  }
-  if (outBody) {
-    headers = new Headers({ "content-type": "application/json; charset=utf-8" });
-    headers.set("Server-Timing", "conaud;dur=0, detguard;dur=0, anscache;desc=hit");
-  } else {
-    await next();
-    status = c.res.status;
-    if (!(c.res.headers.get("content-type") ?? "").includes("application/json")) return;
-    const body = (await c.res.clone().json()) as Record<string, unknown>;
-    if (typeof body.answer !== "string") return;
-    const preFinalized = body.guard_finalized === true;
-    if (preFinalized) delete body.guard_finalized;
-    const notesText = Array.isArray(body.notes)
-      ? (body.notes as Array<Record<string, unknown>>)
-          .map((n) => `${typeof n.title === "string" ? n.title : ""}\n${typeof n.content === "string" ? n.content : ""}`)
-          .join("\n")
-      : "";
-    const t0 = Date.now();
-    // 已在路由内经同一 finalize 收口的生成分支不重复执行（stripSpoofedControlMarks
-    // 会把本轮插入的真标注当仿冒剥掉，且路由内的资料面更完整）。
-    const fin = preFinalized
-      ? { answer: body.answer, changed: false, isolated: body.instruction_isolated === true }
-      : finalizeAskAnswer(body.answer, { dataText: notesText, question });
-    if (!preFinalized) {
-      if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
-      else if (fin.changed) console.log("ask: external link scrubbed from deterministic answer");
-    }
-    // P0-2：隔离语义同时由结构化字段承载，渲染层可据此区分真标注。
-    outBody = { ...body, answer: fin.answer, ...(fin.isolated ? { instruction_isolated: true } : {}) };
-    headers = new Headers(c.res.headers);
-    const prevTiming = headers.get("Server-Timing");
-    const finDur = Date.now() - t0;
-    const conaudPart = prevTiming?.includes("conaud") ? "" : `conaud;dur=${finDur}, `;
-    headers.set("Server-Timing", `${prevTiming ? `${prevTiming}, ` : ""}${conaudPart}detguard;dur=${finDur}`);
-    if (cacheKey && c.res.status === 200) {
-      const stored = new Response(JSON.stringify(outBody), {
-        headers: { "content-type": "application/json", "cache-control": `max-age=${ASK_ANSWER_CACHE_TTL_S}` },
-      });
-      const put = cache!.put(cacheKey, stored).catch(() => {});
-      try {
-        c.executionCtx.waitUntil(put);
-      } catch {
-        await put;
+  const cacheKey = cache && auth && question ? await askAnswerCacheKey(auth, askAnswerCacheKeyMaterial(question, reqBody)) : null;
+  const produce = async (): Promise<AskProduced> => {
+    let outBody: Record<string, unknown> | null = null;
+    let headers: Headers;
+    let status = 200;
+    if (cacheKey) {
+      const hit = await cache!.match(cacheKey).catch(() => undefined);
+      if (hit) {
+        outBody = (await hit.json().catch(() => null)) as Record<string, unknown> | null;
+        if (outBody && typeof outBody.answer !== "string") outBody = null;
       }
     }
-  }
-  if (wantsSse && status === 200) {
-    const refs = Array.isArray(outBody.references) ? outBody.references.length : 0;
-    // R276 P1-3：delta 分片只发生在 finalize 之后（fail-closed 先于 delta 生效），
-    // 全部 delta 拼接恒等于 done.answer，也恒等于非流式 body.answer。
-    // R278 P1-7：逐块独立 flush；确定性路由的答案是模板一次成型，如实标注。
-    headers.set("content-type", "text/event-stream; charset=utf-8");
-    headers.set("cache-control", "no-cache");
-    c.res = sseStreamResponse(
-      [
-        // R280 P2-7：delta 契约随流下发（deterministic_complete 路由为
-        // exact_concat：concat(delta) ≡ done.answer）。
-        ["meta", { retrieved: refs, stream_mode: "deterministic_complete", delta_contract: "exact_concat" }],
-        ...sseAnswerChunks(String(outBody.answer)).map((t): [string, unknown] => ["delta", { text: t }]),
-        ["done", outBody],
-      ],
-      headers
-    );
+    if (outBody) {
+      headers = new Headers({ "content-type": "application/json; charset=utf-8" });
+      headers.set("Server-Timing", "conaud;dur=0, detguard;dur=0, anscache;desc=hit");
+    } else {
+      await next();
+      status = c.res.status;
+      if (!(c.res.headers.get("content-type") ?? "").includes("application/json")) return { kind: "passthrough", res: c.res };
+      const body = (await c.res.clone().json()) as Record<string, unknown>;
+      if (typeof body.answer !== "string") return { kind: "passthrough", res: c.res };
+      const preFinalized = body.guard_finalized === true;
+      if (preFinalized) delete body.guard_finalized;
+      const notesText = Array.isArray(body.notes)
+        ? (body.notes as Array<Record<string, unknown>>)
+            .map((n) => `${typeof n.title === "string" ? n.title : ""}\n${typeof n.content === "string" ? n.content : ""}`)
+            .join("\n")
+        : "";
+      const t0 = Date.now();
+      // 已在路由内经同一 finalize 收口的生成分支不重复执行（stripSpoofedControlMarks
+      // 会把本轮插入的真标注当仿冒剥掉，且路由内的资料面更完整）。
+      const fin = preFinalized
+        ? { answer: body.answer, changed: false, isolated: body.instruction_isolated === true }
+        : finalizeAskAnswer(body.answer, { dataText: notesText, question });
+      if (!preFinalized) {
+        if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
+        else if (fin.changed) console.log("ask: external link scrubbed from deterministic answer");
+      }
+      // P0-2：隔离语义同时由结构化字段承载，渲染层可据此区分真标注。
+      // 确定性路由自身置的 instruction_isolated（建议标签退到占位提示）与出口隔离同样插字面标记。
+      const isolatedOut = fin.isolated || body.instruction_isolated === true;
+      const finAnswer =
+        isolatedOut && !preFinalized && !hasGuardControlMark(fin.answer) ? `${INSTRUCTION_ISOLATED_MARK}\n${fin.answer}` : fin.answer;
+      outBody = { ...body, answer: finAnswer, ...(isolatedOut ? { instruction_isolated: true } : {}) };
+      headers = new Headers(c.res.headers);
+      const prevTiming = headers.get("Server-Timing");
+      const finDur = Date.now() - t0;
+      const conaudPart = prevTiming?.includes("conaud") ? "" : `conaud;dur=${finDur}, `;
+      headers.set("Server-Timing", `${prevTiming ? `${prevTiming}, ` : ""}${conaudPart}detguard;dur=${finDur}`);
+      if (cacheKey && c.res.status === 200) {
+        const stored = new Response(JSON.stringify(outBody), {
+          headers: { "content-type": "application/json", "cache-control": `max-age=${ASK_ANSWER_CACHE_TTL_S}` },
+        });
+        const put = cache!.put(cacheKey, stored).catch(() => {});
+        try {
+          c.executionCtx.waitUntil(put);
+        } catch {
+          await put;
+        }
+      }
+    }
+    return { kind: "json", outBody, headers, status };
+  };
+
+  if (!wantsSse) {
+    const r = await produce();
+    if (r.kind === "passthrough") return;
+    c.res = new Response(JSON.stringify(r.outBody), { status: r.status, headers: r.headers });
     return;
   }
-  c.res = new Response(JSON.stringify(outBody), { status, headers });
+
+  // R306 P1-3（audit-r305 §9：meta p50 2.7s，19/22 超 1.5s）：SSE 客户端在
+  // 检索/门判**之前**就拿到响应与首个 meta（phase=accepted），进度指示不再
+  // 等检索完成；检索完成后的 meta（phase=retrieved，含 retrieved 数）照旧下发。
+  // 路由内部产出的非 200 JSON（限频/参数错误/鉴权失败）以 error 事件携带
+  // status 下发——响应头已外发，无法再改状态码。
+  const enc = new TextEncoder();
+  const sseHeaders = new Headers({
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+  });
+  // 早返回的代价：本中间件把包装响应交给 Hono 时 `c.finalized` 已置 true，
+  // 之后路由 handler `return new Response(...)` 会被 compose 丢弃（只在
+  // finalized=false 时赋给 c.res），produce() 读到的 c.res 就是包装流本身
+  //（其 body 已被客户端锁定 → getReader 抛错，SSE 全部 500）。因此在包装响应
+  // 已经交出去之后（宏任务边界）、调用 next() 之前把 finalized 重置，让路由
+  // 的返回值照常落到 c.res。
+  let ctrlRef!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start(ctrl) {
+      ctrlRef = ctrl;
+    },
+  });
+  const wrapperRes = new Response(stream, { status: 200, headers: sseHeaders });
+  const run = async (ctrl: ReadableStreamDefaultController<Uint8Array>) => {
+    const send = (event: string, data: unknown) =>
+      ctrl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+    send("meta", { phase: "accepted", retrieved: null, stream_mode: "pending" });
+    const heartbeat = setInterval(() => {
+      try {
+        ctrl.enqueue(enc.encode(": keepalive\n\n"));
+      } catch {
+        clearInterval(heartbeat);
+      }
+    }, 10_000);
+    try {
+      await new Promise((res) => setTimeout(res, 0));
+      c.finalized = false;
+      const r = await produce();
+      if (r.kind === "passthrough" && r.res === wrapperRes) throw new Error("ask sse wrapper: inner response was not captured");
+      if (r.kind === "passthrough" && !(r.res.headers.get("content-type") ?? "").includes("text/event-stream")) {
+        const raw = (await r.res.clone().json().catch(() => null)) as { error?: unknown; retryable?: unknown } | null;
+        const message = typeof raw?.error === "string" ? raw.error : r.res.status === 200 ? "响应格式异常" : "请求失败，请重试";
+        send("error", { message, status: r.res.status, ...(raw?.retryable === true ? { retryable: true } : {}) });
+      } else if (r.kind === "passthrough") {
+        const st = r.res.headers.get("server-timing");
+        if (st) send("timing", { server_timing: st });
+        if (r.res.body) {
+          const reader = r.res.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            ctrl.enqueue(value);
+          }
+        }
+      } else if (r.status !== 200) {
+        const message = typeof r.outBody.error === "string" ? r.outBody.error : "请求失败，请重试";
+        send("error", { message, status: r.status, ...(r.outBody.retryable === true ? { retryable: true } : {}) });
+      } else {
+        const refs = Array.isArray(r.outBody.references) ? r.outBody.references.length : 0;
+        // R276 P1-3：delta 分片只发生在 finalize 之后（fail-closed 先于 delta 生效），
+        // 全部 delta 拼接恒等于 done.answer，也恒等于非流式 body.answer。
+        // R278 P1-7：逐块独立 flush；确定性路由的答案是模板一次成型，如实标注。
+        // R280 P2-7：delta 契约随流下发（deterministic_complete 路由为
+        // exact_concat：concat(delta) ≡ done.answer）。
+        const st = r.headers.get("Server-Timing");
+        if (st) send("timing", { server_timing: st });
+        const events: Array<[string, unknown]> = [
+          ["meta", { phase: "retrieved", retrieved: refs, stream_mode: "deterministic_complete", delta_contract: "exact_concat" }],
+          ...sseAnswerChunks(String(r.outBody.answer)).map((t): [string, unknown] => ["delta", { text: t }]),
+          ["done", r.outBody],
+        ];
+        for (const [event, data] of events) {
+          send(event, data);
+          // 让出事件循环，保证逐块 flush 到传输层
+          await new Promise((res) => setTimeout(res, 15));
+        }
+      }
+    } catch (err) {
+      console.error("ask sse wrapper failed", err);
+      try {
+        send("error", { message: "生成失败，请重试", status: 500 });
+      } catch {
+        /* stream 已关闭 */
+      }
+    }
+    clearInterval(heartbeat);
+    try {
+      ctrl.close();
+    } catch {
+      /* 已关闭 */
+    }
+  };
+  // start() 同步执行，ctrlRef 在此处必已就绪
+  const pending = run(ctrlRef);
+  try {
+    c.executionCtx.waitUntil(pending);
+  } catch {
+    /* 非 Workers 运行时无 executionCtx */
+  }
+  c.res = wrapperRes;
 });
 
 app.onError((err, c) => {
@@ -3176,6 +3274,13 @@ export function sanitizeNormalizedQuestion(raw: string | null, question: string)
   const out = (raw ?? "").trim().replace(/^[\u0022\u201c\u201d\u0027\u300c\u300e]+|[\u0022\u201c\u201d\u0027\u300d\u300f]+$/g, "").trim();
   if (!out || out === question || out.length > 200 || out.includes("\n")) return null;
   if (!CJK_RE.test(out)) return null;
+  // 「…」/“…” 引用的字面量是用户要找的原文片段，归一化不得改写或丢失
+  for (const m of question.matchAll(/[\u300c\u201c]([^\u300d\u201d]{1,60})[\u300d\u201d]/g)) {
+    if (!out.includes(m[1])) return null;
+  }
+  // 中英混合问句本身已有中文框架却无任何财务措辞时，归一化产物不得凭空
+  // 命中确定性财务聚合路由（纯英文问句的财务措辞只能靠归一化翻出，不在此限）
+  if (CJK_RE.test(question) && !FINANCE_WORD_RE.test(question) && (financeAggIntent(out) !== null || financeCompareIntent(out) || financeMomIntent(out) !== null)) return null;
   return out;
 }
 
@@ -4236,10 +4341,17 @@ app.post("/api/ask", async (c) => {
         const tMissingRel = ungroundedRelationTerm(relationQuestion, tRelSource);
         if (tMissingRel) {
           const tSuggestions = tRows.filter((n) => !n.is_sensitive).slice(0, 3);
-          const { answer, references } = buildNoAnswerResponse(tSuggestions, "not_in_notes", tMissingRel);
+          const { answer, references, held } = buildNoAnswerResponse(tSuggestions, "not_in_notes", tMissingRel);
           const tById = new Map(tSuggestions.map((n) => [n.id, n]));
           const refNotes = await Promise.all(references.map((r) => noteToJsonDecrypted(c.env, tById.get(r.note_id)!)));
-          return c.json({ answer, references, notes: refNotes, no_answer: true, relation_guard: true });
+          return c.json({
+            answer,
+            references,
+            notes: refNotes,
+            no_answer: true,
+            relation_guard: true,
+            ...(held ? { instruction_isolated: true } : {}),
+          });
         }
       }
       const tLines = enumNoteLines(tRows);
@@ -4561,13 +4673,19 @@ app.post("/api/ask", async (c) => {
       const topicHits = suggestions.filter((n) => noteHitsTopic(n, zeroTopics));
       suggestions = topicHits.length > 0 ? topicHits : [];
     }
-    const { answer, references } = buildNoAnswerResponse(suggestions);
+    const { answer, references, held } = buildNoAnswerResponse(suggestions);
     const zeroHint = await sensitiveNoRecallHint(c.env, userId, terms, question);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
     );
-    return c.json({ answer: answer + zeroHint, references, notes: refNotes, no_answer: true });
+    return c.json({
+      answer: answer + zeroHint,
+      references,
+      notes: refNotes,
+      no_answer: true,
+      ...(held ? { instruction_isolated: true } : {}),
+    });
   }
 
   notes = dedupeNotesByContent(notes);
@@ -4583,11 +4701,18 @@ app.post("/api/ask", async (c) => {
     const missingRel = ungroundedRelationTerm(relationQuestion, relSource);
     if (missingRel) {
       const relSuggestions = notes.filter((n) => !n.is_sensitive).slice(0, 3);
-      const { answer, references } = buildNoAnswerResponse(relSuggestions, "not_in_notes", missingRel);
+      const { answer, references, held } = buildNoAnswerResponse(relSuggestions, "not_in_notes", missingRel);
       const relHint = await sensitiveNoRecallHint(c.env, userId, terms, question);
       const relById = new Map(relSuggestions.map((n) => [n.id, n]));
       const refNotes = await Promise.all(references.map((r) => noteToJsonDecrypted(c.env, relById.get(r.note_id)!)));
-      return c.json({ answer: answer + relHint, references, notes: refNotes, no_answer: true, relation_guard: true });
+      return c.json({
+        answer: answer + relHint,
+        references,
+        notes: refNotes,
+        no_answer: true,
+        relation_guard: true,
+        ...(held ? { instruction_isolated: true } : {}),
+      });
     }
   }
 
@@ -4654,9 +4779,12 @@ app.post("/api/ask", async (c) => {
   // 伪造资料边界——不依赖识别注入变体形态。
   const dataNonce = makeDataNonce();
   // 输出护栏的资料面/问题面文本（marker 判定用）：正文+标题+剪藏元数据+实体关系
-  const askGuardData = `${context}\n${notes
-    .map((n) => `${n.title ?? ""}\n${n.content}\n${n.url_title ?? ""}\n${n.url_summary ?? ""}`)
-    .join("\n")}\n${graphTriples.join("\n")}`;
+  const askGuardNoteUnits = notes.map(
+    (n) => `${n.title ?? ""}\n${n.content}\n${n.url_title ?? ""}\n${n.url_summary ?? ""}`
+  );
+  const askGuardData = `${context}\n${askGuardNoteUnits.join("\n")}\n${graphTriples.join("\n")}`;
+  // 跨笔记语义窗口的地址归因单元：每条笔记一项，每条图谱三元组一项。
+  const askGuardUnits = [...askGuardNoteUnits, ...graphTriples];
   const askGuardQuestion = `${question}\n${recallQuestion}`;
   // R268 语义级主判（docs/decision-r268.md）：独立 LLM 判别器对资料区做指令
   // 抽取（语言无关），与生成并行启动；判别失败退化为 guardAskAnswer 内的
@@ -4733,6 +4861,12 @@ app.post("/api/ask", async (c) => {
   // 拒答很可能是历史话题干扰下的误判：去掉对话历史、同一上下文重问一次，
   // 仍拒答才诚实返回「没找到」。
   let answer2 = answer;
+  // 退化乱码（降级模型同词循环）：同上下文非流式重生一次，仍乱码则走下方「AI 暂不可用」诚实通道。
+  if (answer2 && isDegenerateAnswer(answer2)) {
+    console.log("ask: degenerate answer, regenerating");
+    const regen = await chatComplete(c.env, { ...genOpts, temperature: 0 });
+    answer2 = regen && !isDegenerateAnswer(regen) ? regen : "";
+  }
   if (answer2 && isRefusalAnswer(answer2) && notes.some((n) => !weakIds.has(n.id))) {
     const retry = await chatComplete(c.env, {
       temperature: 0,
@@ -4759,6 +4893,12 @@ app.post("/api/ask", async (c) => {
   }
   // R278 P1-4：生成分支的实质性安全改写追踪（随最终 body 以结构化字段下发）
   let genIsolated = false;
+  // 生成侧隔离归因（随 exec_gate 外露，与 finalizeAskAnswer.reason 同口径）。
+  let genIsolatedReason: string | null = null;
+  const isolateGen = (reason: string) => {
+    genIsolated = true;
+    if (genIsolatedReason === null) genIsolatedReason = reason;
+  };
   // 无来源金额后校验（R200 生产 QA 实测）：肯定句编造金额整句剥除；全被
   // 剥空则按拒答处理，走下方诚实拒答通道给建议，绝不把编造金额递给用户
   // 副文本只取标题/正文，不含 context 的 [n]/id/时间戳元数据头（R236 P3-6，
@@ -4828,6 +4968,7 @@ app.post("/api/ask", async (c) => {
       console.log(`ask: ${grounded.length - demands.length} non-directive technical demand(s) dropped`);
     const g = guardAskAnswer(answer2, {
       dataText: askGuardData,
+      dataUnits: askGuardUnits,
       question: askGuardQuestion,
       directiveDemands: demands ?? [],
     });
@@ -4838,8 +4979,18 @@ app.post("/api/ask", async (c) => {
     // 改道（原文走笔记卡片），不是安全隔离，不置 instruction_isolated；
     // 资料含 demand 或可隔离内容时维持 fail-closed 置位不变。
     const spanScrubIsIsolation =
-      g.spanScrubbed && ((demands?.length ?? 0) > 0 || demands === null || dataTextHasIsolatableContent(askGuardData));
-    if (g.conductScrubbed || g.markerScrubbed || spanScrubIsIsolation || g.directiveScrubbed) genIsolated = true;
+      g.spanScrubbed &&
+      ((demands?.length ?? 0) > 0 ||
+        demands === null ||
+        echoedDataHasIsolatableContent(
+          answer2,
+          notes.map((n) => `${n.title ?? ""}\n${n.content}`),
+          askGuardData
+        ));
+    if (g.conductScrubbed) isolateGen("guard:conduct");
+    if (g.markerScrubbed) isolateGen("guard:marker");
+    if (spanScrubIsIsolation) isolateGen("guard:span");
+    if (g.directiveScrubbed) isolateGen("guard:directive");
     if (g.linkScrubbed) console.log("ask: external link scrubbed from answer");
     if (g.conductScrubbed) console.log("ask: unsolicited conduct scrubbed from answer");
     if (g.markerScrubbed) console.log("ask: data-derived marker scrubbed from answer");
@@ -4847,7 +4998,7 @@ app.post("/api/ask", async (c) => {
     if (g.directiveScrubbed) console.log("ask: directive-demanded text scrubbed from answer");
     // R274（audit-r273 P1-2）：护栏剥空不再谎称「没找到」（与检索空不可区分，
     // 误导用户以为笔记不存在），改走既有保守口径：只给来源引用。
-    if (g.answer.trim() === "") genIsolated = true;
+    if (g.answer.trim() === "") isolateGen("guard:emptied");
     answer2 =
       g.answer.trim() === ""
         ? "相关笔记中包含试图影响回答的内容，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
@@ -4874,7 +5025,7 @@ app.post("/api/ask", async (c) => {
       askMarks.push(["conaud", Date.now() - tAud]);
       if (verdict === null && (demands?.length ?? 0) > 0) {
         console.log("ask: fail-closed conservative answer (demands present, audit unavailable)");
-        genIsolated = true;
+        isolateGen("audit:unavailable+demands");
         answer2 =
           "相关笔记中包含试图影响回答的指令，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
           notes.slice(0, 3).map((_n, i) => `[${i + 1}]`).join(" ");
@@ -4933,10 +5084,16 @@ app.post("/api/ask", async (c) => {
           };
         })();
         const audKeep = (t: string) => Boolean(verbatimKeep?.(t) || noDirectiveKeep?.(t) || faithfulKeep(t));
+        const isolatedBeforeAudit = genIsolated;
+        const isolatedReasonBeforeAudit = genIsolatedReason;
         const audited = applyConductVerdict(answer2, verdict, audKeep);
         if (audited !== answer2) {
           console.log(`ask: conduct audit scrubbed segment(s)`);
-          genIsolated = true;
+          // 抽取器已裁定资料无指令（demands === []）时，审计剥掉的句段不可能是
+          // 资料指令的产物（与下方剥空分支同一前提），照常剥除但不算隔离——
+          // 否则善意 verbatim 答案会顶着隔离横幅原样出关（R306 生产实测 LC11/LC22）。
+          if (demands !== null && demands.length === 0) console.log("ask: conduct audit scrub with no directives in data; not counted as isolation");
+          else isolateGen("audit:scrubbed");
         }
         if (audited.trim() === "") {
           // R276 P1-2（audit-r275 §2）：抽取器已裁定资料无指令（demands === []）时，
@@ -4945,7 +5102,10 @@ app.post("/api/ask", async (c) => {
           // fail-closed 降级为保守答案。
           if (demands !== null && demands.length === 0) {
             console.log("ask: conduct audit emptied answer but no directives in data; keeping answer");
-            genIsolated = false;
+            // 只撤销本审计层自己的隔离：护栏剥空等在此之前成形的保守答案仍是隔离态
+            //（否则保守文案顶着 instruction_isolated=false 出关，答案区无字面标记）。
+            genIsolated = isolatedBeforeAudit;
+            genIsolatedReason = isolatedReasonBeforeAudit;
           } else {
             answer2 =
               "相关笔记中包含试图影响回答的内容，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
@@ -5047,13 +5207,19 @@ app.post("/api/ask", async (c) => {
       notes.some((n) => !weakIds.has(n.id)) && (topics.length === 0 || notes.some((n) => noteHitsTopic(n, topics)))
         ? "not_in_notes"
         : "no_recall";
-    const { answer: noAnswer, references } = buildNoAnswerResponse(suggestions, mode);
+    const { answer: noAnswer, references, held } = buildNoAnswerResponse(suggestions, mode);
     const hint = await sensitiveNoRecallHint(c.env, userId, terms, question);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
     );
-    return { answer: noAnswer + hint, references, notes: refNotes, no_answer: true };
+    return {
+      answer: noAnswer + hint,
+      references,
+      notes: refNotes,
+      no_answer: true,
+      ...(held ? { instruction_isolated: true } : {}),
+    };
   }
   // 否定话术实体后校验（R200，audit-r199 P3-1）：否定分句引入问句与片段中
   // 都不存在的实体时改写成通用指代（流式 delta 原样透传，done 事件全文替换
@@ -5092,6 +5258,8 @@ app.post("/api/ask", async (c) => {
   const refNotes = await Promise.all(
     references.map((r) => noteToJsonDecrypted(c.env, byId.get(r.note_id)!))
   );
+  // R306 P0-1：引用卡片出口打点（数据面标注随 noteToJson 走，这里只计发生率）
+  recordOutletExecMarks(c.env, "ask_ref", refNotes.filter((n) => n.contains_executable_command).length, (p) => c.executionCtx.waitUntil(p));
   if (!answer2) {
     return { answer: "（AI 暂不可用）已找到相关记录，见 references。", references, notes: refNotes };
   }
@@ -5126,7 +5294,13 @@ app.post("/api/ask", async (c) => {
   // R302 P0-2/P0-5：截断推断式告知撤销——verbatim 问法的统一指引改由
   // finalizeAskAnswer 末尾附 VERBATIM_REDIRECT_NOTICE（固定文案，不再做
   // 量级可能失真的「以上回显不完整」推断）。
-  return { answer: finalAnswer + recallGapHint, references, notes: refNotes, ...(genIsolated ? { instruction_isolated: true } : {}) };
+  return {
+    answer: finalAnswer + recallGapHint,
+    references,
+    notes: refNotes,
+    ...(genIsolated ? { instruction_isolated: true } : {}),
+    ...(genIsolated && genIsolatedReason !== null ? { isolation_reason: genIsolatedReason } : {}),
+  };
   };
 
   // R276 P0-1：生成分支的唯一出口——与确定性路由共用同一个 finalizeAskAnswer
@@ -5297,20 +5471,33 @@ app.post("/api/ask", async (c) => {
         : await classifyExecDanger(body.answer);
     const fin = finalizeAskAnswer(body.answer, {
       dataText: askGuardData,
+      dataUnits: askGuardUnits,
       question: askGuardQuestion,
       execDangerSegments: cls.danger,
       execClassifierUnavailable: cls.unavailable,
       execConservativeVeto: cls.conservative,
     });
+    const genReason = typeof body.isolation_reason === "string" ? body.isolation_reason : null;
     if (fin.isolated) {
-      console.log("ask: note-embedded instruction isolated at generation exit");
+      console.log(`ask: note-embedded instruction isolated at generation exit (${fin.reason ?? "unattributed"})`);
       execCounters.isolated += 1;
     }
     flushGuardEvents();
     const isolated = fin.isolated || body.instruction_isolated === true;
+    // 隔离归因随 exec_gate 外露（层名 + 判据原因，不含内容），生产误伤可定位。
+    if (isolated) {
+      const why = fin.isolated ? `fin:${fin.reason ?? "unattributed"}` : `gen:${genReason ?? "unattributed"}`;
+      execGateMark = execGateMark === null ? `none|iso:${why}` : `${execGateMark}|iso:${why}`;
+    }
+    const { isolation_reason: _dropped, ...bodyOut } = body;
+    void _dropped;
+    // R306 P1-2（audit-r305 §11：4/4 隔离态答案区无字面标记）：结构化 isolated
+    // 与答案区字面 〔…〕 标记必须同现——保守答案/审计剥空等在 finalize 之前
+    // 成形的隔离文案不携带控制标记（携带会被防仿冒剥除），在唯一出口补齐。
+    const answerOut = isolated && !hasGuardControlMark(fin.answer) ? `${INSTRUCTION_ISOLATED_MARK}\n${fin.answer}` : fin.answer;
     return {
-      ...body,
-      answer: fin.answer,
+      ...bodyOut,
+      answer: answerOut,
       guard_finalized: true,
       ...(isolated ? { instruction_isolated: true } : {}),
       // R292 P0-1：降级标记以判别器状态为权威源（不从答案文本反推）。
@@ -5383,7 +5570,7 @@ app.post("/api/ask", async (c) => {
       if (scrubDirectiveDemands(s, groundedDemandsS, askGuardQuestion) !== s) return hold("demand_scrub");
       if (scrubUnsourcedAmounts(s, askScrubSourceS) !== s) return hold("unsourced_amount");
       if (scrubUnsourcedNegations(s, askScrubSourceS) !== s) return hold("unsourced_negation");
-      const fin = finalizeAskAnswer(s, { dataText: askGuardData, question: askGuardQuestion });
+      const fin = finalizeAskAnswer(s, { dataText: askGuardData, dataUnits: askGuardUnits, question: askGuardQuestion });
       if (fin.isolated || fin.changed || fin.answer !== s) return hold("finalize_rewrite");
       if (scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) !== s) return hold("link_scrub");
       // 拒答形句段扣下不外发：整答为拒答时下游会走复问重试/诚实拒答通道整体
@@ -5411,6 +5598,7 @@ app.post("/api/ask", async (c) => {
         //  3) 安全方向单调：危险执行/注入/社工内容不会先以 delta 外发再于 done
         //     收回（闸门在首 delta 前 fail-closed）。
         send("meta", {
+          phase: "retrieved",
           retrieved: notes.length,
           stream_mode: "generation_stream",
           delta_contract: "preview_ordered_fragments",
@@ -5492,7 +5680,9 @@ app.post("/api/ask", async (c) => {
     "Server-Timing",
     serverTimingHeader([
       ...askMarks,
-      ...(execGateMark !== null && execGateMark !== "none" ? ([["execgate", 1]] as Array<[string, number]>) : []),
+      ...(execGateMark !== null && !/^none(?:\|iso:|$)/.test(execGateMark)
+        ? ([["execgate", 1]] as Array<[string, number]>)
+        : []),
       ["total", Date.now() - askT0],
     ])
   );
@@ -6003,16 +6193,15 @@ app.get("/api/export", async (c) => {
   const threads = threadsR.results ?? [];
   const reports = reportsR.results ?? [];
 
+  recordOutletExecMarks(c.env, "export", notes.filter((n) => n.contains_executable_command).length, (p) => c.executionCtx.waitUntil(p));
   const format = c.req.query("format");
   if (format === "markdown" || format === "md") {
     let md = `# 碎念全量导出（${new Date().toISOString().slice(0, 10)}）\n\n共 ${notes.length} 条笔记、${threads.length} 条线索、${reports.length} 份周报。\n\n## 笔记\n`;
     for (const n of notes) {
       // 危险标记随导出走（R304 P0-A）：Markdown 无折叠交互，改为在原文前加
       // 明确风险警示行（JSON 导出经 noteToJson 已带 contains_executable_command）
-      const execWarn = n.contains_executable_command
-        ? "\n> ⚠️ 本条笔记含可执行命令/危险指令（如下载执行远程代码），仅供查阅，请勿直接执行。\n"
-        : "";
-      md += `\n### ${n.title || n.content.slice(0, 30)}\n- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${n.url ? ` | 链接：${n.url}` : ""}\n${execWarn}\n${n.content}\n`;
+      const execWarn = n.contains_executable_command ? `\n> ${EXEC_OUTLET_WARN_LINE}\n` : "";
+      md += `\n### ${exportMdHeading(n)}\n- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${n.url ? ` | 链接：${n.url}` : ""}\n${execWarn}\n${n.content}\n`;
     }
     md += `\n## 思考线索\n`;
     for (const t of threads) md += `\n### ${t.title}（${t.note_count} 条）\n${t.summary ?? ""}\n`;
@@ -6030,6 +6219,20 @@ app.get("/api/export", async (c) => {
     reports,
   });
 });
+
+/**
+ * Markdown 导出的笔记标题（R306 P1-4，audit-r305 §2：H04 围栏首行进了 `###`
+ * 把标题撕成代码块、警示行落进围栏；N01/N02/X25 标题不可定位）：只取首个非空
+ * 行、剥掉 Markdown 结构字符、限长，空则回落到笔记 id，保证每条都有可定位标题。
+ */
+export function exportMdHeading(n: { id: string; title: string | null; content: string }): string {
+  const first = (n.title || n.content || "")
+    .split("\n")
+    .map((l) => l.replace(/[`#>*_\[\]|]/g, "").trim())
+    .find((l) => l.length > 0);
+  const head = (first ?? "").slice(0, 30).trim();
+  return head ? `${head}（${n.id}）` : `笔记 ${n.id}`;
+}
 
 // ---- GET /api/backup ----
 // Full backup zip: manifest + notes.json (all fields) + threads/reports +

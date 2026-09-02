@@ -149,6 +149,8 @@ function dayLabel(iso: string): string {
 // 迁移大库用户首小时能看到消化进度而不是满屏转圈无反馈
 const BACKLOG_BANNER_MIN = 5
 const BACKLOG_POLL_MS = 60_000
+/** 顶部异步横幅最多等这么久，超时就直接显示下方内容 */
+const TOP_BANNERS_SETTLE_MS = 1500
 
 function TriageBacklogBanner({ notes }: { notes: Note[] }) {
   const [backlog, setBacklog] = useState<number | null>(null)
@@ -924,6 +926,17 @@ export function TimelinePage() {
   const visibleTags = tagsExpanded ? allTags : allTags.slice(0, TOP_TAGS)
   const hiddenCount = allTags.length - TOP_TAGS
 
+  // 顶部异步横幅（今日回顾 / 到期待办）后到会把输入框与列表整体下推：在它们就位（或超时）前
+  // 下方内容先不绘制（visibility:hidden 保留占位），避免首屏 CLS。
+  const [reviewSettled, setReviewSettled] = useState(false)
+  const [dueSettled, setDueSettled] = useState(false)
+  const [topTimedOut, setTopTimedOut] = useState(false)
+  useEffect(() => {
+    const t = window.setTimeout(() => setTopTimedOut(true), TOP_BANNERS_SETTLE_MS)
+    return () => window.clearTimeout(t)
+  }, [])
+  const topSettled = topTimedOut || (reviewSettled && dueSettled)
+
   return (
     <div className="space-y-4">
       {showTour && <FirstRunTour onDone={() => setShowTour(false)} />}
@@ -952,12 +965,13 @@ export function TimelinePage() {
         </div>
       )}
 
-      <DueTodosBanner />
+      <DueTodosBanner onSettled={() => setDueSettled(true)} />
 
       <TriageBacklogBanner notes={notes} />
 
-      <DailyReview onTagClick={setTag} />
+      <DailyReview onTagClick={setTag} onSettled={() => setReviewSettled(true)} />
 
+      <div className={cn("space-y-4", !topSettled && "invisible")}>
       <div ref={quickInputRef}>
         <QuickInput
           onCreated={handleCreated}
@@ -1490,6 +1504,7 @@ export function TimelinePage() {
           <Plus className="size-6" />
         </button>
       )}
+      </div>
     </div>
   )
 }

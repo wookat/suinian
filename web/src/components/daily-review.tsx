@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { CalendarClock, ChevronDown, ChevronRight, Eye, EyeOff, Sparkles } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -25,7 +25,14 @@ function noteDateLabel(iso: string): string {
 }
 
 /** 首页顶部「今日回顾」卡：那年今日 / 上月今日 / 久未回看 / 反复出现的主题 / 悬置的待办，可折叠、可翻下一条 */
-export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void }) {
+export function DailyReview({
+  onTagClick,
+  onSettled,
+}: {
+  onTagClick?: (tag: string) => void
+  /** 首次加载结束（无论有无条目）时回调：首页据此决定何时显示下方内容，避免卡片后到导致整页下移 */
+  onSettled?: () => void
+}) {
   const [items, setItems] = useState<DailyReviewItem[]>([])
   const [index, setIndex] = useState(0)
   const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set())
@@ -34,6 +41,10 @@ export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void
   const settingsVersion = useSettingsVersion()
 
   const [refreshKey, setRefreshKey] = useState(0)
+  const onSettledRef = useRef(onSettled)
+  useEffect(() => {
+    onSettledRef.current = onSettled
+  }, [onSettled])
 
   useEffect(() => {
     let cancelled = false
@@ -48,6 +59,7 @@ export function DailyReview({ onTagClick }: { onTagClick?: (tag: string) => void
       })
       .finally(() => {
         if (!cancelled) setLoaded(true)
+        onSettledRef.current?.()
       })
     return () => {
       cancelled = true
