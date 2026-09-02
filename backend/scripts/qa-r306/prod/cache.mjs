@@ -39,11 +39,11 @@ async function ask(body) {
 const Q = "分别是哪几笔？";
 const hBooks = [
   { role: "user", content: "今年买书一共花了多少" },
-  { role: "assistant", content: "今年买书共 3 笔，合计 463 元。" },
+  { role: "assistant", content: "按关键词「买书」精确匹配（标题/正文/标签），今年共 3 笔支出：\n- CNY：支出 ¥463\n\n以上为数据库精确统计（关键词匹配口径，金额口径与周报/月报一致，不含已删除笔记）。" },
 ];
 const hAll = [
   { role: "user", content: "我一共花了多少钱" },
-  { role: "assistant", content: "到目前为止共 5 笔支出，合计 553 元。" },
+  { role: "assistant", content: "到目前为止你共记了 5 笔支出：\n- CNY：支出 ¥553\n\n以上为数据库精确统计（金额口径与周报/月报一致，不含已删除笔记）。" },
 ];
 const rows = {};
 rows.all1 = await ask({ question: Q, history: hAll });

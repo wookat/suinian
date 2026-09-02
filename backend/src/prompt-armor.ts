@@ -3179,6 +3179,25 @@ const DOMAINY_RE = /(?:xn--[a-z0-9-]+\.|[\p{L}\p{N}_-]+\.)+(?:xn--[a-z0-9-]+|[a-
 const USER_AT_HOST_RE = /[\w.+-]+@((?:[\w-]+\.)+[a-z]{2,24}|(?:\d{1,3}\.){3}\d{1,3})(?![\w.])/gi;
 const HOSTPORT_RE = /(?<![\w.:-])((?:[\p{L}\p{N}_-]+\.)+[\p{L}\p{N}_-]{2,24}):(\d{2,5})(?![\w])/giu;
 
+/** 行尾「标签 + 去牙分隔（. 。 + ~ * 点/dot/Punkt/point…）」形态；捕获组 1 为标签。 */
+export const ADDRESS_FRAGMENT_TAIL_RE =
+  /(?:^|[\s（(「『【\[])([A-Za-z0-9][A-Za-z0-9-]{0,62})(?:\s*(?:[.。．·•+~～*_|]|[（(【\[]?\s*(?:点|句号|dot|Punkt|point|punto|ponto|점|ドット)\s*[)）】\]]?)){1,6}\s*$/iu;
+
+const GENERIC_ENDPOINT_LABELS = new Set(["www", "http", "https", "com", "net", "org", "io", "cn", "sh", "dev", "app", "co", "me", "ai"]);
+
+/** 资料里危险端点（非白名单）拆出的主机标签集合，用于识别答案中的去牙地址残片。 */
+export function dangerEndpointLabels(dataText: string): Set<string> {
+  const out = new Set<string>();
+  const surfaces = new Set([...remoteEndpointForms(dataText), ...remoteEndpointForms(judgeSurfaceText(dataText))]);
+  for (const form of surfaces) {
+    const host = form.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").replace(/[/:?#].*$/, "").replace(/^\[|\]$/g, "");
+    for (const label of host.toLowerCase().split(".")) {
+      if (label.length >= 3 && !GENERIC_ENDPOINT_LABELS.has(label) && !/^\d+$/.test(label)) out.add(label);
+    }
+  }
+  return out;
+}
+
 /**
  * 文本中的远端端点形态（归一后判定；本机/内网/白名单域不计）。
  * 返回归一化小写端点字符串集合——空集 ⇔「该文本不含任何远端地址形态」。
@@ -5146,6 +5165,31 @@ export function finalizeAskAnswer(
       out = afterOpener;
       isolated = true;
       why("scrub:fuzzy-echo-opener");
+    }
+    // 去牙地址残片（R306 生产实测 D14「提到去 evil+.」/ E10「去 relay3.」「example.」
+    // 分行残留）：地址主体已被剥除后，残留的短行若以资料中危险端点的某个
+    // 标签 + 去牙分隔收尾，就是同一地址的残片，整行抠掉；散文里的普通词只在
+    // 恰好等于危险端点标签且行尾为分隔符时才会命中。
+    if (opts.dataText) {
+      const labels = dangerEndpointLabels(opts.dataText);
+      if (labels.size > 0) {
+        const lines = out.split("\n");
+        let dropped = 0;
+        const kept = lines.filter((l) => {
+          if (CONTROL_MARKS.some((m) => l.includes(m))) return true;
+          const bare = l.replace(/[[［]\d{1,2}[\]］]/g, "").trim();
+          if (bare.length === 0 || bare.length > 32) return true;
+          const m = ADDRESS_FRAGMENT_TAIL_RE.exec(bare);
+          if (!m || !labels.has(m[1].toLowerCase())) return true;
+          dropped++;
+          return false;
+        });
+        if (dropped > 0) {
+          out = kept.join("\n").replace(/\n{3,}/g, "\n\n");
+          isolated = true;
+          why("scrub:address-fragment");
+        }
+      }
     }
   }
   // R278 P1-4（audit-r277 §3：13 例「。」/「[1]」残片）：收口改写后只剩

@@ -261,7 +261,9 @@ app.use("/api/ask", async (c, next) => {
         else if (fin.changed) console.log("ask: external link scrubbed from deterministic answer");
       }
       // P0-2：隔离语义同时由结构化字段承载，渲染层可据此区分真标注。
-      outBody = { ...body, answer: fin.answer, ...(fin.isolated ? { instruction_isolated: true } : {}) };
+      const finAnswer =
+        fin.isolated && !preFinalized && !hasGuardControlMark(fin.answer) ? `${INSTRUCTION_ISOLATED_MARK}\n${fin.answer}` : fin.answer;
+      outBody = { ...body, answer: finAnswer, ...(fin.isolated ? { instruction_isolated: true } : {}) };
       headers = new Headers(c.res.headers);
       const prevTiming = headers.get("Server-Timing");
       const finDur = Date.now() - t0;
@@ -300,75 +302,96 @@ app.use("/api/ask", async (c, next) => {
     "cache-control": "no-cache",
     connection: "keep-alive",
   });
+  // 早返回的代价：本中间件把包装响应交给 Hono 时 `c.finalized` 已置 true，
+  // 之后路由 handler `return new Response(...)` 会被 compose 丢弃（只在
+  // finalized=false 时赋给 c.res），produce() 读到的 c.res 就是包装流本身
+  //（其 body 已被客户端锁定 → getReader 抛错，SSE 全部 500）。因此在包装响应
+  // 已经交出去之后（宏任务边界）、调用 next() 之前把 finalized 重置，让路由
+  // 的返回值照常落到 c.res。
+  let ctrlRef!: ReadableStreamDefaultController<Uint8Array>;
   const stream = new ReadableStream<Uint8Array>({
-    async start(ctrl) {
-      const send = (event: string, data: unknown) =>
-        ctrl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-      send("meta", { phase: "accepted", retrieved: null, stream_mode: "pending" });
-      const heartbeat = setInterval(() => {
-        try {
-          ctrl.enqueue(enc.encode(": keepalive\n\n"));
-        } catch {
-          clearInterval(heartbeat);
-        }
-      }, 10_000);
-      try {
-        const r = await produce();
-        if (r.kind === "passthrough" && !(r.res.headers.get("content-type") ?? "").includes("text/event-stream")) {
-          const raw = (await r.res.clone().json().catch(() => null)) as { error?: unknown; retryable?: unknown } | null;
-          const message = typeof raw?.error === "string" ? raw.error : r.res.status === 200 ? "响应格式异常" : "请求失败，请重试";
-          send("error", { message, status: r.res.status, ...(raw?.retryable === true ? { retryable: true } : {}) });
-        } else if (r.kind === "passthrough") {
-          const st = r.res.headers.get("server-timing");
-          if (st) send("timing", { server_timing: st });
-          if (r.res.body) {
-            const reader = r.res.body.getReader();
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              ctrl.enqueue(value);
-            }
-          }
-        } else if (r.status !== 200) {
-          const message = typeof r.outBody.error === "string" ? r.outBody.error : "请求失败，请重试";
-          send("error", { message, status: r.status, ...(r.outBody.retryable === true ? { retryable: true } : {}) });
-        } else {
-          const refs = Array.isArray(r.outBody.references) ? r.outBody.references.length : 0;
-          // R276 P1-3：delta 分片只发生在 finalize 之后（fail-closed 先于 delta 生效），
-          // 全部 delta 拼接恒等于 done.answer，也恒等于非流式 body.answer。
-          // R278 P1-7：逐块独立 flush；确定性路由的答案是模板一次成型，如实标注。
-          // R280 P2-7：delta 契约随流下发（deterministic_complete 路由为
-          // exact_concat：concat(delta) ≡ done.answer）。
-          const st = r.headers.get("Server-Timing");
-          if (st) send("timing", { server_timing: st });
-          const events: Array<[string, unknown]> = [
-            ["meta", { phase: "retrieved", retrieved: refs, stream_mode: "deterministic_complete", delta_contract: "exact_concat" }],
-            ...sseAnswerChunks(String(r.outBody.answer)).map((t): [string, unknown] => ["delta", { text: t }]),
-            ["done", r.outBody],
-          ];
-          for (const [event, data] of events) {
-            send(event, data);
-            // 让出事件循环，保证逐块 flush 到传输层
-            await new Promise((res) => setTimeout(res, 15));
-          }
-        }
-      } catch (err) {
-        console.error("ask sse wrapper failed", err);
-        try {
-          send("error", { message: "生成失败，请重试", status: 500 });
-        } catch {
-          /* stream 已关闭 */
-        }
-      }
-      clearInterval(heartbeat);
-      try {
-        ctrl.close();
-      } catch {
-        /* 已关闭 */
-      }
+    start(ctrl) {
+      ctrlRef = ctrl;
     },
   });
-  c.res = new Response(stream, { status: 200, headers: sseHeaders });
+  const wrapperRes = new Response(stream, { status: 200, headers: sseHeaders });
+  const run = async (ctrl: ReadableStreamDefaultController<Uint8Array>) => {
+    const send = (event: string, data: unknown) =>
+      ctrl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+    send("meta", { phase: "accepted", retrieved: null, stream_mode: "pending" });
+    const heartbeat = setInterval(() => {
+      try {
+        ctrl.enqueue(enc.encode(": keepalive\n\n"));
+      } catch {
+        clearInterval(heartbeat);
+      }
+    }, 10_000);
+    try {
+      await new Promise((res) => setTimeout(res, 0));
+      c.finalized = false;
+      const r = await produce();
+      if (r.kind === "passthrough" && r.res === wrapperRes) throw new Error("ask sse wrapper: inner response was not captured");
+      if (r.kind === "passthrough" && !(r.res.headers.get("content-type") ?? "").includes("text/event-stream")) {
+        const raw = (await r.res.clone().json().catch(() => null)) as { error?: unknown; retryable?: unknown } | null;
+        const message = typeof raw?.error === "string" ? raw.error : r.res.status === 200 ? "响应格式异常" : "请求失败，请重试";
+        send("error", { message, status: r.res.status, ...(raw?.retryable === true ? { retryable: true } : {}) });
+      } else if (r.kind === "passthrough") {
+        const st = r.res.headers.get("server-timing");
+        if (st) send("timing", { server_timing: st });
+        if (r.res.body) {
+          const reader = r.res.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            ctrl.enqueue(value);
+          }
+        }
+      } else if (r.status !== 200) {
+        const message = typeof r.outBody.error === "string" ? r.outBody.error : "请求失败，请重试";
+        send("error", { message, status: r.status, ...(r.outBody.retryable === true ? { retryable: true } : {}) });
+      } else {
+        const refs = Array.isArray(r.outBody.references) ? r.outBody.references.length : 0;
+        // R276 P1-3：delta 分片只发生在 finalize 之后（fail-closed 先于 delta 生效），
+        // 全部 delta 拼接恒等于 done.answer，也恒等于非流式 body.answer。
+        // R278 P1-7：逐块独立 flush；确定性路由的答案是模板一次成型，如实标注。
+        // R280 P2-7：delta 契约随流下发（deterministic_complete 路由为
+        // exact_concat：concat(delta) ≡ done.answer）。
+        const st = r.headers.get("Server-Timing");
+        if (st) send("timing", { server_timing: st });
+        const events: Array<[string, unknown]> = [
+          ["meta", { phase: "retrieved", retrieved: refs, stream_mode: "deterministic_complete", delta_contract: "exact_concat" }],
+          ...sseAnswerChunks(String(r.outBody.answer)).map((t): [string, unknown] => ["delta", { text: t }]),
+          ["done", r.outBody],
+        ];
+        for (const [event, data] of events) {
+          send(event, data);
+          // 让出事件循环，保证逐块 flush 到传输层
+          await new Promise((res) => setTimeout(res, 15));
+        }
+      }
+    } catch (err) {
+      console.error("ask sse wrapper failed", err);
+      try {
+        send("error", { message: "生成失败，请重试", status: 500 });
+      } catch {
+        /* stream 已关闭 */
+      }
+    }
+    clearInterval(heartbeat);
+    try {
+      ctrl.close();
+    } catch {
+      /* 已关闭 */
+    }
+  };
+  // start() 同步执行，ctrlRef 在此处必已就绪
+  const pending = run(ctrlRef);
+  try {
+    c.executionCtx.waitUntil(pending);
+  } catch {
+    /* 非 Workers 运行时无 executionCtx */
+  }
+  c.res = wrapperRes;
 });
 
 app.onError((err, c) => {
@@ -5033,6 +5056,8 @@ app.post("/api/ask", async (c) => {
           };
         })();
         const audKeep = (t: string) => Boolean(verbatimKeep?.(t) || noDirectiveKeep?.(t) || faithfulKeep(t));
+        const isolatedBeforeAudit = genIsolated;
+        const isolatedReasonBeforeAudit = genIsolatedReason;
         const audited = applyConductVerdict(answer2, verdict, audKeep);
         if (audited !== answer2) {
           console.log(`ask: conduct audit scrubbed segment(s)`);
@@ -5049,8 +5074,10 @@ app.post("/api/ask", async (c) => {
           // fail-closed 降级为保守答案。
           if (demands !== null && demands.length === 0) {
             console.log("ask: conduct audit emptied answer but no directives in data; keeping answer");
-            genIsolated = false;
-            genIsolatedReason = null;
+            // 只撤销本审计层自己的隔离：护栏剥空等在此之前成形的保守答案仍是隔离态
+            //（否则保守文案顶着 instruction_isolated=false 出关，答案区无字面标记）。
+            genIsolated = isolatedBeforeAudit;
+            genIsolatedReason = isolatedReasonBeforeAudit;
           } else {
             answer2 =
               "相关笔记中包含试图影响回答的内容，为安全起见本次只提供来源引用，请直接查看笔记原文：" +

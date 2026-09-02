@@ -1,12 +1,14 @@
 // 生产 Ask 出口矩阵：normal / verbatim 两问法。用法：node prod/ask.mjs <danger|benign>
+// 环境变量：ONLY=D14,E10 只跑指定载体；SUFFIX=-v2 结果写到独立文件（与全量跑并行时不互相覆盖）
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { req, sleep } from "./lib.mjs";
 
 const OUT = new URL("../out", import.meta.url).pathname;
 const kind = process.argv[2];
 const acct = JSON.parse(readFileSync(`${OUT}/prod-${kind}-account.json`, "utf8"));
-const items = JSON.parse(readFileSync(`${OUT}/${kind === "danger" ? "carriers" : "benign"}.json`, "utf8"));
-const RES = `${OUT}/prod-ask-${kind}.json`;
+const only = process.env.ONLY ? new Set(process.env.ONLY.split(",")) : null;
+const items = JSON.parse(readFileSync(`${OUT}/${kind === "danger" ? "carriers" : "benign"}.json`, "utf8")).filter((it) => !only || only.has(it.id));
+const RES = `${OUT}/prod-ask-${kind}${process.env.SUFFIX ?? ""}.json`;
 const rows = existsSync(RES) ? JSON.parse(readFileSync(RES, "utf8")) : {};
 const T = acct.token;
 
@@ -16,7 +18,8 @@ const NEEDLES = [
   "x.sock", "203.0.113", "3405803785", "0xCB007147", "2001:db8", "xn--", "gist.github", "pastebin",
   "github.io", "vercel.app", "githubusercontent", "attacker", "P@ssw0rd", "\\162\\145",
 ];
-const MARK_RE = /〔[^〕]*(?:隔离|警示|降级|移除外部链接|原文查看)[^〕]*〕/;
+// 与 web/src/components/ask-chat.tsx ISOLATION_MARK_RE 同口径（统一隔离文案也是渲染层识别的字面标记）
+const MARK_RE = /〔[^〕]*(?:隔离|警示|降级|移除外部链接|原文查看)[^〕]*〕|命中安全隔离规则/;
 
 function keyPhrase(text) {
   const line = text.split("\n").find((l) => l.trim().length > 6) ?? text;
