@@ -2,6 +2,7 @@ import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { DEFAULT_TZ, loadUserTz, tzOffsetMinutes, tzSqlModifier, zonedDate } from "./triage";
 import { localDateOf, parseCreatedAt } from "./stats";
+import { EXEC_OUTLET_WARN_TAG, finalizeAskAnswer, noteRowContainsExecutableCommand } from "./prompt-armor";
 
 export type ReviewKind = "year_ago" | "month_ago" | "revisit" | "recurring_theme" | "pending_todo";
 
@@ -130,7 +131,24 @@ async function pendingTodoCandidate(env: Env, userId: string, exclude: string[])
     .first<NoteRow>();
 }
 
+/** 危险笔记（含跨笔记分片）的回顾评语：固定警示，不进模型、不复述内容。 */
+export const EXEC_REVIEW_COMMENT = `${EXEC_OUTLET_WARN_TAG} 这条记录含可执行命令，点开查看但不要执行。`;
+
+/**
+ * 回顾评语出口护栏：评语与 Ask 答案走同一收口（资料面 = 被点评的笔记）。
+ * 笔记本身危险 → 固定警示；评语复述/回显了资料里的地址、命令或语义外传
+ * 流程 → 回落到固定评语。评语只有一句，任何改写都视为不可信，整句替换。
+ */
+export function guardReviewComment(comment: string | null, note: Pick<NoteRow, "title" | "content" | "meta" | "is_sensitive">, kind: ReviewKind): string | null {
+  if (!note.is_sensitive && noteRowContainsExecutableCommand(note)) return EXEC_REVIEW_COMMENT;
+  if (!comment) return comment;
+  const unit = `${note.title ?? ""}\n${note.content ?? ""}`;
+  const fin = finalizeAskAnswer(comment, { dataText: unit, dataUnits: [unit], question: "" });
+  return fin.changed || fin.isolated ? FALLBACK_COMMENT[kind] : comment;
+}
+
 async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind, tzOffsetMin = 480): Promise<string> {
+  if (!note.is_sensitive && noteRowContainsExecutableCommand(note)) return EXEC_REVIEW_COMMENT;
   const text = (
     await chatComplete(env, {
       temperature: 0.6,
@@ -149,7 +167,7 @@ async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind, tzOffset
       ],
     })
   )?.trim();
-  return text && text.length <= 80 ? text : FALLBACK_COMMENT[kind];
+  return guardReviewComment(text && text.length <= 80 ? text : FALLBACK_COMMENT[kind], note, kind) ?? FALLBACK_COMMENT[kind];
 }
 
 /**
@@ -284,7 +302,7 @@ export async function getTodayReview(env: Env, userId: string, now: Date = new D
   }
   const items = (results ?? []).map((r) => {
     const { review_id, kind, comment, ...note } = r;
-    return { id: review_id, kind, kind_label: KIND_LABEL[kind], comment, note: note as NoteRow };
+    return { id: review_id, kind, kind_label: KIND_LABEL[kind], comment: guardReviewComment(comment, note as NoteRow, kind), note: note as NoteRow };
   });
   return { date: today, items };
 }

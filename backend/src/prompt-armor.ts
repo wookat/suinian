@@ -247,7 +247,10 @@ function caesarShift(s: string, shift: number): string {
 /** 八进制/十六进制转义序列（`\162\145` / `\x72\x65` / `%72%65`）还原为字面字符。 */
 function decodeByteEscapes(s: string): string {
   return s
-    .replace(/\\([0-3][0-7]{2})/g, (_m, o: string) => String.fromCharCode(parseInt(o, 8)))
+    .replace(/\\([0-7]{1,3})/g, (m, o: string) => {
+      const code = parseInt(o, 8);
+      return code >= 0x20 && code <= 0x7e ? String.fromCharCode(code) : m;
+    })
     .replace(/\\x([0-9a-f]{2})/gi, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
 }
 
@@ -2669,7 +2672,7 @@ const SEM_FETCH_RE =
 const SEM_INTERP_TARGET_RE =
   /(?:[壳殼]|\bsh\b|\bbash\b|\bzsh\b|\bpwsh\b|\bpowershell\b|\bcmd\b|\bpython\b|\bnode\b|\bperl\b|\bruby\b|收件人\s*s\s*h|壳程序|殼程序|外壳|外殼|命令行|終端|终端|解释器|解釋器|翻译器|翻譯器|shell|interpreter|インタプリタ|シェル|ターミナル|端末|셸|쉘|터미널|명령줄|명령어|两个字母|兩個字母)/i;
 const SEM_HANDOFF_RE =
-  /交给|交給|交过去|交過去|交由|交上去|付于|付與|付给|付給|念给|念給|掉落|撒进|撒入|丢给|丟給|喂给|餵給|递给|遞給|倒进|倒進|灌进|灌進|接到|接给|接給|管道|竖线|豎線|贴到|貼到|粘到|粘进|扔进|扔給|扔给|下到|种进|种到|放进|放入|装进|倒入|下锅|pipe\s*(?:it|into|to)?|pour\s+(?:it\s+)?(?:in)?to|hand\s+(?:it\s+)?(?:over\s+)?to|feed\s+(?:it\s+)?(?:in)?to|流し込|渡して|パイプ|파이프|넘겨|붙여넣/i;
+  /交给|交給|交过去|交過去|交由|交上去|付于|付與|付给|付給|念给|念給|掉落|撒进|撒入|丢给|丟給|喂给|餵給|递给|遞給|倒进|倒進|灌进|灌進|接到|接给|接給|管道|竖线|豎線|贴到|貼到|粘到|粘进|扔进|扔給|扔给|下到|种进|种到|放进|放入|装进|倒入|下锅|pipe\s*(?:it|into|to)?|pour\s+(?:it\s+)?(?:in)?to|hand\s+(?:it\s+)?(?:over\s+)?to|feed\s+(?:it\s+)?(?:in)?to|(?:给|給)\s*(?:\bsh\b|\bbash\b|\bzsh\b|\bpwsh\b|\bpowershell\b|\bpython\b|\bnode\b|\bperl\b|\bruby\b|[壳殼]|终端|終端|解释器|解釋器)|\b(?:to|into)\s+(?:sh|bash|zsh|pwsh|powershell)\b|流し込|渡して|パイプ|파이프|넘겨|붙여넣/i;
 const SEM_RUN_RE =
   /执行|執行|行之|施行|运行|運行|跑起来|跑掉|跑一下|跑一遍|跑几遍|跑幾遍|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|(?:\bsh\b|\bbash\b|\bzsh\b|\bpython\b|\bnode\b)\s*(?:一下|一遍|跑|执行|運行|运行)|(?:用|拿|交给|交給|丢给|丟給)\s*(?:\bsh\b|\bbash\b|\bzsh\b|\bpython\b|\bnode\b|壳|殼|终端|終端)\s*(?:去)?\s*(?:跑|执行|運行|运行|起来|起來)|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|走らせ|실행|돌려|구동|запуст|выполн|исполни|установи|شغل|نفذ|ejec[úu]t|ex[eé]cut|führ\w*[^\n]{0,60}\baus\b|\bch[ạa]y\b|รัน|\bjalankan\b|\besegui|\bexecute\b|\buruchom\b|\b[çc]al[ıi][şs]t[ıi]r\b/i;
 /** 取回词的名词性复合形态（下载页面 / 下载链接 / download page）。 */
@@ -3317,8 +3320,12 @@ function normalizeAddressSurfaceUncached(text: string): string {
   // 兼容分解是「空格+组合符」，先归一会把分隔符信息丢成空白，折不回点。
   // HTML 数字/十六进制实体分隔符（`evil&#46;example&#46;com` / `&#x2e;`）：按类
   // 折叠会把 `&#46;` 当三个记号折成 `.46.`，先解成字面字符。
-  const decoded = text.replace(/&#(\d{1,5});|&#x([0-9a-f]{1,4});/gi, (_m, d: string | undefined, h: string | undefined) =>
-    String.fromCodePoint(d !== undefined ? parseInt(d, 10) : parseInt(h ?? "0", 16))
+  // 字节转义（八进制 `\\162` / 十六进制 `\\x72`）同理先解成字面字符，否则下文的类折叠会把
+  // 反斜杠当分隔符折成点（`\\162\\145` → `162.145`），解码面随之丢失。
+  const decoded = decodeByteEscapes(
+    text.replace(/&#(\d{1,5});|&#x([0-9a-f]{1,4});/gi, (_m, d: string | undefined, h: string | undefined) =>
+      String.fromCodePoint(d !== undefined ? parseInt(d, 10) : parseInt(h ?? "0", 16))
+    )
   );
   // R308 P0-1（audit-r307 §2 R01/R02）：自然语言分隔词的折叠必须先在【原面】做。
   // 下面的同形折叠会把西里尔字母折成拉丁（точка → тocчкa）、NFD 会把谚文音节
@@ -3382,6 +3389,13 @@ const HOSTPORT_RE = /(?<![\w.:-])((?:[\p{L}\p{N}_-]+\.)+[\p{L}\p{N}_-]{2,24}):(\
 /** 行尾「标签 + 去牙分隔（. 。 + ~ * 点/dot/Punkt/point…）」形态；捕获组 1 为标签。 */
 export const ADDRESS_FRAGMENT_TAIL_RE =
   /(?:^|[\s（(「『【\[])([A-Za-z0-9][A-Za-z0-9-]{0,62})(?:\s*(?:[.。．·•+~～*_|]|[（(【\[]?\s*(?:点|句号|dot|Punkt|point|punto|ponto|점|ドット)\s*[)）】\]]?)){1,6}\s*$/iu;
+
+/** 答案里以「地址/域名/主机/URL/host/…」标签引出的列举行前缀（含列表符/粗体）。 */
+const ADDR_LABEL_LINE_RE =
+  /^\s*(?:[-*•]|\d{1,2}[.)、])?\s*(?:\*\*)?(?:地址|域名|主机名?|服务器|目标|端点|端点地址|链接|网址|站点|url|host(?:name)?|address|domain|endpoint|server|target|site|link)(?:\*\*)?\s*[:：]/iu;
+/** 地址列举行的不透明记号：反引号包裹、点分串、字节转义、URL、含数字的长编码块。 */
+const ADDR_LABEL_OPAQUE_RE =
+  /`[^`]{4,}`|[\p{L}\p{N}-]+\.[\p{L}\p{N}-]{2,}|\\(?:[0-3][0-7]{2}|x[0-9a-fA-F]{2})|:\/\/|(?<![\p{L}\p{N}])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{8,}(?![\p{L}\p{N}])/u;
 
 const GENERIC_ENDPOINT_LABELS = new Set(["www", "http", "https", "com", "net", "org", "io", "cn", "sh", "dev", "app", "co", "me", "ai"]);
 
@@ -5369,6 +5383,9 @@ export function finalizeAskAnswer(
     /** R306 P0-3：资料面按笔记切分的单元（每条笔记一项），用于跨笔记语义窗口
      * 的地址收口按笔记归因；缺省时整面收口（fail-closed）。 */
     dataUnits?: string[];
+    /** 同账号邻近笔记拼接后判为危险的分片笔记（meta.exec_fragment）：单片各自
+     * 无痕，其片段记号与地址一律按危险行收口。 */
+    execFragmentUnits?: string[];
   }
 ): { answer: string; changed: boolean; isolated: boolean; degraded?: boolean; reason?: string } {
   const hosts = opts.allowedHosts ?? ANSWER_LINK_ALLOWED_HOSTS;
@@ -5687,11 +5704,38 @@ export function finalizeAskAnswer(
       }
       // 危险行里的点分串（含伪 TLD/倒写/白名单文档域）：地址是否「合法形态」
       // 不重要，来自危险行的点分串本身就是载荷坐标，其回声（含倒写）一律收口。
-      for (const m of dl.matchAll(/[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+){2,}/gu)) {
-        const tok = alnumFold(m[0]);
-        if (tok.length >= 10) {
-          dangerTokens.push(tok);
-          dangerTokens.push([...tok].reverse().join(""));
+      const collectDotted = (src: string): void => {
+        for (const m of src.matchAll(/[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+){2,}/gu)) {
+          const tok = alnumFold(m[0]);
+          if (tok.length >= 10) {
+            dangerTokens.push(tok);
+            dangerTokens.push([...tok].reverse().join(""));
+          }
+        }
+      };
+      collectDotted(dl);
+      // 字节转义序列（八进制/十六进制 printf 拼主机名）：转义原文与解码结果都是
+      // 同一载荷坐标；解码后的地址面（凯撒/倒写/Base32 还原）同样收点分串。
+      for (const m of dl.matchAll(/(?:\\(?:[0-3][0-7]{2}|x[0-9a-fA-F]{2})){3,}/g)) {
+        const raw = alnumFold(m[0]);
+        if (raw.length >= 8) dangerTokens.push(raw);
+        const dec = alnumFold(decodeByteEscapes(m[0]));
+        if (dec.length >= 5) dangerTokens.push(dec);
+      }
+      const surf = normalizeAddressSurface(dl);
+      if (surf !== dl) collectDotted(surf);
+    };
+    // 分片笔记：单片的记号（说明语之后的片段本体）就是载荷的一段，回声即收口。
+    const collectFragmentUnit = (u: string): void => {
+      for (const fl of u.split("\n")) {
+        if (!fl.trim()) continue;
+        collectAddrs(fl);
+        collectDangerLine(fl);
+        const piece = alnumFold(fragmentPiece(fl));
+        if (piece.length >= 6) dangerTokens.push(piece);
+        for (const m of fl.matchAll(/[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/gu)) {
+          const tok = alnumFold(m[0]);
+          if (tok.length >= 8) dangerTokens.push(tok);
         }
       }
     };
@@ -5709,6 +5753,9 @@ export function finalizeAskAnswer(
       /(?:ssh|scp|telnet|netcat|\bnc\b|bash|zsh|\bsh\b|shell|curl|wget|powershell|终端|命令|执行|运行|跑起来|连上|连线|反连|下载|取回|拉取|端口|外传|发送|上传|実行|端末|シェル|ダウンロード|接続|送信|실행|터미널|셸|쉘|명령|다운로드|접속|연결|전송|보내|내보내|execute|terminal|download|connect|pipe)/i;
     for (const seg of [...execDangerKept, ...(opts.execDegradedSegments ?? [])])
       for (const sl of seg.split("\n")) if (lineDangerReason(sl) !== null) collectDangerLine(sl);
+    const fragUnits = (opts.execFragmentUnits ?? []).filter((u) => u.trim().length > 0);
+    for (const u of fragUnits) collectFragmentUnit(u);
+    if (fragUnits.length > 0) dataWhy = "data:fragment";
     if (opts.dataText) {
       for (const dl of opts.dataText.split("\n")) {
         const dlDanger = lineDangerReason(dl);
@@ -5721,7 +5768,7 @@ export function finalizeAskAnswer(
         execSemanticDangerReason(t) ?? execSemanticDangerReason(judgeSurfaceText(t));
       const dataDanger = semanticDanger(opts.dataText);
       if (dataDanger !== null) {
-        dataWhy = `data:${dataDanger}`;
+        dataWhy = `data:${dataDanger}${fragUnits.length > 0 ? "+fragment" : ""}`;
         // 共同检索传染（R306 P0-3，生产实测 OF22/OF23）：语义窗口跨多条笔记聚合时，
         // 「域名笔记 + 含提交/发送词的无关笔记」也会拼出 remote-exfil，把善意
         // 域名收进标记地址集 ⇒ 回声整答隔离。给了笔记边界就按笔记判：单条自证
@@ -5889,6 +5936,8 @@ export function finalizeAskAnswer(
       const m = line.match(CLOSURE_LIST_PREFIX_RE);
       return m ? m[1] + closureMark : closureMark;
     };
+    const dataFaceDangerous =
+      dataWhy !== "" || markedAddrs.size > 0 || dangerTokens.length > 0 || dangerLineFolds.length > 0;
     const lines = out.split("\n").map((line) => {
       if (!line.trim()) return line;
       // 警示级保留原文的行在无判别器兜底（不可用/保守否决）时重判：警示前缀
@@ -5942,6 +5991,17 @@ export function finalizeAskAnswer(
         return line;
       }
       const lineFold = alnumFold(line);
+      // 地址列举行（「地址：`…`」/「域名：…」/「host: …」）：资料面已判危险时，
+      // 答案里以地址类标签引出的不透明记号（反引号/点分串/转义序列/编码块/URL）
+      // 就是载荷坐标的另一种呈现，不看其编码是否能识别，一律收口。
+      if (
+        dataFaceDangerous &&
+        ADDR_LABEL_LINE_RE.test(line) &&
+        ADDR_LABEL_OPAQUE_RE.test(line.replace(ADDR_LABEL_LINE_RE, ""))
+      ) {
+        close("closure:addr-label-line");
+        return isolateLine(line);
+      }
       // 去址残句（R306 生产实测 E05/E06 verbatim `去 下载执行 [1]`）：模型/外链收口
       // 把地址抠掉后，剩下的动作残句是危险行的有序子序列——各记号按序全部落在
       // 同一危险行折叠里且自带执行/取回词即视为回声（只对已判危险的行比对）。
