@@ -221,7 +221,11 @@ export function AskChat({
   // 流式中间态（R174 SSE）：meta = 已检索 N 条；text = 生成中的正文增量。
   // 正文里的 [n] 角标在流式期间按纯文本展示，done 后用引证补全的最终全文
   // 一次性替换，角标才变为可点击引用（保证引证确定性）。
-  const [streamState, setStreamState] = useState<{ retrieved: number | null; text: string }>({ retrieved: null, text: "" })
+  const [streamState, setStreamState] = useState<{ accepted: boolean; retrieved: number | null; text: string }>({
+    accepted: false,
+    retrieved: null,
+    text: "",
+  })
   const abortRef = useRef<AbortController | null>(null)
   const [saveStates, setSaveStates] = useState<Record<string, "saving" | "saved" | "error">>({})
   const [confirmClear, setConfirmClear] = useState(false)
@@ -281,7 +285,7 @@ export function AskChat({
     if (!q || asking) return
     if (question === undefined) setInput("")
     setAsking(true)
-    setStreamState({ retrieved: null, text: "" })
+    setStreamState({ accepted: false, retrieved: null, text: "" })
     const controller = new AbortController()
     abortRef.current = controller
     const history = selectAskContext(historyRef.current, Date.now())
@@ -292,7 +296,12 @@ export function AskChat({
         q,
         history,
         {
-          onMeta: (m) => setStreamState((s) => ({ ...s, retrieved: m.retrieved })),
+          onMeta: (m) =>
+            setStreamState((s) => ({
+              ...s,
+              accepted: true,
+              retrieved: m.phase === "accepted" ? s.retrieved : m.retrieved,
+            })),
           onDelta: (t) => setStreamState((s) => ({ ...s, text: s.text + t })),
         },
         controller.signal,
@@ -338,7 +347,7 @@ export function AskChat({
     } finally {
       abortRef.current = null
       setAsking(false)
-      setStreamState({ retrieved: null, text: "" })
+      setStreamState({ accepted: false, retrieved: null, text: "" })
     }
   }
 
@@ -590,7 +599,9 @@ export function AskChat({
                   <Loader2 className="size-4 animate-spin" />
                   {streamState.retrieved !== null
                     ? `已找到 ${streamState.retrieved} 条相关笔记，正在生成回答…`
-                    : "正在思考…"}
+                    : streamState.accepted
+                      ? "正在检索相关笔记…"
+                      : "正在思考…"}
                 </div>
               )}
               <Button

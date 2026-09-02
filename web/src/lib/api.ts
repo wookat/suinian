@@ -597,8 +597,9 @@ export async function ask(
 
 /** askStream 的增量事件回调 */
 export interface AskStreamHandlers {
-  /** 检索完成（生成开始前）：已找到 retrieved 条相关笔记 */
-  onMeta?: (meta: { retrieved: number }) => void
+  /** 服务端进度：phase=accepted 为请求已受理（检索前，retrieved 为 null），
+   *  phase=retrieved 为检索完成（生成开始前）已找到 retrieved 条相关笔记 */
+  onMeta?: (meta: { phase?: "accepted" | "retrieved"; retrieved: number | null }) => void
   /** 生成文本增量（正文尚未定稿，引证角标以最终 done 全文为准） */
   onDelta?: (text: string) => void
 }
@@ -669,6 +670,7 @@ export async function askStream(
   let event = ""
   let done_: AskResponse | null = null
   let errMessage: string | null = null
+  let errStatus = 500
   const handleLine = (line: string) => {
     if (line.startsWith("event:")) {
       event = line.slice(6).trim()
@@ -678,10 +680,14 @@ export async function askStream(
     const data = line.slice(5).trim()
     if (!data) return
     try {
-      if (event === "meta") handlers.onMeta?.(JSON.parse(data) as { retrieved: number })
+      if (event === "meta") handlers.onMeta?.(JSON.parse(data) as { phase?: "accepted" | "retrieved"; retrieved: number | null })
       else if (event === "delta") handlers.onDelta?.((JSON.parse(data) as { text: string }).text)
       else if (event === "done") done_ = JSON.parse(data) as AskResponse
-      else if (event === "error") errMessage = (JSON.parse(data) as { message?: string }).message ?? "生成失败，请重试"
+      else if (event === "error") {
+        const err = JSON.parse(data) as { message?: string; status?: number }
+        errMessage = err.message ?? "生成失败，请重试"
+        if (typeof err.status === "number") errStatus = err.status
+      }
     } catch {
       // 忽略坏帧，done 缺失时统一在结尾兜底
     }
@@ -697,7 +703,7 @@ export async function askStream(
   }
   clearTimeout(idleTimer)
   handleLine(buf)
-  if (errMessage) throw new ApiError(500, errMessage)
+  if (errMessage) throw new ApiError(errStatus, errMessage)
   if (!done_) throw new NetworkError("流式回答中断，请重试", true)
   const final = done_ as AskResponse
   return { ...final, notes: (final.notes ?? []).map((n) => normalizeNote(n as unknown as Record<string, unknown>)) }

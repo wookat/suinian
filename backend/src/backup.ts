@@ -12,6 +12,8 @@ import { SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 import { maybeSensitive } from "./triage";
 import { scrubDerivedMeta } from "./ingest";
 import { storeOriginal, type MediaType } from "./media";
+import { noteContainsExecutableCommand, EXEC_OUTLET_WARN_LINE } from "./prompt-armor";
+import { recordOutletExecMarks } from "./guard-events";
 
 export const BACKUP_FORMAT = "suinian-backup";
 export const BACKUP_VERSION = 1;
@@ -62,6 +64,9 @@ export interface BackupNote {
   created_at: string;
   updated_at: string;
   attachments: BackupAttachment[];
+  /** R306 P0-1：危险执行标注随备份走（不经 noteToJson 的出口） */
+  contains_executable_command: boolean;
+  exec_warning?: string;
 }
 
 export interface BackupManifest {
@@ -124,6 +129,7 @@ export async function buildBackupZip(
   const backupNotes: BackupNote[] = [];
   const mediaEntries: { path: string; r2_key: string }[] = [];
   let attachmentsRedacted = 0;
+  let execMarked = 0;
   // every note goes into the backup, including ones still waiting for AI
   // triage (category stays null and gets sorted after restore). Fail-closed:
   // besides confirmed-sensitive notes, a redacted (default) backup also
@@ -175,6 +181,8 @@ export async function buildBackupZip(
         return { path, name, mime: a.mime, size: a.size };
       });
     }
+    const execFlag = !redacted && noteContainsExecutableCommand(content);
+    if (execFlag) execMarked++;
     backupNotes.push({
       id: n.id,
       source: n.source,
@@ -198,8 +206,11 @@ export async function buildBackupZip(
       created_at: n.created_at,
       updated_at: n.updated_at,
       attachments: backupAtts,
+      contains_executable_command: execFlag,
+      ...(execFlag ? { exec_warning: EXEC_OUTLET_WARN_LINE } : {}),
     });
   }
+  recordOutletExecMarks(env, "backup", execMarked, waitUntil);
 
   const manifest: BackupManifest = {
     format: BACKUP_FORMAT,

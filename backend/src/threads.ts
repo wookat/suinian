@@ -2,6 +2,8 @@ import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { findGraphThreadMate } from "./graph";
 import { ensureNoteEmbedding, cosineSim, noteHasSemanticSignal } from "./semantic";
+import { execOutletTag, noteContainsExecutableCommand, EXEC_OUTLET_WARN_TAG } from "./prompt-armor";
+import { recordOutletExecMarks } from "./guard-events";
 
 // re-export for existing consumers (graph.ts, tests); the implementation
 // lives in semantic.ts next to the vector-store write path
@@ -72,6 +74,13 @@ async function newThread(env: Env, userId: string, title: string): Promise<strin
  * a one-line summary right away, not only after the daily cron) and reused by
  * the daily refresh. Never throws.
  */
+/** 线索摘要出口的危险警示：摘要本身含命令，或线索内有危险笔记时都带标。 */
+export function threadSummaryWithExecWarn(summary: string, dangerousNotes: number): string {
+  if (summary.includes(EXEC_OUTLET_WARN_TAG)) return summary;
+  if (dangerousNotes > 0 || noteContainsExecutableCommand(summary)) return `${EXEC_OUTLET_WARN_TAG} ${summary}`;
+  return summary;
+}
+
 export async function summarizeThread(env: Env, threadId: string, fallbackTitle?: string): Promise<void> {
   try {
 
@@ -82,8 +91,14 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
       .all<{ title: string | null; content: string; created_at: string }>();
     const rows = notes ?? [];
     if (rows.length === 0) return;
+    // R306 P0-1：摘要生成前对危险笔记打标（模型可见），摘要落库时再加警示兜底
+    const dangerous = rows.filter((n) => noteContainsExecutableCommand(n.content || "")).length;
+    recordOutletExecMarks(env, "thread", dangerous);
     const digest = rows
-      .map((n, i) => `${i + 1}. (${n.created_at.slice(0, 10)}) ${(n.title || n.content).slice(0, 200)}`)
+      .map((n, i) => {
+        const tag = execOutletTag(n.content);
+        return `${i + 1}. (${n.created_at.slice(0, 10)}) ${tag ? `${tag} ` : ""}${(n.title || n.content).slice(0, 200)}`;
+      })
       .join("\n");
     const text = await chatComplete(env, {
       temperature: 0.3,
@@ -110,7 +125,7 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
       )
         .bind(
           spacifyCjk((obj.title || fallbackTitle || "未命名线索").slice(0, 50)),
-          obj.summary ? spacifyCjk(obj.summary) : null,
+          obj.summary ? threadSummaryWithExecWarn(spacifyCjk(obj.summary), dangerous) : dangerous > 0 ? EXEC_OUTLET_WARN_TAG : null,
           threadId
         )
         .run();

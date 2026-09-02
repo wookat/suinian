@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, dataTextHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, dataTextHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -78,6 +78,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
+import { recordOutletExecMarks } from "./guard-events";
 import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
@@ -191,111 +192,183 @@ app.use("*", async (c, next) => {
 // TTL 不改变安全口径，只扩大一致性窗口。
 const ASK_ANSWER_CACHE_TTL_S = 180;
 
-/** SSE 逐事件独立 flush（R278 P1-7）：每个事件单独 enqueue 并让出调度，
- * 客户端观察到真实的多次传输增量，而非一次性字节串。 */
-function sseStreamResponse(events: Array<[string, unknown]>, headers: Headers): Response {
-  const enc = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    async start(ctrl) {
-      for (const [event, data] of events) {
-        ctrl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-        // 让出事件循环，保证逐块 flush 到传输层
-        await new Promise((r) => setTimeout(r, 15));
-      }
-      ctrl.close();
-    },
-  });
-  return new Response(stream, { status: 200, headers });
+
+/**
+ * R306 P1-1（audit-r305 §7 q205 串答）：缓存键除 token + 问题外纳入对话历史
+ * （去噪后逐条 role/content）与 graph 开关——同一问题在不同上下文/模式下是
+ * 不同的请求，不能共享答案。
+ */
+export function askAnswerCacheKeyMaterial(question: string, body: { history?: unknown; graph?: unknown } | null): string {
+  const history = sanitizeAskHistory(body?.history)
+    .map((m) => `${m.role}:${m.content}`)
+    .join("\u241e");
+  const graph = body?.graph === false ? "nograph" : "graph";
+  return `${question}\n${graph}\n${history}`;
 }
 
-async function askAnswerCacheKey(auth: string, question: string): Promise<Request> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${auth}\n${question}`));
+async function askAnswerCacheKey(auth: string, material: string): Promise<Request> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${auth}\n${material}`));
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return new Request(`https://ask-answer-cache.internal/${hex}`);
 }
 
+type AskProduced =
+  | { kind: "json"; outBody: Record<string, unknown>; headers: Headers; status: number }
+  | { kind: "passthrough"; res: Response };
+
 app.use("/api/ask", async (c, next) => {
   const wantsSse = (c.req.header("accept") ?? "").includes("text/event-stream");
-  const reqBody = await c.req.json<{ question?: string }>().catch(() => null);
+  const reqBody = await c.req.json<{ question?: string; history?: unknown; graph?: unknown }>().catch(() => null);
   const question = typeof reqBody?.question === "string" ? reqBody.question : "";
   const auth = c.req.header("authorization") ?? "";
   const cache = typeof caches !== "undefined" ? caches.default : null;
-  const cacheKey = cache && auth && question ? await askAnswerCacheKey(auth, question) : null;
-  let outBody: Record<string, unknown> | null = null;
-  let headers: Headers;
-  let status = 200;
-  if (cacheKey) {
-    const hit = await cache!.match(cacheKey).catch(() => undefined);
-    if (hit) {
-      outBody = (await hit.json().catch(() => null)) as Record<string, unknown> | null;
-      if (outBody && typeof outBody.answer !== "string") outBody = null;
-    }
-  }
-  if (outBody) {
-    headers = new Headers({ "content-type": "application/json; charset=utf-8" });
-    headers.set("Server-Timing", "conaud;dur=0, detguard;dur=0, anscache;desc=hit");
-  } else {
-    await next();
-    status = c.res.status;
-    if (!(c.res.headers.get("content-type") ?? "").includes("application/json")) return;
-    const body = (await c.res.clone().json()) as Record<string, unknown>;
-    if (typeof body.answer !== "string") return;
-    const preFinalized = body.guard_finalized === true;
-    if (preFinalized) delete body.guard_finalized;
-    const notesText = Array.isArray(body.notes)
-      ? (body.notes as Array<Record<string, unknown>>)
-          .map((n) => `${typeof n.title === "string" ? n.title : ""}\n${typeof n.content === "string" ? n.content : ""}`)
-          .join("\n")
-      : "";
-    const t0 = Date.now();
-    // 已在路由内经同一 finalize 收口的生成分支不重复执行（stripSpoofedControlMarks
-    // 会把本轮插入的真标注当仿冒剥掉，且路由内的资料面更完整）。
-    const fin = preFinalized
-      ? { answer: body.answer, changed: false, isolated: body.instruction_isolated === true }
-      : finalizeAskAnswer(body.answer, { dataText: notesText, question });
-    if (!preFinalized) {
-      if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
-      else if (fin.changed) console.log("ask: external link scrubbed from deterministic answer");
-    }
-    // P0-2：隔离语义同时由结构化字段承载，渲染层可据此区分真标注。
-    outBody = { ...body, answer: fin.answer, ...(fin.isolated ? { instruction_isolated: true } : {}) };
-    headers = new Headers(c.res.headers);
-    const prevTiming = headers.get("Server-Timing");
-    const finDur = Date.now() - t0;
-    const conaudPart = prevTiming?.includes("conaud") ? "" : `conaud;dur=${finDur}, `;
-    headers.set("Server-Timing", `${prevTiming ? `${prevTiming}, ` : ""}${conaudPart}detguard;dur=${finDur}`);
-    if (cacheKey && c.res.status === 200) {
-      const stored = new Response(JSON.stringify(outBody), {
-        headers: { "content-type": "application/json", "cache-control": `max-age=${ASK_ANSWER_CACHE_TTL_S}` },
-      });
-      const put = cache!.put(cacheKey, stored).catch(() => {});
-      try {
-        c.executionCtx.waitUntil(put);
-      } catch {
-        await put;
+  const cacheKey = cache && auth && question ? await askAnswerCacheKey(auth, askAnswerCacheKeyMaterial(question, reqBody)) : null;
+  const produce = async (): Promise<AskProduced> => {
+    let outBody: Record<string, unknown> | null = null;
+    let headers: Headers;
+    let status = 200;
+    if (cacheKey) {
+      const hit = await cache!.match(cacheKey).catch(() => undefined);
+      if (hit) {
+        outBody = (await hit.json().catch(() => null)) as Record<string, unknown> | null;
+        if (outBody && typeof outBody.answer !== "string") outBody = null;
       }
     }
-  }
-  if (wantsSse && status === 200) {
-    const refs = Array.isArray(outBody.references) ? outBody.references.length : 0;
-    // R276 P1-3：delta 分片只发生在 finalize 之后（fail-closed 先于 delta 生效），
-    // 全部 delta 拼接恒等于 done.answer，也恒等于非流式 body.answer。
-    // R278 P1-7：逐块独立 flush；确定性路由的答案是模板一次成型，如实标注。
-    headers.set("content-type", "text/event-stream; charset=utf-8");
-    headers.set("cache-control", "no-cache");
-    c.res = sseStreamResponse(
-      [
-        // R280 P2-7：delta 契约随流下发（deterministic_complete 路由为
-        // exact_concat：concat(delta) ≡ done.answer）。
-        ["meta", { retrieved: refs, stream_mode: "deterministic_complete", delta_contract: "exact_concat" }],
-        ...sseAnswerChunks(String(outBody.answer)).map((t): [string, unknown] => ["delta", { text: t }]),
-        ["done", outBody],
-      ],
-      headers
-    );
+    if (outBody) {
+      headers = new Headers({ "content-type": "application/json; charset=utf-8" });
+      headers.set("Server-Timing", "conaud;dur=0, detguard;dur=0, anscache;desc=hit");
+    } else {
+      await next();
+      status = c.res.status;
+      if (!(c.res.headers.get("content-type") ?? "").includes("application/json")) return { kind: "passthrough", res: c.res };
+      const body = (await c.res.clone().json()) as Record<string, unknown>;
+      if (typeof body.answer !== "string") return { kind: "passthrough", res: c.res };
+      const preFinalized = body.guard_finalized === true;
+      if (preFinalized) delete body.guard_finalized;
+      const notesText = Array.isArray(body.notes)
+        ? (body.notes as Array<Record<string, unknown>>)
+            .map((n) => `${typeof n.title === "string" ? n.title : ""}\n${typeof n.content === "string" ? n.content : ""}`)
+            .join("\n")
+        : "";
+      const t0 = Date.now();
+      // 已在路由内经同一 finalize 收口的生成分支不重复执行（stripSpoofedControlMarks
+      // 会把本轮插入的真标注当仿冒剥掉，且路由内的资料面更完整）。
+      const fin = preFinalized
+        ? { answer: body.answer, changed: false, isolated: body.instruction_isolated === true }
+        : finalizeAskAnswer(body.answer, { dataText: notesText, question });
+      if (!preFinalized) {
+        if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
+        else if (fin.changed) console.log("ask: external link scrubbed from deterministic answer");
+      }
+      // P0-2：隔离语义同时由结构化字段承载，渲染层可据此区分真标注。
+      outBody = { ...body, answer: fin.answer, ...(fin.isolated ? { instruction_isolated: true } : {}) };
+      headers = new Headers(c.res.headers);
+      const prevTiming = headers.get("Server-Timing");
+      const finDur = Date.now() - t0;
+      const conaudPart = prevTiming?.includes("conaud") ? "" : `conaud;dur=${finDur}, `;
+      headers.set("Server-Timing", `${prevTiming ? `${prevTiming}, ` : ""}${conaudPart}detguard;dur=${finDur}`);
+      if (cacheKey && c.res.status === 200) {
+        const stored = new Response(JSON.stringify(outBody), {
+          headers: { "content-type": "application/json", "cache-control": `max-age=${ASK_ANSWER_CACHE_TTL_S}` },
+        });
+        const put = cache!.put(cacheKey, stored).catch(() => {});
+        try {
+          c.executionCtx.waitUntil(put);
+        } catch {
+          await put;
+        }
+      }
+    }
+    return { kind: "json", outBody, headers, status };
+  };
+
+  if (!wantsSse) {
+    const r = await produce();
+    if (r.kind === "passthrough") return;
+    c.res = new Response(JSON.stringify(r.outBody), { status: r.status, headers: r.headers });
     return;
   }
-  c.res = new Response(JSON.stringify(outBody), { status, headers });
+
+  // R306 P1-3（audit-r305 §9：meta p50 2.7s，19/22 超 1.5s）：SSE 客户端在
+  // 检索/门判**之前**就拿到响应与首个 meta（phase=accepted），进度指示不再
+  // 等检索完成；检索完成后的 meta（phase=retrieved，含 retrieved 数）照旧下发。
+  // 路由内部产出的非 200 JSON（限频/参数错误/鉴权失败）以 error 事件携带
+  // status 下发——响应头已外发，无法再改状态码。
+  const enc = new TextEncoder();
+  const sseHeaders = new Headers({
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+  });
+  const stream = new ReadableStream<Uint8Array>({
+    async start(ctrl) {
+      const send = (event: string, data: unknown) =>
+        ctrl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      send("meta", { phase: "accepted", retrieved: null, stream_mode: "pending" });
+      const heartbeat = setInterval(() => {
+        try {
+          ctrl.enqueue(enc.encode(": keepalive\n\n"));
+        } catch {
+          clearInterval(heartbeat);
+        }
+      }, 10_000);
+      try {
+        const r = await produce();
+        if (r.kind === "passthrough" && !(r.res.headers.get("content-type") ?? "").includes("text/event-stream")) {
+          const raw = (await r.res.clone().json().catch(() => null)) as { error?: unknown; retryable?: unknown } | null;
+          const message = typeof raw?.error === "string" ? raw.error : r.res.status === 200 ? "响应格式异常" : "请求失败，请重试";
+          send("error", { message, status: r.res.status, ...(raw?.retryable === true ? { retryable: true } : {}) });
+        } else if (r.kind === "passthrough") {
+          const st = r.res.headers.get("server-timing");
+          if (st) send("timing", { server_timing: st });
+          if (r.res.body) {
+            const reader = r.res.body.getReader();
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              ctrl.enqueue(value);
+            }
+          }
+        } else if (r.status !== 200) {
+          const message = typeof r.outBody.error === "string" ? r.outBody.error : "请求失败，请重试";
+          send("error", { message, status: r.status, ...(r.outBody.retryable === true ? { retryable: true } : {}) });
+        } else {
+          const refs = Array.isArray(r.outBody.references) ? r.outBody.references.length : 0;
+          // R276 P1-3：delta 分片只发生在 finalize 之后（fail-closed 先于 delta 生效），
+          // 全部 delta 拼接恒等于 done.answer，也恒等于非流式 body.answer。
+          // R278 P1-7：逐块独立 flush；确定性路由的答案是模板一次成型，如实标注。
+          // R280 P2-7：delta 契约随流下发（deterministic_complete 路由为
+          // exact_concat：concat(delta) ≡ done.answer）。
+          const st = r.headers.get("Server-Timing");
+          if (st) send("timing", { server_timing: st });
+          const events: Array<[string, unknown]> = [
+            ["meta", { phase: "retrieved", retrieved: refs, stream_mode: "deterministic_complete", delta_contract: "exact_concat" }],
+            ...sseAnswerChunks(String(r.outBody.answer)).map((t): [string, unknown] => ["delta", { text: t }]),
+            ["done", r.outBody],
+          ];
+          for (const [event, data] of events) {
+            send(event, data);
+            // 让出事件循环，保证逐块 flush 到传输层
+            await new Promise((res) => setTimeout(res, 15));
+          }
+        }
+      } catch (err) {
+        console.error("ask sse wrapper failed", err);
+        try {
+          send("error", { message: "生成失败，请重试", status: 500 });
+        } catch {
+          /* stream 已关闭 */
+        }
+      }
+      clearInterval(heartbeat);
+      try {
+        ctrl.close();
+      } catch {
+        /* 已关闭 */
+      }
+    },
+  });
+  c.res = new Response(stream, { status: 200, headers: sseHeaders });
 });
 
 app.onError((err, c) => {
@@ -5092,6 +5165,8 @@ app.post("/api/ask", async (c) => {
   const refNotes = await Promise.all(
     references.map((r) => noteToJsonDecrypted(c.env, byId.get(r.note_id)!))
   );
+  // R306 P0-1：引用卡片出口打点（数据面标注随 noteToJson 走，这里只计发生率）
+  recordOutletExecMarks(c.env, "ask_ref", refNotes.filter((n) => n.contains_executable_command).length, (p) => c.executionCtx.waitUntil(p));
   if (!answer2) {
     return { answer: "（AI 暂不可用）已找到相关记录，见 references。", references, notes: refNotes };
   }
@@ -5308,9 +5383,13 @@ app.post("/api/ask", async (c) => {
     }
     flushGuardEvents();
     const isolated = fin.isolated || body.instruction_isolated === true;
+    // R306 P1-2（audit-r305 §11：4/4 隔离态答案区无字面标记）：结构化 isolated
+    // 与答案区字面 〔…〕 标记必须同现——保守答案/审计剥空等在 finalize 之前
+    // 成形的隔离文案不携带控制标记（携带会被防仿冒剥除），在唯一出口补齐。
+    const answerOut = isolated && !hasGuardControlMark(fin.answer) ? `${INSTRUCTION_ISOLATED_MARK}\n${fin.answer}` : fin.answer;
     return {
       ...body,
-      answer: fin.answer,
+      answer: answerOut,
       guard_finalized: true,
       ...(isolated ? { instruction_isolated: true } : {}),
       // R292 P0-1：降级标记以判别器状态为权威源（不从答案文本反推）。
@@ -5411,6 +5490,7 @@ app.post("/api/ask", async (c) => {
         //  3) 安全方向单调：危险执行/注入/社工内容不会先以 delta 外发再于 done
         //     收回（闸门在首 delta 前 fail-closed）。
         send("meta", {
+          phase: "retrieved",
           retrieved: notes.length,
           stream_mode: "generation_stream",
           delta_contract: "preview_ordered_fragments",
@@ -6003,16 +6083,15 @@ app.get("/api/export", async (c) => {
   const threads = threadsR.results ?? [];
   const reports = reportsR.results ?? [];
 
+  recordOutletExecMarks(c.env, "export", notes.filter((n) => n.contains_executable_command).length, (p) => c.executionCtx.waitUntil(p));
   const format = c.req.query("format");
   if (format === "markdown" || format === "md") {
     let md = `# 碎念全量导出（${new Date().toISOString().slice(0, 10)}）\n\n共 ${notes.length} 条笔记、${threads.length} 条线索、${reports.length} 份周报。\n\n## 笔记\n`;
     for (const n of notes) {
       // 危险标记随导出走（R304 P0-A）：Markdown 无折叠交互，改为在原文前加
       // 明确风险警示行（JSON 导出经 noteToJson 已带 contains_executable_command）
-      const execWarn = n.contains_executable_command
-        ? "\n> ⚠️ 本条笔记含可执行命令/危险指令（如下载执行远程代码），仅供查阅，请勿直接执行。\n"
-        : "";
-      md += `\n### ${n.title || n.content.slice(0, 30)}\n- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${n.url ? ` | 链接：${n.url}` : ""}\n${execWarn}\n${n.content}\n`;
+      const execWarn = n.contains_executable_command ? `\n> ${EXEC_OUTLET_WARN_LINE}\n` : "";
+      md += `\n### ${exportMdHeading(n)}\n- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${n.url ? ` | 链接：${n.url}` : ""}\n${execWarn}\n${n.content}\n`;
     }
     md += `\n## 思考线索\n`;
     for (const t of threads) md += `\n### ${t.title}（${t.note_count} 条）\n${t.summary ?? ""}\n`;
@@ -6030,6 +6109,20 @@ app.get("/api/export", async (c) => {
     reports,
   });
 });
+
+/**
+ * Markdown 导出的笔记标题（R306 P1-4，audit-r305 §2：H04 围栏首行进了 `###`
+ * 把标题撕成代码块、警示行落进围栏；N01/N02/X25 标题不可定位）：只取首个非空
+ * 行、剥掉 Markdown 结构字符、限长，空则回落到笔记 id，保证每条都有可定位标题。
+ */
+export function exportMdHeading(n: { id: string; title: string | null; content: string }): string {
+  const first = (n.title || n.content || "")
+    .split("\n")
+    .map((l) => l.replace(/[`#>*_\[\]|]/g, "").trim())
+    .find((l) => l.length > 0);
+  const head = (first ?? "").slice(0, 30).trim();
+  return head ? `${head}（${n.id}）` : `笔记 ${n.id}`;
+}
 
 // ---- GET /api/backup ----
 // Full backup zip: manifest + notes.json (all fields) + threads/reports +

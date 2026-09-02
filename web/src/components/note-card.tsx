@@ -938,7 +938,7 @@ export function NoteCard({
                         void retryLinkFetch()
                       }}
                       disabled={refetching}
-                      className="inline-flex items-center gap-1 font-medium text-primary hover:underline disabled:opacity-60"
+                      className="inline-flex min-h-6 items-center gap-1 rounded px-1.5 py-0.5 font-medium text-primary hover:underline disabled:opacity-60"
                     >
                       <RefreshCw className={cn("size-3", refetching && "animate-spin")} />
                       {refetching ? "重试中…" : "重试抓取"}
@@ -1025,7 +1025,7 @@ export function NoteCard({
                 <button
                   onClick={() => void retryMediaExtract()}
                   disabled={retryingMedia}
-                  className="inline-flex items-center gap-1 font-medium text-primary hover:underline disabled:opacity-60"
+                  className="inline-flex min-h-6 items-center gap-1 rounded px-1.5 py-0.5 font-medium text-primary hover:underline disabled:opacity-60"
                 >
                   <RefreshCw className={cn("size-3", retryingMedia && "animate-spin")} />
                   {retryingMedia ? "重试中…" : "原地重试"}
@@ -1040,7 +1040,7 @@ export function NoteCard({
                 {onEdit && (
                   <button
                     onClick={openEdit}
-                    className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                    className="inline-flex min-h-6 items-center gap-1 rounded px-1.5 py-0.5 font-medium text-primary hover:underline"
                   >
                     <Pencil className="size-3" /> 纠错
                   </button>
@@ -1049,7 +1049,7 @@ export function NoteCard({
                 <button
                   onClick={() => void retryMediaExtract()}
                   disabled={retryingMedia}
-                  className="inline-flex items-center gap-1 font-medium text-primary hover:underline disabled:opacity-60"
+                  className="inline-flex min-h-6 items-center gap-1 rounded px-1.5 py-0.5 font-medium text-primary hover:underline disabled:opacity-60"
                 >
                   <RefreshCw className={cn("size-3", retryingMedia && "animate-spin")} />
                   {retryingMedia ? "重试中…" : "原地重试"}
