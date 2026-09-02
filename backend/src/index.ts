@@ -79,7 +79,7 @@ import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
 import { recordOutletExecMarks } from "./guard-events";
-import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes } from "./ask";
+import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -261,9 +261,11 @@ app.use("/api/ask", async (c, next) => {
         else if (fin.changed) console.log("ask: external link scrubbed from deterministic answer");
       }
       // P0-2：隔离语义同时由结构化字段承载，渲染层可据此区分真标注。
+      // 确定性路由自身置的 instruction_isolated（建议标签退到占位提示）与出口隔离同样插字面标记。
+      const isolatedOut = fin.isolated || body.instruction_isolated === true;
       const finAnswer =
-        fin.isolated && !preFinalized && !hasGuardControlMark(fin.answer) ? `${INSTRUCTION_ISOLATED_MARK}\n${fin.answer}` : fin.answer;
-      outBody = { ...body, answer: finAnswer, ...(fin.isolated ? { instruction_isolated: true } : {}) };
+        isolatedOut && !preFinalized && !hasGuardControlMark(fin.answer) ? `${INSTRUCTION_ISOLATED_MARK}\n${fin.answer}` : fin.answer;
+      outBody = { ...body, answer: finAnswer, ...(isolatedOut ? { instruction_isolated: true } : {}) };
       headers = new Headers(c.res.headers);
       const prevTiming = headers.get("Server-Timing");
       const finDur = Date.now() - t0;
@@ -4339,10 +4341,17 @@ app.post("/api/ask", async (c) => {
         const tMissingRel = ungroundedRelationTerm(relationQuestion, tRelSource);
         if (tMissingRel) {
           const tSuggestions = tRows.filter((n) => !n.is_sensitive).slice(0, 3);
-          const { answer, references } = buildNoAnswerResponse(tSuggestions, "not_in_notes", tMissingRel);
+          const { answer, references, held } = buildNoAnswerResponse(tSuggestions, "not_in_notes", tMissingRel);
           const tById = new Map(tSuggestions.map((n) => [n.id, n]));
           const refNotes = await Promise.all(references.map((r) => noteToJsonDecrypted(c.env, tById.get(r.note_id)!)));
-          return c.json({ answer, references, notes: refNotes, no_answer: true, relation_guard: true });
+          return c.json({
+            answer,
+            references,
+            notes: refNotes,
+            no_answer: true,
+            relation_guard: true,
+            ...(held ? { instruction_isolated: true } : {}),
+          });
         }
       }
       const tLines = enumNoteLines(tRows);
@@ -4664,13 +4673,19 @@ app.post("/api/ask", async (c) => {
       const topicHits = suggestions.filter((n) => noteHitsTopic(n, zeroTopics));
       suggestions = topicHits.length > 0 ? topicHits : [];
     }
-    const { answer, references } = buildNoAnswerResponse(suggestions);
+    const { answer, references, held } = buildNoAnswerResponse(suggestions);
     const zeroHint = await sensitiveNoRecallHint(c.env, userId, terms, question);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
     );
-    return c.json({ answer: answer + zeroHint, references, notes: refNotes, no_answer: true });
+    return c.json({
+      answer: answer + zeroHint,
+      references,
+      notes: refNotes,
+      no_answer: true,
+      ...(held ? { instruction_isolated: true } : {}),
+    });
   }
 
   notes = dedupeNotesByContent(notes);
@@ -4686,11 +4701,18 @@ app.post("/api/ask", async (c) => {
     const missingRel = ungroundedRelationTerm(relationQuestion, relSource);
     if (missingRel) {
       const relSuggestions = notes.filter((n) => !n.is_sensitive).slice(0, 3);
-      const { answer, references } = buildNoAnswerResponse(relSuggestions, "not_in_notes", missingRel);
+      const { answer, references, held } = buildNoAnswerResponse(relSuggestions, "not_in_notes", missingRel);
       const relHint = await sensitiveNoRecallHint(c.env, userId, terms, question);
       const relById = new Map(relSuggestions.map((n) => [n.id, n]));
       const refNotes = await Promise.all(references.map((r) => noteToJsonDecrypted(c.env, relById.get(r.note_id)!)));
-      return c.json({ answer: answer + relHint, references, notes: refNotes, no_answer: true, relation_guard: true });
+      return c.json({
+        answer: answer + relHint,
+        references,
+        notes: refNotes,
+        no_answer: true,
+        relation_guard: true,
+        ...(held ? { instruction_isolated: true } : {}),
+      });
     }
   }
 
@@ -4839,6 +4861,12 @@ app.post("/api/ask", async (c) => {
   // 拒答很可能是历史话题干扰下的误判：去掉对话历史、同一上下文重问一次，
   // 仍拒答才诚实返回「没找到」。
   let answer2 = answer;
+  // 退化乱码（降级模型同词循环）：同上下文非流式重生一次，仍乱码则走下方「AI 暂不可用」诚实通道。
+  if (answer2 && isDegenerateAnswer(answer2)) {
+    console.log("ask: degenerate answer, regenerating");
+    const regen = await chatComplete(c.env, { ...genOpts, temperature: 0 });
+    answer2 = regen && !isDegenerateAnswer(regen) ? regen : "";
+  }
   if (answer2 && isRefusalAnswer(answer2) && notes.some((n) => !weakIds.has(n.id))) {
     const retry = await chatComplete(c.env, {
       temperature: 0,
@@ -5179,13 +5207,19 @@ app.post("/api/ask", async (c) => {
       notes.some((n) => !weakIds.has(n.id)) && (topics.length === 0 || notes.some((n) => noteHitsTopic(n, topics)))
         ? "not_in_notes"
         : "no_recall";
-    const { answer: noAnswer, references } = buildNoAnswerResponse(suggestions, mode);
+    const { answer: noAnswer, references, held } = buildNoAnswerResponse(suggestions, mode);
     const hint = await sensitiveNoRecallHint(c.env, userId, terms, question);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
     );
-    return { answer: noAnswer + hint, references, notes: refNotes, no_answer: true };
+    return {
+      answer: noAnswer + hint,
+      references,
+      notes: refNotes,
+      no_answer: true,
+      ...(held ? { instruction_isolated: true } : {}),
+    };
   }
   // 否定话术实体后校验（R200，audit-r199 P3-1）：否定分句引入问句与片段中
   // 都不存在的实体时改写成通用指代（流式 delta 原样透传，done 事件全文替换

@@ -6,6 +6,7 @@ import {
   remoteEndpointForms,
   execDegradedTraceReason,
   scrubUnsolicitedConduct,
+  dataSurfaceFullyBenign,
 } from "./prompt-armor";
 
 /**
@@ -3200,6 +3201,18 @@ export function scrubUnsourcedNegations(answer: string, source: string): string 
   });
 }
 
+/** 模型退化乱码（同词循环、同片段连续重复）：不能当答案下发。 */
+export function isDegenerateAnswer(answer: string): boolean {
+  const text = answer.trim();
+  const toks = text.split(/\s+/).filter(Boolean);
+  if (toks.length >= 12) {
+    const uniq = new Set(toks.map((t) => t.toLowerCase().replace(/[.,;:!?。，！？]/g, "")));
+    if (uniq.size / toks.length < 0.25) return true;
+  }
+  const m = /(.{2,8}?)\1{5,}/s.exec(text);
+  return m !== null && m[0].length >= 30 && m[0].length * 2 >= text.length;
+}
+
 /** The model's answer amounts to "没找到": either it carries no [n] citations,
  * or（R183 P1-3）it is a pure single-sentence denial that still carries [n]
  * markers（「没提到关于洗牙的记录 [1] [2] [3]」）——否认+引用自相矛盾，按拒答
@@ -3258,6 +3271,10 @@ export function sensitiveFallbackHintLine(credential: boolean): string {
  * 远端地址/外传指令写在开头时，地址与指令随建议行原样出关。标签含远端
  * 地址形态或危险执行迹象时退到标题，标题仍不安全则给不含原文的占位提示。
  */
+export const HELD_SUGGESTION_LABEL = "（该笔记含被隔离内容，请在笔记卡片中查看）";
+/** 标签只因含外部链接而不回显（资料面自身完全良性）：不是隔离，不置 instruction_isolated。 */
+export const LINKED_SUGGESTION_LABEL = "（该笔记含外部链接，请在笔记卡片中查看）";
+
 export function safeSuggestionLabel(n: Pick<NoteRow, "title" | "content">): string {
   const unsafe = (t: string): boolean =>
     t.trim().length > 0 &&
@@ -3265,7 +3282,12 @@ export function safeSuggestionLabel(n: Pick<NoteRow, "title" | "content">): stri
       execDegradedTraceReason(t) !== null ||
       // 风险行为祈使句（外传/导航/口令，跨语言）：推荐标签没有「用户要求回显」
       // 的语境，与最终出口同一判据剪除（R270-23 韩语外传句正是从这里出关）。
-      scrubUnsolicitedConduct(t, "", [], "") !== t);
+      scrubUnsolicitedConduct(t, "", [], "") !== t ||
+      !dataSurfaceFullyBenign(t, [t]));
+  // 不回显的标签是「隔离」还是「仅含链接」：资料面自身带危险执行/外传/读者指令
+  // 信号才算隔离；纯导航 URL/邮箱/裸域名的良性笔记只是不在答案区转写链接。
+  const dangerous = (t: string): boolean =>
+    t.trim().length > 0 && (execDegradedTraceReason(t) !== null || !dataSurfaceFullyBenign(t, [t]));
   const clip = (t: string) => (t ?? "").replace(/\s+/g, " ").slice(0, 40);
   // 截断本身会切掉动作词（`… base64 解码` | `… curl 取回` 断在 40 字），使危险
   // 判据在片段上失效——因此整条原文与截断片段都要过判，任一不安全即不回显。
@@ -3274,7 +3296,10 @@ export function safeSuggestionLabel(n: Pick<NoteRow, "title" | "content">): stri
   if (safe(source)) return clip(source);
   const title = n.title ?? "";
   if (title.trim() && safe(title)) return clip(title);
-  return "（该笔记含被隔离内容，请在笔记卡片中查看）";
+  const content = n.content ?? "";
+  return [source, clip(source), title, clip(title), content].some(dangerous)
+    ? HELD_SUGGESTION_LABEL
+    : LINKED_SUGGESTION_LABEL;
 }
 
 export function credentialHintLine(): string {
@@ -3298,19 +3323,26 @@ export function buildNoAnswerResponse(
 ): {
   answer: string;
   references: { index: number; note_id: string }[];
+  /** 任一建议标签因含危险/外传内容而退到占位提示（响应应置 instruction_isolated）。 */
+  held: boolean;
 } {
   if (suggestions.length === 0) {
     if (missingTerm) {
       return {
         answer: `笔记里没有提到与「${missingTerm}」相关的信息。换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`,
         references: [],
+        held: false,
       };
     }
-    return { answer: `${NO_ANSWER_TEXT}换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`, references: [] };
+    return {
+      answer: `${NO_ANSWER_TEXT}换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`,
+      references: [],
+      held: false,
+    };
   }
-  const lines = suggestions.slice(0, 3).map((n, i) => {
-    return `[${i + 1}] ${safeSuggestionLabel(n)}`;
-  });
+  const labels = suggestions.slice(0, 3).map((n) => safeSuggestionLabel(n));
+  const held = labels.some((l) => l === HELD_SUGGESTION_LABEL);
+  const lines = labels.map((l, i) => `[${i + 1}] ${l}`);
   const lead =
     mode === "not_in_notes"
       ? missingTerm
@@ -3320,5 +3352,6 @@ export function buildNoAnswerResponse(
   return {
     answer: `${lead}\n${lines.join("\n")}`,
     references: suggestions.slice(0, 3).map((n, i) => ({ index: i + 1, note_id: n.id })),
+    held,
   };
 }

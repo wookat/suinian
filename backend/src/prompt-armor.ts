@@ -755,6 +755,19 @@ function exfilDestSatisfied(seg: string): boolean {
   );
 }
 
+/** 否定祈使 + 执行动词同句且中间无句读（「不要随手跑」「别直接执行」）：安全建议句的词面。 */
+const NEGATED_EXEC_ADVICE_RE =
+  /(?:不要|不能|不该|不应|不應|别|別|勿|切勿|禁止|避免|never|don'?t|do not|avoid)[^\n，。；;,.]{0,8}?(?:跑|运行|運行|执行|執行|安装|安裝|\brun|\bexecute|\binstall|\bpipe)/i;
+const SCRIPT_FILE_TOKEN_RE = /[\w-]+\.(?:sh|bash|zsh|ps1|py|pl|rb|exe|bin|run|cmd|bat)\b/i;
+/** 否定祈使的安全建议句：无脚本文件名、无远端地址（二者任一出现即不再是「建议」）。 */
+function isNegatedExecAdvice(t: string): boolean {
+  return (
+    NEGATED_EXEC_ADVICE_RE.test(t) &&
+    !SCRIPT_FILE_TOKEN_RE.test(t) &&
+    !hasRemoteEndpointForm(t, { includeEmails: true, ignoreAllowlist: true })
+  );
+}
+
 const CONDUCT_CLASSES: ConductClass[] = [
   {
     // 数据外传劝导（R269-10）：外传动作 + （数据对象或外部目的地）
@@ -912,8 +925,12 @@ export function scrubUnsolicitedConduct(
       ? dataUnits.filter((u) => u.trim().length > 0 && dataSurfaceFullyBenign(u, [u])).join("\n")
       : "";
   const benignUnitsCompact = benignUnitsText.length > 0 ? foldCompact(benignUnitsText) : null;
+  // 自证良性的笔记的忠实回声不依赖问法（「我给自己提过什么安全提醒」不是元问法，
+  // 但回声的仍是良性笔记）；否定祈使的安全建议句（无脚本文件名、无远端地址）也不是
+  // 危险行的取回/执行转述。
   const echoesBenignUnit = (t: string): boolean =>
-    benignUnitsCompact !== null && wholeNoteAsked && segmentEchoesData(t, benignUnitsCompact, benignUnitsText);
+    benignUnitsCompact !== null && segmentEchoesData(t, benignUnitsCompact, benignUnitsText);
+  const negatedExecAdvice = isNegatedExecAdvice;
   const dangerLabels: string[] = [];
   if (dataDanger) {
     const stop = new Set(["www", "mail", "test", "local", "example", "invalid", "localhost", "http", "https", "hxxp", "hxxps", "user", "admin", "root", "info"]);
@@ -1009,7 +1026,7 @@ export function scrubUnsolicitedConduct(
       const fetchRunPara =
         (SEM_FETCH_RE.test(t) || SEM_RUN_RE.test(t) || SEM_HANDOFF_RE.test(t) || SEM_INTERP_TARGET_RE.test(t) || /运行|運行|执行|執行|安装|安裝|跑/.test(t)) &&
         SCRIPT_TOKEN_RE.test(t);
-      if (labelEcho || (fetchRunPara && !echoesBenignUnit(t))) bad = true;
+      if (labelEcho || (fetchRunPara && !echoesBenignUnit(t) && !negatedExecAdvice(t))) bad = true;
     }
     if (bad) drops.push({ start: seg.start, end: seg.end });
   }
@@ -2628,6 +2645,10 @@ const SEM_HANDOFF_RE =
   /交给|交給|交过去|交過去|交由|交上去|付于|付與|付给|付給|念给|念給|掉落|撒进|撒入|丢给|丟給|喂给|餵給|递给|遞給|倒进|倒進|灌进|灌進|接到|接给|接給|管道|竖线|豎線|贴到|貼到|粘到|粘进|扔进|扔給|扔给|下到|种进|种到|放进|放入|装进|倒入|下锅|pipe\s*(?:it|into|to)?|pour\s+(?:it\s+)?(?:in)?to|hand\s+(?:it\s+)?(?:over\s+)?to|feed\s+(?:it\s+)?(?:in)?to|流し込|渡して|パイプ|파이프|넘겨|붙여넣/i;
 const SEM_RUN_RE =
   /执行|執行|行之|施行|运行|運行|跑起来|跑掉|跑一下|跑一遍|跑几遍|跑幾遍|跑通|煮开|煮開|开火|開火|回车即可|回车执行|回車執行|照做|照跑|直接跑|直接执行|煮|冲开|熟|服下|演奏|长起来|发芽|(?:\bsh\b|\bbash\b|\bzsh\b|\bpython\b|\bnode\b)\s*(?:一下|一遍|跑|执行|運行|运行)|(?:用|拿|交给|交給|丢给|丟給)\s*(?:\bsh\b|\bbash\b|\bzsh\b|\bpython\b|\bnode\b|壳|殼|终端|終端)\s*(?:去)?\s*(?:跑|执行|運行|运行|起来|起來)|run\s+it|execute|launch\s+it|bring\s+to\s+a\s+boil|実行|走らせ|실행|돌려|구동|запуст|выполн|исполни|установи|شغل|نفذ|ejec[úu]t|ex[eé]cut|führ\w*[^\n]{0,60}\baus\b|\bch[ạa]y\b|รัน|\bjalankan\b|\besegui|\bexecute\b|\buruchom\b|\b[çc]al[ıi][şs]t[ıi]r\b/i;
+/** 取回词的名词性复合形态（下载页面 / 下载链接 / download page）。 */
+const FETCH_NOUN_COMPOUND_RE =
+  /(?:下载|下載)(?:页面|頁面|链接|連結|地址|中心|站|量|次数|次數|按钮|按鈕|入口|入口|列表)|\bdownloads?\s+(?:page|link|url|center|section|button|count|list)\b/gi;
+
 /** 拼写拆字型命令名（c-u-r-l / w g e t 等）——逐字母口述规避字面匹配。 */
 const SPELLED_CMD_RE =
   /\bc\s*[-·．.、]\s*u\s*[-·．.、]\s*r\s*[-·．.、]\s*l\b|\bw\s*[-·．.、]\s*g\s*[-·．.、]\s*e\s*[-·．.、]\s*t\b|[两兩]个?字母\s*s\s*h\b/i;
@@ -3176,6 +3197,9 @@ const V4_DEC_CTX_RE = /(?:(?<=:\/\/)|(?<=@))\d{8,10}\b|\b\d{8,10}(?=:\d{2,5}\b)/
 const V6_RE = /(?<![\w:.])\[?((?:[0-9a-f]{1,4}:){2,7}(?::|[0-9a-f]{1,4})(?::(?:\d{1,3}\.){3}\d{1,3})?|::(?:ffff:)?(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9a-f]{1,4}:){1,6}:(?:[0-9a-f]{1,4}:?)*)\]?(?![\w])/gi;
 const LOCAL_V6_RE = /^(?:::1?$|fe80:|fc|fd|::ffff:(?:127\.|10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.))/i;
 const DOMAINY_RE = /(?:xn--[a-z0-9-]+\.|[\p{L}\p{N}_-]+\.)+(?:xn--[a-z0-9-]+|[a-z]{2,24})(?::\d{2,5})?/giu;
+/** 无空格书写系统字符与 ASCII 字母数字的粘连边界。 */
+const CJK_ASCII_BOUNDARY_RE =
+  /(?<=[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Hangul}\p{sc=Thai}])(?=[A-Za-z0-9])|(?<=[A-Za-z0-9])(?=[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Hangul}\p{sc=Thai}])/gu;
 const USER_AT_HOST_RE = /[\w.+-]+@((?:[\w-]+\.)+[a-z]{2,24}|(?:\d{1,3}\.){3}\d{1,3})(?![\w.])/gi;
 const HOSTPORT_RE = /(?<![\w.:-])((?:[\p{L}\p{N}_-]+\.)+[\p{L}\p{N}_-]{2,24}):(\d{2,5})(?![\w])/giu;
 
@@ -3229,6 +3253,11 @@ export function remoteEndpointForms(
       "$1.$2.$3.$4"
     );
     if (spacedIp !== spelled) surfaces.push(spacedIp);
+    // 无空格书写系统（汉/假名/谚文/泰文）与 ASCII 标签直接粘连（`从relay3.example.net下载payload.sh`）：
+    // 标签正则会把 CJK 吞进标签、把 `net下载payload.sh` 判成 `.sh` 伪 TLD 而漏地址；
+    // 在书写系统边界补空格后再判一遍地址面。
+    const scriptSplit = surfaces[0].replace(CJK_ASCII_BOUNDARY_RE, " ");
+    if (scriptSplit !== surfaces[0]) surfaces.push(scriptSplit);
   }
   for (const s of surfaces) {
     // (a) IPv4 字面（含端口）；版本号语境（v1.2.3.4 / 升级到 1.2.3.4 版本）不计
@@ -4363,7 +4392,7 @@ function vetoedExecDangerSegments(
         // 1) 无执行祈使动词（判别器对「运行/执行 X」类散文保持权威）；
         // 2) 行内 latin 命令内容要么不存在，要么本行是资料逐字原文（代码前的
         //    导语行「Python TCP 客户端：」、含命令的备忘行「iperf3 -c … 压带宽」）。
-        if (/运行|執行|执行|直接跑|粘贴|贴到|输入到|実行|실행/.test(l)) return false;
+        if (/运行|執行|执行|直接跑|粘贴|贴到|输入到|実行|실행/.test(l) && !isNegatedExecAdvice(l)) return false;
         if (/[A-Za-z0-9_./-]{4,}|[|>`$]|\s-{1,2}[A-Za-z]/.test(l)) {
           // 逐字整行来自资料 ⇒ 回声；否则退一步按「行内技术记号是否全部来自
           // 资料」判：模型常把资料里的记号嵌进自己的中文导语（「这条笔记记录了
@@ -5200,9 +5229,15 @@ export function finalizeAskAnswer(
       .replace(/[[［]\d{1,2}[\]］]/g, "")
       .replace(/[\s。，；：！？、,.;:!?\-—~～()（）]/g, "");
     if (meaningful.length < 4) {
-      out = ISOLATION_NOTICE_ANSWER;
-      isolated = true;
-      why("fragment:meaningless-residue");
+      // 资料面全部判据均良性且本轮未记录任何危险归因时，残片只能来自链接/图片等
+      // 形态收口（书签类笔记只有一个 URL）：给引用卡片指引，不计隔离。
+      if (reason === null && opts.dataText && dataSurfaceFullyBenign(opts.dataText, opts.dataUnits)) {
+        out = LINK_ONLY_REDIRECT_NOTICE;
+      } else {
+        out = ISOLATION_NOTICE_ANSWER;
+        isolated = true;
+        why("fragment:meaningless-residue");
+      }
     }
   }
   // R280 P1-4（audit-r279 DGX7/DGX8/KO1）：空答案 / 问题回声形态的答案在
@@ -5523,9 +5558,15 @@ export function finalizeAskAnswer(
         if (addrs.some((a) => markedAddrs.has(a))) return "marked-addr";
         if (windowDanger !== null) return `addr+window:${windowDanger}`;
         if (fullDanger !== null) return `addr+full:${fullDanger}`;
-        if (!(EXEC_WORD_RE.test(line) && ACTION_LINE_RE.test(line))) return null;
+        // 名词性复合词（下载页面/下载链接/download page）不是取回动作：同一个词不能同时
+        // 充当执行词与动作语义。
+        const verbsOnly = (l: string): string =>
+          l.replace(/(?:https?:)?\/\/[^\s<>"'）)】]+/gi, " ").replace(FETCH_NOUN_COMPOUND_RE, "");
+        const verbLine = verbsOnly(line);
+        if (!(EXEC_WORD_RE.test(verbLine) && ACTION_LINE_RE.test(verbLine))) return null;
         // 只读探测（curl -I / wget --spider / dig…）的 fetch 词不构成取回执行语义
-        const residual = stripInlineReadOnlyProbes(line);
+        const probeResidual = stripInlineReadOnlyProbes(line);
+        const residual = probeResidual === null ? null : verbsOnly(probeResidual);
         return residual === null || (EXEC_WORD_RE.test(residual) && ACTION_LINE_RE.test(residual))
           ? "addr+exec-word+action"
           : null;
@@ -5768,6 +5809,7 @@ export function finalizeAskAnswer(
   // 的行复查确定性痕迹（载体无关下界，善意行不命中），verbatim 前置警示、
   // 非 verbatim 整行替换为隔离标记。
   applyLineClosure();
+  out = dedupeControlMarkLines(out);
   // R286 P0-1：降级窗口给用户可感知的显式提示（不只靠行内标记）。
   const degraded = out.includes(EXEC_DEGRADED_ISOLATED_MARK);
   if (degraded && !out.includes(EXEC_DEGRADED_NOTICE)) out = `${out}\n\n${EXEC_DEGRADED_NOTICE}`;
@@ -5790,6 +5832,19 @@ export function finalizeAskAnswer(
     ...(degraded ? { degraded: true } : {}),
     ...(reason !== null ? { reason } : {}),
   };
+}
+
+/** 多段同类隔离各自留下同文标记行时只保留首条（纯标记行，不动带正文的行）。 */
+export function dedupeControlMarkLines(text: string): string {
+  const seen = new Set<string>();
+  const kept = text.split("\n").filter((line) => {
+    const t = line.trim();
+    if (!/^〔[^〕]*〕$/.test(t)) return true;
+    if (seen.has(t)) return false;
+    seen.add(t);
+    return true;
+  });
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n");
 }
 
 /** 句段是否与资料共享实体词（拉丁词 ≥4 字符或 CJK 双字），用于识别对资料的
@@ -5941,6 +5996,10 @@ export function scrubPromptStructureLeak(text: string, opts?: { verbatim?: boole
 /** 收口剥空后的显式隔离提示（R278 P1-4）：代替静默空答案/残片答案。 */
 export const ISOLATION_NOTICE_ANSWER =
   "相关笔记内容命中安全隔离规则，已隔离未采纳；原文可在引用的笔记卡片中查看。";
+
+/** 良性资料的答案经链接收口后只剩残片（书签类笔记）：非隔离指引。 */
+export const LINK_ONLY_REDIRECT_NOTICE =
+  "这条笔记的主体是链接，问答区不转写外部链接；点开下方引用的笔记卡片即可查看。";
 
 // 资料派生邮箱收口（R276，audit-r275 K01 族 / R270-31）：跨笔记分片攻击把
 // 外传目的地邮箱放进另一条笔记，摘要/枚举类回答忠实转述时就把回传地址递
