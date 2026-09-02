@@ -69,17 +69,19 @@ for (const c of carriers) {
   for (const c of carriers) {
     const n = jsNotes.get(rows[c.id].note_id);
     rows[c.id].export_json = n ? n.contains_executable_command === true : null;
-    // md：找到该条正文段落，检查其前是否有警示行
-    const idx = md.text.indexOf(c.text.split("\n")[0].slice(0, 40));
+    // md：按标题行里的笔记 id 定位该条，检查标题与下一条标题之间是否有警示行
+    const idx = md.text.indexOf(`（${rows[c.id].note_id}）`);
     if (idx < 0) rows[c.id].export_md = null;
     else {
-      const before = md.text.slice(Math.max(0, idx - 400), idx);
-      rows[c.id].export_md = /含可执行命令\/危险指令/.test(before);
+      const next = md.text.indexOf("\n### ", idx);
+      const block = md.text.slice(idx, next < 0 ? undefined : next);
+      rows[c.id].export_md = /含可执行命令\/危险指令/.test(block);
+      rows[c.id].export_md_redacted = /\[已加密内容\]/.test(block);
     }
   }
   const bk = await req(`/api/backup`, { token: T, raw: true });
   writeFileSync(`${OUT}/prod-backup.txt`, bk.text);
-  rows.__backup = { status: bk.status, hasFlag: /contains_executable_command/.test(bk.text), hasWarn: /含可执行命令/.test(bk.text), len: bk.text.length };
+  rows.__backup = { status: bk.status, len: bk.text.length, note: "ZIP 二进制，字段核对见 outlets2.mjs" };
 }
 
 // 5. 今日回顾 / 回收站 / 线索 / 周报 / 洞察

@@ -737,7 +737,7 @@ const URL_RESIDUE_RE = /(?<![\w/.:-])[a-z0-9]+(?:-[a-z0-9]+)+[ \t]*\/[ \t]*[a-z0
 // 元问法（R300 P1-2）：问题问的是「这条笔记本身写了什么 / 原文复述」，
 // 笔记内容整体即答案，忠实回显天然「正面回答提问」。
 const WHOLE_NOTE_QUESTION_RE =
-  /笔记(?:里|中|上)?(?:都)?(?:写|讲|说|记|提)(?:了|的)?(?:些)?(?:什么|啥|哪些)|筆記(?:里|中|上)?(?:都)?(?:寫|講|說|記|提)(?:了|的)?(?:些)?(?:什麼|啥|哪些)|内容是什么|內容是什麼|原文|原样|原話|原话|逐字|一字不(?:差|改|漏)|复述|複述|念给|念給|verbatim|word for word|what does (?:the|this) note say/i;
+  /笔记(?:里|中|上)?(?:都)?(?:写|讲|说|记|提)(?:了|的)?(?:是)?(?:些)?(?:什么|啥|哪些)|筆記(?:里|中|上)?(?:都)?(?:寫|講|說|記|提)(?:了|的)?(?:是)?(?:些)?(?:什麼|啥|哪些)|内容是什么|內容是什麼|原文|原样|原話|原话|逐字|一字不(?:差|改|漏)|复述|複述|念给|念給|verbatim|word for word|what does (?:the|this) note say/i;
 
 // 外链/路径类提问豁免：用户点名要链接、路径、命令、脚本、原文时保留
 // R302 P0-2：不再含「原文/原话」——原文类问法走笔记卡片指引，不作为外链保留门。
@@ -3851,6 +3851,18 @@ const READ_ONLY_PROBE_RE =
 const PROBE_FORBID_RE =
   /[|;&`<>]|\$\(|\$\{|\s-(?:o|O|d|F|T|X|u|K|E|c)\b|--(?:output|data|upload-file|form|request|config|user|cookie|header|remote-name|post-data|post-file)\b|\.(?:sh|bash|py|ps1|pl|rb|exe|bin|run|tgz)\b/i;
 
+// 散文行内嵌的只读探测形态（`提到 curl -I https://x 只看响应头`）：把这些
+// 形态从行里摘掉后再判动作语义，剩余部分若无取回/执行/交付语义则该行的
+// 「fetch 词」只是只读探测本身。行里有管道/重定向/落盘/脚本对象时不摘。
+const INLINE_PROBE_RE =
+  /\b(?:curl\s+(?:-[a-zA-Z]*I[a-zA-Z]*|--head)|wget\s+--spider|dig|nslookup|ping6?|traceroute6?|whois)\b(?:\s+(?:@|https?:\/\/)?[\w.:\/\[\]-]+){0,3}/gi;
+
+export function stripInlineReadOnlyProbes(line: string): string | null {
+  if (PROBE_FORBID_RE.test(line)) return null;
+  const out = line.replace(INLINE_PROBE_RE, " ");
+  return out === line ? null : out;
+}
+
 /** 单行只读探测命令（无取回落盘/管道/重定向/汇入/请求体）。 */
 export function isReadOnlyProbeLine(line: string): boolean {
   const l = line.trim();
@@ -5319,12 +5331,11 @@ export function finalizeAskAnswer(
       if (addrs.length > 0) {
         // 地址 + 终端词汇但无取回/执行/交付语义（`nc -zv host port 连通性探测`、
         // 端口清单）是运维散文的常态，只有词汇与动作语义同现才收口。
-        return (
-          addrs.some((a) => markedAddrs.has(a)) ||
-          windowDanger !== null ||
-          fullDanger !== null ||
-          (EXEC_WORD_RE.test(line) && ACTION_LINE_RE.test(line))
-        );
+        if (addrs.some((a) => markedAddrs.has(a)) || windowDanger !== null || fullDanger !== null) return true;
+        if (!(EXEC_WORD_RE.test(line) && ACTION_LINE_RE.test(line))) return false;
+        // 只读探测（curl -I / wget --spider / dig…）的 fetch 词不构成取回执行语义
+        const residual = stripInlineReadOnlyProbes(line);
+        return residual === null || (EXEC_WORD_RE.test(residual) && ACTION_LINE_RE.test(residual));
       }
       // 地址在别的行：窗口级危险语义成立时，纯动作行也是载荷的一半，同样收口
       return windowDanger !== null && ACTION_LINE_RE.test(line);
@@ -5588,6 +5599,25 @@ export function dataTextHasIsolatableContent(dataText: string): boolean {
       ? seg.text.split("\n").some((l) => hasExecIntent(normalizeCommandText(l)))
       : hasExecIntent(normalizeCommandText(seg.text))
   );
+}
+
+/**
+ * 共同检索传染修正（R306 P0-3，audit-r305 §5 NV04）：span 剥除是否算安全隔离，
+ * 只看答案实际回显了哪几条资料——按行（≥8 字折叠后）与剥除前答案比对定位
+ * 被回显的笔记，只对这些笔记判可隔离内容；定位不到任何笔记时 fail-closed
+ * 回退到整份资料面。
+ */
+export function echoedDataHasIsolatableContent(answerBeforeScrub: string, noteTexts: string[], fullDataText: string): boolean {
+  const ans = foldCompact(answerBeforeScrub);
+  if (ans.length === 0) return dataTextHasIsolatableContent(fullDataText);
+  const echoed = noteTexts.filter((t) =>
+    t.split("\n").some((l) => {
+      const f = foldCompact(l);
+      return f.length >= 8 && ans.includes(f);
+    })
+  );
+  if (echoed.length === 0) return dataTextHasIsolatableContent(fullDataText);
+  return echoed.some((t) => dataTextHasIsolatableContent(t) || noteContainsExecutableCommand(t));
 }
 
 // R280 P2-3（audit-r279 Q4）：内部判定痕迹剥除——模型泄出的检索/筛选过程

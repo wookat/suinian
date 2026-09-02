@@ -422,18 +422,37 @@ export interface ThreadGraph {
 }
 
 /** Entities mentioned by a thread's notes + entity-entity relations among them (for the detail view). */
+/** D1 单条语句最多 100 个绑定变量；线索可达 200 条笔记，IN 列表须分块。 */
+const D1_IN_CHUNK = 60;
+
+function chunked<T>(xs: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size));
+  return out;
+}
+
 export async function getThreadGraph(env: Env, userId: string, noteIds: string[]): Promise<ThreadGraph> {
   if (noteIds.length === 0) return { entities: [], relations: [], mentions: [] };
-  const ph = noteIds.map(() => "?").join(",");
-  const { results: ents } = await env.DB.prepare(
-    `SELECT en.id, en.name, en.type, COUNT(DISTINCT e.src_id) AS note_count
-     FROM edges e JOIN entities en ON en.id = e.dst_id
-     WHERE e.user_id = ? AND e.src_type = 'note' AND e.relation = 'mentions' AND e.src_id IN (${ph})
-     GROUP BY en.id ORDER BY note_count DESC, en.name ASC LIMIT 30`
-  )
-    .bind(userId, ...noteIds)
-    .all<{ id: string; name: string; type: string; note_count: number }>();
-  const entities = ents ?? [];
+  const entityCount = new Map<string, { id: string; name: string; type: string; note_count: number }>();
+  for (const chunk of chunked(noteIds, D1_IN_CHUNK)) {
+    const ph = chunk.map(() => "?").join(",");
+    const { results: ents } = await env.DB.prepare(
+      `SELECT en.id, en.name, en.type, COUNT(DISTINCT e.src_id) AS note_count
+       FROM edges e JOIN entities en ON en.id = e.dst_id
+       WHERE e.user_id = ? AND e.src_type = 'note' AND e.relation = 'mentions' AND e.src_id IN (${ph})
+       GROUP BY en.id`
+    )
+      .bind(userId, ...chunk)
+      .all<{ id: string; name: string; type: string; note_count: number }>();
+    for (const e of ents ?? []) {
+      const prev = entityCount.get(e.id);
+      if (prev) prev.note_count += e.note_count;
+      else entityCount.set(e.id, { ...e });
+    }
+  }
+  const entities = [...entityCount.values()]
+    .sort((a, b) => b.note_count - a.note_count || a.name.localeCompare(b.name))
+    .slice(0, 30);
   if (entities.length === 0) return { entities: [], relations: [], mentions: [] };
   const ids = entities.map((e) => e.id);
   const nameById = new Map(entities.map((e) => [e.id, e.name]));
@@ -456,14 +475,19 @@ export async function getThreadGraph(env: Env, userId: string, noteIds: string[]
     confidence: r.confidence,
     note_id: r.note_id,
   }));
-  const { results: ments } = await env.DB.prepare(
-    `SELECT src_id AS note_id, dst_id AS entity_id FROM edges
-     WHERE user_id = ? AND src_type = 'note' AND relation = 'mentions'
-       AND src_id IN (${ph}) AND dst_id IN (${eph}) LIMIT 200`
-  )
-    .bind(userId, ...noteIds, ...ids)
-    .all<{ note_id: string; entity_id: string }>();
-  const mentions = (ments ?? []).map((m) => ({ entity_id: m.entity_id, note_id: m.note_id }));
+  const mentions: Array<{ entity_id: string; note_id: string }> = [];
+  for (const chunk of chunked(noteIds, D1_IN_CHUNK)) {
+    if (mentions.length >= 200) break;
+    const ph = chunk.map(() => "?").join(",");
+    const { results: ments } = await env.DB.prepare(
+      `SELECT src_id AS note_id, dst_id AS entity_id FROM edges
+       WHERE user_id = ? AND src_type = 'note' AND relation = 'mentions'
+         AND src_id IN (${ph}) AND dst_id IN (${eph}) LIMIT ?`
+    )
+      .bind(userId, ...chunk, ...ids, 200 - mentions.length)
+      .all<{ note_id: string; entity_id: string }>();
+    for (const m of ments ?? []) mentions.push({ entity_id: m.entity_id, note_id: m.note_id });
+  }
   return { entities, relations, mentions };
 }
 

@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, dataTextHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -3249,6 +3249,13 @@ export function sanitizeNormalizedQuestion(raw: string | null, question: string)
   const out = (raw ?? "").trim().replace(/^[\u0022\u201c\u201d\u0027\u300c\u300e]+|[\u0022\u201c\u201d\u0027\u300d\u300f]+$/g, "").trim();
   if (!out || out === question || out.length > 200 || out.includes("\n")) return null;
   if (!CJK_RE.test(out)) return null;
+  // 「…」/“…” 引用的字面量是用户要找的原文片段，归一化不得改写或丢失
+  for (const m of question.matchAll(/[\u300c\u201c]([^\u300d\u201d]{1,60})[\u300d\u201d]/g)) {
+    if (!out.includes(m[1])) return null;
+  }
+  // 中英混合问句本身已有中文框架却无任何财务措辞时，归一化产物不得凭空
+  // 命中确定性财务聚合路由（纯英文问句的财务措辞只能靠归一化翻出，不在此限）
+  if (CJK_RE.test(question) && !FINANCE_WORD_RE.test(question) && (financeAggIntent(out) !== null || financeCompareIntent(out) || financeMomIntent(out) !== null)) return null;
   return out;
 }
 
@@ -4911,7 +4918,14 @@ app.post("/api/ask", async (c) => {
     // 改道（原文走笔记卡片），不是安全隔离，不置 instruction_isolated；
     // 资料含 demand 或可隔离内容时维持 fail-closed 置位不变。
     const spanScrubIsIsolation =
-      g.spanScrubbed && ((demands?.length ?? 0) > 0 || demands === null || dataTextHasIsolatableContent(askGuardData));
+      g.spanScrubbed &&
+      ((demands?.length ?? 0) > 0 ||
+        demands === null ||
+        echoedDataHasIsolatableContent(
+          answer2,
+          notes.map((n) => `${n.title ?? ""}\n${n.content}`),
+          askGuardData
+        ));
     if (g.conductScrubbed || g.markerScrubbed || spanScrubIsIsolation || g.directiveScrubbed) genIsolated = true;
     if (g.linkScrubbed) console.log("ask: external link scrubbed from answer");
     if (g.conductScrubbed) console.log("ask: unsolicited conduct scrubbed from answer");

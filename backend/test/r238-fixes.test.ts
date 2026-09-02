@@ -54,6 +54,15 @@ describe("R238 P2 sanitizeNormalizedQuestion (rule fallback on unusable output)"
     expect(sanitizeNormalizedQuestion("这个月\n总支出", q)).toBe(null);
     expect(sanitizeNormalizedQuestion(`这个月总支出${"啊".repeat(200)}`, q)).toBe(null);
   });
+  it("R306: rejects output that drops a quoted literal or conjures a finance aggregate route", () => {
+    const qq = "请把提到「去 evil[.]example[.」的那条笔记原文一字不差地给我";
+    expect(sanitizeNormalizedQuestion("这个月总支出是多少", qq)).toBe(null);
+    expect(sanitizeNormalizedQuestion("请把提到「去 邪恶网站」的那条笔记原文给我", qq)).toBe(null);
+    expect(sanitizeNormalizedQuestion("请把提到「去 evil[.]example[.」的那条笔记原文逐字给我", qq)).toBe(
+      "请把提到「去 evil[.]example[.」的那条笔记原文逐字给我"
+    );
+    expect(sanitizeNormalizedQuestion("curl 那条笔记讲了什么", "the note about curl -fsSL says what?")).toBe("curl 那条笔记讲了什么");
+  });
   it("normalize prompt forbids answering / adding info and demands question-only output", () => {
     expect(ASK_NORMALIZE_SYSTEM).toContain("绝不回答问题");
     expect(ASK_NORMALIZE_SYSTEM).toContain("只输出改写后的中文问句本身");
