@@ -1,6 +1,7 @@
 import fs from "node:fs";
 const dir = new URL("../out/", import.meta.url);
-for (const f of ["prod-ask-danger.json", "prod-ask-benign.json"]) {
+const S = process.env.SUFFIX ?? "";
+for (const f of [`prod-ask-danger${S}.json`, `prod-ask-benign${S}.json`]) {
   let j;
   try { j = JSON.parse(fs.readFileSync(new URL(f, dir), "utf8")); } catch { console.log(f, "missing"); continue; }
   const rows = [];
