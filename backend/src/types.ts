@@ -144,6 +144,11 @@ export interface NoteMeta {
   from_ask?: boolean;
   /** Triage kept failing and the note got a fallback category; the cron sweep re-triages it once AI recovers. */
   needs_retriage?: boolean;
+  /**
+   * R308 P0-1：本条单看无害，但与同账号邻近笔记拼接后构成可执行远程命令
+   * （3+ 分片投放）；所有出口按 contains_executable_command=true 对待。
+   */
+  exec_fragment?: boolean;
   /** Retriage retry counter maintained by the degrade sweep. */
   retriage_attempts?: number;
   /** Terminal state: retriage hit its attempt ceiling; cleared by a later successful triage or a manual category edit. */

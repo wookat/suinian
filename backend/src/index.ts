@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -79,7 +79,8 @@ import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
 import { recordOutletExecMarks } from "./guard-events";
-import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes } from "./ask";
+import { rejudgeExecFragmentsRecent } from "./exec-fragments";
+import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -206,8 +207,32 @@ export function askAnswerCacheKeyMaterial(question: string, body: { history?: un
   return `${question}\n${graph}\n${history}`;
 }
 
-async function askAnswerCacheKey(auth: string, material: string): Promise<Request> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${auth}\n${material}`));
+/**
+ * R308 P1-2（audit-r307 §8：写入新笔记后 180s 内同问拿旧答案）：用户资料版本——
+ * 未删笔记数 + 最近一次写入/删除时间戳。任何新增/编辑/删除/恢复都改变其中
+ * 至少一项，缓存键随之翻转；查询失败按「不可缓存」处理（宁可不命中）。
+ */
+export async function askUserDataVersion(db: D1Database, userId: string): Promise<string | null> {
+  try {
+    // 软删/恢复都写 updated_at，MAX(updated_at) 已覆盖；COUNT 兜住硬删与注销级联。
+    const row = await db
+      .prepare(
+        "SELECT COUNT(*) AS total, SUM(deleted_at IS NULL) AS live, MAX(updated_at) AS u FROM notes WHERE user_id = ?"
+      )
+      .bind(userId)
+      .first<{ total: number; live: number | null; u: string | null }>();
+    if (!row) return null;
+    return `${row.total}|${row.live ?? 0}|${row.u ?? ""}`;
+  } catch {
+    return null;
+  }
+}
+
+async function askAnswerCacheKey(auth: string, material: string, dataVersion: string): Promise<Request> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${auth}\n${dataVersion}\n${material}`)
+  );
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return new Request(`https://ask-answer-cache.internal/${hex}`);
 }
@@ -222,7 +247,13 @@ app.use("/api/ask", async (c, next) => {
   const question = typeof reqBody?.question === "string" ? reqBody.question : "";
   const auth = c.req.header("authorization") ?? "";
   const cache = typeof caches !== "undefined" ? caches.default : null;
-  const cacheKey = cache && auth && question ? await askAnswerCacheKey(auth, askAnswerCacheKeyMaterial(question, reqBody)) : null;
+  let cacheKey: Request | null = null;
+  if (cache && auth && question) {
+    const tok = auth.match(/^Bearer\s+(.+)$/i);
+    const who = tok ? await authenticateToken(c.env.DB, tok[1]).catch(() => null) : null;
+    const version = who ? await askUserDataVersion(c.env.DB, who.userId) : null;
+    if (version !== null) cacheKey = await askAnswerCacheKey(auth, askAnswerCacheKeyMaterial(question, reqBody), version);
+  }
   const produce = async (): Promise<AskProduced> => {
     let outBody: Record<string, unknown> | null = null;
     let headers: Headers;
@@ -1372,8 +1403,11 @@ export function normalizeStoredTodoDue(v: string | null): string | null {
 }
 
 function noteToJson(n: NoteRow) {
+  const exec = noteRowContainsExecutableCommand(n);
   return {
     ...n,
+    // 危险笔记的标题显示在正文折叠警示之外：抄入原文/地址/编码串的标题一律置空
+    title: exec ? execSafeTitle(n.title, n.content) : n.title,
     todo_due: normalizeStoredTodoDue(n.todo_due),
     tags: JSON.parse(n.tags || "[]") as string[],
     meta: parseNoteMeta(n.meta),
@@ -1382,7 +1416,8 @@ function noteToJson(n: NoteRow) {
     todo_done: !!n.todo_done,
     // 数据面统一危险标记（R304 P0-A）：notes.list / 引用卡片 / 搜索 / 导出 /
     // 今日回顾 / MCP 全部经由本序列化点，出口共用同一判定
-    contains_executable_command: noteContainsExecutableCommand(n.content || ""),
+    // R308 P0-1：分片投放（meta.exec_fragment）与内容判定同口径。
+    contains_executable_command: exec,
     content_enc: undefined,
   };
 }
@@ -1587,6 +1622,9 @@ async function createNote(
     { rejudge: true, markSensitive: "onlyEncrypted" }
   );
   await stmt.run();
+  // R308 P0-1：同账号邻近短笔记拼接复判（分片投放），标记落 meta.exec_fragment。
+  // 同步完成再返回：创建后紧接的 notes.list / 引用卡片必须已带标。
+  await rejudgeExecFragmentsRecent(c.env, userId, waitUntil);
 
   const runTriage = async (retry: boolean): Promise<TriageResult | null> => {
     const topTags = await loadTopTags(c.env.DB, userId).catch(() => [] as string[]);
@@ -2128,6 +2166,7 @@ app.patch("/api/notes/:id", async (c) => {
     if (still) return conflictResponse(c, id);
     return c.json({ error: "not found" }, 404);
   }
+  if (typeof patch.content === "string") await rejudgeExecFragmentsRecent(c.env, userId, (p) => c.executionCtx.waitUntil(p));
   const note = await c.env.DB.prepare("SELECT * FROM notes WHERE id = ?").bind(id).first<NoteRow>();
   c.executionCtx.waitUntil(capped(upsertNoteEmbedding(c.env, note!), PIPELINE_TIMEOUT_MS, `patch-embed note=${id}`));
   const sensitivityChanged = result.sensitive !== !!existing.is_sensitive;
@@ -4785,6 +4824,10 @@ app.post("/api/ask", async (c) => {
   const askGuardData = `${context}\n${askGuardNoteUnits.join("\n")}\n${graphTriples.join("\n")}`;
   // 跨笔记语义窗口的地址归因单元：每条笔记一项，每条图谱三元组一项。
   const askGuardUnits = [...askGuardNoteUnits, ...graphTriples];
+  // 跨笔记分片（meta.exec_fragment）：单片无痕，出口按危险单元收口其片段回声。
+  const askGuardFragmentUnits = notes
+    .filter((n) => !n.is_sensitive && noteMetaExecFragment(n.meta ?? null))
+    .map((n) => `${n.title ?? ""}\n${n.content}`);
   const askGuardQuestion = `${question}\n${recallQuestion}`;
   // R268 语义级主判（docs/decision-r268.md）：独立 LLM 判别器对资料区做指令
   // 抽取（语言无关），与生成并行启动；判别失败退化为 guardAskAnswer 内的
@@ -4908,6 +4951,7 @@ app.post("/api/ask", async (c) => {
   const askScrubSource = `${question}\n${recallQuestion}\n${scrubBodies}\n${graphTriples.join("\n")}`;
   // 输出侧防执行护栏（R264 P1 层 4）：结构控制 token/不可见字符不外带
   if (answer2) answer2 = scrubModelOutputInjectionArtifacts(stripDataMarks(answer2));
+  const preGuardAnswer = answer2 ?? "";
   // R266 输出侧收口：外链零输出（回传通道）+ 资料派生 marker 剥除（执行痕迹）。
   // 与变体形态无关：不猜哪句是注入，只封死攻击必需的外带通道。
   if (answer2) {
@@ -4956,14 +5000,10 @@ app.post("/api/ask", async (c) => {
     // 行都能定位且无一行命中 segmentIsReaderDirective 时，该 demand 只是技术
     // 正文里的祈使措辞（prompt 模板/运维手册），不是对回答行为的指令，
     // 确定性剔除；定位不到完整行（跨行/跨笔记拼接）时 fail-closed 保留。
-    const askGuardLines = askGuardData.split("\n");
-    const demandLineIsDirective = (d: string) => {
-      const dc = foldCompact(d);
-      const lines = askGuardLines.filter((l) => l.includes(d) || (dc.length >= 3 && foldCompact(l).includes(dc)));
-      if (lines.length === 0) return true; // 定位不到：fail-closed 保留
-      return lines.some((l) => segmentIsReaderDirective(l));
-    };
-    const demands = grounded === null ? null : grounded.filter(demandLineIsDirective);
+    const demands = grounded === null ? null : filterDirectiveDemands(grounded, askGuardData);
+    // 两层 LLM 判别器（抽取器 + 审计）同时不可用时的确定性兜底信号：资料任一行是
+    // 读者指令即按「资料含指令」处置，不因上游故障退化为无闸门放行。
+    const askGuardDataHasDirective = askGuardData.split("\n").some((l) => segmentIsReaderDirective(l));
     if (grounded !== null && demands !== null && demands.length < grounded.length)
       console.log(`ask: ${grounded.length - demands.length} non-directive technical demand(s) dropped`);
     const g = guardAskAnswer(answer2, {
@@ -5023,9 +5063,9 @@ app.post("/api/ask", async (c) => {
               return null;
             });
       askMarks.push(["conaud", Date.now() - tAud]);
-      if (verdict === null && (demands?.length ?? 0) > 0) {
+      if (verdict === null && ((demands?.length ?? 0) > 0 || (demands === null && askGuardDataHasDirective))) {
         console.log("ask: fail-closed conservative answer (demands present, audit unavailable)");
-        isolateGen("audit:unavailable+demands");
+        isolateGen(demands === null ? "audit:unavailable+directive-line" : "audit:unavailable+demands");
         answer2 =
           "相关笔记中包含试图影响回答的指令，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
           notes.slice(0, 3).map((_n, i) => `[${i + 1}]`).join(" ");
@@ -5254,6 +5294,17 @@ app.post("/api/ask", async (c) => {
       references.push({ index: references.length + 1, note_id: id });
     }
   }
+  // R308 P1-1：生成侧隔离剥掉的句段所引笔记不能从 references 消失（横幅归因 +
+  // 「原文可在引用的笔记卡片中查看」都要落在真实卡片上）。
+  const isolatedRefs = genIsolated
+    ? attachIsolatedSources(
+        references,
+        preGuardAnswer,
+        negScrubbed,
+        noteIds,
+        notes.filter((n) => !weakIds.has(n.id) && noteRowContainsExecutableCommand(n)).map((n) => n.id)
+      )
+    : [];
   const byId = new Map(notes.map((n) => [n.id, n]));
   const refNotes = await Promise.all(
     references.map((r) => noteToJsonDecrypted(c.env, byId.get(r.note_id)!))
@@ -5300,6 +5351,7 @@ app.post("/api/ask", async (c) => {
     notes: refNotes,
     ...(genIsolated ? { instruction_isolated: true } : {}),
     ...(genIsolated && genIsolatedReason !== null ? { isolation_reason: genIsolatedReason } : {}),
+    ...(isolatedRefs.length > 0 ? { isolated_refs: isolatedRefs } : {}),
   };
   };
 
@@ -5472,6 +5524,7 @@ app.post("/api/ask", async (c) => {
     const fin = finalizeAskAnswer(body.answer, {
       dataText: askGuardData,
       dataUnits: askGuardUnits,
+      execFragmentUnits: askGuardFragmentUnits,
       question: askGuardQuestion,
       execDangerSegments: cls.danger,
       execClassifierUnavailable: cls.unavailable,
@@ -5491,6 +5544,12 @@ app.post("/api/ask", async (c) => {
     }
     const { isolation_reason: _dropped, ...bodyOut } = body;
     void _dropped;
+    const genIsolatedRefs = Array.isArray(body.isolated_refs)
+      ? body.isolated_refs.filter((n): n is number => typeof n === "number")
+      : [];
+    const isolatedRefs = isolated
+      ? [...new Set([...genIsolatedRefs, ...isolatedReferenceIndexes(body.answer, fin.answer, body)])]
+      : [];
     // R306 P1-2（audit-r305 §11：4/4 隔离态答案区无字面标记）：结构化 isolated
     // 与答案区字面 〔…〕 标记必须同现——保守答案/审计剥空等在 finalize 之前
     // 成形的隔离文案不携带控制标记（携带会被防仿冒剥除），在唯一出口补齐。
@@ -5500,6 +5559,7 @@ app.post("/api/ask", async (c) => {
       answer: answerOut,
       guard_finalized: true,
       ...(isolated ? { instruction_isolated: true } : {}),
+      ...(isolatedRefs.length > 0 ? { isolated_refs: isolatedRefs } : {}),
       // R292 P0-1：降级标记以判别器状态为权威源（不从答案文本反推）。
       ...(fin.degraded || cls.unavailable ? { exec_guard_degraded: true } : {}),
       ...(execGateMark !== null ? { exec_gate: execGateMark } : {}),
@@ -5532,9 +5592,10 @@ app.post("/api/ask", async (c) => {
       new Promise<string[] | null>((resolve) => setTimeout(() => resolve(null), 8_000)),
     ]).then((d) => {
       demandsRawS = d;
-      groundedDemandsS = (d ?? []).filter(
-        (x) => askGuardData.includes(x) || askGuardDataCompactS.includes(foldCompact(x))
-      );
+      groundedDemandsS = [
+        ...(d ?? []).filter((x) => askGuardData.includes(x) || askGuardDataCompactS.includes(foldCompact(x))),
+        ...implicitRelayDemands(askGuardData),
+      ];
       demandsSettled = true;
       askMarks.push(["dirwait", Date.now() - tPre]);
     });
@@ -5554,24 +5615,43 @@ app.post("/api/ask", async (c) => {
       heldCounts[reason] = (heldCounts[reason] ?? 0) + 1;
       return null;
     };
+    const weakIdsS = new Set(extraIds.filter((id) => (semScore.get(id) ?? 0) < ASK_CITATION_MIN_SCORE));
     const gateSegment = (segRaw: string): string | null => {
       // fail-closed：判别器超时/失败（demandsRawS 为 null）时 demand 集未知，
       // done 收口时判别器可能已就绪并剥除句段——期间不外发任何 delta，全部
       // 缓冲到 done 一次成型（audit-r277 X05「先泄后收」的另一形态）。
       if (demandsRawS === null) return hold("demand_unavailable");
       const s0 = scrubModelOutputInjectionArtifacts(stripDataMarksS(segRaw));
+      // 悬空引证判定按 done 的同一口径：只有越界/弱源角标才会被剔除并留下悬空
+      // 导言词（reconcileAskCitations）；在界内且非弱源的角标 done 会原样保留
+      // （只重编号），不构成悬空。段首空白不是悬空形态（done 只对整答开头去空）。
+      const survivingMarkers = s0.replace(/[[［](\d{1,2})[\]］]/g, (m, d: string) => {
+        const n = parseInt(d, 10);
+        return n >= 1 && n <= noteIds.length && !weakIdsS.has(noteIds[n - 1]) ? m : "";
+      });
       const s = s0.replace(/\s*[[［]\d{1,2}[\]］]/g, "");
       if (!s.trim()) return null;
-      // 剑指引证收口：done 剔除无效角标时连带清掉悬空导言词（「根据 ，」）；
-      // 去角标后会留悬空形态的句段扣下不外发，只在 done 中以收口后形态出现。
-      if (cleanDanglingCitations(s) !== s) return hold("dangling_citation");
+      const danglingProbe = survivingMarkers.replace(/^[\s　]+/, "");
+      if (cleanDanglingCitations(danglingProbe) !== danglingProbe) return hold("dangling_citation");
       const sc = foldCompact(s);
       if (groundedDemandsS.some((d) => d && sc.includes(foldCompact(d)))) return hold("demand_hit");
       if (scrubDirectiveDemands(s, groundedDemandsS, askGuardQuestion) !== s) return hold("demand_scrub");
       if (scrubUnsourcedAmounts(s, askScrubSourceS) !== s) return hold("unsourced_amount");
       if (scrubUnsourcedNegations(s, askScrubSourceS) !== s) return hold("unsourced_negation");
-      const fin = finalizeAskAnswer(s, { dataText: askGuardData, dataUnits: askGuardUnits, question: askGuardQuestion });
-      if (fin.isolated || fin.changed || fin.answer !== s) return hold("finalize_rewrite");
+      const fin = finalizeAskAnswer(s, {
+        dataText: askGuardData,
+        dataUnits: askGuardUnits,
+        execFragmentUnits: askGuardFragmentUnits,
+        question: askGuardQuestion,
+      });
+      // 原文问法下 finalize 只在末尾附固定指引（VERBATIM_REDIRECT_NOTICE，done
+      // 整答附一次）而正文逐字未动 ⇒ 句段可外发；任何正文改写/隔离仍整段扣下。
+      if (
+        fin.isolated ||
+        fin.changed ||
+        (fin.answer !== s && fin.answer !== `${s}\n\n${VERBATIM_REDIRECT_NOTICE}`)
+      )
+        return hold("finalize_rewrite");
       if (scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) !== s) return hold("link_scrub");
       // 拒答形句段扣下不外发：整答为拒答时下游会走复问重试/诚实拒答通道整体
       // 替换答案（isRefusalAnswer 分支），先发的拒答 delta 会被 done 撤回。
@@ -5625,11 +5705,18 @@ app.post("/api/ask", async (c) => {
         // R298 P1-6：demand 判别未就绪时句段进队列缓冲（不外发、不丢弃），
         // 就绪后按原顺序排空——首 delta 前 demand 必须就绪的不变量保持不变。
         const segQueue: string[] = [];
+        let firstDeltaAt: number | null = null;
+        let firstTokenAt: number | null = null;
+        let deltaCount = 0;
         const drainQueue = () => {
           if (!demandsSettled) return;
           for (const p of segQueue.splice(0)) {
             const s = gateSegment(p);
-            if (s) send("delta", { text: s });
+            if (s) {
+              if (firstDeltaAt === null) firstDeltaAt = Date.now();
+              deltaCount++;
+              send("delta", { text: s });
+            }
           }
         };
         void demandsReady.then(drainQueue);
@@ -5641,6 +5728,7 @@ app.post("/api/ask", async (c) => {
         };
         try {
           const raw = await runGeneration((t) => {
+            if (firstTokenAt === null) firstTokenAt = Date.now();
             buf += t;
             flushSegments(false);
           });
@@ -5650,6 +5738,17 @@ app.post("/api/ask", async (c) => {
           const body = await finalizeGenerationBody(raw);
           body.conaud_ms = Date.now() - tFin;
           if (Object.keys(heldCounts).length > 0) body.sse_held = heldCounts;
+          // R308 P1-5（audit-r307 §9：27/30 全程 0 delta）：首 delta 慢/无的相位归因
+          // 随 done 下发——生成首 token、demand 判别就绪、首 delta 三个时间点相对
+          // 请求起点的毫秒数 + demand 判别是否可用，生产抓包可直接定位到具体相位。
+          const dirwait = askMarks.find(([k]) => k === "dirwait")?.[1] ?? null;
+          body.sse_timing = {
+            first_token_ms: firstTokenAt === null ? null : firstTokenAt - askT0,
+            demand_ready_ms: dirwait === null ? null : tPre - askT0 + dirwait,
+            demand_available: demandsRawS !== null,
+            first_delta_ms: firstDeltaAt === null ? null : firstDeltaAt - askT0,
+            deltas: deltaCount,
+          };
           delete body.guard_finalized;
           send("done", body);
         } catch (err) {
@@ -6200,8 +6299,10 @@ app.get("/api/export", async (c) => {
     for (const n of notes) {
       // 危险标记随导出走（R304 P0-A）：Markdown 无折叠交互，改为在原文前加
       // 明确风险警示行（JSON 导出经 noteToJson 已带 contains_executable_command）
+      // 警示行紧跟标题、先于元数据；危险笔记的链接字段不单列（地址只在警示之后的原文里出现）
       const execWarn = n.contains_executable_command ? `\n> ${EXEC_OUTLET_WARN_LINE}\n` : "";
-      md += `\n### ${exportMdHeading(n)}\n- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${n.url ? ` | 链接：${n.url}` : ""}\n${execWarn}\n${n.content}\n`;
+      const link = n.url && !n.contains_executable_command ? ` | 链接：${n.url}` : "";
+      md += `\n### ${exportMdHeading(n)}\n${execWarn}- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${link}\n\n${n.content}\n`;
     }
     md += `\n## 思考线索\n`;
     for (const t of threads) md += `\n### ${t.title}（${t.note_count} 条）\n${t.summary ?? ""}\n`;
@@ -6225,7 +6326,8 @@ app.get("/api/export", async (c) => {
  * 把标题撕成代码块、警示行落进围栏；N01/N02/X25 标题不可定位）：只取首个非空
  * 行、剥掉 Markdown 结构字符、限长，空则回落到笔记 id，保证每条都有可定位标题。
  */
-export function exportMdHeading(n: { id: string; title: string | null; content: string }): string {
+export function exportMdHeading(n: { id: string; title: string | null; content: string; contains_executable_command?: boolean }): string {
+  if (n.contains_executable_command) return `${execSafeTitle(n.title, n.content) ?? EXEC_TITLE_PLACEHOLDER}（${n.id}）`;
   const first = (n.title || n.content || "")
     .split("\n")
     .map((l) => l.replace(/[`#>*_\[\]|]/g, "").trim())

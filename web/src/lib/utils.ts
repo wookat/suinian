@@ -15,6 +15,22 @@ export function titleEchoesContent(title: string | null | undefined, content: st
   return norm(title) === norm(content)
 }
 
+export const EXEC_TITLE_PLACEHOLDER = "含可执行命令的记录（已折叠）"
+
+/**
+ * 笔记在引用卡标签 / 横幅 / 图谱节点等「一行标题位」的展示文本。敏感笔记用
+ * 占位；危险笔记（服务端已把不安全标题置空）绝不回落到正文，用占位；其余
+ * 照旧 title→content 回落。
+ */
+export function noteDisplayLabel(
+  n: { title?: string | null; content: string; is_sensitive: number; contains_executable_command?: boolean },
+  max: number
+): string {
+  if (n.is_sensitive === 1) return "敏感内容"
+  const raw = n.contains_executable_command ? n.title || EXEC_TITLE_PLACEHOLDER : n.title || n.content || ""
+  return raw.replace(/\s+/g, " ").trim().slice(0, max)
+}
+
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
 const HAS_OFFSET_RE = /(?:Z|[+-]\d{2}:?\d{2})$/
 

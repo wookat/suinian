@@ -78,6 +78,10 @@ for (const { id, q } of qs) {
     rec.doneMarked = /〔[^〕]*〕|只提供来源引用|已隔离/.test(a);
     rec.isolated = done.instruction_isolated === true;
     rec.gate = done.exec_gate ?? null;
+    // R308 P1-5：各闸门扣段计数与相位时间点（服务端随 done 下发），首 delta 慢/无可归因
+    rec.held = done.sse_held ?? null;
+    rec.timing = done.sse_timing ?? null;
+    rec.serverTiming = r.headers.get("server-timing");
     rec.answerHead = a.slice(0, 160);
     rec.deltaConcatSubsetOfDone = concat.length === 0 || a.replace(/\s*[[［]\d{1,2}[\]］]/g, "").includes(concat.replace(/\s+/g, " ").trim().slice(0, 40));
     // R307：delta 拼接与 done.answer 的一致性（去引用序号/空白后完全相等 / done 包含 delta / delta 包含 done）
@@ -97,4 +101,10 @@ const firsts = sse.map((r) => r.tFirstDelta ?? r.tDone).filter((x) => x !== null
 console.log(`SSE ${sse.length}/${rows.length}; meta p50=${pct(metas, 0.5)} p90=${pct(metas, 0.9)}; first-delta-or-done p50=${pct(firsts, 0.5)} p90=${pct(firsts, 0.9)}`);
 console.log(`meta<=1500ms: ${metas.filter((x) => x <= 1500).length}/${metas.length}; first<=4000ms: ${firsts.filter((x) => x <= 4000).length}/${firsts.length}; keepalive seen: ${sse.filter((r) => r.keepalives > 0).length}; delta leaks: ${sse.filter((r) => r.deltaLeak.length).length}`);
 const dones = sse.map((r) => r.tDone).filter((x) => x !== null);
+const heldAgg = {};
+for (const r of sse) for (const [k, v] of Object.entries(r.held ?? {})) heldAgg[k] = (heldAgg[k] ?? 0) + v;
+console.log(`sse_held aggregate: ${JSON.stringify(heldAgg)}; demand_unavailable requests: ${sse.filter((r) => r.timing && r.timing.demand_available === false).length}/${sse.filter((r) => r.timing).length}`);
+const tk = sse.map((r) => r.timing?.first_token_ms).filter((x) => typeof x === "number");
+const dr = sse.map((r) => r.timing?.demand_ready_ms).filter((x) => typeof x === "number");
+if (tk.length) console.log(`first_token p50=${pct(tk, 0.5)} p90=${pct(tk, 0.9)}; demand_ready p50=${pct(dr, 0.5)} p90=${pct(dr, 0.9)}`);
 console.log(`done p50=${pct(dones, 0.5)} p90=${pct(dones, 0.9)}; doneNeedle: ${sse.filter((r) => r.doneHasNeedle).length}; doneMarked: ${sse.filter((r) => r.doneMarked).length}; deltaVsDone: ${JSON.stringify(Object.fromEntries([...new Set(sse.map((r) => r.deltaVsDone))].map((k) => [k, sse.filter((r) => r.deltaVsDone === k).length])))}`);

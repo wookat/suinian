@@ -17,7 +17,8 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { NoteCard } from "@/components/note-card"
 import { askStream, createNote } from "@/lib/api"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
-import { cn } from "@/lib/utils"
+import { cn, noteDisplayLabel } from "@/lib/utils"
+import { isolatedMarkLocation, isolatedRefTarget, shortenGuardMarks } from "@/lib/ask-isolation"
 import type { AskHistoryMessage, Note } from "@/lib/types"
 
 const LEGACY_STORAGE_KEY = "suinian-ask-chat-v1" // 旧版全局共享 key，会跨账号泄露，读到即删
@@ -65,6 +66,8 @@ export interface AskChatMessage {
   isolated?: boolean
   /** 危险代码判别器不可用，本轮为保守隔离（R288 P2-1：可重试拿到完整答案） */
   guardDegraded?: boolean
+  /** 被隔离段实际命中的引用序号（服务端按收口前后引用差集给出，R308 P1-1） */
+  isolatedRefs?: number[]
   /** 消息产生时刻（epoch ms）；旧版本存量消息无此字段，一律按过期处理 */
   ts?: number
 }
@@ -94,10 +97,7 @@ export function buildAskNoteContent(question: string, answer: string, refs: { in
   if (refs.length > 0) {
     lines.push("", "引用：")
     for (const r of refs) {
-      const label =
-        r.note.is_sensitive === 1
-          ? "敏感内容"
-          : (r.note.title || r.note.content).replace(/\s+/g, " ").slice(0, 60)
+      const label = noteDisplayLabel(r.note, 60)
       const link = r.note.url || (r.note.thread_id ? `${location.origin}${location.pathname}#/threads?id=${r.note.thread_id}` : "")
       lines.push(`[${r.index}] ${label}${link ? ` ${link}` : ""}`)
     }
@@ -128,43 +128,9 @@ function saveMessages(messages: AskChatMessage[]) {
   }
 }
 
-// 隔离标记短句化（R294 P2-3，audit-r293 §9.3）：服务端标记为防仿冒是较长的
-// 固定文案，渲染层换成短句，「查看原文」由横幅按钮承担。只改展示，存为笔记
-// 仍用原文。
-const GUARD_MARK_SHORTS: [string, string][] = [
-  ["〔已隔离笔记内指令，未采纳；原文可在引用的笔记卡片中查看〕", "〔已隔离笔记内指令〕"],
-  ["〔已隔离危险命令（会下载执行远程代码或建立外连），未展示；原文可在引用的笔记卡片中查看〕", "〔已隔离危险命令〕"],
-  ["〔代码安全判别暂不可用，已对疑似可执行代码保守隔离（未展示）；原文可在引用的笔记卡片中查看〕", "〔判别暂不可用，已保守隔离〕"],
-  ["相关笔记内容命中安全隔离规则，已隔离未采纳；原文可在引用的笔记卡片中查看。", "相关内容命中安全隔离规则，已隔离未采纳。"],
-]
-// 降级窗口的答尾长提示整句折进横幅（横幅已说明降级+可重试），正文不重复。
-const DEGRADED_NOTICE_RE =
-  /\n*（本次回答处于代码安全判别降级窗口：判别服务超时\/不可用，系统已对代码区域保守隔离，稍后重试可获得完整判定。）\n*/g
-
-export function shortenGuardMarks(content: string): string {
-  let out = content.replace(DEGRADED_NOTICE_RE, "\n")
-  for (const [long, short] of GUARD_MARK_SHORTS) out = out.split(long).join(short)
-  return out.trim()
-}
-
-// 隔离位置定位（R296 P2-1，audit-r295：提示从「吓人」矫枉到「看不懂」）：
-// 找到含隔离标记的那一段（非空行序号）与同段的 [n] 引用，横幅里告诉用户
-// 被隔离的是哪一条，「查看原文」直接滚到对应笔记卡片。
-const ISOLATION_MARK_RE = /〔已隔离|命中安全隔离规则|〔代码安全判别暂不可用/
 // 原文类问法（与后端 questionRequestsVerbatim 同口径的轻量版）：回答下方提示
 // 「近似原文」口径，告知空白/换行/零宽字符可能被归一化。
 const VERBATIM_QUESTION_RE = /原文|原样|原话|原封不动|逐字|一字不差|一字不漏|一字一句|verbatim|word for word/i
-export function isolatedMarkLocation(content: string): { para: number; refIndex: number | null } | null {
-  const lines = shortenGuardMarks(content)
-    .split("\n")
-    .filter((l) => l.trim().length > 0)
-  for (let i = 0; i < lines.length; i++) {
-    if (!ISOLATION_MARK_RE.test(lines[i])) continue
-    const m = lines[i].match(/[[［](\d{1,2})[\]］]/)
-    return { para: i + 1, refIndex: m ? parseInt(m[1], 10) : null }
-  }
-  return null
-}
 
 /** 把回答中的 [n] 渲染为可点击引用，点击滚动到下方对应笔记卡片 */
 function AnswerText({ msgId, content, refIndexes }: { msgId: string; content: string; refIndexes: Set<number> }) {
@@ -320,6 +286,7 @@ export function AskChat({
           question: q,
           ts: Date.now(),
           ...(res.instruction_isolated ? { isolated: true } : {}),
+          ...(res.isolated_refs?.length ? { isolatedRefs: res.isolated_refs } : {}),
           ...(res.exec_guard_degraded ? { guardDegraded: true } : {}),
         },
       ])
@@ -488,14 +455,10 @@ export function AskChat({
                     ) : null}
                     {m.isolated && !m.guardDegraded && (() => {
                       const loc = isolatedMarkLocation(m.content)
-                      const refIndexes = new Set((m.refs ?? []).map((r) => r.index))
-                      const targetIndex =
-                        loc?.refIndex != null && refIndexes.has(loc.refIndex) ? loc.refIndex : m.refs?.[0]?.index
+                      const targetIndex = isolatedRefTarget(m)
                       const targetNote =
                         targetIndex != null ? m.refs!.find((r) => r.index === targetIndex)?.note : undefined
-                      const noteLabel = targetNote
-                        ? (targetNote.title || targetNote.content).replace(/\s+/g, " ").slice(0, 12)
-                        : null
+                      const noteLabel = targetNote ? noteDisplayLabel(targetNote, 12) : null
                       return (
                         <div className="flex min-w-0 flex-wrap items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-800 [overflow-wrap:anywhere] dark:text-amber-300">
                           <ShieldAlert className="size-3.5 shrink-0" />
