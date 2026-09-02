@@ -676,7 +676,7 @@ export function NoteCard({
             checked={done}
             onCheckedChange={() => onToggleTodo?.(note)}
             aria-label={done ? "标记为未完成" : "标记为完成"}
-            className="mt-0.5 size-6 sm:size-4"
+            className="mt-0.5 size-6"
           />
         )}
         {editing ? (

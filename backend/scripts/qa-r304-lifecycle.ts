@@ -6,7 +6,7 @@
  *
  *   SUINIAN_API_BASE=https://suinian-api.zalize.com npx tsx scripts/qa-r304-lifecycle.ts
  *
- * QA 账号一律 [QA-R304] 前缀、口令运行时随机生成，跑完即注销；不触碰 u_boss。
+ * QA 账号一律 [QA-R306] 前缀、口令运行时随机生成，跑完即注销；不触碰 u_boss。
  */
 import { unzipSync, strFromU8 } from "fflate";
 
@@ -40,7 +40,7 @@ function check(name: string, ok: boolean, detail = "") {
 }
 
 async function main() {
-  const name = `[QA-R304]lc-${Math.random().toString(36).slice(2, 10)}`;
+  const name = `[QA-R306]lc-${Math.random().toString(36).slice(2, 10)}`;
   const password = process.env.QA_R304_PASSWORD ?? `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   const { api_token: token } = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",

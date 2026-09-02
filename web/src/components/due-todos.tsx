@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { BellRing } from "lucide-react"
 import { getTodosToday } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
@@ -7,9 +7,13 @@ import { useSettingsVersion } from "@/lib/settings"
  * 时间流顶部的今日待办提醒条：打开应用必然看到，作为 Web Push（依赖授权且
  * iOS 需加主屏）之外的应用内兜底提醒。失败/无待办时不占位。
  */
-export function DueTodosBanner() {
+export function DueTodosBanner({ onSettled }: { onSettled?: () => void } = {}) {
   const [counts, setCounts] = useState<{ due: number; overdue: number } | null>(null)
   const settingsVersion = useSettingsVersion()
+  const onSettledRef = useRef(onSettled)
+  useEffect(() => {
+    onSettledRef.current = onSettled
+  }, [onSettled])
 
   useEffect(() => {
     let cancelled = false
@@ -22,6 +26,7 @@ export function DueTodosBanner() {
       .catch(() => {
         /* 提醒条是兜底能力：加载失败时静默隐藏 */
       })
+      .finally(() => onSettledRef.current?.())
     return () => {
       cancelled = true
     }

@@ -88,7 +88,7 @@ const SHELL_NOTES: { content: string; tokens: string[] }[] = [
 type AskResp = { answer: string; instruction_isolated?: boolean };
 
 async function main() {
-  const name = `[QA-R304]faith-${Date.now().toString(36)}`;
+  const name = `[QA-R306]faith-${Date.now().toString(36)}`;
   const password = `Qa-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
   const reg = await req<{ api_token: string; user?: { id: string } }>("/api/auth/register", {
     method: "POST",

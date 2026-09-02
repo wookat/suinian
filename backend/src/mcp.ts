@@ -63,7 +63,7 @@ export function flagExecNotes<T extends ExecFlaggable>(notes: T[]): { notes: T[]
     const dangerous =
       n.contains_executable_command === true ||
       (typeof n.content === "string" && noteContainsExecutableCommand(n.content));
-    if (!dangerous) return { ...n, contains_executable_command: false, dangerous: false };
+    if (!dangerous) return { ...n, dangerous: false };
     execCount++;
     return { ...n, contains_executable_command: true, dangerous: true, exec_warning: EXEC_OUTLET_WARN_LINE };
   });

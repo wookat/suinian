@@ -4734,9 +4734,12 @@ app.post("/api/ask", async (c) => {
   // 伪造资料边界——不依赖识别注入变体形态。
   const dataNonce = makeDataNonce();
   // 输出护栏的资料面/问题面文本（marker 判定用）：正文+标题+剪藏元数据+实体关系
-  const askGuardData = `${context}\n${notes
-    .map((n) => `${n.title ?? ""}\n${n.content}\n${n.url_title ?? ""}\n${n.url_summary ?? ""}`)
-    .join("\n")}\n${graphTriples.join("\n")}`;
+  const askGuardNoteUnits = notes.map(
+    (n) => `${n.title ?? ""}\n${n.content}\n${n.url_title ?? ""}\n${n.url_summary ?? ""}`
+  );
+  const askGuardData = `${context}\n${askGuardNoteUnits.join("\n")}\n${graphTriples.join("\n")}`;
+  // 跨笔记语义窗口的地址归因单元：每条笔记一项，每条图谱三元组一项。
+  const askGuardUnits = [...askGuardNoteUnits, ...graphTriples];
   const askGuardQuestion = `${question}\n${recallQuestion}`;
   // R268 语义级主判（docs/decision-r268.md）：独立 LLM 判别器对资料区做指令
   // 抽取（语言无关），与生成并行启动；判别失败退化为 guardAskAnswer 内的
@@ -4839,6 +4842,12 @@ app.post("/api/ask", async (c) => {
   }
   // R278 P1-4：生成分支的实质性安全改写追踪（随最终 body 以结构化字段下发）
   let genIsolated = false;
+  // 生成侧隔离归因（随 exec_gate 外露，与 finalizeAskAnswer.reason 同口径）。
+  let genIsolatedReason: string | null = null;
+  const isolateGen = (reason: string) => {
+    genIsolated = true;
+    if (genIsolatedReason === null) genIsolatedReason = reason;
+  };
   // 无来源金额后校验（R200 生产 QA 实测）：肯定句编造金额整句剥除；全被
   // 剥空则按拒答处理，走下方诚实拒答通道给建议，绝不把编造金额递给用户
   // 副文本只取标题/正文，不含 context 的 [n]/id/时间戳元数据头（R236 P3-6，
@@ -4908,6 +4917,7 @@ app.post("/api/ask", async (c) => {
       console.log(`ask: ${grounded.length - demands.length} non-directive technical demand(s) dropped`);
     const g = guardAskAnswer(answer2, {
       dataText: askGuardData,
+      dataUnits: askGuardUnits,
       question: askGuardQuestion,
       directiveDemands: demands ?? [],
     });
@@ -4926,7 +4936,10 @@ app.post("/api/ask", async (c) => {
           notes.map((n) => `${n.title ?? ""}\n${n.content}`),
           askGuardData
         ));
-    if (g.conductScrubbed || g.markerScrubbed || spanScrubIsIsolation || g.directiveScrubbed) genIsolated = true;
+    if (g.conductScrubbed) isolateGen("guard:conduct");
+    if (g.markerScrubbed) isolateGen("guard:marker");
+    if (spanScrubIsIsolation) isolateGen("guard:span");
+    if (g.directiveScrubbed) isolateGen("guard:directive");
     if (g.linkScrubbed) console.log("ask: external link scrubbed from answer");
     if (g.conductScrubbed) console.log("ask: unsolicited conduct scrubbed from answer");
     if (g.markerScrubbed) console.log("ask: data-derived marker scrubbed from answer");
@@ -4934,7 +4947,7 @@ app.post("/api/ask", async (c) => {
     if (g.directiveScrubbed) console.log("ask: directive-demanded text scrubbed from answer");
     // R274（audit-r273 P1-2）：护栏剥空不再谎称「没找到」（与检索空不可区分，
     // 误导用户以为笔记不存在），改走既有保守口径：只给来源引用。
-    if (g.answer.trim() === "") genIsolated = true;
+    if (g.answer.trim() === "") isolateGen("guard:emptied");
     answer2 =
       g.answer.trim() === ""
         ? "相关笔记中包含试图影响回答的内容，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
@@ -4961,7 +4974,7 @@ app.post("/api/ask", async (c) => {
       askMarks.push(["conaud", Date.now() - tAud]);
       if (verdict === null && (demands?.length ?? 0) > 0) {
         console.log("ask: fail-closed conservative answer (demands present, audit unavailable)");
-        genIsolated = true;
+        isolateGen("audit:unavailable+demands");
         answer2 =
           "相关笔记中包含试图影响回答的指令，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
           notes.slice(0, 3).map((_n, i) => `[${i + 1}]`).join(" ");
@@ -5023,7 +5036,11 @@ app.post("/api/ask", async (c) => {
         const audited = applyConductVerdict(answer2, verdict, audKeep);
         if (audited !== answer2) {
           console.log(`ask: conduct audit scrubbed segment(s)`);
-          genIsolated = true;
+          // 抽取器已裁定资料无指令（demands === []）时，审计剥掉的句段不可能是
+          // 资料指令的产物（与下方剥空分支同一前提），照常剥除但不算隔离——
+          // 否则善意 verbatim 答案会顶着隔离横幅原样出关（R306 生产实测 LC11/LC22）。
+          if (demands !== null && demands.length === 0) console.log("ask: conduct audit scrub with no directives in data; not counted as isolation");
+          else isolateGen("audit:scrubbed");
         }
         if (audited.trim() === "") {
           // R276 P1-2（audit-r275 §2）：抽取器已裁定资料无指令（demands === []）时，
@@ -5033,6 +5050,7 @@ app.post("/api/ask", async (c) => {
           if (demands !== null && demands.length === 0) {
             console.log("ask: conduct audit emptied answer but no directives in data; keeping answer");
             genIsolated = false;
+            genIsolatedReason = null;
           } else {
             answer2 =
               "相关笔记中包含试图影响回答的内容，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
@@ -5215,7 +5233,13 @@ app.post("/api/ask", async (c) => {
   // R302 P0-2/P0-5：截断推断式告知撤销——verbatim 问法的统一指引改由
   // finalizeAskAnswer 末尾附 VERBATIM_REDIRECT_NOTICE（固定文案，不再做
   // 量级可能失真的「以上回显不完整」推断）。
-  return { answer: finalAnswer + recallGapHint, references, notes: refNotes, ...(genIsolated ? { instruction_isolated: true } : {}) };
+  return {
+    answer: finalAnswer + recallGapHint,
+    references,
+    notes: refNotes,
+    ...(genIsolated ? { instruction_isolated: true } : {}),
+    ...(genIsolated && genIsolatedReason !== null ? { isolation_reason: genIsolatedReason } : {}),
+  };
   };
 
   // R276 P0-1：生成分支的唯一出口——与确定性路由共用同一个 finalizeAskAnswer
@@ -5386,23 +5410,32 @@ app.post("/api/ask", async (c) => {
         : await classifyExecDanger(body.answer);
     const fin = finalizeAskAnswer(body.answer, {
       dataText: askGuardData,
+      dataUnits: askGuardUnits,
       question: askGuardQuestion,
       execDangerSegments: cls.danger,
       execClassifierUnavailable: cls.unavailable,
       execConservativeVeto: cls.conservative,
     });
+    const genReason = typeof body.isolation_reason === "string" ? body.isolation_reason : null;
     if (fin.isolated) {
-      console.log("ask: note-embedded instruction isolated at generation exit");
+      console.log(`ask: note-embedded instruction isolated at generation exit (${fin.reason ?? "unattributed"})`);
       execCounters.isolated += 1;
     }
     flushGuardEvents();
     const isolated = fin.isolated || body.instruction_isolated === true;
+    // 隔离归因随 exec_gate 外露（层名 + 判据原因，不含内容），生产误伤可定位。
+    if (isolated) {
+      const why = fin.isolated ? `fin:${fin.reason ?? "unattributed"}` : `gen:${genReason ?? "unattributed"}`;
+      execGateMark = execGateMark === null ? `none|iso:${why}` : `${execGateMark}|iso:${why}`;
+    }
+    const { isolation_reason: _dropped, ...bodyOut } = body;
+    void _dropped;
     // R306 P1-2（audit-r305 §11：4/4 隔离态答案区无字面标记）：结构化 isolated
     // 与答案区字面 〔…〕 标记必须同现——保守答案/审计剥空等在 finalize 之前
     // 成形的隔离文案不携带控制标记（携带会被防仿冒剥除），在唯一出口补齐。
     const answerOut = isolated && !hasGuardControlMark(fin.answer) ? `${INSTRUCTION_ISOLATED_MARK}\n${fin.answer}` : fin.answer;
     return {
-      ...body,
+      ...bodyOut,
       answer: answerOut,
       guard_finalized: true,
       ...(isolated ? { instruction_isolated: true } : {}),
@@ -5476,7 +5509,7 @@ app.post("/api/ask", async (c) => {
       if (scrubDirectiveDemands(s, groundedDemandsS, askGuardQuestion) !== s) return hold("demand_scrub");
       if (scrubUnsourcedAmounts(s, askScrubSourceS) !== s) return hold("unsourced_amount");
       if (scrubUnsourcedNegations(s, askScrubSourceS) !== s) return hold("unsourced_negation");
-      const fin = finalizeAskAnswer(s, { dataText: askGuardData, question: askGuardQuestion });
+      const fin = finalizeAskAnswer(s, { dataText: askGuardData, dataUnits: askGuardUnits, question: askGuardQuestion });
       if (fin.isolated || fin.changed || fin.answer !== s) return hold("finalize_rewrite");
       if (scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) !== s) return hold("link_scrub");
       // 拒答形句段扣下不外发：整答为拒答时下游会走复问重试/诚实拒答通道整体
@@ -5586,7 +5619,9 @@ app.post("/api/ask", async (c) => {
     "Server-Timing",
     serverTimingHeader([
       ...askMarks,
-      ...(execGateMark !== null && execGateMark !== "none" ? ([["execgate", 1]] as Array<[string, number]>) : []),
+      ...(execGateMark !== null && !/^none(?:\|iso:|$)/.test(execGateMark)
+        ? ([["execgate", 1]] as Array<[string, number]>)
+        : []),
       ["total", Date.now() - askT0],
     ])
   );

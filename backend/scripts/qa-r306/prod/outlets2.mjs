@@ -29,11 +29,13 @@ const summary = {};
 // 2. 周报：生成本周报告，正文危险行须带警示标签，且有总警示
 {
   const g = await req(`/api/reports/generate`, { method: "POST", token: T, body: { period: "week", which: "this" } });
-  const md = g.json?.report?.content ?? g.json?.report?.body ?? g.json?.report?.markdown ?? JSON.stringify(g.json);
+  const md = g.json?.report?.content_md ?? g.json?.report?.content ?? g.json?.report?.body ?? g.json?.report?.markdown ?? JSON.stringify(g.json);
   writeFileSync(`${OUT}/prod-report.md`, md);
   const lines = md.split("\n");
   const danger = lines.filter((l) => /curl|wget|bash|payload|relay3|powershell|nslookup|dig\b/i.test(l));
-  const dangerNoWarn = danger.filter((l) => !/〔警示：含可执行命令，勿执行〕/.test(l));
+  const ADDR = /(https?:\/\/|hxxp|\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:]+\]|[a-z0-9-]+(?:\.|。|\[\.\]|\(\.\))(?:example|net|com|org|io|dev)\b)/i;
+  const dangerNoWarn = danger.filter((l) => ADDR.test(l) && !/〔警示：含可执行命令，勿执行〕/.test(l));
+  const proseOnly = danger.filter((l) => !ADDR.test(l) && !/〔警示：含可执行命令，勿执行〕/.test(l));
   summary.report = {
     status: g.status,
     keys: Object.keys(g.json?.report ?? {}),
@@ -41,6 +43,7 @@ const summary = {};
     hasNotice: /本期有 \d+ 条笔记含可执行命令/.test(md),
     dangerLines: danger.length,
     dangerNoWarn: dangerNoWarn.slice(0, 10),
+    proseOnlyMentions: proseOnly.length,
   };
   console.log("report", JSON.stringify(summary.report));
 }
