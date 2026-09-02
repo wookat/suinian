@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -207,8 +207,32 @@ export function askAnswerCacheKeyMaterial(question: string, body: { history?: un
   return `${question}\n${graph}\n${history}`;
 }
 
-async function askAnswerCacheKey(auth: string, material: string): Promise<Request> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${auth}\n${material}`));
+/**
+ * R308 P1-2（audit-r307 §8：写入新笔记后 180s 内同问拿旧答案）：用户资料版本——
+ * 未删笔记数 + 最近一次写入/删除时间戳。任何新增/编辑/删除/恢复都改变其中
+ * 至少一项，缓存键随之翻转；查询失败按「不可缓存」处理（宁可不命中）。
+ */
+export async function askUserDataVersion(db: D1Database, userId: string): Promise<string | null> {
+  try {
+    // 软删/恢复都写 updated_at，MAX(updated_at) 已覆盖；COUNT 兜住硬删与注销级联。
+    const row = await db
+      .prepare(
+        "SELECT COUNT(*) AS total, SUM(deleted_at IS NULL) AS live, MAX(updated_at) AS u FROM notes WHERE user_id = ?"
+      )
+      .bind(userId)
+      .first<{ total: number; live: number | null; u: string | null }>();
+    if (!row) return null;
+    return `${row.total}|${row.live ?? 0}|${row.u ?? ""}`;
+  } catch {
+    return null;
+  }
+}
+
+async function askAnswerCacheKey(auth: string, material: string, dataVersion: string): Promise<Request> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${auth}\n${dataVersion}\n${material}`)
+  );
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return new Request(`https://ask-answer-cache.internal/${hex}`);
 }
@@ -223,7 +247,13 @@ app.use("/api/ask", async (c, next) => {
   const question = typeof reqBody?.question === "string" ? reqBody.question : "";
   const auth = c.req.header("authorization") ?? "";
   const cache = typeof caches !== "undefined" ? caches.default : null;
-  const cacheKey = cache && auth && question ? await askAnswerCacheKey(auth, askAnswerCacheKeyMaterial(question, reqBody)) : null;
+  let cacheKey: Request | null = null;
+  if (cache && auth && question) {
+    const tok = auth.match(/^Bearer\s+(.+)$/i);
+    const who = tok ? await authenticateToken(c.env.DB, tok[1]).catch(() => null) : null;
+    const version = who ? await askUserDataVersion(c.env.DB, who.userId) : null;
+    if (version !== null) cacheKey = await askAnswerCacheKey(auth, askAnswerCacheKeyMaterial(question, reqBody), version);
+  }
   const produce = async (): Promise<AskProduced> => {
     let outBody: Record<string, unknown> | null = null;
     let headers: Headers;
@@ -5502,6 +5532,7 @@ app.post("/api/ask", async (c) => {
     }
     const { isolation_reason: _dropped, ...bodyOut } = body;
     void _dropped;
+    const isolatedRefs = isolated ? isolatedReferenceIndexes(body.answer, fin.answer, body) : [];
     // R306 P1-2（audit-r305 §11：4/4 隔离态答案区无字面标记）：结构化 isolated
     // 与答案区字面 〔…〕 标记必须同现——保守答案/审计剥空等在 finalize 之前
     // 成形的隔离文案不携带控制标记（携带会被防仿冒剥除），在唯一出口补齐。
@@ -5511,6 +5542,7 @@ app.post("/api/ask", async (c) => {
       answer: answerOut,
       guard_finalized: true,
       ...(isolated ? { instruction_isolated: true } : {}),
+      ...(isolatedRefs.length > 0 ? { isolated_refs: isolatedRefs } : {}),
       // R292 P0-1：降级标记以判别器状态为权威源（不从答案文本反推）。
       ...(fin.degraded || cls.unavailable ? { exec_guard_degraded: true } : {}),
       ...(execGateMark !== null ? { exec_gate: execGateMark } : {}),
@@ -5641,11 +5673,18 @@ app.post("/api/ask", async (c) => {
         // R298 P1-6：demand 判别未就绪时句段进队列缓冲（不外发、不丢弃），
         // 就绪后按原顺序排空——首 delta 前 demand 必须就绪的不变量保持不变。
         const segQueue: string[] = [];
+        let firstDeltaAt: number | null = null;
+        let firstTokenAt: number | null = null;
+        let deltaCount = 0;
         const drainQueue = () => {
           if (!demandsSettled) return;
           for (const p of segQueue.splice(0)) {
             const s = gateSegment(p);
-            if (s) send("delta", { text: s });
+            if (s) {
+              if (firstDeltaAt === null) firstDeltaAt = Date.now();
+              deltaCount++;
+              send("delta", { text: s });
+            }
           }
         };
         void demandsReady.then(drainQueue);
@@ -5657,6 +5696,7 @@ app.post("/api/ask", async (c) => {
         };
         try {
           const raw = await runGeneration((t) => {
+            if (firstTokenAt === null) firstTokenAt = Date.now();
             buf += t;
             flushSegments(false);
           });
@@ -5666,6 +5706,17 @@ app.post("/api/ask", async (c) => {
           const body = await finalizeGenerationBody(raw);
           body.conaud_ms = Date.now() - tFin;
           if (Object.keys(heldCounts).length > 0) body.sse_held = heldCounts;
+          // R308 P1-5（audit-r307 §9：27/30 全程 0 delta）：首 delta 慢/无的相位归因
+          // 随 done 下发——生成首 token、demand 判别就绪、首 delta 三个时间点相对
+          // 请求起点的毫秒数 + demand 判别是否可用，生产抓包可直接定位到具体相位。
+          const dirwait = askMarks.find(([k]) => k === "dirwait")?.[1] ?? null;
+          body.sse_timing = {
+            first_token_ms: firstTokenAt === null ? null : firstTokenAt - askT0,
+            demand_ready_ms: dirwait === null ? null : tPre - askT0 + dirwait,
+            demand_available: demandsRawS !== null,
+            first_delta_ms: firstDeltaAt === null ? null : firstDeltaAt - askT0,
+            deltas: deltaCount,
+          };
           delete body.guard_finalized;
           send("done", body);
         } catch (err) {

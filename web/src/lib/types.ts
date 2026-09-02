@@ -123,6 +123,8 @@ export interface AskResponse {
   notes: Note[]
   /** 服务端安全收口对答案做了隔离/警示改写（R278 P1-4：前端据此展示可读说明） */
   instruction_isolated?: boolean
+  /** 被隔离段实际命中的引用序号（R308 P1-1：横幅归因，不再回落首引用） */
+  isolated_refs?: number[]
   /** 危险代码判别器不可用，本轮按保守隔离处理（R288 P2-1：与「已确认危险」区分展示并可重试） */
   exec_guard_degraded?: boolean
 }

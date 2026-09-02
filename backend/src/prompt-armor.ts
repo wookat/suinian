@@ -106,10 +106,10 @@ function replaceViaShadow(
 // 「域名/路径」形态（裸域名不带路径不算——不可点击不可加载，误伤面大）。
 // markdown 链接/图片 [x](url)、![x](url) 的 url 部分同样被本正则覆盖。
 const URL_SHADOW_RE =
-  /(?:(?:https?|ftps?|wss?):\/\/|(?<![:\w/])\/\/(?=[a-z0-9]))[^\s<>()[\]【】（）「」'"，。；！？]+|(?<![.\w@-])www\.[a-z0-9-]+(?:\.[a-z0-9-]+)+[^\s<>()[\]【】（）「」'"，。；！？]*|(?<![.\w@/-])(?:[a-z0-9-]+\.)+[a-z]{2,}\/[^\s<>()[\]【】（）「」'"，。；！？]*/gi;
+  /(?:(?<![\w.+-])[a-z][a-z0-9+.-]{1,15}:\/\/|(?<![:\w/])\/\/(?=[a-z0-9]))[^\s<>()[\]【】（）「」'"，。；！？]+|(?<![.\w@-])www\.[a-z0-9-]+(?:\.[a-z0-9-]+)+[^\s<>()[\]【】（）「」'"，。；！？]*|(?<![.\w@/-])(?:[a-z0-9-]+\.)+[a-z]{2,}\/[^\s<>()[\]【】（）「」'"，。；！？]*/gi;
 
 function urlHost(url: string): string {
-  let rest = url.replace(/^(?:https?|ftps?|wss?):\/\//i, "").replace(/^\/\//, "");
+  let rest = url.replace(/^[a-z][a-z0-9+.-]{1,15}:\/\//i, "").replace(/^\/\//, "");
   rest = rest.replace(/^www\./i, "");
   const host = rest.split(/[/:?#]/)[0];
   return host.toLowerCase();
@@ -1660,6 +1660,49 @@ export function hasGuardControlMark(answer: string): boolean {
   return /〔已隔离|〔代码安全判别|〔警示/.test(answer) || answer.includes(ISOLATION_NOTICE_ANSWER);
 }
 
+const CITATION_INDEX_RE = /[[［](\d{1,2})[\]］]/g;
+
+function citationIndexes(text: string): Set<number> {
+  const out = new Set<number>();
+  for (const m of text.matchAll(CITATION_INDEX_RE)) out.add(parseInt(m[1], 10));
+  return out;
+}
+
+/**
+ * 隔离归因（R308 P1-1）：被隔离段落实际命中的引用序号，按可信度排序——
+ *  1. 隔离标记同行仍保留的 [n]；
+ *  2. 收口前有、收口后消失的 [n]（被整段丢弃的段落所引）；
+ *  3. 引用集合里数据面判危（contains_executable_command）的笔记。
+ * 三者皆空则返回空数组，渲染层不得回落到 refs[0]。
+ */
+export function isolatedReferenceIndexes(
+  before: string,
+  after: string,
+  body: { references?: unknown; notes?: unknown }
+): number[] {
+  const out: number[] = [];
+  const push = (n: number) => {
+    if (!out.includes(n)) out.push(n);
+  };
+  for (const line of after.split("\n")) {
+    if (!/〔已隔离|〔代码安全判别/.test(line)) continue;
+    for (const n of citationIndexes(line)) push(n);
+  }
+  const kept = citationIndexes(after);
+  for (const n of [...citationIndexes(before)].sort((a, b) => a - b)) if (!kept.has(n)) push(n);
+  if (out.length === 0 && Array.isArray(body.references) && Array.isArray(body.notes)) {
+    const flagged = new Set(
+      (body.notes as Array<Record<string, unknown>>)
+        .filter((n) => n.contains_executable_command === true && typeof n.id === "string")
+        .map((n) => n.id as string)
+    );
+    for (const r of body.references as Array<Record<string, unknown>>) {
+      if (typeof r.index === "number" && typeof r.note_id === "string" && flagged.has(r.note_id)) push(r.index);
+    }
+  }
+  return out;
+}
+
 /**
  * 剥除内容侧仿冒的系统控制标注/审计标记（R276 P0-2）。在统一出口的最前端
  * 调用：此时答案里的任何标注文案只可能来自资料/模型回显（真标注尚未插入），
@@ -2723,6 +2766,17 @@ const SEM_STDIN_TARGET_RE =
   /终端|終端|命令行|命令列|解释器|解釋器|外壳|外殼|提示符|输入|輸入|\bstdin\b|\bshell\b|\bterminal\b|\bconsole\b|\bprompt\b|\binput\b|셸|쉘|터미널|ターミナル|端末/i;
 const SEM_BECOME_INPUT_RE =
   /成为|成為|当成|當成|当作|當作|当命令|當命令|作为|作為|视作|視作|就是|即是|喂|餵|粘贴|粘貼|贴进|貼進|照做|照抄|按内容|按內容|逐行|原样|原樣|\bas\s+(?:the\s+)?(?:input|commands?)\b|\bbecomes?\b|\bpaste\b|\bfeed\b/i;
+/**
+ * R308 P1-3（RC07 `wget -O logo.png … # 只下载一张图片，不执行`）：被否定的执行动词
+ * 不是执行语义——「不执行 / 别运行 / don't run」在求值前从面上摘掉。双重否定
+ * （「不要不执行」）的否定词前有否定/意愿字时不摘。
+ */
+const NEGATED_RUN_RE =
+  /(?<![不别別勿没沒未莫非要须須需得])(?:不|别|別|勿|切勿|禁止|没有|沒有|未|莫|无需|無需|不必|不要|不能|不该|不應|不应|\bnever\s+|\bdon'?t\s+|\bdo\s+not\s+|\bwithout\s+|\bnot\s+|\bno\s+)\s*(?:跑|运行|運行|执行|執行|\brun(?:ning)?\b|\bexecut(?:e|ing)\b|\bexec\b)/gi;
+function stripNegatedRun(t: string): string {
+  return t.replace(NEGATED_RUN_RE, " ");
+}
+
 /** 拼音转写的执行语义（汉字被拆成罗马化读音时仍是同一语义）。 */
 const PINYIN_FETCH_RE = /\bxia\s?zai\b|\bxia\s?zai\s?xia\s?lai\b|\bqu\s?hui\b|\bla\s?qu\b/i;
 const PINYIN_HANDOFF_RE = /\bjiao\s?gei\b|\bdao\s?jin\b|\bshu\s?xian\b/i;
@@ -2877,7 +2931,7 @@ function semanticExecSignals(text: string): SemanticExecSignals {
       NET_CARRIER_RE.test(folded),
     fetch: SEM_FETCH_RE.test(folded) || PINYIN_FETCH_RE.test(folded),
     handoffInterp: handoff && interp,
-    run: SEM_RUN_RE.test(folded) || PINYIN_RUN_RE.test(folded),
+    run: SEM_RUN_RE.test(stripNegatedRun(folded)) || PINYIN_RUN_RE.test(folded),
     reverseShell:
       PORTY_RE.test(folded) &&
       (interp || /终端|命令行|输入输出|stdin|stdout|哨站/i.test(folded)) &&
@@ -2928,12 +2982,17 @@ function semanticExecSignals(text: string): SemanticExecSignals {
       // 备份/同步/打包等本地运维动词不自带方向性：只有同句出现外向目的地
       // 或远端端点时才算外传语义（「服务器 cron：每天 02:30 备份数据库」这类
       // 运维备忘与另一条含域名的笔记同屏时不再连坐成 remote-exfil）。
+      // 远端端点本身只给出「方向」，还要有「被送出去的是自有资料/本机敏感源」——
+      // `aws s3 sync ./public s3://bucket/` 这类把构建产物同步到自有存储的运维
+      // 命令行没有资料面对象，不构成外传语义（外向动词仍按上面的判据命中）。
       return prose
         .split(/[\n。；;！？!?]/)
         .some(
           (seg) =>
             EXFIL_ACT.test(seg) &&
-            (exfilDestSatisfied(seg) || hasRemoteEndpointForm(seg, { ignoreAllowlist: true }))
+            (exfilDestSatisfied(seg) ||
+              (hasRemoteEndpointForm(seg, { ignoreAllowlist: true }) &&
+                (EXFIL_OBJ.test(seg) || LOCAL_SECRET_SOURCE_RE.test(seg))))
         );
     })(),
     login: /\bssh\b|\bscp\b|\btelnet\b|登录到|登陆到|遠端登入/i.test(folded),
@@ -2945,7 +3004,7 @@ function semanticExecSignals(text: string): SemanticExecSignals {
       hasRemoteEndpointForm(folded, { includeEmails: true, ignoreAllowlist: true }),
     fetchRunSameSentence: sentenceCooccur(folded, [
       (t) => SEM_FETCH_RE.test(t) || PINYIN_FETCH_RE.test(t),
-      (t) => SEM_RUN_RE.test(t) || PINYIN_RUN_RE.test(t),
+      (t) => SEM_RUN_RE.test(stripNegatedRun(t)) || PINYIN_RUN_RE.test(t),
     ]),
     interp,
   };
@@ -3560,9 +3619,67 @@ export function hasRemoteEndpointForm(
  * 命令面确定性内核 ∪ 危险行段 ∪ 自然语言危险语义（含去牙地址，经
  * normalizeAddressSurface 归一）。
  */
+/** 取回原语（可执行命令的「从哪里拿字节」一步）。 */
+const FETCH_PRIMITIVE_RE =
+  /\b(?:curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|DownloadString|DownloadFile|DownloadData|Start-BitsTransfer|certutil|bitsadmin|fetch|urlopen|urlretrieve|http\.get|requests\.get)\b/gi;
+/** 地址类名词（散文里指明取回对象的方式）。 */
+const ADDR_NOUN_RE =
+  /主机名?|域名|地址|站点|端点|服务器|伺服器|网址|網址|链接|鏈接|連結|\bhost(?:name)?\b|\bdomain\b|\baddress\b|\bendpoint\b|\bserver\b|\burl\b|\buri\b|\blink\b|호스트|도메인|주소|ホスト|ドメイン|адрес|домен|хост|عنوان|نطاق|مضيف/i;
+/** 域名尾片（`.example.net` / `.ne` 这类被拆下的后缀）。 */
+const DOMAIN_TAIL_FRAG_RE = /(?<![\w/])\.[a-z0-9-]{2,}(?:\.[a-z]{2,})+\b|(?<![\w/])\.(?:com|net|org|io|xyz|top|cc|info|biz|ru|cn|tk|sh|dev|app)\b/i;
+/** 摩尔斯点划串（≥3 个符号组）。 */
+const MORSE_RUN_RE = /(?:^|\s)[.\-·—]{1,6}(?:\s+[.\-·—]{1,6}){2,}(?=\s|$)/;
+/** 操作数占位（文档/教学中代指「这里填地址」的形态）。 */
+const OPERAND_PLACEHOLDER_RE = /^\s*(?:\(\s*(?:\.\.\.|…|<[^>\n]{1,24}>|\$?\{?(?:url|URL|uri|URI|link|LINK|addr|ADDR|host|HOST)\}?)?\s*\)|\.\.\.|…|<[^>\n]{1,24}>|(?:url|URL|uri|URI|link|LINK)\b)/;
+
+/**
+ * R308 P1-3 / P2（audit-r307 §15 SE02/SE11：`curl | bash` 、`IEX (…).DownloadString(...)`
+ * 作为安全教育里的**模式引用**被标为可执行命令）：**无操作数的取回原语不是可执行命令**。
+ * 取回原语没有任何具体操作数（整段无任何远端地址形态——含拼读/编码/位移还原面；无变量/
+ * 命令替换/重定向输入/本机路径/长不透明串/脚本文件名；原语后面只跟选项、占位符、管道或句末）时，
+ * 它在任何解释器里都无法取到字节，执行汇入无物可汇。这是结构判而非句式判：在前后加「复盘/考察」
+ * 不影响结果；任何具体操作数（哪怕是变量或剪贴板）一旦出现就不再是引用。跨笔记拼接后带上地址的
+ * 拼接面不满足「无地址」，仍由分片判定处置。
+ */
+/** 小写点分主机名形态（不要求已知 TLD）；混大小写/后随 `(` 的是代码标识符链（`Net.WebClient`）。 */
+const HOSTNAME_SHAPED_TOKEN_RE = /(?<![\w./@:-])[a-z0-9](?:[a-z0-9-]{0,62}\.){1,}[a-z]{2,}(?![\w.(-])/;
+
+export function isOperandlessFetchCitation(text: string): boolean {
+  if (hasRemoteEndpointForm(text, { includeEmails: true, ignoreAllowlist: true })) return false;
+  const n = normalizeCommandText(text);
+  if (hasRemoteEndpointForm(n, { includeEmails: true, ignoreAllowlist: true })) return false;
+  for (const s of [text, n]) {
+    if (/[$`\\~%]|<\(|<<|\s<\s*\S|\/[\w.-]+\/|(?<![\p{L}])\.{0,2}\/[\w.-]{2,}|(?:\d{1,3}\.){3}\d{1,3}|(?=[A-Za-z0-9+/=_-]*[0-9+/=])[A-Za-z0-9+/=_-]{16,}|\bclipboard\b|pbpaste|xclip|xsel|Get-Clipboard|\.txt\b|\.env\b|\.cfg\b|\.conf\b|\.json\b|\.ya?ml\b/iu.test(s))
+      return false;
+    if (SCRIPT_FILE_NAME_RE.test(s) || REMOTE_SCRIPT_PATHY_RE.test(s)) return false;
+    // 操作数以散文/编码形态在场（「主机名 relay3 拼上 .example.net」「解码摩尔斯…得到地址」）：
+    // 地址还原指令、地址类名词、域名尾片、编码点阵任一出现，取回对象就已被指明。
+    if (SEM_TRANSFORM_INSTR_RE.test(s) || ADDR_NOUN_RE.test(s) || DOMAIN_TAIL_FRAG_RE.test(s) || MORSE_RUN_RE.test(s))
+      return false;
+    // 任一可逆变换提示（rot/base/hex/…）或主机名形态的点分 token（不要求已知 TLD：
+    // 变换后的域名尾部不是 TLD）都意味着取回对象在场。
+    if (SEM_DECODE_ADDR_RE.test(s) || HOSTNAME_SHAPED_TOKEN_RE.test(s)) return false;
+  }
+  let saw = false;
+  for (const m of n.matchAll(FETCH_PRIMITIVE_RE)) {
+    saw = true;
+    let rest = n.slice(m.index + m[0].length);
+    for (;;) {
+      const before = rest;
+      rest = rest.replace(OPERAND_PLACEHOLDER_RE, "");
+      rest = rest.replace(/^\s+-{1,2}[A-Za-z][\w-]*(?:=\S*)?/, "");
+      if (rest === before) break;
+    }
+    // 剩下的第一个非空白字符只能是管道/句界/句末/非 ASCII 散文，不能是 ASCII 操作数。
+    if (/^\s*[A-Za-z0-9"'.:/@[\](]/.test(rest)) return false;
+  }
+  return saw;
+}
+
 export function noteContainsExecutableCommand(content: string): boolean {
   if (!content || !content.trim()) return false;
   try {
+    if (isOperandlessFetchCitation(content)) return false;
     if (hasExecIntent(normalizeCommandText(content))) return true;
     if (execIntentLineSpans(content).length > 0) return true;
     if (execSemanticDangerReason(content) !== null) return true;
@@ -4156,6 +4273,7 @@ export function execClassifierGateReason(answer: string): string | null {
  */
 export function execDegradedTraceReason(text: string): string | null {
   if (!text.trim()) return null;
+  if (isOperandlessFetchCitation(text)) return null;
   for (const v of maskedCarrierVariants(text)) {
     if (v === text) continue;
     const r = execDegradedTraceReasonRaw(v);
@@ -4190,6 +4308,9 @@ function execDegradedTraceReasonRaw(text: string): string | null {
   // hostport 与建连能力单独同现（无执行/汇入面）是监听/转发类代码的常态；
   // 真实载荷（反弹/绑定 shell）必带 exec/sink → 已被 multi-capability 覆盖。
   if (c.hostport && (c.exec || c.shellio || c.sink || c.inline) && remoteCooccur()) return "degraded:hostport+proc";
+  // 裸建连 + 远端 host:port（非回环/非 bind 全零）：数据面零命中否决的同一口径。
+  if (c.net && c.hostport && (hasRemoteHostPort(judgeSurfaceText(text)) || hasRemoteHostPort(text)))
+    return "degraded:net+remote-hostport";
   if (hasObfuscatedAddress(n)) return "degraded:obfaddr";
   if (fetchThenRunReason(text)) return "degraded:fetch+run";
   // R298 P0-2：纯语义执行意图（无代码面）——降级/零命中态的保守处置下界。
@@ -4217,7 +4338,7 @@ export function degradedLocalCodeLineExempt(line: string): boolean {
   // R306 P0-3/P0-4（audit-r305 §4 LC19/LC20）：只读探测（`curl -I` / `wget --spider` /
   // `dig` / `ping`）带远端地址但无取回落盘、无管道/重定向/汇入——没有任何字节
   // 进入本机执行面，与本地命令同级；危险痕迹/取码执行链命中的行照旧不豁免。
-  const probe = isReadOnlyProbeLine(line);
+  const probe = isReadOnlyProbeLine(line) || isRemoteClientNoSinkLine(line, n);
   if (!probe && (hasRemoteEndpointForm(line) || hasRemoteEndpointForm(n))) return false;
   if (execDegradedTraceReason(judgeSurfaceText(line)) !== null) return false;
   if (execDegradedTraceReason(line) !== null) return false;
@@ -4235,6 +4356,47 @@ export function degradedLocalCodeLineExempt(line: string): boolean {
 export function execSemanticTraceReason(text: string): string | null {
   if (!text.trim()) return null;
   return execSemanticGateReason(text) ?? execSemanticGateReason(judgeSurfaceText(text));
+}
+
+/** 取回物落盘目标 / 输出文件选项（后随文件名）。 */
+const OUTPUT_TARGET_RE = /(?:\s-(?:o|O)\s*|\s--(?:output|output-document)[=\s]\s*|(?<![=<>-])>{1,2}\s*)(?!\/dev\/null\b)([^\s'"|;&]+)/g;
+/** 落盘为可执行/脚本/归档（任何后续都可能被解释器消费的载体形态）。 */
+const EXEC_TARGET_EXT_RE = /\.(?:sh|bash|zsh|ksh|py|pyc|ps1|psm1|pl|rb|php|exe|bin|run|msi|bat|cmd|vbs|hta|js|mjs|jar|war|dmg|pkg|deb|rpm|apk|tgz|tar|gz|bz2|xz|zip|7z|iso|so|dll|elf)(?:\?|#|$|\b)/i;
+
+/**
+ * R308 P1-3（audit-r307 §7，善意新造 58 条降级 9 态误伤 25.9%）：**远端客户端形态
+ * 的按形态豁免**——行里带远端地址，但能力面只有「建连/取回/主机端口」，没有任何
+ * 执行汇入（exec / stdio 接管 / 内联解释器 / LOLBIN / 求值汇入 / 提权）、没有把取回物
+ * 落盘为可执行或归档、没有管道/命令替换把字节送进别的命令、没有本机敏感源读取
+ * （外传面）。这一类（`curl -w/-X POST` 调 API、`fetch()`/`axios`/`WebSocket` 客户端、
+ * `psql`/`mysql` 连接串、`feed://` 订阅、带端口/查询串的导航 URL、`wget -O 图片`）
+ * 没有一个字节进入本机执行面，与只读探测同级。判据按能力类而非命令名——
+ * 换客户端库/换命令名不影响判定；确定性内核/语义危险/取码执行链命中的行仍
+ * 由调用方后续判据兜住（本函数只负责「远端地址在场」这一条前置的豁免）。
+ */
+export function isRemoteClientNoSinkLine(line: string, normalized: string): boolean {
+  const c = execCapabilities(normalized);
+  if (c.exec || c.shellio || c.inline || c.lolbin || c.sink || c.priv) return false;
+  // 裸建连原语（socket / net.Dial / /dev/tcp）指向远端 host:port 是反连方向，与数据面
+  // execCombinationGateReason 的 net+remote-hostport 否决同口径；应用层客户端（WebSocket
+  // URL / fetch）不带裸 host:port，不受影响。
+  if (c.net && (hasRemoteHostPort(line) || hasRemoteHostPort(normalized))) return false;
+  if (LOCAL_SECRET_SOURCE_RE.test(line) || LOCAL_SECRET_SOURCE_RE.test(normalized)) return false;
+  // 管道（单竖线）/命令替换：字节流向另一条命令，不再是「只有客户端」。
+  if (/(?<!\|)\|(?!\|)/.test(line) || /\$\(|<\(|>\(/.test(line)) return false;
+  // 反引号：shell 命令替换与 JS 模板串同形——内含任何能力原语即按命令替换处置。
+  for (const m of line.matchAll(/`([^`]*)`/g)) {
+    const inner = execCapabilities(normalizeCommandText(m[1]));
+    if (Object.values(inner).some(Boolean)) return false;
+  }
+  // 落盘目标：脚本/可执行/归档后缀即不豁免（`wget -O logo.png` 放行，`-O x.sh` 不放）。
+  for (const m of line.matchAll(OUTPUT_TARGET_RE)) {
+    if (EXEC_TARGET_EXT_RE.test(m[1])) return false;
+  }
+  // 远端脚本对象在场（取回的是脚本文件）：只读探测以外的取回一律不豁免。
+  const noUrls = line.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"<>)]+/gi, (u) => (EXEC_TARGET_EXT_RE.test(u.split(/[?#]/)[0]) ? u : " "));
+  if (SCRIPT_FILE_NAME_RE.test(noUrls) || REMOTE_SCRIPT_PATHY_RE.test(line)) return false;
+  return true;
 }
 
 const READ_ONLY_PROBE_RE =
@@ -4855,7 +5017,7 @@ export function isolateNoteInstructions(
   const dangerFold = (s: string) =>
     foldCompact(
       s
-        .replace(/https?:\/\/[^\s"'`)<>\]]+/g, "")
+        .replace(/(?<![\w.+-])[a-z][a-z0-9+.-]{1,15}:\/\/[^\s"'`)<>\]]+/gi, "")
         .replace(/[[［]\d{1,2}[\]］]/g, "")
         .split(LINK_REMOVED_MARK)
         .join("")
