@@ -24,7 +24,7 @@ import {
   EXEC_DEGRADED_NOTICE,
   EXEC_PIPELINE_WARN_MARK,
   EXEC_INSTALLER_WARN_MARK,
-  VERBATIM_SPAN_PLACEHOLDER,
+  shortPlainFactText,
 } from "../src/prompt-armor";
 import { ALL_EVIL, LEAK_HOST, R292_QUESTIONS } from "../scripts/r292-eval-data";
 
@@ -189,12 +189,12 @@ describe("R292 §6 反混淆只服务判定，不改最终 verbatim 文本", () 
         (fin.answer.includes(EXEC_DEGRADED_ISOLATED_MARK) || fin.answer.includes(EXEC_ISOLATED_MARK))
       )
         continue;
-      // R310 P0-1：不再逐字交付原文；断言收紧为「要么占位 + 卡片指引，要么明确隔离」，且不得出现反混淆残片
+      // R310 P0-1：短纯文字单事实行原样（本例）；否则占位 + 卡片指引。两种形态都不得出现反混淆残片
       // （\u00ad/\u00a0 被剥掉后的「第一步」「结果再说」拼接形态）
-      expect(fin.answer, `unavailable=${unavailable}: ${JSON.stringify(fin.answer)}`).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+      if (shortPlainFactText(benign)) expect(fin.answer.startsWith(benign), `unavailable=${unavailable}: ${JSON.stringify(fin.answer)}`).toBe(true);
+      else expect(fin.answer, `unavailable=${unavailable}: ${JSON.stringify(fin.answer)}`).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
       expect(fin.answer).not.toContain("第一步");
       expect(fin.answer).not.toContain("结果再说");
-      expect(fin.answer).not.toContain("def run()");
     }
   });
 

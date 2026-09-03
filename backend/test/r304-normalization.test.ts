@@ -17,7 +17,7 @@ import {
   hasRemoteEndpointForm,
   remoteEndpointForms,
   noteContainsExecutableCommand,
-  VERBATIM_SPAN_PLACEHOLDER,
+  shortPlainFactText,
 } from "../src/prompt-armor";
 
 const MARK_RE = /〔警示|〔已隔离|〔代码安全判别暂不可用|〔安全提示|〔原文查看|〔标题含指令|命中安全隔离规则/;
@@ -167,9 +167,10 @@ describe("R304 属性：良性面（放宽折叠不得把误伤打上去）", ()
           question: "这条笔记写了什么",
           execClassifierUnavailable: unavailable,
         });
-        // R310 P0-1：不整答案隔离；命令原文（资料完整行）换占位，不逐字交付
+        // R310 P0-1：不整答案隔离；含地址/管道/路径记号或 ≥30 字的命令行换占位，短纯文字行（kubectl get pods）原样
         expect(fin.isolated, `${cmd} unavailable=${unavailable}`).toBe(false);
-        expect(fin.answer, `${cmd} unavailable=${unavailable}`).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+        if (shortPlainFactText(cmd)) expect(fin.answer, `${cmd} unavailable=${unavailable}`).toContain(cmd);
+        else expect(fin.answer, `${cmd} unavailable=${unavailable}`).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
       }
   });
 

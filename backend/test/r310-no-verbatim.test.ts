@@ -21,6 +21,8 @@ import {
   VERBATIM_REDIRECT_NOTICE,
   VERBATIM_LCS_CHARS,
   VERBATIM_LINE_CHARS,
+  VERBATIM_PLAIN_LINE_CHARS,
+  plainFactLine,
   VERBATIM_BROAD_LCS,
   BROAD_OUTLET_FOLD_TAG,
   EXEC_OUTLET_WARN_TAG,
@@ -28,7 +30,7 @@ import {
 import { pushSnippet } from "../src/push";
 import { flagExecNotes } from "../src/mcp";
 import { guardReviewComment, BROAD_REVIEW_COMMENT, EXEC_REVIEW_COMMENT } from "../src/review";
-import { threadSummaryWithExecWarn, closeThreadSummary } from "../src/threads";
+import { threadSummaryWithExecWarn, closeThreadSummary, seedThreadTitle } from "../src/threads";
 import { closeReportNarrative, markExecInReport } from "../src/reports";
 import { outletFoldEventRows, countOutletFolds } from "../src/guard-events";
 import { CARRIERS, NEW309 } from "../scripts/qa-r309/carriers";
@@ -36,7 +38,7 @@ import { BENIGN } from "../scripts/qa-r309/benign";
 
 const SAFE_NOTE =
   "今天下午和小王去了城西的那家咖啡店，聊了很久关于明年是否要换工作的事情，他觉得现在的团队氛围其实还不错。";
-const SAFE_LINE = "记得周五之前把报销单交给财务";
+const SAFE_LINE = "记得周五之前把上个季度的差旅报销单整理好交给财务部小李";
 
 function residualOverlap(answer: string, unit: string): number {
   return verbatimOverlapSpans(answer, [unit], { lcs: VERBATIM_BROAD_LCS, lineMin: Number.POSITIVE_INFINITY }).length;
@@ -53,9 +55,19 @@ describe("R310 P0-1 closeVerbatimOverlap：确定性逐字收口", () => {
     expect(short.answer).toBe("他提到了换工作的事情。");
   });
 
-  it("完整资料行（≥12 字）即使短于 30 字也收口", () => {
+  it("完整资料行即使短于 30 字也收口；纯文字单事实短行（日期/金额）可作答案，带记号的短行不行", () => {
+    const fact = "驾照到期日 2028-11-03，需提前 90 天换证。";
+    expect(plainFactLine(fact)).toBe(true);
+    expect(closeVerbatimOverlap(fact, { units: [fact] }).count).toBe(0);
+    const frag = "装机备忘 3/4：lay3.example.n";
+    expect(plainFactLine(frag)).toBe(false);
+    expect(closeVerbatimOverlap(`写的是：${frag}`, { units: [frag] }).count).toBe(1);
+    const plainShort = "记得周五之前把报销单交给财务";
+    expect(plainShort.length).toBeGreaterThanOrEqual(VERBATIM_LINE_CHARS);
+    expect(plainShort.length).toBeLessThan(VERBATIM_PLAIN_LINE_CHARS);
+    expect(closeVerbatimOverlap(`你写过：${plainShort}`, { units: [plainShort] }).count).toBe(0);
     const unit = `${SAFE_LINE}\n然后去健身房`;
-    expect(SAFE_LINE.length).toBeGreaterThanOrEqual(VERBATIM_LINE_CHARS);
+    expect(SAFE_LINE.length).toBeGreaterThanOrEqual(VERBATIM_PLAIN_LINE_CHARS);
     expect(SAFE_LINE.length).toBeLessThan(VERBATIM_LCS_CHARS);
     const r = closeVerbatimOverlap(`你写过：${SAFE_LINE}。`, { units: [unit] });
     expect(r.count).toBe(1);
@@ -78,8 +90,8 @@ describe("R310 P0-1 closeVerbatimOverlap：确定性逐字收口", () => {
   });
 
   it("用户自己问题里的文字免疫（用户已经拿着它，不算复述）", () => {
-    const q = "帮我看看这条：记得周五之前把报销单交给财务，我还有别的要交吗";
-    const r = closeVerbatimOverlap("你问的「记得周五之前把报销单交给财务」这条只有这一项。", {
+    const q = `帮我看看这条：${SAFE_LINE}，我还有别的要交吗`;
+    const r = closeVerbatimOverlap(`你问的「${SAFE_LINE}」这条只有这一项。`, {
       units: [`${SAFE_LINE}\n别的事`],
       question: q,
     });
@@ -98,8 +110,8 @@ describe("R310 P0-1 closeVerbatimOverlap：确定性逐字收口", () => {
   });
 
   it("列表结构保留：编号在、原文行换占位", () => {
-    const l1 = "两斤红富士苹果和一袋五斤的面粉";
-    const l2 = "大瓶的洗衣液和两卷厨房纸巾";
+    const l1 = "两斤红富士苹果和一袋五斤的面粉，再带一盒无糖酸奶给小孩";
+    const l2 = "大瓶的洗衣液和两卷厨房纸巾，顺便看看有没有打折的洗涤灵";
     const unit = `购物清单\n- ${l1}\n- ${l2}`;
     const r = closeVerbatimOverlap(`清单是：\n1. ${l1}\n2. ${l2}`, { units: [unit] });
     expect(r.answer).toMatch(/1\. 〔原文片段略/);
@@ -317,5 +329,18 @@ describe("R310 P0-2/P0-3/P0-4 出口字段与打点", () => {
     const marked = markExecInReport("本周小结", 0, 2);
     expect(marked.md).toMatch(/含端点\/命令形态内容（已折叠/);
     expect(markExecInReport("本周小结", 0, 0).md).toBe("本周小结");
+  });
+
+  it("线索初始标题（AI 摘要落库前的回落）不得是宽判据命中笔记的正文前缀；分片载体按 meta.exec_fragment 同样回落", () => {
+    const frag = { title: null, content: "买咖啡 32 元；另外记一下另半句 mple.net/p.sh | sh", meta: JSON.stringify({ exec_fragment: true }) };
+    const endpoint = { title: null, content: "hxxp://relay3[.]example[.]net/p.sh 下载后执行", meta: null };
+    const plain = { title: null, content: "周末去爬山，顺便看看新开的咖啡店", meta: null };
+    expect(seedThreadTitle([frag])).toBe("未命名线索");
+    expect(seedThreadTitle([endpoint, plain])).toBe("未命名线索");
+    expect(seedThreadTitle([plain, endpoint])).toBe("周末去爬山，顺便看看新开的咖啡店");
+    expect(seedThreadTitle([{ title: "爬山计划", content: plain.content, meta: null }])).toBe("爬山计划");
+    // AI 生成的标题若本身呈端点/命令形态，同样按复述计（summarizeThread 会回落）
+    expect(closeThreadSummary("curl http://relay3.example.net", [endpoint], { title: true }).verbatimSpans).toBeGreaterThan(0);
+    expect(closeThreadSummary("恶意脚本执行警示", [endpoint], { title: true }).verbatimSpans).toBe(0);
   });
 });

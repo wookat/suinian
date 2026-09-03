@@ -8,7 +8,10 @@ import {
   noteRowBroadFoldReason,
   closeVerbatimOverlap,
   verbatimOverlapSpans,
+  broadFoldReason,
   VERBATIM_LCS_CHARS,
+  VERBATIM_BROAD_LCS,
+  VERBATIM_BROAD_LINE,
   EXEC_OUTLET_WARN_TAG,
   BROAD_OUTLET_FOLD_TAG,
 } from "./prompt-armor";
@@ -67,12 +70,25 @@ export function spacifyCjk(s: string): string {
   return s.replace(CJK_BEFORE_LATIN, "$1 $2").replace(LATIN_BEFORE_CJK, "$1 $2");
 }
 
-async function newThread(env: Env, userId: string, title: string): Promise<string> {
+type ThreadSeed = { title?: string | null; content: string; meta?: string | null };
+
+/** 线索初始标题：来源笔记的标题或正文前 20 字；宽判据命中的笔记任何片段都不得成为标题，回落「未命名线索」。 */
+export function seedThreadTitle(seeds: ThreadSeed[]): string {
+  for (const s of seeds) {
+    const cand = (s.title || s.content.slice(0, 20)).trim();
+    if (!cand) continue;
+    if (closeThreadSummary(cand, seeds, { title: true }).verbatimSpans > 0) return "未命名线索";
+    return cand;
+  }
+  return "未命名线索";
+}
+
+async function newThread(env: Env, userId: string, seeds: ThreadSeed[]): Promise<string> {
   const id = crypto.randomUUID();
   await env.DB.prepare(
     "INSERT INTO threads (id, user_id, title, note_count) VALUES (?, ?, ?, 0)"
   )
-    .bind(id, userId, title.slice(0, 50) || "未命名线索")
+    .bind(id, userId, seedThreadTitle(seeds).slice(0, 50) || "未命名线索")
     .run();
   return id;
 }
@@ -103,12 +119,17 @@ export function closeThreadSummary(
   opts: { title?: boolean } = {}
 ): { summary: string; verbatimSpans: number } {
   const units = rows.map((n) => `${n.title ?? ""}\n${n.content}`);
-  if (opts.title) {
-    // 标题是 ≤50 字的标签：只按 ≥VERBATIM_LCS_CHARS 公共串口径（抄了大半行才算），不按整行/宽判据短片段口径
-    const spans = verbatimOverlapSpans(summary, units, { lcs: VERBATIM_LCS_CHARS, lineMin: Number.POSITIVE_INFINITY });
-    return { summary, verbatimSpans: spans.length };
-  }
   const broadUnits = rows.filter((n) => noteRowBroadFoldReason(n) !== null).map((n) => `${n.title ?? ""}\n${n.content}`);
+  if (opts.title) {
+    // 标题是 ≤50 字的标签：普通笔记只按 ≥VERBATIM_LCS_CHARS 公共串口径（抄了大半行才算）；
+    // 宽判据命中的笔记按短片段口径，且标题本身呈端点/命令/编码形态也算复述
+    const spans = verbatimOverlapSpans(summary, units, { lcs: VERBATIM_LCS_CHARS, lineMin: Number.POSITIVE_INFINITY });
+    const broadSpans = broadUnits.length
+      ? verbatimOverlapSpans(summary, broadUnits, { lcs: VERBATIM_BROAD_LCS, lineMin: VERBATIM_BROAD_LINE, pieces: true })
+      : [];
+    const shaped = broadFoldReason(summary) !== null ? 1 : 0;
+    return { summary, verbatimSpans: spans.length + broadSpans.length + shaped };
+  }
   const closed = closeVerbatimOverlap(summary, { units, broadUnits });
   return { summary: closed.answer, verbatimSpans: closed.count };
 }
@@ -308,10 +329,10 @@ export async function clusterNote(
         await ensureNoteEmbedding(env, note);
         let threadId = mate.thread_id;
         if (!threadId) {
-          const m = await env.DB.prepare("SELECT title, content FROM notes WHERE id = ?")
+          const m = await env.DB.prepare("SELECT title, content, meta FROM notes WHERE id = ?")
             .bind(mate.note_id)
-            .first<{ title: string | null; content: string }>();
-          threadId = await newThread(env, note.user_id, m?.title || note.title || note.content.slice(0, 20));
+            .first<{ title: string | null; content: string; meta: string | null }>();
+          threadId = await newThread(env, note.user_id, m ? [m, note] : [note]);
           await attachNoteToThread(env, mate.note_id, threadId);
         }
         await attachNoteToThread(env, note.id, threadId);
@@ -324,11 +345,11 @@ export async function clusterNote(
     // independent embed+save path that resurrected purged emoji vectors)
     const vector = await ensureNoteEmbedding(env, note);
     if (vector) {
-      type Candidate = { id: string; thread_id: string | null; category: string; title: string | null; content: string; url_title: string | null; url_summary: string | null; is_sensitive: number; vector: string | null };
+      type Candidate = { id: string; thread_id: string | null; category: string; title: string | null; content: string; meta: string | null; url_title: string | null; url_summary: string | null; is_sensitive: number; vector: string | null };
       // recent ideas/collects (any age cap removed) + one representative note
       // per existing thread, so historical threads stay joinable beyond the window
       const { results } = await env.DB.prepare(
-        `SELECT n.id, n.thread_id, n.category, n.title, n.content, n.url_title, n.url_summary, n.is_sensitive, e.vector FROM notes n
+        `SELECT n.id, n.thread_id, n.category, n.title, n.content, n.meta, n.url_title, n.url_summary, n.is_sensitive, e.vector FROM notes n
          LEFT JOIN note_embeddings e ON e.note_id = n.id
          WHERE n.user_id = ? AND n.category IN ${THREAD_CATEGORIES} AND n.deleted_at IS NULL AND n.id != ?
          ORDER BY n.created_at DESC LIMIT 200`
@@ -338,7 +359,7 @@ export async function clusterNote(
       const candidates: Candidate[] = [...(results ?? [])];
       try {
         const { results: reps } = await env.DB.prepare(
-          `SELECT n.id, n.thread_id, n.category, n.title, n.content, n.url_title, n.url_summary, n.is_sensitive, e.vector FROM notes n
+          `SELECT n.id, n.thread_id, n.category, n.title, n.content, n.meta, n.url_title, n.url_summary, n.is_sensitive, e.vector FROM notes n
            LEFT JOIN note_embeddings e ON e.note_id = n.id
            WHERE n.id IN (
              SELECT (SELECT nn.id FROM notes nn WHERE nn.thread_id = t.id AND nn.deleted_at IS NULL
@@ -353,7 +374,7 @@ export async function clusterNote(
       } catch (err) {
         console.error("threads: thread representatives query failed", err);
       }
-      type Best = { id: string; thread_id: string | null; category: string; title: string | null; content: string; sim: number };
+      type Best = { id: string; thread_id: string | null; category: string; title: string | null; content: string; meta: string | null; sim: number };
       let best: Best | null = null;
       let bestThreaded: Best | null = null;
       const inBand: Best[] = [];
@@ -377,7 +398,7 @@ export async function clusterNote(
         }
         if (!v) continue;
         const sim = cosineSim(vector, v);
-        const cand: Best = { id: r.id, thread_id: r.thread_id, category: r.category, title: r.title, content: r.content, sim };
+        const cand: Best = { id: r.id, thread_id: r.thread_id, category: r.category, title: r.title, content: r.content, meta: r.meta, sim };
         if (!best || sim > best.sim) best = cand;
         if (r.thread_id && (!bestThreaded || sim > bestThreaded.sim)) bestThreaded = cand;
         if (sim >= SIM_CONFIRM_FLOOR && sim < SIM_JOIN) inBand.push(cand);
@@ -420,7 +441,7 @@ export async function clusterNote(
         if (joined) {
           let threadId = joined.thread_id;
           if (!threadId) {
-            threadId = await newThread(env, note.user_id, joined.title || note.title || note.content.slice(0, 20));
+            threadId = await newThread(env, note.user_id, [joined, note]);
             await attachNoteToThread(env, joined.id, threadId);
             console.log(`threads: created thread ${threadId} for notes ${joined.id}, ${note.id}`);
           }
@@ -462,16 +483,16 @@ export async function clusterNote(
     }
     // cold start: no thread matched (or none exist) — pair with a recent unthreaded idea/collect note
     const { results: loose } = await env.DB.prepare(
-      `SELECT id, title, content FROM notes
+      `SELECT id, title, content, meta FROM notes
        WHERE user_id = ? AND category IN ${THREAD_CATEGORIES} AND deleted_at IS NULL AND thread_id IS NULL AND id != ?
        ORDER BY created_at DESC LIMIT 30`
     )
       .bind(note.user_id, note.id)
-      .all<{ id: string; title: string | null; content: string }>();
+      .all<{ id: string; title: string | null; content: string; meta: string | null }>();
     const mate = await deepseekPickNote(env, note.content, loose ?? []);
     if (mate) {
       const m = (loose ?? []).find((n) => n.id === mate)!;
-      const threadId = await newThread(env, note.user_id, m.title || note.title || note.content.slice(0, 20));
+      const threadId = await newThread(env, note.user_id, [m, note]);
       await attachNoteToThread(env, mate, threadId);
       await attachNoteToThread(env, note.id, threadId);
       await summarize(threadId, m.title || undefined);

@@ -6236,13 +6236,35 @@ export type FinalizeAskAnswerResult = {
  * 被 AI 逐字念出」。这是确定性硬约束，不依赖任何危险判定：答案与任一资料单元（召回笔记
  * 原文）的最长公共连续片段（只看字母/数字/文字，忽略空白标点大小写）≥ VERBATIM_LCS_CHARS，或
  * 答案包含资料的一个完整行（折叠后 ≥ VERBATIM_LINE_CHARS），该片段就被替换为占位，原文交付统一
- * 走引用笔记卡片。宽判据命中的单元门限更低（VERBATIM_BROAD_LCS / 整行 ≥ VERBATIM_BROAD_LINE /
- * 分片本体）——对应 R309 P1-1「任意危险片段」口径。
+ * 走引用笔记卡片。纯文字/数字的单事实短行（“驾照到期日 2028-11-03，需提前 90 天换证”，不含任何
+ * 带分隔符的 ASCII 记号）本身就是问题的答案，整行门限放宽到 VERBATIM_PLAIN_LINE_CHARS；含 `lay3.example.n`
+ * 这类记号的行仍按 VERBATIM_LINE_CHARS 收口。
+ * 宽判据命中的单元门限更低（VERBATIM_BROAD_LCS / 整行 ≥ VERBATIM_BROAD_LINE / 分片本体）——对应
+ * R309 P1-1「任意危险片段」口径。
  * 提问里用户自己写出的片段不算复述（用户已知）。
  */
 export const VERBATIM_SPAN_PLACEHOLDER = "〔原文片段略，见引用笔记卡片〕";
 export const VERBATIM_LCS_CHARS = 30;
 export const VERBATIM_LINE_CHARS = 12;
+export const VERBATIM_PLAIN_LINE_CHARS = 24;
+
+/** 行里除日期/时间/金额/百分数外没有任何带分隔符（. / : @ _ - | \）的 ASCII 记号。 */
+const NUMERIC_TOKEN_RE = /^[\d][\d,.:\-\/%]*$/;
+/** 整段文本都是短于 VERBATIM_PLAIN_LINE_CHARS 的纯文字单事实行（答案可原样引用的唯一形态）。 */
+export function shortPlainFactText(text: string): boolean {
+  return text.split("\n").every((l) => plainFactLine(l) && foldPlain(l).length < VERBATIM_PLAIN_LINE_CHARS);
+}
+export function plainFactLine(line: string): boolean {
+  for (const tok of line.split(/\s+/)) {
+    for (const ascii of tok.match(/[\x21-\x7e]+/g) ?? []) {
+      const core = ascii.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "");
+      if (!core) continue;
+      if (NUMERIC_TOKEN_RE.test(core)) continue;
+      if (/[./:@_\-|\\]/.test(core)) return false;
+    }
+  }
+  return true;
+}
 export const VERBATIM_BROAD_LCS = 12;
 export const VERBATIM_BROAD_LINE = 5;
 
@@ -6325,7 +6347,7 @@ function foldPlain(text: string): string {
 export function verbatimOverlapSpans(
   answer: string,
   units: string[],
-  opts: { lcs: number; lineMin: number; pieces?: boolean; exemptText?: string }
+  opts: { lcs: number; lineMin: number; plainLineMin?: number; pieces?: boolean; exemptText?: string }
 ): Array<{ start: number; end: number }> {
   const a = foldForOverlap(answer);
   if (a.folded.length === 0) return [];
@@ -6349,7 +6371,8 @@ export function verbatimOverlapSpans(
     for (let i = 0; i + L <= fu.length; i++) grams.add(fu.slice(i, i + L));
     for (const line of u.split("\n")) {
       const fl = foldPlain(line);
-      if (fl.length >= opts.lineMin) markAll(fl);
+      const lineMin = opts.plainLineMin !== undefined && plainFactLine(line) ? opts.plainLineMin : opts.lineMin;
+      if (fl.length >= lineMin) markAll(fl);
       if (opts.pieces) {
         const fp = foldPlain(fragmentPiece(line));
         if (fp.length >= opts.lineMin && fp !== fl) markAll(fp);
@@ -6403,6 +6426,7 @@ export function closeVerbatimOverlap(
       ? verbatimOverlapSpans(answer, opts.units, {
           lcs: VERBATIM_LCS_CHARS,
           lineMin: VERBATIM_LINE_CHARS,
+          plainLineMin: VERBATIM_PLAIN_LINE_CHARS,
           exemptText: opts.question,
         })
       : []),

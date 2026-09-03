@@ -14,7 +14,7 @@ import {
   EXEC_ISOLATED_MARK,
   ENUM_TITLE_ISOLATED_MARK,
   ISOLATION_NOTICE_ANSWER,
-  VERBATIM_SPAN_PLACEHOLDER,
+  shortPlainFactText,
 } from "../src/prompt-armor";
 
 // ---- P1-1：危险执行管道整段处置，禁止残片 ----
@@ -178,11 +178,12 @@ describe("R278 P1-4 出口清洗不静默", () => {
   it("正常答案不受影响", () => {
     const ok = "本月支出共 1200 元，主要是房租 [1]。";
     const fin = finalizeAskAnswer(ok, { dataText: ok, question: "本月花了多少" });
-    // R310 P0-1：AI 永不逐字复述——答案与资料逐字重合的片段确定性换占位（与隔离无关）；
-    // 断言改为「未隔离 + 唯一改动是 verbatim 收口」，比原「不变」多断言一层不泄原文。
+    // R310 P0-1：AI 永不逐字复述——答案与资料逐字重合的片段确定性换占位（与隔离无关）。
+    // 该句是短于 VERBATIM_PLAIN_LINE_CHARS 的纯文字单事实行（金额），是唯一允许原样引用的形态。
     expect(fin.isolated).toBe(false);
-    expect(fin.reason).toMatch(/^verbatim:lcs=\d+$/);
-    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+    expect(shortPlainFactText(ok)).toBe(true);
+    expect(fin.changed).toBe(false);
+    expect(fin.answer).toBe(ok);
     // 资料面不是答案本身时（正常检索），摘要句不受影响
     const fin2 = finalizeAskAnswer(ok, { dataText: "房租 1200 元\n买菜 300 元", question: "本月花了多少" });
     expect(fin2.changed).toBe(false);
