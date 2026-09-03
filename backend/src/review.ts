@@ -2,7 +2,15 @@ import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { DEFAULT_TZ, loadUserTz, tzOffsetMinutes, tzSqlModifier, zonedDate } from "./triage";
 import { localDateOf, parseCreatedAt } from "./stats";
-import { EXEC_OUTLET_WARN_TAG, BROAD_OUTLET_FOLD_TAG, finalizeAskAnswer, noteRowContainsExecutableCommand, noteRowBroadFoldReason } from "./prompt-armor";
+import {
+  EXEC_OUTLET_WARN_TAG,
+  BROAD_OUTLET_FOLD_TAG,
+  AGGREGATE_TIER,
+  finalizeAskAnswer,
+  noteRowContainsExecutableCommand,
+  noteRowBroadFoldReason,
+} from "./prompt-armor";
+import { recordOutletVerbatimClosed } from "./guard-events";
 
 export type ReviewKind = "year_ago" | "month_ago" | "revisit" | "recurring_theme" | "pending_todo";
 
@@ -144,17 +152,30 @@ function fixedReviewComment(note: Pick<NoteRow, "content" | "meta" | "is_sensiti
 }
 
 /**
- * 回顾评语出口护栏：评语与 Ask 答案走同一收口（资料面 = 被点评的笔记）。
- * 笔记本身危险 → 固定警示；评语复述/回显了资料里的地址、命令或语义外传
- * 流程 → 回落到固定评语。评语只有一句，任何改写都视为不可信，整句替换。
+ * 回顾评语出口护栏：评语与 Ask 答案走同一收口（资料面 = 被点评的笔记），且固定为聚合层（R312：回顾是推送/列表面，
+ * 无引用卡片同屏）。笔记本身危险 → 固定警示；评语复述/回显了资料里的地址、命令、语义外传流程或 ≥8 字原文
+ * → 回落到固定评语。评语只有一句，任何改写都视为不可信，整句替换。
  */
-export function guardReviewComment(comment: string | null, note: Pick<NoteRow, "title" | "content" | "meta" | "is_sensitive">, kind: ReviewKind): string | null {
+export function guardReviewComment(
+  comment: string | null,
+  note: Pick<NoteRow, "title" | "content" | "meta" | "is_sensitive">,
+  kind: ReviewKind
+): string | null {
+  return guardReviewCommentDetailed(comment, note, kind).comment;
+}
+
+export function guardReviewCommentDetailed(
+  comment: string | null,
+  note: Pick<NoteRow, "title" | "content" | "meta" | "is_sensitive">,
+  kind: ReviewKind
+): { comment: string | null; verbatimSpans: number } {
   const fixed = fixedReviewComment(note);
-  if (fixed) return fixed;
-  if (!comment) return comment;
+  if (fixed) return { comment: fixed, verbatimSpans: 0 };
+  if (!comment) return { comment, verbatimSpans: 0 };
   const unit = `${note.title ?? ""}\n${note.content ?? ""}`;
-  const fin = finalizeAskAnswer(comment, { dataText: unit, dataUnits: [unit], question: "" });
-  return fin.changed || fin.isolated ? FALLBACK_COMMENT[kind] : comment;
+  const fin = finalizeAskAnswer(comment, { dataText: unit, dataUnits: [unit], question: "", tier: AGGREGATE_TIER });
+  const spans = fin.verbatim_closed_spans ?? 0;
+  return fin.changed || fin.isolated ? { comment: FALLBACK_COMMENT[kind], verbatimSpans: Math.max(spans, 1) } : { comment, verbatimSpans: 0 };
 }
 
 async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind, tzOffsetMin = 480): Promise<string> {
@@ -178,7 +199,9 @@ async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind, tzOffset
       ],
     })
   )?.trim();
-  return guardReviewComment(text && text.length <= 80 ? text : FALLBACK_COMMENT[kind], note, kind) ?? FALLBACK_COMMENT[kind];
+  const guarded = guardReviewCommentDetailed(text && text.length <= 80 ? text : FALLBACK_COMMENT[kind], note, kind);
+  recordOutletVerbatimClosed(env, "review", guarded.verbatimSpans);
+  return guarded.comment ?? FALLBACK_COMMENT[kind];
 }
 
 /**

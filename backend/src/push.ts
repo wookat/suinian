@@ -9,23 +9,35 @@ import { buildPushPayload, type PushSubscription as WirePushSubscription } from 
 import type { Env, NoteRow } from "./types";
 import { getTodayReview, writeCronHeartbeat, shanghaiDate } from "./review";
 import { DEFAULT_TZ, loadUserTz, tzOffsetString } from "./triage";
-import { noteRowBroadFoldReason, type BroadFoldReason } from "./prompt-armor";
-import { recordOutletFoldMarks } from "./guard-events";
+import { noteRowBroadFoldReason, closeAggregateVerbatim, type BroadFoldReason } from "./prompt-armor";
+import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
+
+/** Push 正文无可用标题时的中性描述（不带任何笔记原文）。 */
+export const PUSH_GENERIC_SNIPPET = "点开查看详情";
 
 /**
- * Push 正文片段：敲到系统通知的文本不可折叠，因此宽判据命中（R310 P0-2，不依赖严判）一律
- * 用占位代替原文；严判据只决定警示强度（exec = 严判据，fold = 宽判据）。
+ * Push 正文片段（R312 P0-1 聚合/对外层）：系统通知不可折叠、无引用卡片同屏，因此不再带任何正文前缀。
+ * 可用的只有笔记标题（≤ 40 字的标签），且标题必须通过对正文的聚合层校验（无 ≥8 归一化字公共串），否则用中性
+ * 描述。宽判据命中（R310 P0-2，不依赖严判）仍用固定占位；严判据只决定警示强度（exec = 严判据，fold = 宽判据）。
+ * closed = 标题因聚合层校验被换掉（打点 verbatim_closed_spans）。
  */
 export function pushSnippet(
   note: Pick<NoteRow, "is_sensitive" | "title" | "content"> & Partial<Pick<NoteRow, "meta">>,
   sensitiveLabel: string,
   fallback: string
-): { text: string; exec: boolean; fold: boolean; fold_reason: BroadFoldReason | null } {
-  if (note.is_sensitive) return { text: sensitiveLabel, exec: false, fold: false, fold_reason: null };
+): { text: string; exec: boolean; fold: boolean; fold_reason: BroadFoldReason | null; closed: boolean } {
+  if (note.is_sensitive) return { text: sensitiveLabel, exec: false, fold: false, fold_reason: null, closed: false };
   const reason = noteRowBroadFoldReason(note);
-  if (reason === "strict") return { text: "⚠️ 一条含可执行命令的记录（勿执行，点开查看）", exec: true, fold: true, fold_reason: reason };
-  if (reason !== null) return { text: "一条含端点/代码形态内容的记录（已折叠，点开查看）", exec: false, fold: true, fold_reason: reason };
-  return { text: (note.title || note.content || fallback).slice(0, 60), exec: false, fold: false, fold_reason: null };
+  if (reason === "strict")
+    return { text: "⚠️ 一条含可执行命令的记录（勿执行，点开查看）", exec: true, fold: true, fold_reason: reason, closed: false };
+  if (reason !== null)
+    return { text: "一条含端点/代码形态内容的记录（已折叠，点开查看）", exec: false, fold: true, fold_reason: reason, closed: false };
+  const title = (note.title ?? "").trim().slice(0, 40);
+  const generic = fallback || PUSH_GENERIC_SNIPPET;
+  if (!title) return { text: generic, exec: false, fold: false, fold_reason: null, closed: false };
+  if (closeAggregateVerbatim(title, [note.content ?? ""]).count > 0)
+    return { text: generic, exec: false, fold: false, fold_reason: null, closed: true };
+  return { text: title, exec: false, fold: false, fold_reason: null, closed: false };
 }
 
 export interface PushSubRow {
@@ -225,9 +237,10 @@ export async function sweepTodoReminders(env: Env, now: Date = new Date()): Prom
     stats.reminded++;
     let okCount = 0;
     let goneCount = 0;
-    const snip = pushSnippet(n, "一条待办", "待办");
+    const snip = pushSnippet(n, "一条待办", "一条待办");
     const label = snip.text;
     recordOutletFoldMarks(env, "push", { strict: snip.exec ? 1 : 0, broad: snip.fold ? 1 : 0 });
+    recordOutletVerbatimClosed(env, "push", snip.closed ? 1 : 0);
     const dueMs = todoDueEpochMs(n.todo_due, await userTz(n.user_id));
     const timing =
       dueMs !== null && dueMs <= nowMs
@@ -344,9 +357,10 @@ export async function sweepDailyReviewPush(env: Env, now: Date = new Date()): Pr
       }
       const first = review.items[0];
       // same masking as todo reminders: sensitive rows never leak into a push
-      const snip = pushSnippet(first.note, "一条记录", "");
+      const snip = pushSnippet(first.note, "一条记录", "一条记录");
       const snippet = snip.text;
       recordOutletFoldMarks(env, "push", { strict: snip.exec ? 1 : 0, broad: snip.fold ? 1 : 0 });
+      recordOutletVerbatimClosed(env, "push", snip.closed ? 1 : 0);
       const payload: PushPayload = {
         title: "☀️ 今日回顾",
         body: `${first.kind_label}：${snippet}`,

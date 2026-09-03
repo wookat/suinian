@@ -233,7 +233,9 @@ describe(`R298 恶意矩阵（${R298_EVIL.length} 载体 × 2 问法 × 8 判别
     const data2 = "待办：周五前给测试环境的 nginx 配好 HTTPS 证书，记得先备份旧配置。";
     const ans1 =
       "Docker 安装：Ubuntu 上先 apt-get update，然后 apt-get install docker.io，装完 systemctl enable --now docker，把用户加入 docker 组即可免 sudo 使用 [1]。";
-    const ans2 = "你周五之前要给测试环境的 nginx 配好 HTTPS 证书，记得先备份旧配置 [1]。";
+    // R312 P0-1：角标是直答层的确定性依据——答案转述的是 data2，角标就必须是 [2]（卡片才同屏）；
+    // 错标 [1] 时 data2 不在卡片里，按聚合口径收口是预期行为。
+    const ans2 = "你周五之前要给测试环境的 nginx 配好 HTTPS 证书，记得先备份旧配置 [2]。";
     const g1 = guardAskAnswer(ans1, { dataText: `${data1}\n${data2}`, question: "docker 怎么安装？", directiveDemands: [] });
     expect(g1.answer).toBe(ans1);
     // 生产路径逐条传 dataUnits：data1 含 `systemctl enable --now` 命令形态属宽判据（12 字阈值），
@@ -246,6 +248,14 @@ describe(`R298 恶意矩阵（${R298_EVIL.length} 载体 × 2 问法 × 8 判别
     });
     expect(fin2.isolated).toBe(false);
     expect(fin2.answer).toBe(ans2);
+    const mis = finalizeAskAnswer(ans2.replace("[2]", "[1]"), {
+      dataText: `${data1}\n${data2}`,
+      dataUnits: [data1, data2],
+      question: "我周五之前要做什么事？",
+      execDangerSegments: [],
+    });
+    expect(mis.isolated).toBe(false);
+    expect(mis.answer).not.toContain("记得先备份旧配置");
   });
 
   // P0-2 回归钉子：纯语义伪装（无代码面）必须进入判别通路。

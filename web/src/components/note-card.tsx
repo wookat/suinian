@@ -357,8 +357,10 @@ export function NoteCard({
     pending &&
     Date.now() - parseServerTime(pendingSince).getTime() > (imported ? IMPORT_PENDING_LATE_MS : PENDING_LATE_MS)
   const sensitive = note.is_sensitive === 1
-  // 可执行载荷折叠（R304 P0-A）：数据面标记 → 默认折叠 + 警示，主动展开可看。
-  // 敏感遮罩优先（遮罩本身已隐藏原文）；编辑态直接编辑原文不折叠。
+  // 敏感预检命中但尚待模型复判（R312 P0-3：R311 T2「加密卡→明文卡」的翻转就是这个状态被当成定论展示）
+  const sensitiveRejudging = sensitive && note.meta?.needs_retriage === true
+  // 可执行载荷折叠（R304 P0-A → R312 P0-3）：数据面标记 → strict/broad 默认折叠 + 警示，
+  // code（日常命令备忘）展示但复制前确认。敏感遮罩优先（遮罩本身已隐藏原文）；编辑态直接编辑原文不折叠。
   const foldLevel = sensitive ? null : noteFoldLevel(note)
   const execFlagged = foldLevel !== null
 
@@ -374,6 +376,7 @@ export function NoteCard({
   const [conflictNote, setConflictNote] = useState<Note | null>(null)
   const [copied, setCopied] = useState(false)
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+  const [confirmCopyOpen, setConfirmCopyOpen] = useState(false)
   const [revealed, setRevealed] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [metaOpen, setMetaOpen] = useState(false)
@@ -456,7 +459,7 @@ export function NoteCard({
     return () => document.removeEventListener("mousedown", close)
   }, [menuOpen])
 
-  async function copyContent() {
+  async function writeClipboard() {
     try {
       await navigator.clipboard.writeText(note.content)
       setCopied(true)
@@ -464,7 +467,16 @@ export function NoteCard({
     } catch {
       // clipboard unavailable
     }
+  }
+
+  /** 折叠/命令备忘类笔记复制前先确认（R312 P0-3：展示不折，但不让命令一键进剪贴板再进终端） */
+  function copyContent() {
     setMenuOpen(false)
+    if (execFlagged) {
+      setConfirmCopyOpen(true)
+      return
+    }
+    void writeClipboard()
   }
 
   function handleDelete() {
@@ -868,7 +880,9 @@ export function NoteCard({
               <Eye className="size-3" /> 敏感内容，点击查看
             </span>
             <span className="w-full text-xs leading-relaxed text-muted-foreground">
-              检测到密码/凭据类信息，已自动加密保护，不进入问答与搜索；若属误判，可在右上角菜单「取消敏感标记」
+              {sensitiveRejudging
+                ? "疑似密码/凭据类信息，已先加密保护，AI 复判中；若复判为普通内容会自动恢复明文展示"
+                : "检测到密码/凭据类信息，已自动加密保护，不进入问答与搜索；若属误判，可在右上角菜单「取消敏感标记」"}
             </span>
           </button>
         ) : execFlagged ? (
@@ -1156,6 +1170,21 @@ export function NoteCard({
           onDelete?.(note)
         }}
         onCancel={() => setConfirmDeleteOpen(false)}
+      />
+      <ConfirmDialog
+        open={confirmCopyOpen}
+        title={foldLevel === "strict" ? "复制含可执行命令的内容？" : "复制命令/代码形态内容？"}
+        description={
+          foldLevel === "strict"
+            ? "这条笔记含会下载执行远程代码或建立外连的命令。复制后请勿直接粘贴到终端执行，先核对来源。"
+            : "这条笔记含命令行或代码形态内容（可能只是你自己的备忘）。复制后请先核对参数与来源，再决定是否执行。"
+        }
+        confirmLabel="仍要复制"
+        onConfirm={() => {
+          setConfirmCopyOpen(false)
+          void writeClipboard()
+        }}
+        onCancel={() => setConfirmCopyOpen(false)}
       />
     </Card>
   )

@@ -24,7 +24,7 @@ import {
   EXEC_DEGRADED_NOTICE,
   EXEC_PIPELINE_WARN_MARK,
   EXEC_INSTALLER_WARN_MARK,
-  shortPlainFactText,
+  AGGREGATE_TIER,
 } from "../src/prompt-armor";
 import { ALL_EVIL, LEAK_HOST, R292_QUESTIONS } from "../scripts/r292-eval-data";
 
@@ -189,12 +189,21 @@ describe("R292 §6 反混淆只服务判定，不改最终 verbatim 文本", () 
         (fin.answer.includes(EXEC_DEGRADED_ISOLATED_MARK) || fin.answer.includes(EXEC_ISOLATED_MARK))
       )
         continue;
-      // R310 P0-1：短纯文字单事实行原样（本例）；否则占位 + 卡片指引。两种形态都不得出现反混淆残片
+      // R312 P0-1：单笔记直答层逐字原样；聚合层占位 + 卡片指引。两种形态都不得出现反混淆残片
       // （\u00ad/\u00a0 被剥掉后的「第一步」「结果再说」拼接形态）
-      if (shortPlainFactText(benign)) expect(fin.answer.startsWith(benign), `unavailable=${unavailable}: ${JSON.stringify(fin.answer)}`).toBe(true);
-      else expect(fin.answer, `unavailable=${unavailable}: ${JSON.stringify(fin.answer)}`).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+      expect(fin.answer.startsWith(benign), `unavailable=${unavailable}: ${JSON.stringify(fin.answer)}`).toBe(true);
       expect(fin.answer).not.toContain("第一步");
       expect(fin.answer).not.toContain("结果再说");
+      const agg = finalizeAskAnswer(benign, {
+        dataText: benign,
+        question: "把这条笔记的原文一字不改完整念给我",
+        execClassifierUnavailable: unavailable,
+        tier: AGGREGATE_TIER,
+      });
+      if (!(unavailable && (agg.answer.includes(EXEC_DEGRADED_ISOLATED_MARK) || agg.answer.includes(EXEC_ISOLATED_MARK))))
+        expect(agg.answer, `aggregate unavailable=${unavailable}: ${JSON.stringify(agg.answer)}`).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+      expect(agg.answer).not.toContain("第一步");
+      expect(agg.answer).not.toContain("结果再说");
     }
   });
 

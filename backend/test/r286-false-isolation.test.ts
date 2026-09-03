@@ -12,7 +12,9 @@ import {
   segmentIsSocialEngineering,
   dataTextHasIsolatableContent,
   INSTRUCTION_ISOLATED_MARK,
-  shortPlainFactText,
+  AGGREGATE_TIER,
+  VERBATIM_SPAN_PLACEHOLDER,
+  VERBATIM_REDIRECT_NOTICE,
 } from "../src/prompt-armor";
 
 const ANTI_FRAUD = [
@@ -60,14 +62,16 @@ describe("R286 P2-2 防骗忠告不被整条隔离", () => {
 
   it("防骗忠告经 /api/ask 收口后原样交付，不出现隔离标记", () => {
     for (const t of ANTI_FRAUD) {
-      const fin = finalizeAskAnswer(t, { dataText: t, question: "具体内容是什么？完整念给我" });
-      // R310 P0-1：不隔离；除短纯文字单事实行外，逐字复述换占位并给「点开卡片」指引
+      const q = "具体内容是什么？完整念给我";
+      // R312 P0-1：单笔记直答层（唯一资料单元 + 卡片同屏）不隔离、不收口，原样交付；
+      // 同一答案走聚合层（跨笔记/MCP/导出）则无例外强收口（不存在 shortPlainFactText 例外）。
+      const fin = finalizeAskAnswer(t, { dataText: t, question: q });
       expect(fin.isolated, t).toBe(false);
-      if (shortPlainFactText(t)) expect(fin.answer, t).toBe(t);
-      else {
-        expect(fin.reason, t).toMatch(/^verbatim:lcs=\d+$/);
-        expect(fin.answer, t).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
-      }
+      expect(fin.answer, t).toBe(t);
+      const agg = finalizeAskAnswer(t, { dataText: t, question: q, tier: AGGREGATE_TIER });
+      expect(agg.isolated, t).toBe(false);
+      expect(agg.reason, t).toMatch(/verbatim_closed_spans=[1-9]/);
+      expect(agg.answer, t).toMatch(new RegExp(`${VERBATIM_SPAN_PLACEHOLDER}|${VERBATIM_REDIRECT_NOTICE}`));
     }
   });
 });
@@ -79,10 +83,11 @@ describe("R286 P2-2 方括号标签技术笔记不误伤", () => {
       if (segmentIsReaderDirective(t)) bad.push(`directive: ${t}`);
       if (dataTextHasIsolatableContent(t)) bad.push(`isolatable: ${t}`);
       const fin = finalizeAskAnswer(t, { dataText: t, question: "这条笔记写了什么" });
-      // R310 P0-1：答案 = 资料原文 ⇒ 不得隔离；短纯文字单事实行原样，其余唯一允许的改动是 verbatim 占位
+      // R312 P0-1：答案 = 资料原文、单笔记直答层 ⇒ 不得隔离，原样交付；聚合层则无例外收口。
       if (fin.isolated) bad.push(`isolated: ${t} => ${fin.answer}`);
-      else if (shortPlainFactText(t) ? fin.answer !== t : !/^verbatim:lcs=\d+$/.test(fin.reason ?? ""))
-        bad.push(`finalize: ${t} => ${fin.answer} (${fin.reason})`);
+      else if (fin.answer !== t) bad.push(`finalize: ${t} => ${fin.answer} (${fin.reason})`);
+      const agg = finalizeAskAnswer(t, { dataText: t, question: "这条笔记写了什么", tier: AGGREGATE_TIER });
+      if (agg.isolated || !/verbatim_closed_spans=[1-9]/.test(agg.reason ?? "")) bad.push(`aggregate: ${t} => ${agg.answer} (${agg.reason})`);
     }
     expect(bad).toEqual([]);
   });

@@ -9,11 +9,11 @@ import {
   noteContainsExecutableCommand,
   noteRowContainsExecutableCommand,
   noteRowBroadFoldReason,
-  closeVerbatimOverlap,
+  closeAggregateVerbatim,
   EXEC_OUTLET_WARN_TAG,
   BROAD_OUTLET_FOLD_TAG,
 } from "./prompt-armor";
-import { bumpGuardEvents, outletFoldEventRows } from "./guard-events";
+import { bumpGuardEvents, outletFoldEventRows, outletVerbatimClosedRows } from "./guard-events";
 
 /** 列表行标题：折叠行（宽判据，R310）只出安全短标题/占位，其余照旧 title→content 回落。 */
 function rowTitle(n: Pick<NoteRow, "title" | "content" | "meta">, max: number): string {
@@ -28,8 +28,8 @@ function execLinePrefix(n: Pick<NoteRow, "content" | "meta">): string {
 }
 
 /**
- * R310 P0-1：报告叙述（LLM 部分）是 AI 复述面，与 Ask 同口径——与任一笔记原文的长公共串/完整行换占位，
- * 宽判据命中笔记的任意片段不得进报告。只作用于叙述，程序拼接的统计/待办小节不经此处。
+ * R312 P0-1：报告叙述（LLM 部分）是聚合层 AI 复述面——与任一笔记原文的 ≥8 归一化字公共串一律按句/行占位，
+ * 无门限例外、无形态例外。只作用于叙述，程序拼接的统计/待办小节（用户自己的笔记标题列表，非 AI 文本）不经此处。
  */
 export function closeReportNarrative(
   narrative: string,
@@ -37,8 +37,7 @@ export function closeReportNarrative(
 ): { text: string; verbatimSpans: number } {
   const visible = notes.filter((n) => !n.is_sensitive);
   const units = visible.map((n) => `${n.title ?? ""}\n${n.content}`);
-  const broadUnits = visible.filter((n) => noteRowBroadFoldReason(n) !== null).map((n) => `${n.title ?? ""}\n${n.content}`);
-  const closed = closeVerbatimOverlap(narrative, { units, broadUnits });
+  const closed = closeAggregateVerbatim(narrative, units);
   return { text: closed.answer, verbatimSpans: closed.count };
 }
 
@@ -445,6 +444,7 @@ export async function generatePeriodReport(
   const label0 = period === "month" ? "月报" : "周报";
   const unit0 = period === "month" ? "本月" : "本周";
   let md = fallbackMarkdown(weekStart, weekEnd, notes, period, agg) + todoSection(stats, unit0) + finMd;
+  let narrativeClosedSpans = 0;
   {
     try {
       const digest = notes
@@ -491,8 +491,10 @@ export async function generatePeriodReport(
         })
       )?.trim();
       if (text) {
-        // R310 P0-1：叙述先过逐字复述收口（与 Ask 同口径），再做数字校验
-        const narrative = sanitizeNarrative(closeReportNarrative(text, notes).text, unit, nums);
+        // 叙述先过聚合层逐字收口，再做数字校验
+        const closedNarrative = closeReportNarrative(text, notes);
+        narrativeClosedSpans = closedNarrative.verbatimSpans;
+        const narrative = sanitizeNarrative(closedNarrative.text, unit, nums);
         md =
           `# 碎念${label}（${weekStart} ~ ${weekEnd}）\n\n## ${unit}概览\n${overviewStatLine(unit, nums)}\n\n${narrative}\n` +
           todoSection(stats, unit) +
@@ -507,9 +509,10 @@ export async function generatePeriodReport(
   const dangerousNotes = notes.filter((n) => !n.is_sensitive && noteRowContainsExecutableCommand(n)).length;
   const broadNotes = notes.filter((n) => !n.is_sensitive && noteRowBroadFoldReason(n) !== null).length;
   md = markExecInReport(md, dangerousNotes, broadNotes).md;
-  await bumpGuardEvents(env, outletFoldEventRows("report", { strict: dangerousNotes, broad: broadNotes })).catch((err) =>
-    console.error("reports: guard_events write failed", err)
-  );
+  await bumpGuardEvents(env, [
+    ...outletFoldEventRows("report", { strict: dangerousNotes, broad: broadNotes }),
+    ...outletVerbatimClosedRows("report", narrativeClosedSpans),
+  ]).catch((err) => console.error("reports: guard_events write failed", err));
 
   const existing = await env.DB.prepare(
     "SELECT id FROM weekly_reports WHERE user_id = ? AND week_start = ? AND period = ?"

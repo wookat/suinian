@@ -37,6 +37,8 @@ export interface NoteMeta {
   transcript_logprob?: number
   /** 分拣判定内容像在提问（无问号疑问句）：卡片渲染「去问 AI」轻量入口 */
   is_question?: boolean
+  /** 敏感预检仅疑似命中，待模型复判（R312 P0-3：卡片标「复判中」而非定论） */
+  needs_retriage?: boolean
 }
 
 /** 附件元数据（R144 P1-1）：仅元信息，取件走鉴权 API，不含任何直链 */
@@ -50,6 +52,7 @@ export interface NoteAttachment {
 export type FoldReason =
   | "strict"
   | "broad:endpoint"
+  | "broad:fetch"
   | "broad:code"
   | "broad:opaque"
   | "broad:obfuscated"

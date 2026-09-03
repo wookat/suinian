@@ -16,11 +16,12 @@ export function titleEchoesContent(title: string | null | undefined, content: st
 }
 
 /**
- * 产品安全承诺（R310）：不承诺认得出每一种危险内容（检测器只决定折叠优先级），
- * 承诺的是结构性边界：AI 永不逐字复述笔记原文，原文只在用户点开的卡片里。
+ * 产品安全承诺（R312，按信任域分层）：不承诺认得出每一种危险内容（检测器只决定折叠优先级），
+ * 承诺的是结构性边界：聚合/对外出口（跨笔记问答、周报回顾线索、推送、导出中的 AI 文本、工具接口）
+ * 不逐字转写笔记；单笔记直答时原文只与它的笔记卡片同屏出现。
  */
 export const SAFETY_PROMISE =
-  "什么都能丢：我们不保证认得出每一种危险内容，但保证任何笔记原文都不会被 AI 念给你或悄悄递回——AI 只给摘要和引用卡片，原文要你自己点开看；含端点/命令形态的内容默认折叠，一键展开，请勿直接执行。"
+  "什么都能丢：我们不保证认得出每一种危险内容，但保证跨笔记聚合、推送、导出与工具接口不会逐字转写你的笔记；你问某条自己的笔记时，原文只会连同它的笔记卡片一起出现。含远程地址/取回执行原语/编码串的内容默认折叠，一键展开；日常命令备忘直接展示，复制前会提醒核对，请勿直接执行。"
 
 export const EXEC_TITLE_PLACEHOLDER = "含可执行命令的记录（已折叠）"
 export const BROAD_TITLE_PLACEHOLDER = "含端点/代码形态内容的记录（已折叠）"
@@ -34,18 +35,26 @@ export interface FoldableNote {
   fold_reason?: string | null
 }
 
-/** 笔记是否默认折叠（R310 P0-2：宽判据 fold 或严判据二者之一；严判据只决定警示强度） */
-export function noteFolded(n: Pick<FoldableNote, "contains_executable_command" | "fold">): boolean {
-  return n.fold === true || n.contains_executable_command === true
-}
+export type NoteFoldLevel = "strict" | "broad" | "code"
 
-/** 折叠强度：strict = 危险命令（红色警示）；broad = 形态命中（中性提示，可能只是技术备忘） */
+/**
+ * 折叠强度（R312 P0-3）：
+ * - strict：危险命令（红色警示，默认折叠）；
+ * - broad：远程端点 / 取回执行原语 / 编码串 / 混淆书写（中性提示，默认折叠）；
+ * - code：本机命令行 / SQL 等日常命令备忘（默认展示，复制/执行前警示）。
+ */
 export function noteFoldLevel(
   n: Pick<FoldableNote, "contains_executable_command" | "fold" | "fold_reason">
-): "strict" | "broad" | null {
+): NoteFoldLevel | null {
   if (n.contains_executable_command === true || n.fold_reason === "strict") return "strict"
-  if (n.fold === true) return "broad"
+  if (n.fold === true) return n.fold_reason === "broad:code" ? "code" : "broad"
   return null
+}
+
+/** 笔记是否默认折叠（strict / broad 折；code 展示但复制时警示） */
+export function noteFolded(n: Pick<FoldableNote, "contains_executable_command" | "fold" | "fold_reason">): boolean {
+  const level = noteFoldLevel(n)
+  return level === "strict" || level === "broad"
 }
 
 /**

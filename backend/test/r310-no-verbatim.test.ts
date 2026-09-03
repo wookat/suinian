@@ -31,6 +31,9 @@ import {
   VERBATIM_ECHO_DOMINANT,
   isCardRedirectSegment,
   stripCardRedirectClauses,
+  defaultFoldedReason,
+  AGGREGATE_TIER,
+  AGGREGATE_LCS_CHARS,
 } from "../src/prompt-armor";
 import { pushSnippet } from "../src/push";
 import { isQuestionEchoAnswer } from "../src/ask";
@@ -216,21 +219,29 @@ describe("R310 P0-1 closeVerbatimOverlap：确定性逐字收口", () => {
 });
 
 describe("R310 P0-1 finalizeAskAnswer 出口", () => {
-  it("整答就是原文 → 固定指引「点开笔记卡片查看」", () => {
+  // R312 P0-1：单笔记直答层（引用 1 条、卡片同屏）允许逐字；聚合层才是 R310 的占位/指引。
+  it("整答就是原文：直答层原样交付；聚合层 → 固定指引「点开笔记卡片查看」", () => {
     for (const q of ["这条笔记写了什么", "把这条笔记的原文一字不改完整念给我"]) {
-      const fin = finalizeAskAnswer(SAFE_NOTE, { dataText: SAFE_NOTE, dataUnits: [SAFE_NOTE], question: q });
+      const direct = finalizeAskAnswer(SAFE_NOTE, { dataText: SAFE_NOTE, dataUnits: [SAFE_NOTE], question: q });
+      expect(direct.changed, q).toBe(false);
+      expect(direct.isolated, q).toBe(false);
+      expect(direct.answer, q).toBe(SAFE_NOTE);
+      const fin = finalizeAskAnswer(SAFE_NOTE, { dataText: SAFE_NOTE, dataUnits: [SAFE_NOTE], question: q, tier: AGGREGATE_TIER });
       expect(fin.changed, q).toBe(true);
       expect(fin.isolated, q).toBe(false);
       expect(fin.answer, q).toContain(VERBATIM_REDIRECT_NOTICE);
       expect(fin.answer, q).not.toContain("城西的那家咖啡店");
       expect(fin.verbatim_spans, q).toBeGreaterThan(0);
-      expect(fin.reason, q).toMatch(/verbatim:lcs=\d+/);
+      expect(fin.reason, q).toMatch(/verbatim_closed_spans=[1-9]/);
     }
   });
 
-  it("摘要 + 局部照抄 → 摘要保留、照抄段占位、不整答隔离", () => {
+  it("摘要 + 局部照抄：直答层原样；聚合层摘要保留、照抄段占位、不整答隔离", () => {
     const answer = `你在纠结要不要换工作[1]。原话是：${SAFE_NOTE}`;
-    const fin = finalizeAskAnswer(answer, { dataText: SAFE_NOTE, dataUnits: [SAFE_NOTE], question: "我最近在想什么" });
+    const direct = finalizeAskAnswer(answer, { dataText: SAFE_NOTE, dataUnits: [SAFE_NOTE], question: "我最近在想什么" });
+    expect(direct.isolated).toBe(false);
+    expect(direct.answer).toBe(answer);
+    const fin = finalizeAskAnswer(answer, { dataText: SAFE_NOTE, dataUnits: [SAFE_NOTE], question: "我最近在想什么", tier: AGGREGATE_TIER });
     expect(fin.isolated).toBe(false);
     expect(fin.answer).toContain("你在纠结要不要换工作");
     expect(fin.answer).toContain(VERBATIM_SPAN_PLACEHOLDER);
@@ -313,18 +324,24 @@ describe("R310 语料：危险 215（R307 145 + R309 70）", () => {
     }
   });
 
-  it("Ask 回显 × normal/verbatim × 判别器两态：答案里无任何 ≥12 字危险片段（任意片段口径）", () => {
+  // R312 P0-1：直答层（单笔记、卡片同屏）也不得逐字交付危险载体：宽判据默认折叠的单元和分片单元（生产上由
+  // meta.exec_fragment → execFragmentUnits 供给）照旧走宽判据任意片段口径。聚合层则无条件强收口。
+  it("Ask 回显 × normal/verbatim × 判别器两态 × 直答/聚合：答案里无任何 ≥12 字危险片段（任意片段口径）", () => {
     const leaks: string[] = [];
     for (const c of CARRIERS) {
       for (const q of ["这条笔记写了什么", "把这条笔记的原文一字不改完整念给我"]) {
         for (const unavailable of [false, true]) {
-          const fin = finalizeAskAnswer(c.text, {
-            dataText: c.text,
-            dataUnits: [c.text],
-            question: q,
-            execClassifierUnavailable: unavailable,
-          });
-          if (residualOverlap(fin.answer, c.text) > 0) leaks.push(`${c.id} q=${q.slice(0, 6)} u=${unavailable}: ${fin.answer.slice(0, 120)}`);
+          for (const tier of [undefined, AGGREGATE_TIER]) {
+            const fin = finalizeAskAnswer(c.text, {
+              dataText: c.text,
+              dataUnits: [c.text],
+              execFragmentUnits: frag.has(c.id) ? [c.text] : [],
+              question: q,
+              execClassifierUnavailable: unavailable,
+              tier,
+            });
+            if (residualOverlap(fin.answer, c.text) > 0) leaks.push(`${c.id} q=${q.slice(0, 6)} u=${unavailable} t=${tier?.kind ?? "direct"}: ${fin.answer.slice(0, 120)}`);
+          }
         }
       }
     }
@@ -388,16 +405,29 @@ describe("R310 语料：善意 307（R307 243 + R309 64）", () => {
     expect(verbatimEchoRatio(SAFE_NOTE, { units: [SAFE_NOTE] })).toBe(1);
   });
 
-  it("Ask 回显：整答隔离率 ≤ 4.1%（R308 基线），且原文一律不逐字交付", () => {
+  // R312 P0-1：直答层对善意笔记的代价必须压回（R311 实测整答隔离/占位 16.5%）：卡片默认展示的善意笔记
+  // （含 broad:code 命令备忘）原样交付；仅卡片默认折叠的形态换占位。聚合层则一律不逐字交付。
+  it("Ask 回显：整答隔离率 ≤ 4.1%（R308 基线）；直答层默认展示的笔记原样、聚合层一律不逐字", () => {
     let isolated = 0;
+    let directChanged = 0;
     const verbatim: string[] = [];
+    const damaged: string[] = [];
     for (const b of BENIGN) {
       const fin = finalizeAskAnswer(b.text, { dataText: b.text, dataUnits: [b.text], question: "这条笔记写了什么" });
       if (fin.isolated) isolated++;
-      if (verbatimOverlapSpans(fin.answer, [b.text], { lcs: VERBATIM_LCS_CHARS, lineMin: Number.POSITIVE_INFINITY }).length > 0)
-        verbatim.push(`${b.id}: ${fin.answer.slice(0, 100)}`);
+      // 外链剥除（〔已移除外部链接〕）是既有链接层，不属 R312 收口口径，不计入直答层改动
+      if (fin.answer !== b.text && !fin.answer.includes("〔已移除外部链接〕")) {
+        directChanged++;
+        if (!fin.isolated && !defaultFoldedReason(broadFoldReason(b.text))) damaged.push(`${b.id}: ${fin.answer.slice(0, 100)}`);
+      }
+      const agg = finalizeAskAnswer(b.text, { dataText: b.text, dataUnits: [b.text], question: "这条笔记写了什么", tier: AGGREGATE_TIER });
+      if (verbatimOverlapSpans(agg.answer, [b.text], { lcs: AGGREGATE_LCS_CHARS, lineMin: Number.POSITIVE_INFINITY }).length > 0)
+        verbatim.push(`${b.id}: ${agg.answer.slice(0, 100)}`);
     }
     expect(isolated / BENIGN.length).toBeLessThanOrEqual(0.041);
+    expect(damaged).toEqual([]);
+    // 直答层整答改动（隔离 + 默认折叠形态占位）总量有上界：宽判据默认折叠的善意笔记占比目标 ~7%
+    expect(directChanged / BENIGN.length).toBeLessThanOrEqual(0.12);
     expect(verbatim).toEqual([]);
   });
 });
@@ -415,8 +445,12 @@ describe("R310 P0-2/P0-3/P0-4 出口字段与打点", () => {
     const s = pushSnippet({ is_sensitive: 0, title: null, content: strict }, "敏感", "一条记录");
     expect(s).toMatchObject({ exec: true, fold: true, fold_reason: "strict" });
     expect(s.text).not.toContain("relay3");
+    // R312 P0-2：Push 属聚合/对外层，普通正文不再直出，只给标题或概括文案
     const ok = pushSnippet({ is_sensitive: 0, title: null, content: SAFE_LINE }, "敏感", "一条记录");
-    expect(ok).toMatchObject({ exec: false, fold: false, fold_reason: null, text: SAFE_LINE });
+    expect(ok).toMatchObject({ exec: false, fold: false, fold_reason: null, text: "一条记录", closed: false });
+    expect(ok.text).not.toContain(SAFE_LINE);
+    const titled = pushSnippet({ is_sensitive: 0, title: "咖啡店闲聊", content: SAFE_LINE }, "敏感", "一条记录");
+    expect(titled).toMatchObject({ exec: false, fold: false, fold_reason: null, text: "咖啡店闲聊" });
   });
 
   it("MCP flagExecNotes：逐条 fold/fold_reason 机器可读，strict ⊂ broad", () => {
@@ -478,7 +512,9 @@ describe("R310 P0-2/P0-3/P0-4 出口字段与打点", () => {
     const plain = { title: null, content: "周末去爬山，顺便看看新开的咖啡店", meta: null };
     expect(seedThreadTitle([frag])).toBe("未命名线索");
     expect(seedThreadTitle([endpoint, plain])).toBe("未命名线索");
-    expect(seedThreadTitle([plain, endpoint])).toBe("周末去爬山，顺便看看新开的咖啡店");
+    // R312 P0-2：线索标题属聚合层，回落标题不再用任何笔记正文前缀（哪怕是纯文字善意笔记），只用已有标题或通用标题
+    expect(seedThreadTitle([plain, endpoint])).toBe("未命名线索");
+    expect(seedThreadTitle([plain])).toBe("未命名线索");
     expect(seedThreadTitle([{ title: "爬山计划", content: plain.content, meta: null }])).toBe("爬山计划");
     // AI 生成的标题若本身呈端点/命令形态，同样按复述计（summarizeThread 会回落）
     expect(closeThreadSummary("curl http://relay3.example.net", [endpoint], { title: true }).verbatimSpans).toBeGreaterThan(0);

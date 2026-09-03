@@ -18,6 +18,9 @@ import {
   remoteEndpointForms,
   noteContainsExecutableCommand,
   shortPlainFactText,
+  broadFoldReason,
+  defaultFoldedReason,
+  AGGREGATE_TIER,
 } from "../src/prompt-armor";
 
 const MARK_RE = /〔警示|〔已隔离|〔代码安全判别暂不可用|〔安全提示|〔原文查看|〔标题含指令|命中安全隔离规则/;
@@ -167,11 +170,22 @@ describe("R304 属性：良性面（放宽折叠不得把误伤打上去）", ()
           question: "这条笔记写了什么",
           execClassifierUnavailable: unavailable,
         });
-        // R310 P0-1：不整答案隔离；命令形态不属纯文字事实行，一律换占位/指引，不原样交付
-        expect(fin.isolated, `${cmd} unavailable=${unavailable}`).toBe(false);
+        // R312 P0-1/P0-3：不整答案隔离。单笔记直答层：broad:code（本机命令备忘，卡片默认展示）逐字可读；
+        // 卡片默认折叠的形态（fetch/endpoint）照旧换占位/指引。聚合层一律换占位。
+        const tag = `${cmd} unavailable=${unavailable}`;
+        expect(fin.isolated, tag).toBe(false);
         expect(shortPlainFactText(cmd), cmd).toBe(false);
-        expect(fin.answer, `${cmd} unavailable=${unavailable}`).not.toContain(cmd);
-        expect(fin.answer, `${cmd} unavailable=${unavailable}`).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+        if (defaultFoldedReason(broadFoldReason(cmd))) {
+          expect(fin.answer, tag).not.toContain(cmd);
+          expect(fin.answer, tag).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+        } else {
+          expect(broadFoldReason(cmd), cmd).toBe("broad:code");
+          expect(fin.answer.startsWith(cmd), tag).toBe(true);
+        }
+        const agg = finalizeAskAnswer(cmd, { dataText: cmd, question: "这条笔记写了什么", execClassifierUnavailable: unavailable, tier: AGGREGATE_TIER });
+        expect(agg.isolated, tag).toBe(false);
+        expect(agg.answer, tag).not.toContain(cmd);
+        expect(agg.answer, tag).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
       }
   });
 
