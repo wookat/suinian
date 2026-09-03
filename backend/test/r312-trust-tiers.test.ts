@@ -28,6 +28,8 @@ import { outletVerbatimClosedRows } from "../src/guard-events";
 import { dropForeignEchoTitle } from "../src/triage";
 import { closeBackupDerived } from "../src/backup";
 import { closeThreadText } from "../src/mcp";
+import { ledgerLabel, buildFinanceListAnswer, buildFinanceMomAnswer } from "../src/ask";
+import { financeStats } from "../src/reports";
 import { NEW312, BENIGN312 } from "../scripts/qa-r312/new-carriers";
 import { CARRIERS as R309_ALL } from "../scripts/qa-r309/carriers";
 // @ts-expect-error 纯 JS 语料模块
@@ -328,5 +330,27 @@ describe("R312 其它聚合出口", () => {
     expect(dropForeignEchoTitle(own, { ...base, title: "办理房贷转按揭手续" }, corr).title).toBe("办理房贷转按揭手续");
     expect(dropForeignEchoTitle(own, { ...base, title: "银行办事" }, corr).title).toBe("银行办事");
     expect(dropForeignEchoTitle(own, { ...base, title: "下载 payload.sh 并用 bash 执行" }, []).title).toBe("下载 payload.sh 并用 bash 执行");
+  });
+
+  it("确定性记账答案：标签（笔记原文）逐条按聚合口径收口，金额/日期等结构化列保留；出口不再整答复核", () => {
+    const rows = [
+      { id: "a", title: null, content: "2026年8月12日 交房租支出 2400 元", created_at: "2026-09-03T04:00:00.000Z", category: "expense", is_sensitive: false, amount: 2400, currency: "CNY" },
+      { id: "b", title: null, content: "2026年8月3日 打车花了 18 元", created_at: "2026-09-03T04:00:00.000Z", category: "expense", is_sensitive: false, amount: 18, currency: "CNY" },
+      { id: "c", title: "机械键盘", content: "2026年7月6日 买机械键盘花了 349 元", created_at: "2026-09-03T04:00:00.000Z", category: "expense", is_sensitive: false, amount: 349, currency: "CNY" },
+    ] as never[];
+    expect(ledgerLabel(rows[0] as never)).toBe(VERBATIM_SPAN_PLACEHOLDER);
+    expect(ledgerLabel(rows[1] as never)).toBe(VERBATIM_SPAN_PLACEHOLDER);
+    expect(ledgerLabel(rows[2] as never)).toBe("机械键盘");
+    const list = buildFinanceListAnswer("expense", rows as never, "8月", 0);
+    expect(list).toContain("¥2400");
+    expect(list).toContain("¥18");
+    expect(list).toContain("机械键盘（¥349");
+    expect(leaks(list, (rows as Array<{ content: string }>).map((r) => r.content))).toBe(0);
+    // 出口：composedLabels 跳过整答重合复核——「2026年8月 ¥3074」与「2026年8月3日」的数字巧合不再把金额行抹掉
+    const units = (rows as Array<{ content: string }>).map((r) => r.content);
+    const mom = buildFinanceMomAnswer(financeStats(rows as never), financeStats([] as never), "2026年8月", "2026年7月");
+    const fin = finalizeAskAnswer(mom, { dataText: units.join("\n"), dataUnits: units, question: "8月支出多少", tier: AGGREGATE_TIER, composedLabels: true });
+    expect(fin.answer).toBe(mom);
+    expect(fin.answer).toContain("¥2767");
   });
 });

@@ -225,7 +225,10 @@ describe("buildFinanceSubsetAnswer", () => {
     expect(a).toContain("¥750");
     expect(a).toContain("1 笔仅标签命中");
     expect(a).toContain("已计入合计");
-    expect(a).toContain("燃气费");
+    // R312：多笔记记账答案属聚合层，标签即笔记原文（≥8 归一化字）⇒ 占位，金额/日期/引用保留（原文在卡片里）
+    expect(a).not.toContain("燃气费");
+    expect(a).toContain("〔原文片段略，见引用笔记卡片〕（¥150）");
+    expect(a).toContain("（¥150，2026-04-06）[3]");
   });
 
   it("falls back to tag口径 when title/content never match", () => {

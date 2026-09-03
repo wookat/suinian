@@ -15,7 +15,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, type BroadFoldReason } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, type BroadFoldReason } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -246,6 +246,16 @@ type AskProduced =
   | { kind: "passthrough"; res: Response };
 
 /**
+ * R312：服务端按结构化列组装的确定性记账/极值答案（路由自身置的布尔标记，客户端不可注入）：笔记原文只以
+ * ask.ts `ledgerLabel` 进入且组装时已逐条按聚合口径收口，出口不再对整答做资料重合复核（金额/日期数字与笔记巧合）。
+ * 其它确定性路由（计数/主题概括/列举）仍走完整分层收口。
+ */
+const LEDGER_COMPOSED_KEY_RE = /^(?:finance_[a-z_]+|ledger_row_extreme|extreme_aggregate)$/;
+function isLedgerComposed(body: Record<string, unknown>): boolean {
+  return Object.entries(body).some(([k, v]) => v === true && LEDGER_COMPOSED_KEY_RE.test(k));
+}
+
+/**
  * R312 P0-1：Ask 信任域由最终 references（同屏卡片）的去重笔记数 + 出口类型确定：恰好 1 条且能对应到
  * 资料单元 ⇒ 单笔记直答；否则（0 条 / 多条 / MCP）聚合层。不看答案形态，不由模型决定。
  */
@@ -307,7 +317,8 @@ app.use("/api/ask", async (c, next) => {
       // R312 P0-2：确定性路由并入分层规则——单笔记直答允许逐字，聚合（多引用 / 零引用 / MCP）强收口；
       // 不再有「只收宽判据单元」的降级口径（R311 §6：42/44 新载体零收口的根因）。
       const detOutlet = askOutletOf(c.req.header(ASK_OUTLET_HEADER));
-      const detTier = askTierFromBody(body, unitByNoteId, detOutlet);
+      const ledgerComposed = !preFinalized && isLedgerComposed(body);
+      const detTier = ledgerComposed ? AGGREGATE_TIER : askTierFromBody(body, unitByNoteId, detOutlet);
       const fin = preFinalized
         ? { answer: body.answer, changed: false, isolated: body.instruction_isolated === true, verbatim_closed_spans: 0 }
         : finalizeAskAnswer(body.answer, {
@@ -316,7 +327,9 @@ app.use("/api/ask", async (c, next) => {
             question,
             verbatimExempt: question,
             tier: detTier,
+            composedLabels: ledgerComposed,
           });
+      if (ledgerComposed) fin.verbatim_closed_spans = body.answer.split(VERBATIM_SPAN_PLACEHOLDER).length - 1;
       if (!preFinalized) {
         if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
         else if (fin.changed) console.log(`ask: deterministic answer rewritten at exit (${fin.reason ?? "link_scrub"})`);

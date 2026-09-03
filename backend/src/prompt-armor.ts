@@ -6284,6 +6284,10 @@ export interface FinalizeAskAnswerOpts {
   tier?: TrustTier;
   /** R312：单笔记直答层的问句豁免文本——只能是用户逐字输入的问句（不含改写/历史）。聚合层忽略。 */
   verbatimExempt?: string;
+  /** R312：服务端按结构化列（金额/币种/时间/计数）组装的确定性答案：笔记原文只以 `ledgerLabel` 进入，
+   * 组装时已逐条按聚合口径收口；这里不再对整答做资料重合复核（金额/日期数字与笔记的巧合公共串会把
+   * 结构化数值整行抹掉）。其它出口审计（外链/邮箱/指令隔离/危险残片）照常。 */
+  composedLabels?: boolean;
 }
 
 export type FinalizeAskAnswerResult = {
@@ -6826,7 +6830,7 @@ const CONTROL_MARK_SPAN_RE = /^[\s〔〕（）()]*(?:已隔离|代码安全判�
 export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): FinalizeAskAnswerResult {
   const core = finalizeAskAnswerCore(answer, opts);
   const units = opts.dataUnits && opts.dataUnits.length > 0 ? opts.dataUnits : opts.dataText ? [opts.dataText] : [];
-  if (units.length === 0) return core;
+  if (units.length === 0 || opts.composedLabels) return core;
   // R312 P0-1：按信任域收口。未显式给 tier 时按确定性事实推定（与 index.ts echoTierOf 同口径）：答案恰好点到 1 个
   // 资料单元（角标唯一，或无角标且只有 1 个单元）⇒ app 出口单笔记直答；否则聚合（fail-closed）。
   // 生产 Ask/MCP/回顾都显式传 tier（MCP 强制聚合），这里只兜未传 tier 的调用方。分片笔记一并作为资料单元。

@@ -154,7 +154,9 @@ describe("R234 P3-3 subset answer surfaces direct-hit transfers", () => {
       null
     );
     expect(md).toContain("资金往来/还款类记录");
-    expect(md).toContain("信用卡账单还了 4200");
+    // R312：标签是笔记原文（≥8 归一化字）⇒ 聚合口径占位；金额/日期仍透出
+    expect(md).not.toContain("信用卡账单还了 4200");
+    expect(md).toContain("〔原文片段略，见引用笔记卡片〕（¥4200，2026-08-21）");
   });
 });
 
