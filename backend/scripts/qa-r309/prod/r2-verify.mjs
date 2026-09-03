@@ -23,11 +23,16 @@ for (;;) {
   if (!cursor || (j.result ?? []).length === 0 || j.result_info?.is_truncated === false) break;
 }
 const byPrefix = {};
+// 实际 key 形如 media/<user_id>/<note_id>/<file>（qa-attach.ts 实测）；兼容顶层直接 <user_id>/ 的旧布局
+const userOf = (key) => {
+  const seg = key.split("/");
+  return seg[0].startsWith("u_") ? seg[0] : seg[1] ?? seg[0];
+};
 for (const k of keys) {
-  const p = k.key.split("/")[0];
+  const p = userOf(k.key);
   byPrefix[p] = (byPrefix[p] ?? 0) + 1;
 }
-const nonBoss = keys.filter((k) => !k.key.startsWith("u_boss/"));
+const nonBoss = keys.filter((k) => userOf(k.key) !== "u_boss");
 const summary = { checked_at: new Date().toISOString(), bucket: BUCKET, total: keys.length, byPrefix, non_boss_objects: nonBoss.length, non_boss_keys: nonBoss.map((k) => k.key) };
 console.log(JSON.stringify(summary, null, 2));
 writeFileSync(join(OUT, "r2-verify.json"), JSON.stringify({ ...summary, keys }, null, 1));

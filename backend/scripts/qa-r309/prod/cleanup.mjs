@@ -26,12 +26,13 @@ async function login(name, password) {
 }
 
 // 1) 危险/善意账号（token 文件）
-for (const f of ["prod-danger-account.json", "prod-benign-account.json"]) {
+const FILES = ["prod-danger-account.json", "prod-benign-account.json", "prod-fragfar-account.json"];
+for (const f of FILES) {
   const p = `${OUT}/${f}`;
   if (!existsSync(p)) continue;
   const a = JSON.parse(readFileSync(p, "utf8"));
   await delWithToken(f, a.token);
 }
-// 2) 其余脚本（regress/*、lh.mjs、mixed.mjs、cache.mjs、sse.mjs、testing agent 浏览器账号）均在各自流程末尾自行注销并校验旧 token 401。
+// 2) 其余脚本（regress/*、lh.mjs、mixed.mjs、attrib.mjs、cache.mjs、push-real.mjs、testing agent 浏览器账号）均在各自流程末尾自行注销并校验旧 token 401。
 writeFileSync(`${OUT}/prod-cleanup.log`, log.join("\n") + "\n");
-for (const f of [`${OUT}/prod-danger-account.json`, `${OUT}/prod-benign-account.json`]) if (existsSync(f)) unlinkSync(f);
+for (const f of FILES) if (existsSync(`${OUT}/${f}`)) unlinkSync(`${OUT}/${f}`);
