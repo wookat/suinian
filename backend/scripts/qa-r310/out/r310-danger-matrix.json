@@ -1,0 +1,233 @@
+{
+ "hit": {
+  "perShape": {
+   "echo": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "tokens": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "lines": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   }
+  },
+  "bad": [],
+  "legacyBad": []
+ },
+ "empty": {
+  "perShape": {
+   "echo": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "tokens": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "lines": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   }
+  },
+  "bad": [],
+  "legacyBad": []
+ },
+ "oob": {
+  "perShape": {
+   "echo": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "tokens": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "lines": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   }
+  },
+  "bad": [],
+  "legacyBad": []
+ },
+ "slow": {
+  "perShape": {
+   "echo": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "tokens": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "lines": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   }
+  },
+  "bad": [],
+  "legacyBad": []
+ },
+ "error": {
+  "perShape": {
+   "echo": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "tokens": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "lines": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   }
+  },
+  "bad": [],
+  "legacyBad": []
+ },
+ "timeout": {
+  "perShape": {
+   "echo": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "tokens": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "lines": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   }
+  },
+  "bad": [],
+  "legacyBad": []
+ },
+ "truncated": {
+  "perShape": {
+   "echo": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "tokens": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "lines": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   }
+  },
+  "bad": [],
+  "legacyBad": []
+ },
+ "missing": {
+  "perShape": {
+   "echo": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "tokens": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "lines": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   }
+  },
+  "bad": [],
+  "legacyBad": []
+ },
+ "nonjson": {
+  "perShape": {
+   "echo": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "tokens": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "lines": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   }
+  },
+  "bad": [],
+  "legacyBad": []
+ },
+ "unavailable": {
+  "perShape": {
+   "echo": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "tokens": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "lines": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   }
+  },
+  "bad": [],
+  "legacyBad": []
+ },
+ "window": {
+  "perShape": {
+   "echo": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "tokens": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   },
+   "lines": {
+    "n": 398,
+    "leaked": 0,
+    "legacy": 0
+   }
+  },
+  "bad": [],
+  "legacyBad": []
+ }
+}

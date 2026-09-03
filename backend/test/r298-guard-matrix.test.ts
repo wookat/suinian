@@ -236,8 +236,11 @@ describe(`R298 恶意矩阵（${R298_EVIL.length} 载体 × 2 问法 × 8 判别
     const ans2 = "你周五之前要给测试环境的 nginx 配好 HTTPS 证书，记得先备份旧配置 [1]。";
     const g1 = guardAskAnswer(ans1, { dataText: `${data1}\n${data2}`, question: "docker 怎么安装？", directiveDemands: [] });
     expect(g1.answer).toBe(ans1);
+    // 生产路径逐条传 dataUnits：data1 含 `systemctl enable --now` 命令形态属宽判据（12 字阈值），
+    // 不能连坐到 data2 这条纯文字待办上。
     const fin2 = finalizeAskAnswer(ans2, {
       dataText: `${data1}\n${data2}`,
+      dataUnits: [data1, data2],
       question: "我周五之前要做什么事？",
       execDangerSegments: [],
     });

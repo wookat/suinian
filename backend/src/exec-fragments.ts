@@ -4,11 +4,24 @@
 // execOutletTag 与内容判定同口径读取。只增标不撤标：分片被删或改写后其余
 // 分片仍保留标记（保守），撤标须人工。
 import type { Env, NoteMeta } from "./types";
-import { fragmentExecNoteIds, noteMetaExecFragment, type FragmentCandidate } from "./prompt-armor";
+import {
+  FRAG_MAX_LEN,
+  fragmentCandidateShape,
+  fragmentExecNoteIds,
+  noteMetaExecFragment,
+  type FragmentCandidate,
+} from "./prompt-armor";
 import { recordOutletExecMarks } from "./guard-events";
 
 /** 单条写入后复判的邻近窗口：滑窗 6 的两倍，覆盖新笔记落在窗口任一位置。 */
 export const FRAG_REJUDGE_RECENT = 12;
+/**
+ * R310 P1：分片之间夹入无关笔记（买菜/咖啡）把「最近 12 条」窗口顶满即整族免判
+ * （audit-r309 §14.3）。扫描面放宽到最近 FRAG_REJUDGE_SCAN 条，再取其中**具备分片形态**
+ * （代码/地址残片、还原说明、密文样串）的最近 FRAG_REJUDGE_RECENT 条作判定序列——
+ * 无关的自然语言笔记不占窗口。判定本身另有 CPU 预算（prompt-armor FRAG_*_BUDGET）。
+ */
+export const FRAG_REJUDGE_SCAN = 48;
 /** 批量导入/恢复时的分块大小（含重叠），控制单次 CPU 预算。 */
 const FRAG_BULK_CHUNK = 60;
 const FRAG_BULK_OVERLAP = 6;
@@ -46,19 +59,20 @@ export async function rejudgeExecFragmentsRecent(
   try {
     const { results } = await env.DB.prepare(
       `SELECT id, content, meta, created_at FROM notes
-       WHERE user_id = ? AND deleted_at IS NULL AND is_sensitive = 0 AND length(content) <= 200
+       WHERE user_id = ? AND deleted_at IS NULL AND is_sensitive = 0 AND length(content) <= ?
        ORDER BY created_at DESC, rowid DESC LIMIT ?`
     )
-      .bind(userId, FRAG_REJUDGE_RECENT)
+      .bind(userId, FRAG_MAX_LEN, FRAG_REJUDGE_SCAN)
       .all<FragRow>();
-    const rows = (results ?? []).reverse();
-    if (rows.length < 2) return [];
-    const hit = fragmentExecNoteIds(rows as FragmentCandidate[]);
-    const stmts = markStmts(env.DB, rows, hit);
+    const scanned = (results ?? []).reverse();
+    const candidates = scanned.filter((r) => fragmentCandidateShape(r.content)).slice(-FRAG_REJUDGE_RECENT);
+    if (candidates.length < 2) return [];
+    const hit = fragmentExecNoteIds(candidates as FragmentCandidate[]);
+    const stmts = markStmts(env.DB, scanned, hit);
     if (stmts.length === 0) return [];
     await env.DB.batch(stmts);
     recordOutletExecMarks(env, "fragment", stmts.length, waitUntil);
-    return rows.filter((r) => hit.has(r.id) && !noteMetaExecFragment(r.meta)).map((r) => r.id);
+    return scanned.filter((r) => hit.has(r.id) && !noteMetaExecFragment(r.meta)).map((r) => r.id);
   } catch (err) {
     console.error(`exec-fragments: recent rejudge failed user=${userId}`, err);
     return [];
@@ -82,9 +96,9 @@ export async function rejudgeExecFragmentsBulk(
       const slice = ids.slice(i, i + 90);
       const { results } = await env.DB.prepare(
         `SELECT id, content, meta, created_at FROM notes
-         WHERE id IN (${slice.map(() => "?").join(",")}) AND deleted_at IS NULL AND is_sensitive = 0 AND length(content) <= 200`
+         WHERE id IN (${slice.map(() => "?").join(",")}) AND deleted_at IS NULL AND is_sensitive = 0 AND length(content) <= ?`
       )
-        .bind(...slice)
+        .bind(...slice, FRAG_MAX_LEN)
         .all<FragRow>();
       rows.push(...(results ?? []));
     }

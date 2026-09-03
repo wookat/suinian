@@ -9,17 +9,23 @@ import { buildPushPayload, type PushSubscription as WirePushSubscription } from 
 import type { Env, NoteRow } from "./types";
 import { getTodayReview, writeCronHeartbeat, shanghaiDate } from "./review";
 import { DEFAULT_TZ, loadUserTz, tzOffsetString } from "./triage";
-import { noteRowContainsExecutableCommand } from "./prompt-armor";
-import { recordOutletExecMarks } from "./guard-events";
+import { noteRowBroadFoldReason, type BroadFoldReason } from "./prompt-armor";
+import { recordOutletFoldMarks } from "./guard-events";
 
 /**
- * R306 P0-1（audit-r305 §3：Push 正文危险照抄前 60 字）：推送体是无交互的纯文本
- * 出口，危险笔记不出正文，只给带警示的占位；敏感笔记沿用既有脱敏占位。
+ * Push 正文片段：敲到系统通知的文本不可折叠，因此宽判据命中（R310 P0-2，不依赖严判）一律
+ * 用占位代替原文；严判据只决定警示强度（exec = 严判据，fold = 宽判据）。
  */
-export function pushSnippet(note: Pick<NoteRow, "is_sensitive" | "title" | "content"> & Partial<Pick<NoteRow, "meta">>, sensitiveLabel: string, fallback: string): { text: string; exec: boolean } {
-  if (note.is_sensitive) return { text: sensitiveLabel, exec: false };
-  if (noteRowContainsExecutableCommand(note)) return { text: "⚠️ 一条含可执行命令的记录（勿执行，点开查看）", exec: true };
-  return { text: (note.title || note.content || fallback).slice(0, 60), exec: false };
+export function pushSnippet(
+  note: Pick<NoteRow, "is_sensitive" | "title" | "content"> & Partial<Pick<NoteRow, "meta">>,
+  sensitiveLabel: string,
+  fallback: string
+): { text: string; exec: boolean; fold: boolean; fold_reason: BroadFoldReason | null } {
+  if (note.is_sensitive) return { text: sensitiveLabel, exec: false, fold: false, fold_reason: null };
+  const reason = noteRowBroadFoldReason(note);
+  if (reason === "strict") return { text: "⚠️ 一条含可执行命令的记录（勿执行，点开查看）", exec: true, fold: true, fold_reason: reason };
+  if (reason !== null) return { text: "一条含端点/代码形态内容的记录（已折叠，点开查看）", exec: false, fold: true, fold_reason: reason };
+  return { text: (note.title || note.content || fallback).slice(0, 60), exec: false, fold: false, fold_reason: null };
 }
 
 export interface PushSubRow {
@@ -221,7 +227,7 @@ export async function sweepTodoReminders(env: Env, now: Date = new Date()): Prom
     let goneCount = 0;
     const snip = pushSnippet(n, "一条待办", "待办");
     const label = snip.text;
-    recordOutletExecMarks(env, "push", snip.exec ? 1 : 0);
+    recordOutletFoldMarks(env, "push", { strict: snip.exec ? 1 : 0, broad: snip.fold ? 1 : 0 });
     const dueMs = todoDueEpochMs(n.todo_due, await userTz(n.user_id));
     const timing =
       dueMs !== null && dueMs <= nowMs
@@ -340,7 +346,7 @@ export async function sweepDailyReviewPush(env: Env, now: Date = new Date()): Pr
       // same masking as todo reminders: sensitive rows never leak into a push
       const snip = pushSnippet(first.note, "一条记录", "");
       const snippet = snip.text;
-      recordOutletExecMarks(env, "push", snip.exec ? 1 : 0);
+      recordOutletFoldMarks(env, "push", { strict: snip.exec ? 1 : 0, broad: snip.fold ? 1 : 0 });
       const payload: PushPayload = {
         title: "☀️ 今日回顾",
         body: `${first.kind_label}：${snippet}`,

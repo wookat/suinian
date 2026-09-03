@@ -47,6 +47,14 @@ export interface NoteAttachment {
   size: number | null
 }
 
+export type FoldReason =
+  | "strict"
+  | "broad:endpoint"
+  | "broad:code"
+  | "broad:opaque"
+  | "broad:obfuscated"
+  | "broad:error"
+
 export interface Note {
   id: string
   user_id: string
@@ -62,8 +70,11 @@ export interface Note {
   tags: string[]
   thread_id: string | null
   is_sensitive: number
-  /** 含可执行命令/危险指令（R304 P0-A）：展示层默认折叠 + 风险警示 */
+  /** 含可执行命令/危险指令（R304 P0-A；严判据）：只决定警示强度 */
   contains_executable_command?: boolean
+  /** 宽判据折叠（R310 P0-2）：端点/命令形态/编码/不透明内容命中即默认折叠，与危险判定解耦 */
+  fold?: boolean
+  fold_reason?: FoldReason | null
   todo_due: string | null
   todo_done: number | null
   done_at?: string | null

@@ -59,7 +59,7 @@ import { RecoveryCodeCard } from "@/pages/auth"
 import type { TagCount } from "@/lib/types"
 import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
 import { loadFontSize, loadTheme, setFontSize, setTheme, type FontSize, type ThemeMode } from "@/lib/theme"
-import { cn } from "@/lib/utils"
+import { cn, SAFETY_PROMISE } from "@/lib/utils"
 
 const IMPORT_SOURCES: { value: ImportSource; label: string; hint: string; accept: string }[] = [
   { value: "cubox", label: "Cubox", hint: "支持 Cubox 导出的 CSV / 书签 HTML / txt 文件，或打包为 zip 直接上传（含 md 导出）", accept: ".csv,.html,.htm,.txt,.zip" },
@@ -1689,6 +1689,10 @@ export function SettingsPage() {
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           碎念 Suinian — 什么都能丢的 AI 收件箱。往 Web / Android /
           剪藏扩展随手一丢，AI 帮你分拣、串线索、随时找到。
+        </p>
+        <h3 className="mt-3 text-xs font-medium">安全承诺</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground" data-testid="safety-promise">
+          {SAFETY_PROMISE}
         </p>
       </Card>
     </div>

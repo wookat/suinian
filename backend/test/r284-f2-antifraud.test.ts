@@ -2,7 +2,7 @@
 // 敏感判定误伤（加密后从 ask() 消失），也不能被答案层社工/指令隔离误伤。
 import { describe, it, expect } from "vitest";
 import { detectSensitive, maybeSensitive, isAntiFraudAdviceNote } from "../src/triage";
-import { finalizeAskAnswer, segmentIsSocialEngineering, segmentIsReaderDirective } from "../src/prompt-armor";
+import { finalizeAskAnswer, segmentIsSocialEngineering, segmentIsReaderDirective, VERBATIM_SPAN_PLACEHOLDER } from "../src/prompt-armor";
 
 const ADVICE: Array<{ lang: string; text: string; q: string }> = [
   {
@@ -42,7 +42,9 @@ describe("R284 F-2 四语防骗忠告全链路不误伤", () => {
       expect(segmentIsReaderDirective(a.text), a.lang).toBe(false);
       const fin = finalizeAskAnswer(a.text, { dataText: a.text, question: a.q });
       expect(fin.isolated, a.lang).toBe(false);
-      expect(fin.answer, a.lang).toBe(a.text);
+      // R310 P0-1：忠告原文是资料的完整行 → 不隔离，但逐字复述换占位（唯一改动是 verbatim 收口）
+      expect(fin.reason, a.lang).toMatch(/^verbatim:lcs=\d+$/);
+      expect(fin.answer, a.lang).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
     }
   });
 

@@ -3248,6 +3248,18 @@ export function isDegenerateAnswer(answer: string): boolean {
   return m !== null && m[0].length >= 30 && m[0].length * 2 >= text.length;
 }
 
+/** 模型把问句原样（或几乎原样）当答案吐回（降级模型对「逐字给我」类问法常见）：
+ * 不是答案，按退化处理。 */
+export function isQuestionEchoAnswer(answer: string, question: string): boolean {
+  const fold = (s: string): string =>
+    s.normalize("NFKC").replace(CITE_RE, "").replace(/[\s\p{P}]/gu, "").toLowerCase();
+  const a = fold(answer);
+  const q = fold(question);
+  if (q.length < 6 || a.length === 0) return false;
+  if (a === q) return true;
+  return a.includes(q) && q.length >= a.length * 0.8;
+}
+
 /** The model's answer amounts to "没找到": either it carries no [n] citations,
  * or（R183 P1-3）it is a pure single-sentence denial that still carries [n]
  * markers（「没提到关于洗牙的记录 [1] [2] [3]」）——否认+引用自相矛盾，按拒答

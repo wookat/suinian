@@ -2,7 +2,7 @@ import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { DEFAULT_TZ, loadUserTz, tzOffsetMinutes, tzSqlModifier, zonedDate } from "./triage";
 import { localDateOf, parseCreatedAt } from "./stats";
-import { EXEC_OUTLET_WARN_TAG, finalizeAskAnswer, noteRowContainsExecutableCommand } from "./prompt-armor";
+import { EXEC_OUTLET_WARN_TAG, BROAD_OUTLET_FOLD_TAG, finalizeAskAnswer, noteRowContainsExecutableCommand, noteRowBroadFoldReason } from "./prompt-armor";
 
 export type ReviewKind = "year_ago" | "month_ago" | "revisit" | "recurring_theme" | "pending_todo";
 
@@ -133,6 +133,15 @@ async function pendingTodoCandidate(env: Env, userId: string, exclude: string[])
 
 /** 危险笔记（含跨笔记分片）的回顾评语：固定警示，不进模型、不复述内容。 */
 export const EXEC_REVIEW_COMMENT = `${EXEC_OUTLET_WARN_TAG} 这条记录含可执行命令，点开查看但不要执行。`;
+/** 宽判据命中（严判据未命中）的回顾评语：同样不进模型，文案中性。 */
+export const BROAD_REVIEW_COMMENT = `${BROAD_OUTLET_FOLD_TAG} 这条记录含端点或代码形态内容，点开查看，仅供参考。`;
+
+function fixedReviewComment(note: Pick<NoteRow, "content" | "meta" | "is_sensitive">): string | null {
+  if (note.is_sensitive) return null;
+  const reason = noteRowBroadFoldReason(note);
+  if (reason === null) return null;
+  return reason === "strict" || noteRowContainsExecutableCommand(note) ? EXEC_REVIEW_COMMENT : BROAD_REVIEW_COMMENT;
+}
 
 /**
  * 回顾评语出口护栏：评语与 Ask 答案走同一收口（资料面 = 被点评的笔记）。
@@ -140,7 +149,8 @@ export const EXEC_REVIEW_COMMENT = `${EXEC_OUTLET_WARN_TAG} 这条记录含可�
  * 流程 → 回落到固定评语。评语只有一句，任何改写都视为不可信，整句替换。
  */
 export function guardReviewComment(comment: string | null, note: Pick<NoteRow, "title" | "content" | "meta" | "is_sensitive">, kind: ReviewKind): string | null {
-  if (!note.is_sensitive && noteRowContainsExecutableCommand(note)) return EXEC_REVIEW_COMMENT;
+  const fixed = fixedReviewComment(note);
+  if (fixed) return fixed;
   if (!comment) return comment;
   const unit = `${note.title ?? ""}\n${note.content ?? ""}`;
   const fin = finalizeAskAnswer(comment, { dataText: unit, dataUnits: [unit], question: "" });
@@ -148,7 +158,8 @@ export function guardReviewComment(comment: string | null, note: Pick<NoteRow, "
 }
 
 async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind, tzOffsetMin = 480): Promise<string> {
-  if (!note.is_sensitive && noteRowContainsExecutableCommand(note)) return EXEC_REVIEW_COMMENT;
+  const fixed = fixedReviewComment(note);
+  if (fixed) return fixed;
   const text = (
     await chatComplete(env, {
       temperature: 0.6,

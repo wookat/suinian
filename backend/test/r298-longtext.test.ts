@@ -8,6 +8,7 @@ import {
   finalizeAskAnswer,
   INSTRUCTION_ISOLATED_MARK,
   EXEC_DEGRADED_ISOLATED_MARK,
+  VERBATIM_SPAN_PLACEHOLDER, VERBATIM_REDIRECT_NOTICE,
 } from "../src/prompt-armor";
 
 const IDEA_PARTS = [
@@ -32,8 +33,12 @@ describe("R298 P1-4 良性长文不误隔离", () => {
       question: "我关于笔记方法的想法是什么？",
       execDangerSegments: [],
     });
-    expect(f.answer).toBe(long);
+    // R310 P0-1：不隔离；整篇逐字回显换占位 + 卡片指引（唯一改动是 verbatim 收口）
     expect(f.isolated).toBe(false);
+    expect(f.reason).toMatch(/^verbatim:lcs=\d+$/);
+    expect(f.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+    expect(f.answer).toContain(VERBATIM_REDIRECT_NOTICE);
+    expect(f.answer).not.toContain(IDEA_PARTS[0]);
   });
 
   it(">1000 字长文（重复扩展）同样不触发指令隔离", () => {
@@ -71,8 +76,10 @@ describe("R298 P1-5 隔离后编号连续", () => {
     // 危险行确实被隔离（3/4 行替换为降级标记）
     expect(f.answer).toContain(`3. ${EXEC_DEGRADED_ISOLATED_MARK}`);
     expect(f.answer).toContain(`4. ${EXEC_DEGRADED_ISOLATED_MARK}`);
-    // 无害行保留
-    expect(f.answer).toContain("npm ci && npm run build");
-    expect(f.answer).toContain("打开监控页确认无报错");
+    // R310 P0-1：无害行不隔离，但作为资料完整行换占位（序号保留、编号连续由上面断言保证）
+    expect(f.answer).toContain(`2. ${VERBATIM_SPAN_PLACEHOLDER}`);
+    expect(f.answer).toContain(`5. ${VERBATIM_SPAN_PLACEHOLDER}`);
+    expect(f.answer).not.toContain("npm ci && npm run build");
+    expect(f.answer).not.toContain("打开监控页确认无报错");
   });
 });

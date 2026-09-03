@@ -8,6 +8,7 @@ import {
   EXEC_DEGRADED_ISOLATED_MARK,
   EXEC_ISOLATED_MARK,
   EXEC_PIPELINE_WARN_MARK,
+  VERBATIM_SPAN_PLACEHOLDER,
 } from "../src/prompt-armor";
 
 const marked = (s: string) =>
@@ -66,8 +67,11 @@ describe("R284 F-1b 危险语句整行一体处置", () => {
       execDangerSegments: [],
       execDegradedSegments: execDegradedIsolationSegments(answer),
     });
-    expect(fin.answer).toContain("tail -f /var/log/app.log");
-    expect(fin.answer).toContain("再重启服务");
+    // R310 P0-1：无害邻行是资料原文的完整行 → 不隔离但换占位（逐字复述硬约束）；危险行仍是唯一被隔离的行
+    expect(fin.answer).not.toContain("tail -f /var/log/app.log");
+    expect(fin.answer).not.toContain("再重启服务");
+    expect(fin.answer).toContain(VERBATIM_SPAN_PLACEHOLDER);
+    expect(fin.answer.split(EXEC_ISOLATED_MARK).length - 1 + (fin.answer.split(EXEC_DEGRADED_ISOLATED_MARK).length - 1)).toBe(1);
     expect(fin.answer).not.toContain("/dev/tcp/");
   });
 });

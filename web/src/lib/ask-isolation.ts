@@ -48,14 +48,14 @@ export function isolatedMarkLocation(content: string): { para: number; refIndex:
 
 export interface IsolationAttributionInput {
   content: string
-  refs?: { index: number; note: { contains_executable_command?: boolean } }[]
+  refs?: { index: number; note: { contains_executable_command?: boolean; fold?: boolean } }[]
   isolatedRefs?: number[]
 }
 
 /**
  * 隔离横幅归因（R308 P1-1）：优先服务端按收口前后引用差集给出的 isolated_refs，
- * 其次答案文本里隔离标记邻近的 [n]，再次引用集合里数据面判危的笔记；三者皆无
- * 则不归因（不回落 refs[0]——指错笔记比不指更糟）。
+ * 其次答案文本里隔离标记邻近的 [n]，再次引用集合里数据面判危的笔记，最后是宽判据
+ * 折叠（fold）的笔记；皆无则不归因（不回落 refs[0]——指错笔记比不指更糟）。
  */
 export function isolatedRefTarget(m: IsolationAttributionInput): number | null {
   const refIndexes = new Set((m.refs ?? []).map((r) => r.index))
@@ -67,5 +67,7 @@ export function isolatedRefTarget(m: IsolationAttributionInput): number | null {
   if (flagged && /〔已隔离危险命令|〔代码安全判别暂不可用/.test(m.content)) return flagged.index
   const loc = isolatedMarkLocation(m.content)
   if (loc?.refIndex != null && refIndexes.has(loc.refIndex)) return loc.refIndex
-  return flagged ? flagged.index : null
+  if (flagged) return flagged.index
+  const folded = (m.refs ?? []).filter((r) => r.note.fold)
+  return folded.length === 1 ? folded[0].index : null
 }

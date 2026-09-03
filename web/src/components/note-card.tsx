@@ -45,7 +45,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { downloadNoteFile, refetchLink, retryMedia } from "@/lib/api"
 import { NoteAudio, NoteImage, isAudioAttachment, isImageAttachment } from "@/components/note-media"
 import { ExecGuard } from "@/components/exec-guard"
-import { cn, formatTime, parseServerTime, parseDue, dueHasTime, titleEchoesContent } from "@/lib/utils"
+import { cn, formatTime, noteFoldLevel, parseServerTime, parseDue, dueHasTime, titleEchoesContent } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
 
 const CATEGORY_META: Record<
@@ -359,7 +359,8 @@ export function NoteCard({
   const sensitive = note.is_sensitive === 1
   // 可执行载荷折叠（R304 P0-A）：数据面标记 → 默认折叠 + 警示，主动展开可看。
   // 敏感遮罩优先（遮罩本身已隐藏原文）；编辑态直接编辑原文不折叠。
-  const execFlagged = note.contains_executable_command === true && !sensitive
+  const foldLevel = sensitive ? null : noteFoldLevel(note)
+  const execFlagged = foldLevel !== null
 
   const [menuOpen, setMenuOpen] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -872,7 +873,7 @@ export function NoteCard({
           </button>
         ) : execFlagged ? (
           <div className="min-w-0 flex-1">
-            <ExecGuard>
+            <ExecGuard level={foldLevel ?? "strict"}>
               <p
                 className={cn(
                   "whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]",

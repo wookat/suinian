@@ -22,7 +22,7 @@ notes 内容字段而绕过统一敏感管道。R124 做结构性终结：
 | 标签重命名 | index.ts `renameTagForUser` | `prepareTagsUpdate` | 同上 |
 | 链接摘要 AI 补 tags | extract.ts `enrichLinkInto` | `prepareTagsUpdate` | 同上 |
 | AI 分拣落库（同步/异步/cron 复判） | index.ts `runTriage`/`retriageOne` | `applyTriage` | 敏感→加密+title 置空+tags 过滤+raw_transcript 洗净；非敏感→解密恢复明文 |
-| 内容编辑后重算 AI 标题 | index.ts `recomputeTitle` | `setNoteAiTitle` | SQL 内置 `is_sensitive = 0` 谓词，敏感行永不写 title |
+| 内容编辑后全量复判（标题/分类/金额/币种/标签） | index.ts `retriageAfterEdit` | `applyTriage` | 与新建/cron 复判同 DAO：manual_override 不覆盖、updated_at CAS、敏感行直接跳过 |
 | 媒体重试重提取 | index.ts POST /api/notes/:id/retry-media | `replaceNoteContent` | 新文本过 gate；category 归零重分拣 |
 | 文件导入（Cubox/flomo/MD/txt） | import.ts `runImport` | `prepareNoteInsert` | 同 createNote；import_tags 敏感时过滤 |
 | 备份恢复 | backup.ts restore | `prepareNoteInsert` | 不信任 zip 内 is_sensitive 定论，重新过 gate |

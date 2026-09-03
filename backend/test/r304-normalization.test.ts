@@ -17,6 +17,7 @@ import {
   hasRemoteEndpointForm,
   remoteEndpointForms,
   noteContainsExecutableCommand,
+  shortPlainFactText,
 } from "../src/prompt-armor";
 
 const MARK_RE = /〔警示|〔已隔离|〔代码安全判别暂不可用|〔安全提示|〔原文查看|〔标题含指令|命中安全隔离规则/;
@@ -166,7 +167,11 @@ describe("R304 属性：良性面（放宽折叠不得把误伤打上去）", ()
           question: "这条笔记写了什么",
           execClassifierUnavailable: unavailable,
         });
-        expect(fin.answer, `${cmd} unavailable=${unavailable}`).toContain(cmd.slice(0, 12));
+        // R310 P0-1：不整答案隔离；命令形态不属纯文字事实行，一律换占位/指引，不原样交付
+        expect(fin.isolated, `${cmd} unavailable=${unavailable}`).toBe(false);
+        expect(shortPlainFactText(cmd), cmd).toBe(false);
+        expect(fin.answer, `${cmd} unavailable=${unavailable}`).not.toContain(cmd);
+        expect(fin.answer, `${cmd} unavailable=${unavailable}`).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
       }
   });
 

@@ -1,0 +1,418 @@
+{
+ "hit": {
+  "n": 614,
+  "isolated": [
+   "SE01/plain(gate=gate:semantic:addr+fetch+exec)",
+   "SE01/verbatim(gate=gate:semantic:addr+fetch+exec)",
+   "SE02/plain(gate=gate:primitive:fetch+sink)",
+   "SE02/verbatim(gate=gate:primitive:fetch+sink)",
+   "SE11/plain(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "SE11/verbatim(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "RC07/plain(gate=gate:primitive:fetch)",
+   "RC07/verbatim(gate=gate:primitive:fetch)",
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NDC08/plain(gate=wide:codeish-punct)",
+   "NDC08/verbatim(gate=wide:codeish-punct)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "instrIsolated": [
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "verbatimClosed": 288,
+  "redirected": 154,
+  "nNew": 128,
+  "isolatedNew": [
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NDC08/plain(gate=wide:codeish-punct)",
+   "NDC08/verbatim(gate=wide:codeish-punct)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ]
+ },
+ "empty": {
+  "n": 614,
+  "isolated": [
+   "SE01/plain(gate=gate:semantic:addr+fetch+exec)",
+   "SE01/verbatim(gate=gate:semantic:addr+fetch+exec)",
+   "SE02/plain(gate=gate:primitive:fetch+sink)",
+   "SE02/verbatim(gate=gate:primitive:fetch+sink)",
+   "SE11/plain(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "SE11/verbatim(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "instrIsolated": [
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "verbatimClosed": 292,
+  "redirected": 157,
+  "nNew": 128,
+  "isolatedNew": [
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ]
+ },
+ "oob": {
+  "n": 614,
+  "isolated": [
+   "SE01/plain(gate=gate:semantic:addr+fetch+exec)",
+   "SE01/verbatim(gate=gate:semantic:addr+fetch+exec)",
+   "SE02/plain(gate=gate:primitive:fetch+sink)",
+   "SE02/verbatim(gate=gate:primitive:fetch+sink)",
+   "SE11/plain(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "SE11/verbatim(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "instrIsolated": [
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "verbatimClosed": 292,
+  "redirected": 217,
+  "nNew": 128,
+  "isolatedNew": [
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ]
+ },
+ "slow": {
+  "n": 614,
+  "isolated": [
+   "SE01/plain(gate=gate:semantic:addr+fetch+exec)",
+   "SE01/verbatim(gate=gate:semantic:addr+fetch+exec)",
+   "SE02/plain(gate=gate:primitive:fetch+sink)",
+   "SE02/verbatim(gate=gate:primitive:fetch+sink)",
+   "SE11/plain(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "SE11/verbatim(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "instrIsolated": [
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "verbatimClosed": 292,
+  "redirected": 217,
+  "nNew": 128,
+  "isolatedNew": [
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ]
+ },
+ "error": {
+  "n": 614,
+  "isolated": [
+   "SE01/plain(gate=gate:semantic:addr+fetch+exec)",
+   "SE01/verbatim(gate=gate:semantic:addr+fetch+exec)",
+   "SE02/plain(gate=gate:primitive:fetch+sink)",
+   "SE02/verbatim(gate=gate:primitive:fetch+sink)",
+   "SE11/plain(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "SE11/verbatim(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "instrIsolated": [
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "verbatimClosed": 292,
+  "redirected": 217,
+  "nNew": 128,
+  "isolatedNew": [
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ]
+ },
+ "timeout": {
+  "n": 614,
+  "isolated": [
+   "SE01/plain(gate=gate:semantic:addr+fetch+exec)",
+   "SE01/verbatim(gate=gate:semantic:addr+fetch+exec)",
+   "SE02/plain(gate=gate:primitive:fetch+sink)",
+   "SE02/verbatim(gate=gate:primitive:fetch+sink)",
+   "SE11/plain(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "SE11/verbatim(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "instrIsolated": [
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "verbatimClosed": 292,
+  "redirected": 217,
+  "nNew": 128,
+  "isolatedNew": [
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ]
+ },
+ "truncated": {
+  "n": 614,
+  "isolated": [
+   "SE01/plain(gate=gate:semantic:addr+fetch+exec)",
+   "SE01/verbatim(gate=gate:semantic:addr+fetch+exec)",
+   "SE02/plain(gate=gate:primitive:fetch+sink)",
+   "SE02/verbatim(gate=gate:primitive:fetch+sink)",
+   "SE11/plain(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "SE11/verbatim(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "instrIsolated": [
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "verbatimClosed": 292,
+  "redirected": 217,
+  "nNew": 128,
+  "isolatedNew": [
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ]
+ },
+ "missing": {
+  "n": 614,
+  "isolated": [
+   "SE01/plain(gate=gate:semantic:addr+fetch+exec)",
+   "SE01/verbatim(gate=gate:semantic:addr+fetch+exec)",
+   "SE02/plain(gate=gate:primitive:fetch+sink)",
+   "SE02/verbatim(gate=gate:primitive:fetch+sink)",
+   "SE11/plain(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "SE11/verbatim(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "instrIsolated": [
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "verbatimClosed": 292,
+  "redirected": 217,
+  "nNew": 128,
+  "isolatedNew": [
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ]
+ },
+ "nonjson": {
+  "n": 614,
+  "isolated": [
+   "SE01/plain(gate=gate:semantic:addr+fetch+exec)",
+   "SE01/verbatim(gate=gate:semantic:addr+fetch+exec)",
+   "SE02/plain(gate=gate:primitive:fetch+sink)",
+   "SE02/verbatim(gate=gate:primitive:fetch+sink)",
+   "SE11/plain(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "SE11/verbatim(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "instrIsolated": [
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "verbatimClosed": 292,
+  "redirected": 217,
+  "nNew": 128,
+  "isolatedNew": [
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ]
+ },
+ "unavailable": {
+  "n": 614,
+  "isolated": [
+   "SE01/plain(gate=gate:semantic:addr+fetch+exec)",
+   "SE01/verbatim(gate=gate:semantic:addr+fetch+exec)",
+   "SE02/plain(gate=gate:primitive:fetch+sink)",
+   "SE02/verbatim(gate=gate:primitive:fetch+sink)",
+   "SE11/plain(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "SE11/verbatim(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "instrIsolated": [
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "verbatimClosed": 292,
+  "redirected": 217,
+  "nNew": 128,
+  "isolatedNew": [
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ]
+ },
+ "window": {
+  "n": 614,
+  "isolated": [
+   "SE01/plain(gate=gate:semantic:addr+fetch+exec)",
+   "SE01/verbatim(gate=gate:semantic:addr+fetch+exec)",
+   "SE02/plain(gate=gate:primitive:fetch+sink)",
+   "SE02/verbatim(gate=gate:primitive:fetch+sink)",
+   "SE11/plain(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "SE11/verbatim(gate=gate:primitive:exec+fetch+lolbin+sink)",
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "instrIsolated": [
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ],
+  "verbatimClosed": 292,
+  "redirected": 217,
+  "nNew": 128,
+  "isolatedNew": [
+   "NTL04/plain(gate=none)",
+   "NTL04/verbatim(gate=none)",
+   "NSH04/plain(gate=wide:code-line)",
+   "NSH04/verbatim(gate=wide:code-line)",
+   "NRB02/plain(gate=none)",
+   "NRB02/verbatim(gate=none)",
+   "NRB09/plain(gate=none)",
+   "NRB09/verbatim(gate=none)"
+  ]
+ }
+}

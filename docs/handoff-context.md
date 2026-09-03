@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-08-31（R302）
+> 最后更新：2026-09-03（R310）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -63,6 +63,8 @@
 
 - R302：落实 R301 审查（audit-r301.md，NO-GO 复评）——**方法论整改 + verbatim 解耦**：①§18 方法论：归一化改按类 property-based（fast-check，test/r302-normalization.test.ts 9 属性）；回归集 = R295/R296/R298 全部历史载体 + R301 等价重建 73 载体 + 新造 26 类（test/r302-guard-matrix.test.ts，154 载体 × 10 判别器态 × 2 模式）；R301 原脚本机已回收，按 §15 等价重建（如实标注非逐字节重跑）；②P0-2 verbatim 与安全闭合解耦（采纳 R301 建议）：答案区摘要 + VERBATIM_REDIRECT_NOTICE 指引，原文走引用笔记卡片；移除 restoreVerbatimEchoes/verbatim 豁免；③P0-1 白名单只免地址形态不免动作语义；④P0-3 分隔符整类折 `.` + percent 递归解码 + 拼接/模板/IP 各形态/Base32⁄45/ROT13/hex 逐类；⑤P0-4 离线 outbox 真写 IndexedDB（suinian-outbox v2）+ client_id 幂等补发（生产 UI exactly-once 实测）；⑥P0-5 虚假隔离横幅修复（span 剥除不再无差别置隔离位）；⑦P0-6 地址×动作同句共现 + 邮箱/常见端口退让，benign 整段误隔离 0/130、部分标记 3/130；⑧P1 藏头/口令词闭合、跨笔记分片聚合；P2 guard_events 新增 `*_requests` 请求级计数、SSE keepalive 帧（生产 20/20 实测）、验收口径改【≤1.5s 进度指示 + ≤4s 首 delta】；P3 对比度/375px 收敛/目标尺寸。生产：evil 308 问泄漏 1（N02/plain 随机性残余，复测 4/4 隔离）、split 0、injection 240/498 执行 0 泄漏 0、ask 136/141、忠实 30/30、财务 4/4、shell 13/15（聚焦复测 5/5）、Lighthouse 96⁄100+100⁄100、axe 0。未解决：进度指示 >1.5s 11/20；wrangler routes API code 10000（用 deployment API + 端点实测交叉确认）。详见 docs/decision-r302.md
 
+- R310：落实 R309 审查（audit-r309.md §14.3）——**架构转向：安全不再建立在分类精度上**（三轮审查量化：检测器在未见语料上漏判 7%→60%，项目开源、判据可读，R306→R308 两轮补判据均在下一批语料失败）。安全承诺从「识别所有危险」改为「**任何笔记原文都不会被 AI 逐字念出或悄悄递回**」（可守承诺文案 `SAFETY_PROMISE` 已上设置页/注册页）。①P0-1 确定性出口收口 `closeVerbatimOverlap`/`finalizeAskAnswer`（prompt-armor.ts）：答案与任一引用/分片原文的公共连续片段 ≥30 字或完整行（宽判据单元 ≥12 字/≥5 字行 + 记号级）一律换占位「〔原文片段略，见引用笔记卡片〕」，与危险判定无关，Ask 三条返回路径 + SSE delta（与 done 同口径、先泄后撤 0）+ 周报/线索摘要·标题/今日回顾/Push 同一函数；verbatim 问法统一「点开笔记卡片」指引；唯一例外是 <24 字纯文字短事实行（金额/日期，`shortPlainFactText`）。②P0-2 宽判据 `broadFoldReason`（端点/命令形态行含 tar·docker·kubectl·SQL/不透明 token/混淆形态）决定原文默认折叠（`fold`/`fold_reason` 字段，前端琥珀一键展开），严判据 `contains_executable_command` 降级为红色警示强度；R309 70 漏判载体宽折叠 70/70，善意 79/307=25.7% 折叠（高于 §4.2 预估，多为运维命令备忘，有意）。③P0-3 导出/备份/MCP 账号任一宽命中即 `X-Suinian-Content-Risk` 响应头 + 文件头/manifest 声明 + MCP 逐条机器标记。④P0-4 guard_events 新增 `outlet_*_broad_fold_*`/`broad_only_notes`（宽命中严未命中 = 漏判可观测代理），list/search/review/push 补打点。P1：泄漏口径改「任意危险片段」（`qa-r310/leak.mjs`）；检测器最小闭合（分隔词结构判/跨笔记还原/分片窗口按形态取 12 条/陈述·表格·清单·收件人）R309 70 漏 42→5——**仅影响折叠优先级，不再是安全边界**；编辑后旧值根因 = PATCH 只重算标题不复判 amount 列，改 `applyTriage` 全量复判；分片拼接 CPU 收敛（生产写入 503 根因）与接缝伪端点不连坐（善意连坐 47→0）。生产（Worker 最终 `c962eeba`，Pages `f8873921`）：危险 215（R307 145 + R309 70）× normal/verbatim 任意片段泄漏 0/430、SSE 42 delta/done 泄漏 0、七出口未标 0、injection 240/498 泄露 0、ask-eval 141/141、忠实 29/30（座位号 7A 旧失败）、财务 36/36 + 4/4、shell 15 口径反转为「0 脚本 token + 指引」、生命周期 14/14、Push 真实端点占位、Lighthouse 移动 0.96/桌面 1.0、axe 0、Android assembleDebug OK；真实浏览器两轮（第一轮暴露 tar/docker 备忘裸露 → 命令形态纳入宽判据 → 复测 4 账号 Day1 + 折叠/展开 + verbatim 引导全过，375px 无横滚）。未解决：SSE 首 delta ≤4s 仍 2/42（回退模型根因同 R308）；忠实性座位号 7A；PWA outbox 本轮未重跑（代码未改）。详见 docs/decision-r310.md
+
 ## Android/Web 功能奇偶性缺口计划（R129 清单，R130 评估）
 - 今日回顾时间流卡片（Android 降级）：需新增 Compose 卡片 + `/api/reviews/today` 接入与点评交互，估 1 个子会话；与下方导出/导入合并一轮 Android 对齐专项更划算
 - JSON/Markdown 导出（Android 缺失，仅备份 zip）：后端接口现成（`/api/export?format=json|md`），Android 需加设置页入口 + SAF 保存，低成本但非找回主线，并入对齐专项
@@ -80,6 +82,7 @@
 - 【R94/R134】DeepSeek 长期欠费停摆，生产主力=Workers AI（`/health?probe=ai` 报 `provider:"fallback"` 是常态基线而非降级，告警只看 `ok:false`，R134 口径已写入文档/代码注释）；DeepSeek 充值后无需改配置自动切回（每次调用先试第一链位），可用 `/health?probe=ai` 观察 provider 回到 primary；todo_due 在 Workers AI 下偶有时区语义偏差（切回后应消失，观察）
 
 - 【R284 未修 P2】生产**认证接口偶发超时**：UI 测试中注销首次超时重试成功、注册连续两次超时第三次成功、一次登录超时；同期 curl 探测 <0.5s。方向推断为前端超时阈值/Worker 冷启动/偶发网络，未定位，下一轮跟进
+- 【R310】安全承诺已改为「不保证认出每种危险，保证原文不被 AI 复述」：后续任何「检测器漏判」都不是 P0（宽判据折叠 + AI 不复述 + 出口声明 + `broad_only` 差集可观测兜底），优先看 `guard_events` 的 `outlet_*_broad_only_notes` 差集与 Ask `exec_gate` 里 `verbatim:lcs=` 计数；善意折叠率 25.7% 若用户反馈打断，再调宽判据的命令形态子类而不是收窄安全边界
 - 【R284】生产判别器（Workers AI）无法人为关停，降级窗口只有本地模拟证据；月报出口敏感隔离仍未覆盖（生产无月报周期数据）
 - 【R142 归因】导入后聚类覆盖率低（R141 观察 21 条仅 1 线索）：代码路径完备——导入即 `resetThreadBackfill` 重置游标，10 分钟 cron `backfillThreadClusters` 全量回扫（frugal：embedding 预筛 + 至多一次 LLM 边界确认）。低覆盖为设计内保守行为的叠加：a) 导入笔记先经异步分拣，仅 idea/collect 参与聚类（todo/记账/资料不参与）；b) 直并阈值 SIM_JOIN=0.76 较严，0.62-0.76 需 LLM 确认（此前确认回复带前缀会解析失败而放弃——R142 已健壮化，预期边界并线索率提升）；c) frugal 路径不走 DeepSeek 兜底。属「宁散勿错并」取向，非缺陷；R142 QA 用生产 flomo 样本导入实测覆盖率，后续轮次如仍偏低再评估阈值
 
@@ -91,7 +94,7 @@
 - 【R85】公众号资源：注册公众号（个人订阅号即可起步）、提供 AppID/AppSecret、在公众号后台回填服务器配置（URL/Token/EncodingAESKey）；开发验证可微信扫码领测试号。清单见 docs/wechat-integration.md 第五节
 
 ## 测试约定
-- 测试数据一律 `[QA-R302]`（R302 收尾已核对 [QA-%] users=0、孤儿 embeddings/attachments=0、R2 object_count=0）（按轮次改前缀，R290 收尾已核对 users 仅剩 u_boss、15 表 orphan 全 0、R2 suinian-media 0 对象）；历史示例 `[QA-R88]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
+- 测试数据一律 `[QA-R310]`（R310 收尾已核对 users 仅剩 u_boss、逐表 orphan/non-boss 全 0、R2 0 对象，见 decision-r310.md §14（收尾后回填）；R302 收尾已核对 [QA-%] users=0、孤儿 embeddings/attachments=0、R2 object_count=0）（按轮次改前缀，R290 收尾已核对 users 仅剩 u_boss、15 表 orphan 全 0、R2 suinian-media 0 对象）；历史示例 `[QA-R88]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
 - QA 账号命名建议：用户名允许字符为中英文、数字、`._-[]`（2-32 字符，R60 起支持 `[]`）。建议 QA 账号命名 `[QA-R<轮次>]-<用途>`（如 `[QA-R60]-migrate-a`），**务必记录密码**，测完自助注销；若密码遗失需手动用 wrangler d1 按 `backend/src/account.ts` 的级联口径清理（children 先删，附前后 SQL 证据）
 - **QA 账号清单核对（收尾强制步骤）**：每轮 QA 收尾时，除逐表验证自己账号级联清零外，必须再跑一次 `SELECT id, name FROM users` 全量核对，确认只剩 `u_boss / Thomas`；发现任何 `[QA-*]` 残留账号（如 R91 发现的 `[QA-R88]-repro`，系该轮会话未执行注销、非注销接口缺陷——账号所有 children 与 users 行均完整保留，说明 `DELETE /api/auth/me` 从未被调用），按 account.ts 级联口径手动清理（children 先删，附前后 SQL 证据）并在报告中注明
 - 老板测试 token 由老板在会话中提供附件，勿写入仓库/日志

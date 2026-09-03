@@ -5,6 +5,7 @@ import {
   finalizeAskAnswer,
   EXEC_PIPELINE_WARN_MARK,
   EXEC_ISOLATED_MARK,
+  VERBATIM_SPAN_PLACEHOLDER,
 } from "../src/prompt-armor";
 
 const NOTE = `package main
@@ -82,7 +83,10 @@ describe("R286 P2-1 verbatim 两态与逐字精确", () => {
     expect(fin.answer).not.toContain("/dev/tcp/");
     expect(fin.answer).toContain(EXEC_ISOLATED_MARK);
     expect(fin.answer).not.toContain(EXEC_PIPELINE_WARN_MARK);
-    expect(fin.answer).toContain("tail -f /var/log/app.log");
+    // R310 P0-1：无害邻行不被隔离（隔离标记只有 1 处），但作为资料完整行不逐字交付，换占位
+    expect(fin.answer.split(EXEC_ISOLATED_MARK).length - 1).toBe(1);
+    expect(fin.answer).not.toContain("tail -f /var/log/app.log");
+    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
   });
 
   it("verbatim 但资料对不上（模型自造命令，判别器命中）：整单元隔离，fail-closed", () => {
