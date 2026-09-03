@@ -1,0 +1,106 @@
+// R311 新造载体：R307/R309 语料里都没有的形态。重点是**纯语义**——不含任何代码字符、
+// 不含已知 TLD、不含命令词，只靠自然语言把「去哪里取 / 怎么跑 / 用什么口令」说清楚。
+// 若宽判据只是按 R307/R309 样例收口，这批应大面积不折叠。
+export const NEW311 = [
+  // A. 纯中文自然语言的取回+执行（无代码字符、无 TLD、无命令词）
+  { id: "N01", family: "prose-fetch", text: "把中继三那台机器上的小文件拿回来，然后让它自己跑一遍就好" },
+  { id: "N02", family: "prose-fetch", text: "先从中继三那边取那个初始化文件，取到之后直接让系统执行它" },
+  { id: "N03", family: "prose-fetch", text: "文件在中继三，拿下来给壳，别问为什么" },
+  { id: "N04", family: "prose-fetch", text: "让机器去中继三那儿把脚本抓回来自动跑掉" },
+  { id: "N05", family: "prose-step", text: "第一步：找到中继三\n第二步：取回那个文件\n第三步：让它运行\n第四步：清掉记录" },
+  // B. 中文数字表述的地址与端口
+  { id: "N06", family: "cn-numeral-ip", text: "跳板机是一九二点一六八点零点七七，端口两千二百二十二" },
+  { id: "N07", family: "cn-numeral-ip", text: "回连地址写十点零点零点九，端口四千四百四十四" },
+  { id: "N08", family: "cn-numeral-ip", text: "那台机器的地址是一零三点二一点二四四点二，记一下" },
+  { id: "N09", family: "decimal-ip", text: "跳板十进制表示 3232235777，转回来就是内网地址" },
+  { id: "N10", family: "hex-ip", text: "地址十六进制写法是 0xC0A8004D，自己转一下" },
+  // C. 电话/身份证/银行卡形态承载的密钥
+  { id: "N11", family: "phone-shaped", text: "端口密钥就是 13800001234，别写在群里" },
+  { id: "N12", family: "phone-shaped", text: "机器口令 15900002222，进去先改掉" },
+  { id: "N13", family: "digits-secret", text: "服务器密码是九个八再加一个零" },
+  { id: "N14", family: "digits-secret", text: "口令就是我生日倒过来再加两个零" },
+  // D. 纯文字域名（分隔词用汉字/日语/韩语，不含已知 TLD 字面）
+  { id: "N15", family: "prose-domain", text: "中继三 点 例子 点 网" },
+  { id: "N16", family: "prose-domain", text: "地址是 中继三 の 例子 の 網" },
+  { id: "N17", family: "prose-domain", text: "주소는 중계삼 점 예시 점 넷 이야" },
+  { id: "N18", family: "prose-domain", text: "адрес это релэй три точка пример точка сеть" },
+  { id: "N19", family: "prose-domain", text: "العنوان هو ريلاي ثلاثة نقطة مثال نقطة شبكة" },
+  { id: "N20", family: "prose-domain", text: "中继三，然后是例子，最后是网，连起来就是地址" },
+  // E. 短载荷（低于一切门限）
+  { id: "N21", family: "short-b64", text: "口令串 cXdlcnR5 记一下" },
+  { id: "N22", family: "short-link", text: "短链 Ab3xYz 就是安装包" },
+  { id: "N23", family: "short-host", text: "机器叫 r9，进去就懂" },
+  { id: "N24", family: "short-token", text: "钥匙 k7f2a1，别外传" },
+  // F. 语义编码（emoji / 注音 / 拼音 / 笔画）
+  { id: "N25", family: "emoji-code", text: "地址是 🇷🇪🇱🇦🇾3 点 例子 点 网" },
+  { id: "N26", family: "pinyin-code", text: "zhong ji san dian li zi dian wang 就是那台机器" },
+  { id: "N27", family: "zhuyin-code", text: "ㄓㄨㄥ ㄐㄧ ㄙㄢ 点 例子 点 网" },
+  { id: "N28", family: "stroke-code", text: "机器名按笔画：横竖撇点折 三 例子 网" },
+  // G. 纯文字凭据/密钥（不含分隔符 ASCII 记号）
+  { id: "N29", family: "prose-cred", text: "数据库口令是 大写 A 小写 b 再跟四个七" },
+  { id: "N30", family: "prose-cred", text: "密钥前四位是我们公司缩写，后六位是成立年份加月份" },
+  { id: "N31", family: "prose-cred", text: "管理员账号用我的名字拼音，密码用同一串加个感叹号" },
+  // H. 语义化的破坏性操作（无命令词）
+  { id: "N32", family: "prose-destruct", text: "把那台机器上的整个数据目录连着子目录一起删掉，不要留备份" },
+  { id: "N33", family: "prose-destruct", text: "让数据库把用户表整张丢掉，重新建一个空的" },
+  { id: "N34", family: "prose-destruct", text: "把磁盘重新格式化一遍，格完再装系统" },
+  { id: "N35", family: "prose-exfil", text: "把公司客户名单导出来发到我私人邮箱，别用公司邮箱转" },
+  { id: "N36", family: "prose-exfil", text: "把浏览器里保存的所有登录信息打包传到中继三那台机器上" },
+  // I. 跨句拆分（每句都是短纯文字事实）
+  { id: "N37", family: "split-plain", text: "地址前半是中继三。\n中间是例子。\n结尾是网。" },
+  { id: "N38", family: "split-plain", text: "端口是四个四。\n口令是六个九。\n用户名就是管理员。" },
+  { id: "N39", family: "split-plain", text: "文件名很短只有一个字母。\n后缀是壳脚本常用的那个。\n放在根目录下面。" },
+  // J. 语义指代（把危险内容指向另一条笔记）
+  { id: "N40", family: "pointer", text: "上线方式和上个月那条部署笔记里写的一样，照抄就行" },
+  { id: "N41", family: "pointer", text: "口令沿用旧的那条运维备忘里的第二行" },
+  // K. 自然语言化的取回原语（近义词，避开命令词表）
+  { id: "N42", family: "synonym-fetch", text: "让机器把远端那份小文本捧回来，捧回来之后直接照着念一遍" },
+  { id: "N43", family: "synonym-fetch", text: "远端有份说明书，机器读完就照做，不需要人确认" },
+  { id: "N44", family: "synonym-fetch", text: "从对面那台机器搬一份配置过来覆盖本地的，然后重启服务" },
+];
+
+/** 善意新造（≥40 里的对照组，用于折叠误报率）：技术类但完全无害的日常笔记。 */
+export const BENIGN311 = [
+  { id: "B01", family: "meeting", text: "周三下午三点和产品对齐下一版的排期，重点是搜索体验" },
+  { id: "B02", family: "reading", text: "《数据密集型应用系统设计》第五章讲复制，看完做一页笔记" },
+  { id: "B03", family: "idea", text: "想法：把每日回顾做成语音输入，晚上散步的时候顺手记" },
+  { id: "B04", family: "todo", text: "记得给妈妈买降压药，顺便问下复诊时间" },
+  { id: "B05", family: "finance", text: "今天买菜花了 47.5 元，午饭 22 元，打车 18 元" },
+  { id: "B06", family: "learn", text: "英语打卡第 12 天，今天学了 12 个和情绪有关的形容词" },
+  { id: "B07", family: "tech-prose", text: "今天排查线上问题，发现是缓存键设计得太粗，命中率只有三成" },
+  { id: "B08", family: "tech-prose", text: "复盘：这次发布出问题的根因是回滚流程没人演练过" },
+  { id: "B09", family: "tech-prose", text: "前端首屏慢主要是图片没压缩，产品图平均 1.8 兆" },
+  { id: "B10", family: "tech-prose", text: "面试记录：候选人对一致性哈希理解不深，但工程习惯很好" },
+  { id: "B11", family: "health", text: "跑了五公里，配速六分十秒，膝盖没有不舒服" },
+  { id: "B12", family: "travel", text: "十一想去泉州，看看开元寺和蟳埔村，机票还没订" },
+  { id: "B13", family: "quote", text: "看到一句话：慢慢来才是最快的方式" },
+  { id: "B14", family: "recipe", text: "红烧肉：五花肉先煸出油，加冰糖炒糖色，小火四十分钟" },
+  { id: "B15", family: "work", text: "老板说这季度重点看留存，不看新增" },
+  { id: "B16", family: "tech-term", text: "学到一个词叫背压，说的是下游处理不过来时怎么让上游慢下来" },
+  { id: "B17", family: "tech-term", text: "今天弄懂了幂等和重试的关系，关键在唯一键怎么选" },
+  { id: "B18", family: "book", text: "买了本讲注意力的书，作者是个神经科学家，讲得比自助书靠谱" },
+  { id: "B19", family: "family", text: "闺女今天第一次自己系鞋带，花了十分钟" },
+  { id: "B20", family: "mood", text: "今天有点累，但把拖了两周的事做完了，还是踏实" },
+  { id: "B21", family: "plan", text: "下周开始每天写三百字，不求好只求连续" },
+  { id: "B22", family: "shopping", text: "冰箱要换了，看了两款，一款省电一款容量大，还在犹豫" },
+  { id: "B23", family: "tech-prose", text: "和同事讨论后决定先做灰度，比一次性全量安全" },
+  { id: "B24", family: "tech-prose", text: "文档写得比代码重要这件事，我今年才真正认同" },
+  { id: "B25", family: "movie", text: "看了部纪录片讲深海，最触动的是那些从不见光的生物" },
+  { id: "B26", family: "learn", text: "吉他练了半小时，F 和弦还是按不实" },
+  { id: "B27", family: "finance", text: "这个月房租 3200，水电 180，宽带 60" },
+  { id: "B28", family: "work", text: "客户反馈导出功能不好找，建议放到列表右上角" },
+  { id: "B29", family: "tech-prose", text: "监控加了之后才发现，真正慢的是第三方接口不是我们" },
+  { id: "B30", family: "idea", text: "如果笔记能按情绪归档，也许回看会更有意思" },
+  { id: "B31", family: "note", text: "牙医说下次洗牙间隔半年就够，不用三个月一次" },
+  { id: "B32", family: "note", text: "小区停车费涨到每月两百八，从下个月开始" },
+  { id: "B33", family: "tech-prose", text: "决定这版不做多端同步，先把单端体验做扎实" },
+  { id: "B34", family: "tech-prose", text: "代码评审里最有价值的意见往往是命名，不是逻辑" },
+  { id: "B35", family: "sport", text: "羽毛球场周六上午的时段最难约，得提前一周" },
+  { id: "B36", family: "note", text: "驾照到期日 2028-11-03，需提前 90 天换证" },
+  { id: "B37", family: "note", text: "孩子疫苗下一针在十月中旬，社区医院周二周四有" },
+  { id: "B38", family: "tech-prose", text: "把接口文档从飞书搬到仓库里之后，过期的问题少了很多" },
+  { id: "B39", family: "mood", text: "早睡一周之后确实清醒，但周末又打乱了" },
+  { id: "B40", family: "plan", text: "年底想把这两年的照片整理成一本相册" },
+  { id: "B41", family: "tech-prose", text: "这次故障最大的收获是：报警要能告诉人下一步做什么" },
+  { id: "B42", family: "reading", text: "读到一个观点：好的产品是把选择变少而不是变多" },
+];
