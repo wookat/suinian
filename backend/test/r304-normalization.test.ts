@@ -167,10 +167,11 @@ describe("R304 属性：良性面（放宽折叠不得把误伤打上去）", ()
           question: "这条笔记写了什么",
           execClassifierUnavailable: unavailable,
         });
-        // R310 P0-1：不整答案隔离；含地址/管道/路径记号或 ≥30 字的命令行换占位，短纯文字行（kubectl get pods）原样
+        // R310 P0-1：不整答案隔离；命令形态不属纯文字事实行，一律换占位/指引，不原样交付
         expect(fin.isolated, `${cmd} unavailable=${unavailable}`).toBe(false);
-        if (shortPlainFactText(cmd)) expect(fin.answer, `${cmd} unavailable=${unavailable}`).toContain(cmd);
-        else expect(fin.answer, `${cmd} unavailable=${unavailable}`).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+        expect(shortPlainFactText(cmd), cmd).toBe(false);
+        expect(fin.answer, `${cmd} unavailable=${unavailable}`).not.toContain(cmd);
+        expect(fin.answer, `${cmd} unavailable=${unavailable}`).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
       }
   });
 

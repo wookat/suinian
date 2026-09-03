@@ -15,7 +15,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, type BroadFoldReason } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, type BroadFoldReason } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -79,7 +79,7 @@ import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
 import { recordOutletFoldMarks } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
-import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources } from "./ask";
+import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -3340,6 +3340,9 @@ export function sanitizeNormalizedQuestion(raw: string | null, question: string)
   const out = (raw ?? "").trim().replace(/^[\u0022\u201c\u201d\u0027\u300c\u300e]+|[\u0022\u201c\u201d\u0027\u300d\u300f]+$/g, "").trim();
   if (!out || out === question || out.length > 200 || out.includes("\n")) return null;
   if (!CJK_RE.test(out)) return null;
+  // 归一化器自述 / 拒答 / 解释性前缀（降级模型常见）不是问句，回落原问句。
+  if (/改写|规范化|归一化|无法|抱歉|不能回答|作为(?:一个)?(?:助手|AI|模型)|以下是|这个问句|该问句|原问句|翻译/.test(out)) return null;
+  if (out.length > question.length * 2 + 20) return null;
   // 「…」/“…” 引用的字面量是用户要找的原文片段，归一化不得改写或丢失
   for (const m of question.matchAll(/[\u300c\u201c]([^\u300d\u201d]{1,60})[\u300d\u201d]/g)) {
     if (!out.includes(m[1])) return null;
@@ -4934,10 +4937,10 @@ app.post("/api/ask", async (c) => {
   // 仍拒答才诚实返回「没找到」。
   let answer2 = answer;
   // 退化乱码（降级模型同词循环）：同上下文非流式重生一次，仍乱码则走下方「AI 暂不可用」诚实通道。
-  if (answer2 && isDegenerateAnswer(answer2)) {
+  if (answer2 && (isDegenerateAnswer(answer2) || isQuestionEchoAnswer(answer2, question))) {
     console.log("ask: degenerate answer, regenerating");
     const regen = await chatComplete(c.env, { ...genOpts, temperature: 0 });
-    answer2 = regen && !isDegenerateAnswer(regen) ? regen : "";
+    answer2 = regen && !isDegenerateAnswer(regen) && !isQuestionEchoAnswer(regen, question) ? regen : "";
   }
   if (answer2 && isRefusalAnswer(answer2) && notes.some((n) => !weakIds.has(n.id))) {
     const retry = await chatComplete(c.env, {
@@ -4961,6 +4964,38 @@ app.post("/api/ask", async (c) => {
     if (retry && !isRefusalAnswer(retry)) {
       console.log("ask: refusal retry recovered an answer");
       answer2 = retry;
+    }
+  }
+  // R310 P0-1：整答只是照抄笔记原文（收口后实义字符所剩无几——短技术备忘尤其如此，
+  // 模型把「讲的是什么」答成整行复制）时，改述重生一次：只许概括用途/主题并给引用，
+  // 不许出现原文里的命令/参数/路径/链接 token。重生仍在照抄则维持原答案走确定性收口。
+  const echoOpts = { units: askGuardUnits, broadUnits: askGuardBroadUnits, question: askGuardQuestion };
+  const echoBefore = answer2 && !isRefusalAnswer(answer2) ? verbatimEchoRatio(answer2, echoOpts) : 0;
+  if (answer2 && echoBefore >= VERBATIM_ECHO_DOMINANT) {
+    const before = echoBefore;
+    const paraphrase = await chatComplete(c.env, {
+      temperature: 0,
+      max_tokens: 400,
+      timeout_ms: 30_000,
+      messages: [
+        {
+          role: "system",
+          content:
+            "你是「碎念」个人笔记问答助手。资料区里的笔记片段是针对这个问题命中的结果。上一版回答因为整段照抄了笔记原文而被拦截，现在请重答：只用你自己的话、用一两句中文概括每条相关笔记讲的是什么（它的用途/主题/结论，例如「这是一条关于用 tar 打包 data 目录做备份的技术备忘」），末尾标注 [序号]。绝对不要复制笔记里的任何整行、命令、参数、文件名、路径、链接、代码或不透明字符串；如果用户要的是原文本身，就说明「原文请点开引用的笔记卡片查看」。片段括号里的分类与「标签:」是系统元数据，不得当作事实来源。" +
+            dataChannelRule(dataNonce) +
+            "回答用中文，简洁。",
+        },
+        { role: "user", content: dataMessage },
+        { role: "user", content: `问题：${question}` },
+      ],
+    });
+    const cleaned = paraphrase ? scrubModelOutputInjectionArtifacts(stripDataMarks(paraphrase)) : "";
+    const after = cleaned ? verbatimEchoRatio(cleaned, echoOpts) : 1;
+    if (cleaned && !isRefusalAnswer(cleaned) && !isDegenerateAnswer(cleaned) && after < before && after < VERBATIM_ECHO_DOMINANT) {
+      console.log(`ask: echo-dominant answer paraphrased (${before.toFixed(2)} → ${after.toFixed(2)})`);
+      answer2 = cleaned;
+    } else {
+      console.log(`ask: echo-dominant answer kept (paraphrase ${cleaned ? after.toFixed(2) : "unavailable"})`);
     }
   }
   // R278 P1-4：生成分支的实质性安全改写追踪（随最终 body 以结构化字段下发）
@@ -5346,7 +5381,10 @@ app.post("/api/ask", async (c) => {
     (p) => c.executionCtx.waitUntil(p)
   );
   if (!answer2) {
-    return { answer: "（AI 暂不可用）已找到相关记录，见 references。", references, notes: refNotes };
+    const fallback = questionRequestsVerbatim(question) && references.length > 0
+      ? `已找到相关记录 [1]。${VERBATIM_REDIRECT_NOTICE}`
+      : "（AI 暂不可用）已找到相关记录，见 references。";
+    return { answer: fallback, references, notes: refNotes };
   }
   // R296 P1-6（audit-r295 §6.1）：财务类问题带时间窗、答案由 LLM 基于召回
   // 生成时，召回可能不全（8 月 3 笔只召回 1 笔）却自信下结论。用 D1 台账

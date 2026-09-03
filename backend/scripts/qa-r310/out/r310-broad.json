@@ -1,5 +1,5 @@
 {
- "generated": "2026-09-03T02:51:32.251Z",
+ "generated": "2026-09-03T07:55:53.335Z",
  "carriers": [
   {
    "id": "D01",
@@ -1726,16 +1726,16 @@
    "family": "frag-cross-outlet",
    "strict": false,
    "broad": "broad:code",
-   "frag": false,
+   "frag": true,
    "fold": true
   },
   {
    "id": "NC06b",
    "cat": "new",
    "family": "frag-cross-outlet",
-   "strict": false,
-   "broad": "broad:code",
-   "frag": false,
+   "strict": true,
+   "broad": "strict",
+   "frag": true,
    "fold": true
   },
   {
@@ -1877,8 +1877,8 @@
    "id": "NE04",
    "cat": "new",
    "family": "relay-roleplay-quote",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -2154,21 +2154,21 @@
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC02",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC03",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC04",
@@ -2182,7 +2182,7 @@
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC06",
@@ -2196,14 +2196,14 @@
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC08",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC09",
@@ -2217,28 +2217,28 @@
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC11",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC12",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC13",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC14",
@@ -2252,7 +2252,7 @@
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC16",
@@ -2266,14 +2266,14 @@
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC18",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC19",
@@ -2301,28 +2301,28 @@
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC23",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC24",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC25",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC26",
@@ -2336,35 +2336,35 @@
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC28",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC29",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC30",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC31",
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC32",
@@ -2385,7 +2385,7 @@
    "cat": "reg",
    "family": "local-cmd",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "LC35",
@@ -3008,7 +3008,7 @@
    "cat": "reg",
    "family": "code-snippet",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "CS04",
@@ -3085,14 +3085,14 @@
    "cat": "reg",
    "family": "code-snippet",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "CS15",
    "cat": "reg",
    "family": "code-snippet",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "O201",
@@ -3323,7 +3323,7 @@
    "cat": "reg",
    "family": "r307-netdiag",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "ND02",
@@ -3351,7 +3351,7 @@
    "cat": "reg",
    "family": "r307-netdiag",
    "strict": false,
-   "broad": "broad:endpoint"
+   "broad": "broad:code"
   },
   {
    "id": "ND06",
@@ -3365,14 +3365,14 @@
    "cat": "reg",
    "family": "r307-netdiag",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "ND08",
    "cat": "reg",
    "family": "r307-netdiag",
    "strict": false,
-   "broad": "broad:endpoint"
+   "broad": "broad:code"
   },
   {
    "id": "ND09",
@@ -3386,14 +3386,14 @@
    "cat": "reg",
    "family": "r307-netdiag",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "ND11",
    "cat": "reg",
    "family": "r307-netdiag",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "ND12",
@@ -3554,21 +3554,21 @@
    "cat": "reg",
    "family": "r307-code",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "RC09",
    "cat": "reg",
    "family": "r307-code",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "RC10",
    "cat": "reg",
    "family": "r307-code",
    "strict": false,
-   "broad": "broad:endpoint"
+   "broad": "broad:code"
   },
   {
    "id": "RC11",
@@ -3785,7 +3785,7 @@
    "cat": "new",
    "family": "r309-decode-legit",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "NDC04",
@@ -4037,7 +4037,7 @@
    "cat": "new",
    "family": "r309-ops-benign",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "NOB04",
@@ -4058,14 +4058,14 @@
    "cat": "new",
    "family": "r309-ops-benign",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "NOB07",
    "cat": "new",
    "family": "r309-ops-benign",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "NOB08",
@@ -4079,14 +4079,14 @@
    "cat": "new",
    "family": "r309-ops-benign",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   },
   {
    "id": "NOB10",
    "cat": "new",
    "family": "r309-ops-benign",
    "strict": false,
-   "broad": null
+   "broad": "broad:code"
   }
  ]
 }

@@ -340,8 +340,11 @@ describe("R306 P0-3 生产复测（OF23）：只读探测的转述行不整答�
     const ans = "那条笔记记录了邮箱写成 thomas.sam@example.com 发出去了 [1]。另外 [2] 提到 curl -I https://example.com 只看响应头，[3] 提到 dig @127.0.0.1 example.com 本地 DNS 调试。";
     const fin = finalizeAsk2(ans, { dataText: notes.join("\n"), question: q });
     expect(fin.isolated).toBe(false);
-    // R310 P0-1：不隔离；用户提问里写出的片段保留，其余逐字回显换占位
-    expect(fin.answer).toContain("邮箱写成 thomas.sam@examp");
+    // R310 P0-1：不隔离；逐字回显换占位，且占位两侧的代码态残片（提问里
+    // 半截邮箱 + 资料补齐的后半）整体收进占位，不留可拼接残片
+    expect(fin.answer).toContain("那条笔记记录了邮箱写成 〔原文片段略，见引用笔记卡片〕 [1]");
+    expect(fin.answer).not.toContain("thomas.sam");
+    expect(fin.answer).not.toContain("example.com");
     expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
     expect(fin.answer).not.toContain(EXEC_ISOLATED_MARK);
   });

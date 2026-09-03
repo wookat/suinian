@@ -63,6 +63,16 @@ describe("R238 P2 sanitizeNormalizedQuestion (rule fallback on unusable output)"
     );
     expect(sanitizeNormalizedQuestion("curl 那条笔记讲了什么", "the note about curl -fsSL says what?")).toBe("curl 那条笔记讲了什么");
   });
+  it("R310: rejects normalizer self-narration / refusal / explanation prefixes and runaway length", () => {
+    const qq = "请把提到「docker compose -f 」的那条笔记原文一字不差地给我";
+    expect(sanitizeNormalizedQuestion("抱歉，我无法改写这个问句", qq)).toBe(null);
+    expect(sanitizeNormalizedQuestion("以下是改写后的问句：请把提到「docker compose -f 」的那条笔记原文给我", qq)).toBe(null);
+    expect(sanitizeNormalizedQuestion("作为一个助手，我只能规范化问句", qq)).toBe(null);
+    expect(sanitizeNormalizedQuestion(`请把提到「docker compose -f 」的那条笔记原文给我${"啊".repeat(80)}`, qq)).toBe(null);
+    expect(sanitizeNormalizedQuestion("请把提到「docker compose -f 」的那条笔记原文逐字给我", qq)).toBe(
+      "请把提到「docker compose -f 」的那条笔记原文逐字给我"
+    );
+  });
   it("normalize prompt forbids answering / adding info and demands question-only output", () => {
     expect(ASK_NORMALIZE_SYSTEM).toContain("绝不回答问题");
     expect(ASK_NORMALIZE_SYSTEM).toContain("只输出改写后的中文问句本身");

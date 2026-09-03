@@ -4018,6 +4018,15 @@ const BROAD_OPAQUE_MIN_LEN = 12;
 /** 脚本文件名 / 管道给壳 / 壳原语——命令形态的最小面（不要求地址同现）。 */
 const BROAD_COMMAND_SHAPE_RE =
   /\b[\w-]+\.(?:sh|bash|zsh|ps1|bat|cmd|vbs|hta|exe|msi|run)\b|\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b|\|\s*(?:iex|powershell|pwsh|python\d?|perl|ruby|node)\b|\b(?:curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|Invoke-Expression|certutil|bitsadmin|mshta|rundll32|regsvr32|nc|ncat|netcat|socat|chmod\s+\+x|base64\s+-d|xxd\s+-r|eval|exec)\b|<\(\s*(?:curl|wget)|\/dev\/tcp\/|\bIEX\b|DownloadString|DownloadFile/i;
+/** 行首（可带「标签：」/ `$ ` 提示符）为 ASCII 命令词，且同行出现壳选项（` -x` / ` --long`）、管道、
+ * 重定向、`&&` 串接、`$(` 或反引号——命令形态本身即折，不问命令是否取回 / 外连（`tar -czf`、`docker compose up -d`）。 */
+const BROAD_SHELL_LINE_RE =
+  /^(?:[^\n\x21-\x7e]{0,24}[：:「『]\s*)?(?:[$#>]\s*)?(?:sudo\s+|doas\s+)?(?:[a-z][a-z0-9.+_-]*|[A-Z][a-z]+-[A-Z][A-Za-z]+)(?:\s+[^\s|;&<>`]+){0,12}?(?:\s-{1,2}[A-Za-z][\w-]*|\s*\|\s*[a-z:]|\s*&&\s*[a-z]|(?<![-=<])\s*>>?\s*[\w/.~$]|\$\(|`[a-z])/m;
+/** 壳函数 / fork bomb 形态（`:(){ :|:& };:`），或块设备路径（`mkfs.ext4 /dev/sdb1`）。 */
+const BROAD_SHELL_FUNC_RE = /\w*\(\)\s*\{[^}]*[|&;][^}]*\}|\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|mapper\/)[\w]*/;
+/** SQL 语句形态（DDL / DML 主干），不要求分号。 */
+const BROAD_SQL_LINE_RE =
+  /\b(?:drop\s+(?:table|database|schema|index|view|user)|delete\s+from\s+\w|truncate\s+(?:table\s+)?\w|alter\s+(?:table|user|role|database)\s+\w|update\s+[\w.`"]+\s+set\s+\w|insert\s+into\s+\w|grant\s+\w+.*\s+on\s+|revoke\s+\w+.*\s+on\s+|create\s+(?:table|user|role|database|trigger|procedure|function)\s+|(?:^|[：:(;`]\s*)select\s+[\w*.,()\s`"]+\s+from\s+\w)/im;
 /** 结构化分隔标签串：≥3 个标签由**同一个**分隔 token 隔开（`relay3 杠杠 example 杠杠 net`），
  * 或 ≥4 个单字符由同一分隔符逐字拆开（`r-e-l-a-y`）。不查词表、不查 TLD、不限分隔长度。 */
 const BROAD_LETTERWISE_RE = /(?<![\w])(?:[a-z0-9]([ \-_·•.])){3,}[a-z0-9](?![\w])/i;
@@ -4058,6 +4067,8 @@ export function broadFoldReason(content: string | null | undefined): BroadFoldRe
     // 命令形态：脚本文件名 / 管道给壳 / 取回・执行・外连原语（不要求地址同现）。
     const commandShape = BROAD_COMMAND_SHAPE_RE.test(text) || BROAD_COMMAND_SHAPE_RE.test(cmdSurface);
     if (commandShape) return "broad:code";
+    // 命令行 / 壳函数 / SQL 语句形态：不取回、不外连的本机命令也折（`tar -czf`、`rm -rf`、`DROP TABLE`）。
+    if (BROAD_SHELL_LINE_RE.test(text) || BROAD_SHELL_FUNC_RE.test(text) || BROAD_SQL_LINE_RE.test(text)) return "broad:code";
     // 编码块 / 不透明串：摩尔斯、\x/%xx/八进制转义、长 base64/hex、密文样 token。
     // URL 内的短 id（视频 BV 号 / Figma 文件 id / 搜索词）是书签常态：URL 里的不透明串要 ≥20 才算。
     const urlFree = text.replace(/\bhttps?:\/\/[^\s<>"']+/gi, " ");
@@ -5384,6 +5395,33 @@ export function segmentIsReaderDirective(segText: string): boolean {
   return segmentIsNonExecReaderDirective(segText);
 }
 
+// R310：答案里「原文请点开引用的笔记卡片查看」是系统契约的固定指引（模型被要求
+// 这样回答 verbatim 问法），不是笔记里对读者的行动指令。只豁免**纯 CJK 指路句**：
+// 去掉引用序号后不含任何 ASCII 词（命令/路径/链接/不透明串一律不在豁免面）。
+const CARD_REDIRECT_RE =
+  /(?:原文|全文|完整内容)[^。！？\n]{0,16}(?:点开|打开|点击|查看|见)[^。！？\n]{0,24}卡片|(?:点开|打开|点击)[^。！？\n]{0,16}卡片[^。！？\n]{0,16}(?:查看|看)[^。！？\n]{0,8}(?:原文|全文)/;
+
+export function isCardRedirectSegment(segText: string): boolean {
+  const t = segText.normalize("NFKC").replace(/[[［]\d{1,2}[\]］]/g, "").trim();
+  if (t.length === 0 || t.length > 120) return false;
+  if (/[A-Za-z0-9\/\\@#$%&*+=<>|`~^_]/.test(t)) return false;
+  return CARD_REDIRECT_RE.test(t);
+}
+
+/** 去掉句段里的指路子句（「…技术备忘 [1]，原文请点开引用的笔记卡片查看」），其余子句照常判。 */
+export function stripCardRedirectClauses(segText: string): string {
+  const parts = segText.split(/([，,；;])/);
+  if (parts.length < 3) return isCardRedirectSegment(segText) ? "" : segText;
+  let out = "";
+  for (let i = 0; i < parts.length; i += 2) {
+    const clause = parts[i];
+    const delim = parts[i + 1] ?? "";
+    if (isCardRedirectSegment(clause)) continue;
+    out += clause + delim;
+  }
+  return out;
+}
+
 /**
  * 除可执行管道外的读者指令判定（R278 拆分）：isolateNoteInstructions 对管道
  * 有专门的整段处置（verbatim 原文+警示 / 非 verbatim 整段隔离），其余读者
@@ -5999,7 +6037,7 @@ export function isolateNoteInstructions(
         if (!inExecSpan(lineStart, lineEnd) && !inDegradedUnit(lineStart, lineEnd) && !inDangerUnit(lineStart, lineEnd)) {
           if (hasExecIntent(normalizeCommandText(l))) {
             reps.push({ start: lineStart, end: lineEnd, rep: execSegRep(l) });
-          } else if (segmentIsNonExecReaderDirective(l)) {
+          } else if (segmentIsNonExecReaderDirective(stripCardRedirectClauses(l))) {
             reps.push({ start: lineStart, end: lineEnd, rep: INSTRUCTION_ISOLATED_MARK });
           }
         }
@@ -6028,7 +6066,7 @@ export function isolateNoteInstructions(
       }
       continue;
     }
-    if (segmentIsNonExecReaderDirective(seg.text)) {
+    if (segmentIsNonExecReaderDirective(stripCardRedirectClauses(seg.text))) {
       const fold = foldCompact(seg.text);
       if (templateQuote && fold.length >= 8 && templateQuote.includes(fold)) {
         reps.push({ start: seg.start, end: seg.end, rep: `${QUOTE_MARK}${seg.text}` });
@@ -6248,13 +6286,17 @@ export const VERBATIM_LCS_CHARS = 30;
 export const VERBATIM_LINE_CHARS = 12;
 export const VERBATIM_PLAIN_LINE_CHARS = 24;
 
-/** 行里除日期/时间/金额/百分数外没有任何带分隔符（. / : @ _ - | \）的 ASCII 记号。 */
+/** 行里除日期/时间/金额/百分数外没有任何带分隔符（. / : @ _ - | \）的 ASCII 记号，且不是命令/SQL 形态。 */
 const NUMERIC_TOKEN_RE = /^[\d][\d,.:\-\/%]*$/;
+function commandShapeLine(line: string): boolean {
+  return BROAD_COMMAND_SHAPE_RE.test(line) || BROAD_SHELL_LINE_RE.test(line) || BROAD_SHELL_FUNC_RE.test(line) || BROAD_SQL_LINE_RE.test(line);
+}
 /** 整段文本都是短于 VERBATIM_PLAIN_LINE_CHARS 的纯文字单事实行（答案可原样引用的唯一形态）。 */
 export function shortPlainFactText(text: string): boolean {
   return text.split("\n").every((l) => plainFactLine(l) && foldPlain(l).length < VERBATIM_PLAIN_LINE_CHARS);
 }
 export function plainFactLine(line: string): boolean {
+  if (commandShapeLine(line)) return false;
   for (const tok of line.split(/\s+/)) {
     for (const ascii of tok.match(/[\x21-\x7e]+/g) ?? []) {
       const core = ascii.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "");
@@ -6480,9 +6522,55 @@ export function closeVerbatimOverlap(
       from = to + 1;
     }
   }
+  // 占位两侧紧邻的代码态 ASCII 残片（`backup.tar.〔…〕/`、`-czf 〔…〕`）一并收进占位：提问里用户自己
+  // 写出的那半段命令被豁免后，不能留下一截拼接得上的命令字符。纯字母词（工具名/英文散文）
+  // 不吃，引用角标/括号/引号不吃。
+  const CODE_CH = /[\x21-\x7e]/;
+  const STOP_CH = /[[\]()（）「」『』“”"'‘’]/;
+  const codeish = (tok: string): boolean => /[\/.\-=:\\|$~%&*+<>@#^`_]/.test(tok) && !/^[[［]\d{1,2}[\]］]$/.test(tok);
+  const extend = (p: { start: number; end: number }): void => {
+    const lineStart = answer.lastIndexOf("\n", p.start - 1) + 1;
+    const lead = /^[ \t]*(?:\d{1,2}[.、)）]|[-*+•])[ \t]*/.exec(answer.slice(lineStart, lineStart + 6));
+    const floor = lineStart + (lead ? lead[0].length : 0);
+    for (;;) {
+      let s = p.start;
+      while (s > floor && CODE_CH.test(answer[s - 1]) && !STOP_CH.test(answer[s - 1])) s--;
+      if (s < p.start) {
+        p.start = s;
+        continue;
+      }
+      const m = /(\S+) $/.exec(answer.slice(Math.max(floor, s - 80), s));
+      if (m && codeish(m[1]) && [...m[1]].every((c) => CODE_CH.test(c) && !STOP_CH.test(c))) {
+        p.start = s - m[0].length;
+        continue;
+      }
+      break;
+    }
+    for (;;) {
+      let e = p.end;
+      while (e < answer.length && CODE_CH.test(answer[e]) && !STOP_CH.test(answer[e])) e++;
+      if (e > p.end) {
+        p.end = e;
+        continue;
+      }
+      const m = /^ (\S+)/.exec(answer.slice(e, e + 80));
+      if (m && codeish(m[1]) && [...m[1]].every((c) => CODE_CH.test(c) && !STOP_CH.test(c))) {
+        p.end = e + m[0].length;
+        continue;
+      }
+      break;
+    }
+  };
+  for (const p of pieces) extend(p);
+  const flat: Array<{ start: number; end: number }> = [];
+  for (const p of pieces) {
+    const last = flat[flat.length - 1];
+    if (last && p.start <= last.end) last.end = Math.max(last.end, p.end);
+    else flat.push({ ...p });
+  }
   let out = "";
   let cursor = 0;
-  for (const s of pieces) {
+  for (const s of flat) {
     out += answer.slice(cursor, s.start) + VERBATIM_SPAN_PLACEHOLDER;
     cursor = s.end;
   }
@@ -6491,6 +6579,23 @@ export function closeVerbatimOverlap(
     .replace(new RegExp(`(?:${VERBATIM_SPAN_PLACEHOLDER}[ \\t，,。.；;、]*){2,}`, "g"), VERBATIM_SPAN_PLACEHOLDER)
     .replace(/[“"「『`]\s*〔原文片段略，见引用笔记卡片〕\s*[”"」』`]/g, VERBATIM_SPAN_PLACEHOLDER);
   return { answer: out, count: merged.length };
+}
+
+/** 答案里被逐字收口吃掉的实义字符（字母/数字）占比：≥ VERBATIM_ECHO_DOMINANT 视为「整答只是照抄原文」，
+ * 生成侧应改述重生一次，而不是把占位残片递给用户。 */
+export const VERBATIM_ECHO_DOMINANT = 0.5;
+export function verbatimEchoRatio(answer: string, opts: { units: string[]; broadUnits?: string[]; question?: string }): number {
+  const meaningful = (s: string): number =>
+    s
+      .split(VERBATIM_SPAN_PLACEHOLDER)
+      .join("")
+      .replace(/[[［]\d{1,2}[\]］]/g, "")
+      .replace(/[^\p{L}\p{N}]/gu, "").length;
+  const before = meaningful(answer);
+  if (before === 0) return 0;
+  const closed = closeVerbatimOverlap(answer, opts);
+  if (closed.count === 0) return 0;
+  return 1 - meaningful(closed.answer) / before;
 }
 
 /** 系统控制标记自身不算复述（它们不是笔记原文，但可能与笔记里仿冒的标记同形）。 */
