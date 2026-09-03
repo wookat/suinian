@@ -6288,6 +6288,14 @@ export const VERBATIM_PLAIN_LINE_CHARS = 24;
 
 /** 行里除日期/时间/金额/百分数外没有任何带分隔符（. / : @ _ - | \）的 ASCII 记号，且不是命令/SQL 形态。 */
 const NUMERIC_TOKEN_RE = /^[\d][\d,.:\-\/%]*$/;
+/** 代码/表达式标点（括号、花/方括号、分号、赋值/比较、箭头、反引号、通配、管道、`$`）：含之即非纯文字行。 */
+const CODE_PUNCT_RE = /[(){}\[\];=<>*`$&|\\^~]/;
+/** 引用角标 `[1]` 与清单勾选框 `[ ]`/`[x]` 不是代码标点。 */
+const NON_CODE_BRACKET_RE = /\[(?:\d{1,3}|[ xX])\]/g;
+/** 行首（可带缩进、「标签：」/ `build:` 目标名 / `$ ` 提示符）为常见构建/包管理/运维工具名并跟 ASCII 子命令
+ * （`npm run build`、`gradle assembleDebug`、`gh pr checks 342`）：没有选项/管道也属命令形态，不是纯文字事实。 */
+const TOOL_COMMAND_LINE_RE =
+  /^\s*(?:(?:[^\n\x21-\x7e]{0,24}|[\w.-]{1,24})[：:「『]\s*)?(?:[$#>]\s*)?(?:sudo\s+)?(?:npm|npx|yarn|pnpm|bun|deno|pip3?|python3?|node|tsx?|tsc|vitest|jest|eslint|prettier|cargo|go|make|gradlew?|mvn|gem|bundle|composer|php|ruby|java|javac|dotnet|flutter|swift|pod|xcodebuild|adb|ffmpeg|git|gh|glab|docker|podman|kubectl|helm|terraform|ansible|wrangler|aws|gcloud|az|brew|apt|apt-get|yum|dnf|pacman|snap|systemctl|service|journalctl|ip|ssh|scp|rsync|tar|zip|unzip|redis-cli|psql|mysql|sqlite3|k6|wrk|ab)\s+[a-z][\w.:/-]*/im;
 function commandShapeLine(line: string): boolean {
   return BROAD_COMMAND_SHAPE_RE.test(line) || BROAD_SHELL_LINE_RE.test(line) || BROAD_SHELL_FUNC_RE.test(line) || BROAD_SQL_LINE_RE.test(line);
 }
@@ -6296,7 +6304,7 @@ export function shortPlainFactText(text: string): boolean {
   return text.split("\n").every((l) => plainFactLine(l) && foldPlain(l).length < VERBATIM_PLAIN_LINE_CHARS);
 }
 export function plainFactLine(line: string): boolean {
-  if (commandShapeLine(line)) return false;
+  if (commandShapeLine(line) || CODE_PUNCT_RE.test(line.replace(NON_CODE_BRACKET_RE, "")) || TOOL_COMMAND_LINE_RE.test(line)) return false;
   for (const tok of line.split(/\s+/)) {
     for (const ascii of tok.match(/[\x21-\x7e]+/g) ?? []) {
       const core = ascii.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "");

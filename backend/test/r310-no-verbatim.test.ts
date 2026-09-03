@@ -23,6 +23,7 @@ import {
   VERBATIM_LINE_CHARS,
   VERBATIM_PLAIN_LINE_CHARS,
   plainFactLine,
+  shortPlainFactText,
   VERBATIM_BROAD_LCS,
   BROAD_OUTLET_FOLD_TAG,
   EXEC_OUTLET_WARN_TAG,
@@ -78,6 +79,34 @@ describe("R310 P0-1 closeVerbatimOverlap：确定性逐字收口", () => {
     expect(r.count).toBe(1);
     expect(r.answer).not.toContain(SAFE_LINE);
     expect(r.answer).toContain(VERBATIM_SPAN_PLACEHOLDER);
+  });
+
+  it("代码行 / 无选项工具命令行不是纯文字事实行：折叠后 <24 字也按 12 字整行收口（生产善意 CS06/CS08/CS09/LC09/LC32）", () => {
+    const codeLines = [
+      "useEffect(() => { setReady(true); }, []);",
+      "for i in range(10): print(i * i)",
+      "let mut v = vec![1, 2, 3];",
+      "export default defineConfig({})",
+      "npm run build 用了 42 秒",
+      "gradle assembleDebug 出 apk",
+      "构建命令：$ yarn build 即可",
+      "build: npm run build 即可",
+      "\tnpm run build 即可",
+      "gh pr checks 342 看一眼 CI",
+      "ip route get 1.1.1.1",
+      "journalctl -u nginx 看日志",
+    ];
+    for (const line of codeLines) {
+      expect(plainFactLine(line), line).toBe(false);
+      expect(shortPlainFactText(line), line).toBe(false);
+      const r = closeVerbatimOverlap(`那条笔记讲的是 ${line}。`, { units: [line] });
+      expect(r.count, line).toBe(1);
+      expect(r.answer, line).not.toContain(line);
+      expect(r.answer, line).toContain(VERBATIM_SPAN_PLACEHOLDER);
+    }
+    for (const line of ["房贷利率 3.45%，等额本息 30 年", "屏幕分辨率 1920x1080，缩放 1.25 倍最舒服", "明天 12:30 和产品对齐需求，会议室 B2", "go 语言课下周开始", "记得 make 一份周报", "本月支出共 1200 元，主要是房租 [1]。", "- [ ] 周五交周报", "IP 段规划 10.0.0.0/8 内网，不对外", "型号 iPhone 15 Pro Max"]) {
+      expect(plainFactLine(line), line).toBe(true);
+    }
   });
 
   it("NFKC 全角 / 标点 / 空白差异不构成绕过", () => {
