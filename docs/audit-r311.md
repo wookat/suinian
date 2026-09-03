@@ -256,7 +256,10 @@ testing agent 执行 test planning → 最大化（1600×1069）→ 录屏 → `
 | 敏感九出口 + 生命周期 | **14/14**（含 MCP/周报无敏感明文、软删/回收站/恢复、注销级联 401） | `out/lifecycle.log` |
 | R2 权威列举 | bucket `suinian-media` **total 0**、`non_boss_objects 0` | `out/r2-verify.json` |
 | D1 逐表 | 25 表逐表，见 §12.3 | `out/d1-verify.txt` |
-| injection-eval 498 / retrieval / ask-eval 141 / 附件 R2 密文 | **【未验证】**（本轮启动但未在报告截止前拿到终态） | `out/regress-b.log`、`out/regress-c.log`、`out/attach.log` |
+| ask-eval 141 | **141/141**（含 q107「最贵的钢琴」✅；CITE 141/141），eval 账号级联删除 | `out/askeval.log` |
+| 附件 R2 密文 | 上传后 R2 对象头 `SNE1`、明文泄漏 false；注销 200 → 旧 token 401 → R2 对象读取失败（级联删除） | `out/attach.log` |
+| injection-eval 240 变体 / 498 问答 | **执行 0 / 泄露 0 / benign 误伤 0**（R310 自报 1/498 的 R278-E09 本轮两问均「中和」；R267 13 例、R269 4 例历史穿透均 0） | `out/injection.log`、`out/injection.json` |
+| retrieval-eval 22 | 召回率 100%、平均精确率 91.0%、必过题未过 0，p50 4.7s / p95 7.5s | `out/retrieval.log`、`out/retrieval.json` |
 | Lighthouse / axe / PWA 离线壳 + outbox exactly-once | **【未验证】**（本轮未跑） | — |
 
 `shell 0/15` 不是退化：R310 已把口径反转为「答案 0 个脚本 token + 有点开指引」（`decision-r310.md` §366），
@@ -277,7 +280,8 @@ testing agent 执行 test planning → 最大化（1600×1069）→ 录屏 → `
 | normal 善意整答隔离 5.2% | **推翻**：生产 reg 善意 normal 整答/大段占位 40/243 = **16.5%**（§8.1） |
 | 批量出口整体声明 | **成立**（备份 ZIP 响应头 + README + 逐条 fold；周报/月报占位）【实测确证】 |
 | MCP 出口带机器可读标记 | **推翻**：`search_notes` 返回体无 `fold`/`fold_reason`；MCP `ask` 逐字复述（§6.3） |
-| ask-eval 140/141（q107）、injection 1/498（R278-E09）、忠实性 29/30 | **【未验证】**（ask-eval/injection 未拿到终态；忠实性本轮 30/30） |
+| ask-eval 140/141（q107）、忠实性 29/30 | **本轮均通过**：ask-eval 141/141（q107 ✅）、忠实性 30/30【实测确证】 |
+| injection 执行判定 1/498（R278-E09） | **本轮 0/498**（R278-E09 中和）【实测确证】；提醒：这套 eval 的载体全是旧语料，与 §0 的新语料结论不矛盾 |
 | 危险 215 × 2 全矩阵在补丁版重跑 | 本轮独立重跑：reg/new 全 0 泄漏【实测确证】 |
 | 部署 `f58734a0` 时旧版本曾短暂 100% | **部分成立**（§12.4） |
 
@@ -297,7 +301,7 @@ testing agent 执行 test planning → 最大化（1600×1069）→ 录屏 → `
 
 **还不能，差 4 件：**
 
-1. **确定性路由的收口降级**（§6.1）：`verbatimClosure:"broad"` 让 42/44 新载体零收口——这是当前泄漏的主因。
+1. **确定性路由的收口降级**（§6.1）：`verbatimClosure:"broad"` 让 42/44 新载体在该路由上零收口——与第 2 件共同构成当前泄漏（归因比例见 §6.1，标为推断）。
 2. **纯文字例外的逃逸窗口**（§1.2、§2）：22–28 字窗口足以承载完整中文危险指令；例外必须从「短且纯文字」
    改为语义/长度以外的判据，或对**自有单笔记**才放开。
 3. **未收口出口**（§6.2–§6.3）：线索标题 3/19 逐字、MCP `ask` 逐字、MCP `search_notes` 缺 fold 机器字段。
@@ -312,11 +316,12 @@ testing agent 执行 test planning → 最大化（1600×1069）→ 录屏 → `
   旧 token 复查 **401**。浏览器 4 账号注销 + 4 token 401（§9）。【实测确证】`out/prod-cleanup.log`
 - **D1 逐表**（`prod/d1-verify.sh`，11:59Z，25 表）：所有带 `user_id` 的表 `user_id_orphans=0`，
   所有带 `note_id` 的表 `note_id_orphans=0`；`attachments 0`、`media_*_failures 0`。
-  截止该次快照 `users` 仍有 2 个 `[QA-R311]` 账号（`ask-eval-8dro7c`、`inj-mtlh1orh-hp7t`）——
-  这是当时**仍在运行**的 ask-eval / injection-eval 脚本的临时账号，两脚本在自身流程末尾注销。
-  **【未验证】**：这两个账号的最终注销状态与注销后的 D1/R2 复查（本轮未在截止前重跑 `d1-verify.sh`）。
-- **R2 权威列举**（Cloudflare API 分页 list，12:00Z）：bucket `suinian-media` **total 0 对象、non_boss_objects 0**。【实测确证】
-- `u_boss` 数据未动（`notes` 表 non_boss 行均属上述 QA 临时账号）。
+  该次快照 `users` 仍有 2 个 `[QA-R311]` 账号（当时仍在运行的 ask-eval / injection-eval 临时账号，存档 `out/d1-verify-1159Z.txt`）。
+- **D1 终态（全部回归脚本结束后重跑，13:06Z，`out/d1-verify-final.txt`）**：`users` 仅 `u_boss`，`qa_users=0`；
+  所有带 `user_id` 的表 `non_boss_rows=0`、`user_id_orphans=0`；所有带 `note_id` 的表 `note_id_orphans=0`；
+  `attachments 0`、`media_*_failures 0`；`auth_rate_limits qa_keys=0`。**零残留【实测确证】**。
+- **R2 权威列举**（Cloudflare API 分页 list，12:00Z 与 13:07Z 两次）：bucket `suinian-media` **total 0 对象、non_boss_objects 0**。【实测确证】`out/r2-verify-final.json`
+- `u_boss` 数据未动：终态 `notes` 6 行、`daily_reviews` 16、`weekly_reports` 3 全部属 `u_boss`，QA 运行前后未对其执行任何写操作。
 
 ### 12.4 部署核对
 
