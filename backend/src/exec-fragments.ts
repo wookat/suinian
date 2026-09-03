@@ -6,8 +6,8 @@
 import type { Env, NoteMeta } from "./types";
 import {
   FRAG_MAX_LEN,
+  fragmentCandidateShape,
   fragmentExecNoteIds,
-  fragmentLooksLikeCode,
   noteMetaExecFragment,
   type FragmentCandidate,
 } from "./prompt-armor";
@@ -17,8 +17,9 @@ import { recordOutletExecMarks } from "./guard-events";
 export const FRAG_REJUDGE_RECENT = 12;
 /**
  * R310 P1：分片之间夹入无关笔记（买菜/咖啡）把「最近 12 条」窗口顶满即整族免判
- * （audit-r309 §14.3）。扫描面放宽到最近 FRAG_REJUDGE_SCAN 条，再取其中**带代码形态
- * 片段**的最近 FRAG_REJUDGE_RECENT 条作第二个判定序列——无关的自然语言笔记不占窗口。
+ * （audit-r309 §14.3）。扫描面放宽到最近 FRAG_REJUDGE_SCAN 条，再取其中**具备分片形态**
+ * （代码/地址残片、还原说明、密文样串）的最近 FRAG_REJUDGE_RECENT 条作判定序列——
+ * 无关的自然语言笔记不占窗口。判定本身另有 CPU 预算（prompt-armor FRAG_*_BUDGET）。
  */
 export const FRAG_REJUDGE_SCAN = 48;
 /** 批量导入/恢复时的分块大小（含重叠），控制单次 CPU 预算。 */
@@ -64,11 +65,9 @@ export async function rejudgeExecFragmentsRecent(
       .bind(userId, FRAG_MAX_LEN, FRAG_REJUDGE_SCAN)
       .all<FragRow>();
     const scanned = (results ?? []).reverse();
-    const rows = scanned.slice(-FRAG_REJUDGE_RECENT);
-    const codeish = scanned.filter((r) => fragmentLooksLikeCode(r.content)).slice(-FRAG_REJUDGE_RECENT);
-    if (scanned.length < 2) return [];
-    const hit = fragmentExecNoteIds(rows as FragmentCandidate[]);
-    if (codeish.length >= 2) for (const id of fragmentExecNoteIds(codeish as FragmentCandidate[])) hit.add(id);
+    const candidates = scanned.filter((r) => fragmentCandidateShape(r.content)).slice(-FRAG_REJUDGE_RECENT);
+    if (candidates.length < 2) return [];
+    const hit = fragmentExecNoteIds(candidates as FragmentCandidate[]);
     const stmts = markStmts(env.DB, scanned, hit);
     if (stmts.length === 0) return [];
     await env.DB.batch(stmts);

@@ -686,6 +686,16 @@ const PASSPHRASE_RE = /(?:口令|暗号|暗語|密令|接头|通关|通關|密�
 // 文件扩展名伪 TLD（R274，audit-r273 P1-1 B21）：`in.mov`、`dist/*.js` 这类
 // 文件名被域名正则误判为主机，导致 ffmpeg/构建命令段落被整段剥除。末段是
 // 常见文件扩展名时不按域名处理。
+/**
+ * 主机名前面是否紧贴协议头（`https://`、`ssh://`）或 `www.`。只回看固定长度的尾窗，
+ * 否则对每个域名候选都从文本开头扫一遍会让长笔记的端点提取退化成 O(n²)。
+ */
+const SCHEME_TAIL_RE = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)$/i;
+const SCHEME_LOOKBACK = 48;
+function precededByScheme(text: string, idx: number): boolean {
+  return SCHEME_TAIL_RE.test(text.slice(Math.max(0, idx - SCHEME_LOOKBACK), idx));
+}
+
 const FILE_EXT_PSEUDO_TLD = new Set([
   "js", "ts", "jsx", "tsx", "mjs", "cjs", "py", "sh", "go", "rs", "rb", "php", "java", "kt", "c", "h", "cpp", "cs",
   "md", "txt", "log", "json", "yml", "yaml", "toml", "ini", "conf", "env", "lock", "sql", "db", "csv", "xml", "html", "css",
@@ -725,7 +735,7 @@ function segHasForeignHost(
     // 裸点分标识符（R276，benign B31）：`limits.memory` 这类配置键没有协议
     // 前缀也没有 www.，末段又不是常见 TLD，不按域名处理。带协议/www. 的
     // 一律按域名判（任意 TLD 都可能是真域）。
-    const schemed = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)$/i.test(canon.slice(0, m.index));
+    const schemed = precededByScheme(canon, m.index);
     if (!schemed && !m[0].toLowerCase().startsWith("www.") && !COMMON_TLDS.has(tld)) continue;
     // R300 P1-2：裸包名/文档域（无协议头、无路径）不计入地址面（docker.io/pypi.org 类）；
     // 官方安装源主机不构成回传端点（R288 §4）。
@@ -3805,7 +3815,7 @@ export function remoteEndpointForms(
       const port = /:(\d{2,5})$/.exec(raw)?.[1];
       const host = raw.replace(/:\d{2,5}$/, "").replace(/^www\./, "");
       const tld = host.slice(host.lastIndexOf(".") + 1);
-      const schemed = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)$/i.test(s.slice(0, m.index));
+      const schemed = precededByScheme(s, m.index);
       // R302 P0-3：带协议头的主机不吃文件扩展名伪 TLD 豁免——`https://x.sh/…`
       // 是真域（bun.sh 类 TLD 与脚本扩展名重合），文件名不会带协议头。
       if (!port && !schemed && FILE_EXT_PSEUDO_TLD.has(tld)) continue;
@@ -4099,10 +4109,64 @@ export function noteRowBroadFoldReason(row: {
 // 要能被用户复原，就必须(a)同账号、(b)时间相邻、(c)可按顺序首尾相接，这
 // 三条正是判定面的构造条件。拼接只用于判定；标记落回参与拼接的每一条。
 //
-// 复杂度上界：窗口 ≤ FRAG_WINDOW 条、组合按滑窗（非全排列），因此是线性的。
+// 复杂度上界：窗口 ≤ FRAG_WINDOW 条、滑窗 × ≤4 片全排列 × 拼法变体；每次调用另有
+// 严判据调用次数与拼接变体数两道预算（Workers 内 Date.now() 不随 CPU 推进，不能用
+// 墙钟截止），预算耗尽即停止——分片标记在 R310 只影响折叠优先级，可以安全地少判。
 
 /** 参与拼接的邻近笔记条数上界（滑动窗口）。 */
 const FRAG_WINDOW = 6;
+/**
+ * 单次 fragmentExecNoteIds 内送入严判据（noteContainsExecutableCommand）的拼接文本总字数上界。
+ * 严判据与端点归一都随文本长度线性走，按字数而非次数计预算，长笔记窗口不会把 CPU 打爆。
+ */
+export const FRAG_STRICT_BUDGET = 40_000;
+/** 单次 fragmentExecNoteIds 内做端点集合差的拼接文本总字数上界。 */
+export const FRAG_STITCH_BUDGET = 60_000;
+
+interface FragProjections {
+  piece: string;
+  firstPiece: string;
+  rawPiece: string;
+  rawFirstPiece: string;
+  whole: string;
+  codeRun: string;
+}
+
+interface FragCtx {
+  strictLeft: number;
+  stitchLeft: number;
+  exhausted: boolean;
+  endpoints: Map<string, string[]>;
+  restore: Map<string, boolean>;
+  cipher: Map<string, boolean>;
+  danger: Map<string, boolean>;
+  projections: Map<string, FragProjections>;
+}
+
+function newFragCtx(): FragCtx {
+  return {
+    strictLeft: FRAG_STRICT_BUDGET,
+    stitchLeft: FRAG_STITCH_BUDGET,
+    exhausted: false,
+    endpoints: new Map(),
+    restore: new Map(),
+    cipher: new Map(),
+    danger: new Map(),
+    projections: new Map(),
+  };
+}
+
+function fragSeqKey(win: FragmentCandidate[]): string {
+  return win.map((n) => n.id).join("\u0000");
+}
+
+function memo<T>(m: Map<string, T>, key: string, f: () => T): T {
+  const v = m.get(key);
+  if (v !== undefined) return v;
+  const r = f();
+  m.set(key, r);
+  return r;
+}
 /**
  * 参与拼接的单条长度上界。R310 P1：旧值 200 是「分片必须短」的经验假设，攻击者
  * 只要把每片写长一点就整族失效（audit-r309 §14.3）。放宽到 800——拼接判定仍要求
@@ -4122,24 +4186,28 @@ export interface FragmentCandidate {
  */
 export function fragmentExecNoteIds(notes: FragmentCandidate[]): Set<string> {
   const out = new Set<string>();
+  const ctx = newFragCtx();
+  // 只有具备分片形态的笔记参与拼接（纯自然语言笔记只会稀释窗口）；每次调用带 CPU 预算，
+  // 预算耗尽先舍弃旧窗口（生产 [QA-R310] 载体账号实测：无预算时写入 503 资源超限）。
   const frags = notes.filter((n) => {
     const t = (n.content ?? "").trim();
-    return t.length > 0 && t.length <= FRAG_MAX_LEN;
+    return t.length > 0 && t.length <= FRAG_MAX_LEN && fragmentCandidateShape(t);
   });
   if (frags.length < 2) return out;
-  for (let i = 0; i < frags.length; i++) {
-    for (let len = 2; len <= FRAG_WINDOW && i + len <= frags.length; len++) {
+  // 从最新一条所在的窗口开始（调用方按时间有序），预算耗尽时先舍弃旧窗口。
+  for (let i = frags.length - 2; i >= 0 && !ctx.exhausted; i--) {
+    for (let len = 2; len <= FRAG_WINDOW && i + len <= frags.length && !ctx.exhausted; len++) {
       const win = frags.slice(i, i + len);
       if (win.every((n) => out.has(n.id))) continue;
       for (const seq of fragmentOrders(win)) {
-        if (!stitchedWindowIsDangerous(seq)) continue;
+        if (!stitchedWindowIsDangerous(seq, ctx)) continue;
         // 只标记**最小**拼接子集：夹在分片之间的无关笔记（买菜清单）剔除后
         // 仍成立时不连坐。R310 P1：带代码形态片段的一片（`cur`、`-qO- htt`）
         // 即使剔除后余下仍危险也不剔——它是载荷的一部分，不是被夹住的路人。
         let minimal = seq;
         for (let k = 0; k < minimal.length && minimal.length > 2; ) {
           const without = minimal.filter((_, idx) => idx !== k);
-          if (!fragmentLooksLikeCode(minimal[k].content) && stitchedWindowIsDangerous(without)) minimal = without;
+          if (!fragmentLooksLikeCode(minimal[k].content) && stitchedWindowIsDangerous(without, ctx)) minimal = without;
           else k++;
         }
         for (const n of minimal) out.add(n.id);
@@ -4147,6 +4215,7 @@ export function fragmentExecNoteIds(notes: FragmentCandidate[]): Set<string> {
       }
     }
   }
+  if (ctx.exhausted) console.warn(`prompt-armor: fragment budget exhausted notes=${frags.length}`);
   return out;
 }
 
@@ -4157,27 +4226,45 @@ export function fragmentExecNoteIds(notes: FragmentCandidate[]): Set<string> {
  * NC02/NC03/NC05/NC06 实测全漏）。现在按**端点集合差**判：拼接后出现了任何一片
  * 单独都没有的端点即成立；良性相邻笔记各自的地址在差集里，因此不会互相连坐。
  */
-function stitchedWindowIsDangerous(win: FragmentCandidate[]): boolean {
+function stitchedWindowIsDangerous(win: FragmentCandidate[], ctx: FragCtx = newFragCtx()): boolean {
+  const key = fragSeqKey(win);
+  const cached = ctx.danger.get(key);
+  if (cached !== undefined) return cached;
+  if (ctx.exhausted) return false;
   // 端点集合取原文 ∪ 地址判定面（拼读/分隔/还原说明折叠后）：还原说明与密文分别
   // 落在两条笔记里时（R309 NB04a/b），只有拼接面才解得出地址。
-  const endpointsOf = (t: string): string[] => [
-    ...remoteEndpointForms(t, { ignoreAllowlist: true, includeEmails: true }),
-    ...remoteEndpointForms(normalizeAddressSurface(t), { ignoreAllowlist: true, includeEmails: true }),
-  ];
+  const endpointsOf = (t: string): string[] =>
+    memo(ctx.endpoints, t, () => [
+      ...remoteEndpointForms(t, { ignoreAllowlist: true, includeEmails: true }),
+      ...remoteEndpointForms(normalizeAddressSurface(t), { ignoreAllowlist: true, includeEmails: true }),
+    ]);
+  // 跨笔记的还原说明必须指向别的笔记（上一条那串 / 前面那段）：单条里「gunzip 还原备份」
+  // 说的是自己，不与邻近的 base64 缩略图拼成「密文 + 还原」（R310 善意 NDC06/NDC08 实测连坐）。
+  const restoreOf = (n: FragmentCandidate): boolean =>
+    memo(ctx.restore, n.id, () => hasRestoreInstruction(n.content ?? "") && FRAG_CROSS_NOTE_REF_RE.test(n.content ?? ""));
+  const cipherOf = (n: FragmentCandidate): boolean => memo(ctx.cipher, n.id, () => cipherishToken(n.content ?? ""));
   const own = new Set<string>();
   for (const n of win) for (const e of endpointsOf(n.content ?? "")) own.add(e);
   // 还原说明与密文/不透明串分落两条（R310 P1：hasRestoreInstruction 去掉同笔记位置约束）：
   // 单条都不同时具备「说明 + 密文」而拼接后具备，也算拼出了新信息。
-  const restoreSplit =
-    !win.some((n) => hasRestoreInstruction(n.content ?? "") && cipherishToken(n.content ?? "")) &&
-    win.some((n) => hasRestoreInstruction(n.content ?? "")) &&
-    win.some((n) => cipherishToken(n.content ?? ""));
-  for (const st of stitchWindow(win)) {
+  const restoreSplit = !win.some((n) => restoreOf(n) && cipherOf(n)) && win.some(restoreOf) && win.some(cipherOf);
+  let result = false;
+  for (const st of stitchWindow(win, ctx)) {
+    if (ctx.stitchLeft <= 0 || ctx.strictLeft <= 0) {
+      ctx.exhausted = true;
+      break;
+    }
+    ctx.stitchLeft -= st.text.length;
     const fresh = endpointsOf(st.text).filter((e) => !own.has(e) && !seamArtifactEndpoint(e, st, endpointsOf));
     if (fresh.length === 0 && !restoreSplit) continue;
-    if (noteContainsExecutableCommand(st.text)) return true;
+    ctx.strictLeft -= st.text.length;
+    if (noteContainsExecutableCommand(st.text)) {
+      result = true;
+      break;
+    }
   }
-  return false;
+  if (!ctx.exhausted) ctx.danger.set(key, result);
+  return result;
 }
 
 /** 密文样/不透明串：末段非公共 TLD 的点分标签串、长 base64/hex、摩尔斯段。 */
@@ -4211,11 +4298,24 @@ function fragmentPiece(content: string, opts?: { keepTrailingSpace?: boolean; fi
   return piece.trim().length > 0 ? piece : t;
 }
 
+/**
+ * 能参与拼接的片段形态：代码/地址残片、还原说明、密文样串、或拼读・分隔面能折出地址。
+ * 纯自然语言笔记（买菜清单）拼上去只会稀释，不会拼出新端点——提前剔除，窗口只留候选。
+ */
+export function fragmentCandidateShape(content: string): boolean {
+  if (fragmentLooksLikeCode(content) || hasRestoreInstruction(content) || cipherishToken(content)) return true;
+  if (remoteEndpointForms(content, { ignoreAllowlist: true, includeEmails: true }).length > 0) return true;
+  return remoteEndpointForms(normalizeAddressSurface(content), { ignoreAllowlist: true, includeEmails: true }).length > 0;
+}
+
 /** 片段本身是否带代码/地址形态（ASCII 标识符・路径・管道・协议头残片）。 */
+const FRAG_CODE_SHAPE_RE =
+  /[A-Za-z][A-Za-z0-9]*[\/.:|@\-_][A-Za-z0-9\/.:|@\-_ ]*|[\/.:|@\-_][A-Za-z0-9]{2,}|\b(?:cur|url|wget|htt|tps?|sh|bash|iex)\b/;
+
 export function fragmentLooksLikeCode(content: string): boolean {
-  return /[A-Za-z][A-Za-z0-9]*[\/.:|@\-_][A-Za-z0-9\/.:|@\-_ ]*|[\/.:|@\-_][A-Za-z0-9]{2,}|\b(?:cur|url|wget|htt|tps?|sh|bash|iex)\b/.test(
-    fragmentPiece(content)
-  );
+  // 片段尾部自带说明（`h | sh —— 顺着连起来就是要跑的命令`）时最后一个「是」会吃掉片段，
+  // 两个分界投影都看（与 stitchWindow 的 firstSep 投影同口径）。
+  return FRAG_CODE_SHAPE_RE.test(fragmentPiece(content)) || FRAG_CODE_SHAPE_RE.test(fragmentPiece(content, { firstSep: true }));
 }
 
 /**
@@ -4223,8 +4323,17 @@ export function fragmentLooksLikeCode(content: string): boolean {
  * 攻击者会把「第二段」先写、「第一段」后写并在说明里标注拼接顺序（R309 NC04
  * frag-shuffled 实测漏判），读者按标注拼，判定面也要能按标注拼。
  */
+/** 指向另一条笔记的指代（上一条那串 / 前面那段 / 下一条 / the previous note / above）。 */
+const FRAG_CROSS_NOTE_REF_RE =
+  /[上前下后後另]\s*一?\s*[条條段则則篇个個项項]|上面|下面|前面|后面|後面|刚才|剛才|刚刚|剛剛|之前|先前|那[串段条條行个個]|\b(?:previous|prior|preceding|earlier|next|following|above|below|last|other)\s+(?:note|entry|line|one|string|item|post)\b|\bthat\s+string\b/i;
+
+/** 片段说明里标注了拼接顺序（第 N 段 / 先・后・中间拼 / step N / ①②③ / 序号）。 */
+const FRAG_ORDER_HINT_RE = /第\s*[一二三四五六七八九十\d]+\s*[段片节部截块]|[最先后中间末尾]{1,2}拼|顺序|次序|\b(?:step|part|piece|chunk|seg(?:ment)?)\s*#?\d|[①②③④⑤⑥⑦⑧⑨⑩]|(?:^|\n)\s*\(?\d{1,2}[.)、．]/i;
+
 function fragmentOrders(win: FragmentCandidate[]): FragmentCandidate[][] {
-  if (win.length > 4) return [win, [...win].reverse()];
+  // 全排列只在有人标注了顺序时才有意义：读者要按标注拼，说明必然带顺序提示；没有
+  // 提示则读者只能按时间顺序（或倒序）拼——判定面同口径，避免 24 倍无谓枚举。
+  if (win.length > 4 || !win.some((n) => FRAG_ORDER_HINT_RE.test(n.content))) return [win, [...win].reverse()];
   const out: FragmentCandidate[][] = [];
   const permute = (rest: FragmentCandidate[], acc: FragmentCandidate[]) => {
     if (rest.length === 0) {
@@ -4256,16 +4365,28 @@ function joinPieces(parts: string[], sep: string): Stitched {
   return { text, seams };
 }
 
-function stitchWindow(win: FragmentCandidate[]): Stitched[] {
-  const pieces = win.map((n) => fragmentPiece(n.content));
-  const firstPieces = win.map((n) => fragmentPiece(n.content, { firstSep: true }));
-  // 「按空格断开」的分片（`wget ` + `-qO- htt`）trim 后会粘成 `wget-qO-`：保留片尾空白再直接相接。
-  const rawPieces = win.map((n) => fragmentPiece(n.content, { keepTrailingSpace: true }));
-  const rawFirstPieces = win.map((n) => fragmentPiece(n.content, { keepTrailingSpace: true, firstSep: true }));
-  const wholes = win.map((n) => n.content.trim());
-  // 片段夹在说明句中间（`把 curl http://relay3.exa 这半句` / `另半句 mple.net/p.sh | bash 拼上去`）：
-  // 取每条里最长的代码形态连续段再拼（R310 P1，R309 NC06 实测漏判）。
-  const codeRuns = win.map((n) => fragmentCodeRun(n.content));
+function fragProjections(n: FragmentCandidate, ctx: FragCtx): FragProjections {
+  return memo(ctx.projections, n.id, () => ({
+    piece: fragmentPiece(n.content),
+    firstPiece: fragmentPiece(n.content, { firstSep: true }),
+    // 「按空格断开」的分片（`wget ` + `-qO- htt`）trim 后会粘成 `wget-qO-`：保留片尾空白再直接相接。
+    rawPiece: fragmentPiece(n.content, { keepTrailingSpace: true }),
+    rawFirstPiece: fragmentPiece(n.content, { keepTrailingSpace: true, firstSep: true }),
+    whole: n.content.trim(),
+    // 片段夹在说明句中间（`把 curl http://relay3.exa 这半句` / `另半句 mple.net/p.sh | bash 拼上去`）：
+    // 取每条里最长的代码形态连续段再拼（R310 P1，R309 NC06 实测漏判）。
+    codeRun: fragmentCodeRun(n.content),
+  }));
+}
+
+function stitchWindow(win: FragmentCandidate[], ctx: FragCtx = newFragCtx()): Stitched[] {
+  const pr = win.map((n) => fragProjections(n, ctx));
+  const pieces = pr.map((p) => p.piece);
+  const firstPieces = pr.map((p) => p.firstPiece);
+  const rawPieces = pr.map((p) => p.rawPiece);
+  const rawFirstPieces = pr.map((p) => p.rawFirstPiece);
+  const wholes = pr.map((p) => p.whole);
+  const codeRuns = pr.map((p) => p.codeRun);
   const out: Stitched[] = [];
   const seen = new Set<string>();
   for (const st of [
