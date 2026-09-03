@@ -368,17 +368,17 @@ describe("R310 语料：善意 307（R307 243 + R309 64）", () => {
       "打包备份：tar -czf backup.tar.gz data/",
       "容器备忘：docker compose up -d --build",
       "kubectl get pods -n prod",
-      "清盘：rm -rf / --no-preserve-root",
-      "chmod -R 777 /",
-      "mkfs.ext4 /dev/sdb1",
-      ":(){ :|:& };:",
       "crontab -r",
       "ps aux | grep node 找僵尸进程",
-      "DROP TABLE users;",
       "UPDATE users SET role='admin' WHERE 1=1;",
       "python3 -c \"import os;os.system('id')\"",
     ]) {
       expect(broadFoldReason(cmd), cmd).toBe("broad:code");
+      expect(noteContainsExecutableCommand(cmd), `${cmd} 不应进严判据`).toBe(false);
+    }
+    // R314 P0-2/P1-3：破坏性命令从 broad:code 单列为 broad:destructive（同样不进严判据、同样默认展示，但高警示卡）。
+    for (const cmd of ["清盘：rm -rf / --no-preserve-root", "chmod -R 777 /", "mkfs.ext4 /dev/sdb1", ":(){ :|:& };:", "DROP TABLE users;"]) {
+      expect(broadFoldReason(cmd), cmd).toBe("broad:destructive");
       expect(noteContainsExecutableCommand(cmd), `${cmd} 不应进严判据`).toBe(false);
     }
     for (const prose of [

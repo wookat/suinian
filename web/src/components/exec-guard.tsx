@@ -1,22 +1,60 @@
-import { useState, type ReactNode } from "react"
-import { Code2, Eye, EyeOff, TriangleAlert } from "lucide-react"
+import { useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react"
+import { Code2, Eye, EyeOff, KeyRound, TriangleAlert } from "lucide-react"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 
 /**
- * 原文折叠警示（R304 P0-A → R310 P0-2）：服务端在笔记数据上给出折叠标记，
+ * 原文折叠警示（R304 P0-A → R310 P0-2 → R314 P0-2/P0-3）：服务端在笔记数据上给出折叠标记，
  * 所有展示笔记原文的出口（时间流卡片、问答引用卡片、搜索结果、今日回顾等）
  * 共用本组件——默认折叠原文，用户主动展开才显示（一次点击，不打断流）。
  *
- * 三档强度（R312 P0-3）：
+ * 五档强度：
  * - strict：严判据 contains_executable_command 命中，红色警示「含可执行命令」，默认折叠；
  * - broad：宽判据 fold 命中（远程端点 / 取回执行原语 / 编码块 / 混淆书写），
  *   中性提示「含端点/代码形态内容」，默认折叠；
+ * - credential：口令 / 密钥 / 连接串口令段（fold_reason=broad:credential），默认折叠，建议标为敏感；
+ * - destructive：破坏性命令 rm -rf / dd / DROP TABLE 等（fold_reason=broad:destructive），
+ *   默认展示但带红色高警示横幅，不与日常命令备忘同级；
  * - code：本机命令行 / SQL 等日常命令备忘（fold_reason=broad:code），默认展示，
- *   只在正文上方给一行「复制/执行前核对」提示（复制时另有确认）。
- * 这是用户自己的笔记：不删除、不改写，只避免「不带警示地把原文推到眼前」。
+ *   只在正文上方给一行「复制/执行前核对」提示。
+ *
+ * 复制路径（R314 P0-3）：本组件在自己的正文区域监听 copy 事件（选中 + Ctrl+C / 右键复制 /
+ * 展开后复制都会经过这里）——strict / destructive / credential / broad 先弹确认再写剪贴板；
+ * code 放行原生复制、只给一行提醒。监听范围只限被标记笔记的正文区，不是全局拦截。
+ * 这是用户自己的笔记：不删除、不改写，只避免「不带警示地把原文推到眼前 / 推进终端」。
  */
-export type FoldLevel = "strict" | "broad" | "code"
+export type FoldLevel = "strict" | "broad" | "code" | "destructive" | "credential"
 
 export const CODE_COPY_HINT = "命令备忘：复制或执行前请核对来源与参数"
+export const CODE_COPIED_HINT = "已复制：执行前请核对来源与参数，勿直接粘贴到终端"
+export const DESTRUCTIVE_BANNER = "破坏性命令（会删除/覆写数据）：请勿直接执行，先核对对象与参数"
+
+export const COPY_CONFIRM: Record<FoldLevel, { title: string; description: string }> = {
+  strict: {
+    title: "复制含可执行命令的内容？",
+    description: "这条笔记含会下载执行远程代码或建立外连的命令。复制后请勿直接粘贴到终端执行，先核对来源。",
+  },
+  destructive: {
+    title: "复制破坏性命令？",
+    description: "这条笔记含会删除/覆写数据的命令（如 rm -rf / dd / DROP TABLE）。复制后请先核对目标对象与参数，确认无误再决定是否执行。",
+  },
+  credential: {
+    title: "复制口令/密钥类内容？",
+    description: "这条笔记含口令、密钥或连接串口令段。复制到剪贴板可能被其它应用读取，建议改为标记敏感加密保存。",
+  },
+  broad: {
+    title: "复制命令/代码形态内容？",
+    description: "这条笔记含远程地址、命令行或编码形态内容（可能只是你自己的备忘）。复制后请先核对参数与来源，再决定是否执行。",
+  },
+  code: {
+    title: "复制命令/代码形态内容？",
+    description: "这条笔记含命令行或代码形态内容（可能只是你自己的备忘）。复制后请先核对参数与来源，再决定是否执行。",
+  },
+}
+
+/** 该强度下复制是否需要先确认（code 只提醒不阻断）。 */
+export function copyNeedsConfirm(level: FoldLevel): boolean {
+  return level !== "code"
+}
 
 export function ExecGuardBadge({ level = "strict" }: { level?: FoldLevel }) {
   if (level === "code") {
@@ -35,6 +73,22 @@ export function ExecGuardBadge({ level = "strict" }: { level?: FoldLevel }) {
       </span>
     )
   }
+  if (level === "credential") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+        <KeyRound className="size-3" />
+        含口令/密钥
+      </span>
+    )
+  }
+  if (level === "destructive") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-400">
+        <TriangleAlert className="size-3" />
+        破坏性命令
+      </span>
+    )
+  }
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-400">
       <TriangleAlert className="size-3" />
@@ -44,7 +98,7 @@ export function ExecGuardBadge({ level = "strict" }: { level?: FoldLevel }) {
 }
 
 const COPY: Record<
-  Exclude<FoldLevel, "code">,
+  Exclude<FoldLevel, "code" | "destructive">,
   { folded: string; revealed: string; help: string; border: string; pill: string; text: string }
 > = {
   strict: {
@@ -63,6 +117,72 @@ const COPY: Record<
     pill: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
     text: "text-amber-700 dark:text-amber-400",
   },
+  credential: {
+    folded: "含口令/密钥类内容，已折叠",
+    revealed: "含口令/密钥类内容，建议标为敏感笔记加密保存",
+    help: "这条笔记含口令、密钥或连接串口令段（按形态判据折叠，可能有误判）。内容未被修改，展开即可查看；问答区只给占位，不逐字转写。",
+    border: "border-amber-500/30 bg-amber-500/5",
+    pill: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+    text: "text-amber-700 dark:text-amber-400",
+  },
+}
+
+function selectionText(): string {
+  return typeof window === "undefined" ? "" : (window.getSelection()?.toString() ?? "")
+}
+
+/**
+ * 被标记笔记正文的复制守卫：包一层 div 监听 copy 事件（选中 + Ctrl+C、右键「复制」都会触发）。
+ * 需确认的强度：阻止原生复制、记下选中文本、弹确认；确认后再用 clipboard API 写入。
+ * code 强度：放行原生复制，显示一行提醒。
+ */
+export function CopyGuard({ level, children, className }: { level: FoldLevel; children: ReactNode; className?: string }) {
+  const [pending, setPending] = useState<string | null>(null)
+  const [hint, setHint] = useState(false)
+  const timer = useRef<number | null>(null)
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current)
+    },
+    []
+  )
+  function onCopy(e: ClipboardEvent<HTMLDivElement>) {
+    const text = selectionText()
+    if (!text) return
+    if (!copyNeedsConfirm(level)) {
+      setHint(true)
+      if (timer.current !== null) window.clearTimeout(timer.current)
+      timer.current = window.setTimeout(() => setHint(false), 2500)
+      return
+    }
+    e.preventDefault()
+    setPending(text)
+  }
+  const copy = COPY_CONFIRM[level]
+  return (
+    <div className={className} data-copy-guard={level} onCopy={onCopy}>
+      {children}
+      {hint && (
+        <p role="status" className="mt-1 text-xs text-muted-foreground">
+          {CODE_COPIED_HINT}
+        </p>
+      )}
+      <ConfirmDialog
+        open={pending !== null}
+        title={copy.title}
+        description={copy.description}
+        confirmLabel="仍要复制"
+        onConfirm={() => {
+          const text = pending ?? ""
+          setPending(null)
+          navigator.clipboard.writeText(text).catch(() => {
+            // clipboard unavailable
+          })
+        }}
+        onCancel={() => setPending(null)}
+      />
+    </div>
+  )
 }
 
 export function ExecGuard({
@@ -78,17 +198,32 @@ export function ExecGuard({
   const [revealed, setRevealed] = useState(false)
   if (level === "code") {
     return (
-      <div className="min-w-0 flex-1" data-fold-level="code">
-        <p className="mb-1.5 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
-          <Code2 className="mt-0.5 size-3.5 shrink-0" />
-          {CODE_COPY_HINT}
-        </p>
-        {children}
-      </div>
+      <CopyGuard level="code" className="min-w-0 flex-1">
+        <div data-fold-level="code">
+          <p className="mb-1.5 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+            <Code2 className="mt-0.5 size-3.5 shrink-0" />
+            {CODE_COPY_HINT}
+          </p>
+          {children}
+        </div>
+      </CopyGuard>
+    )
+  }
+  if (level === "destructive") {
+    return (
+      <CopyGuard level="destructive" className="min-w-0 flex-1">
+        <div data-fold-level="destructive" className="rounded-lg border border-red-500/40 bg-red-500/5 p-2.5">
+          <p role="alert" className="mb-1.5 flex items-start gap-1.5 text-xs font-medium leading-relaxed text-red-700 dark:text-red-400">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+            {DESTRUCTIVE_BANNER}
+          </p>
+          {children}
+        </div>
+      </CopyGuard>
     )
   }
   const copy = COPY[level]
-  const Icon = level === "broad" ? Code2 : TriangleAlert
+  const Icon = level === "broad" ? Code2 : level === "credential" ? KeyRound : TriangleAlert
   if (!revealed) {
     return (
       <button
@@ -111,22 +246,24 @@ export function ExecGuard({
     )
   }
   return (
-    <div className="min-w-0 flex-1" data-fold-level={level}>
-      <p className={`mb-1.5 flex items-start gap-1.5 text-xs leading-relaxed ${copy.text}`}>
-        <Icon className="mt-0.5 size-3.5 shrink-0" />
-        {copy.revealed}
-      </p>
-      {children}
-      <button
-        onClick={(e) => {
-          e.stopPropagation()
-          setRevealed(false)
-        }}
-        aria-expanded={true}
-        className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-      >
-        <EyeOff className="size-3" /> 收起
-      </button>
-    </div>
+    <CopyGuard level={level} className="min-w-0 flex-1">
+      <div data-fold-level={level}>
+        <p className={`mb-1.5 flex items-start gap-1.5 text-xs leading-relaxed ${copy.text}`}>
+          <Icon className="mt-0.5 size-3.5 shrink-0" />
+          {copy.revealed}
+        </p>
+        {children}
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            setRevealed(false)
+          }}
+          aria-expanded={true}
+          className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <EyeOff className="size-3" /> 收起
+        </button>
+      </div>
+    </CopyGuard>
   )
 }

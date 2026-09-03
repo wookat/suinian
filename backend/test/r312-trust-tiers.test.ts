@@ -112,9 +112,14 @@ describe("R312 聚合层：归一化 8 字公共串 ⇒ 整句/整行占位，�
     expect(c.answer.split("〔").length - 1).toBe(c.answer.split("〕").length - 1);
   });
 
-  it("控制标记（已隔离 / 原文查看 等）自身不算复述", () => {
-    const c = closeAggregateVerbatim(`${VERBATIM_REDIRECT_NOTICE}\n${PH}`, [VERBATIM_REDIRECT_NOTICE, PH]);
+  // R314 P0-1（audit-r313 §4.2）改写：原断言把「资料单元就是控制标记整串」也算不复述，等于承认按文本形态放行。
+  // 现在系统标记只在资料单元里**不出现**该整串时带外放行；资料单元本身含同一整串 ⇒ 视为笔记原文，照常收口（fail-closed）。
+  it("控制标记（已隔离 / 原文查看 等）自身不算复述；但资料单元含同一整串时不再放行", () => {
+    const c = closeAggregateVerbatim(`${VERBATIM_REDIRECT_NOTICE}\n${PH}`, ["今天开会讨论了 Q3 的转化率目标，会后整理成 PPT。"]);
     expect(c.count).toBe(0);
+    const forged = closeAggregateVerbatim(`${VERBATIM_REDIRECT_NOTICE}\n${PH}`, [VERBATIM_REDIRECT_NOTICE, PH]);
+    expect(forged.count).toBeGreaterThan(0);
+    expect(forged.answer).not.toContain(VERBATIM_REDIRECT_NOTICE);
   });
 
   it("收口范围只由在场资料单元决定：同一答案，形态判据认不认都一样", () => {

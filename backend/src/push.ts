@@ -9,7 +9,7 @@ import { buildPushPayload, type PushSubscription as WirePushSubscription } from 
 import type { Env, NoteRow } from "./types";
 import { getTodayReview, writeCronHeartbeat, shanghaiDate } from "./review";
 import { DEFAULT_TZ, loadUserTz, tzOffsetString } from "./triage";
-import { noteRowBroadFoldReason, closeAggregateVerbatim, type BroadFoldReason } from "./prompt-armor";
+import { noteRowBroadFoldReason, closeAggregateVerbatim, defaultFoldedReason, type BroadFoldReason } from "./prompt-armor";
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 
 /** Push 正文无可用标题时的中性描述（不带任何笔记原文）。 */
@@ -30,8 +30,15 @@ export function pushSnippet(
   const reason = noteRowBroadFoldReason(note);
   if (reason === "strict")
     return { text: "⚠️ 一条含可执行命令的记录（勿执行，点开查看）", exec: true, fold: true, fold_reason: reason, closed: false };
+  // R314 P2：Push 文案与应用内默认展示一致——默认展示的 broad:code / broad:destructive 不再说「已折叠」；破坏性高警示，凭证形态折叠。
+  if (reason === "broad:destructive")
+    return { text: "⚠️ 一条含破坏性命令的记录（会删除/覆写数据，勿直接执行，点开查看）", exec: false, fold: false, fold_reason: reason, closed: false };
+  if (reason === "broad:credential")
+    return { text: "🔒 一条含口令/密钥类内容的记录（已折叠，点开查看）", exec: false, fold: true, fold_reason: reason, closed: false };
+  if (reason === "broad:code")
+    return { text: "一条命令备忘（点开查看，复制前请核对，勿直接执行）", exec: false, fold: false, fold_reason: reason, closed: false };
   if (reason !== null)
-    return { text: "一条含端点/代码形态内容的记录（已折叠，点开查看）", exec: false, fold: true, fold_reason: reason, closed: false };
+    return { text: "一条含端点/代码形态内容的记录（已折叠，点开查看）", exec: false, fold: defaultFoldedReason(reason), fold_reason: reason, closed: false };
   const title = (note.title ?? "").trim().slice(0, 40);
   const generic = fallback || PUSH_GENERIC_SNIPPET;
   if (!title) return { text: generic, exec: false, fold: false, fold_reason: null, closed: false };

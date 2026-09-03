@@ -4,6 +4,7 @@ import { useRegisterSW } from "virtual:pwa-register/react"
 import { Button } from "@/components/ui/button"
 import { defaultApiBase } from "@/lib/settings"
 import { detachServiceWorker, giveUpOfflineCache, isOfflineCacheEnabled, withSwTimeout } from "@/lib/sw-control"
+import { isPushWanted, reconcilePushSubscription, registrationHasPush } from "@/lib/push"
 
 // 长驻 PWA 里 SW 只在页面加载时检查一次更新，常开着不关的用户可能几天
 // 都见不到更新提示：定期 + 回到前台时主动 update()，让 needRefresh 能
@@ -28,6 +29,11 @@ const NO_WORKER_CHECK_INTERVAL_MS = 60_000
 // （R287 实测 120s 无结算），此前的自愈 await 会永远挂着、SwNoWorkerHealed
 // 永不产生。所有自愈动作一律加超时；超时即判定 wedge，转成用户可操作的出路。
 const HEAL_TIMEOUT_MS = 20_000
+// R314 P2（audit-r313 §8.1）：Web Push 订阅挂在 registration 上，下面每一条自愈路径的
+// unregister() 都会连带把订阅丢掉（浏览器侧 getSubscription()→null，服务端下次推送
+// 收到 410 删行）。自愈后等新 SW active 再对账重订阅；对账本身也周期性做一次。
+const PUSH_RECONCILE_MIN_INTERVAL_MS = 10 * 60 * 1000
+const PUSH_RESTORE_WAIT_MS = 30_000
 
 /** 注册失败原因轻量上报：只带错误名称/消息与重试序号（不含任何用户内容
  * 或凭据），供运维统计真实用户侧的失败原因分布；上报失败静默。 */
@@ -61,12 +67,39 @@ class SwHealEvent extends Error {
  * 但无任何 worker」两类靠原样 register() 无法走出的卡死态。 */
 async function hardResetAndRegister(): Promise<ServiceWorkerRegistration> {
   const regs = await navigator.serviceWorker.getRegistrations()
+  const hadPush = (await Promise.all(regs.map(registrationHasPush))).some(Boolean)
   await Promise.all(regs.map((reg) => reg.unregister().catch(() => false)))
   if ("caches" in window) {
     const keys = await caches.keys()
     await Promise.all(keys.map((k) => caches.delete(k).catch(() => false)))
   }
-  return navigator.serviceWorker.register(`/sw.js?reinstall=${Date.now()}`, { scope: "/" })
+  const reg = await navigator.serviceWorker.register(`/sw.js?reinstall=${Date.now()}`, { scope: "/" })
+  if (hadPush || isPushWanted()) void restorePushWhenActive(reg)
+  return reg
+}
+
+let lastPushReconcileAt = 0
+
+/** 节流版对账：同一页面 10 分钟内只做一次（visibilitychange 会频繁触发）。 */
+function reconcilePushThrottled(reg?: ServiceWorkerRegistration, force = false) {
+  if (!isPushWanted()) return
+  const now = Date.now()
+  if (!force && now - lastPushReconcileAt < PUSH_RECONCILE_MIN_INTERVAL_MS) return
+  lastPushReconcileAt = now
+  void reconcilePushSubscription(reg).then((outcome) => {
+    if (outcome === "resubscribed" || outcome === "synced")
+      reportSwError(new SwHealEvent("SwPushReconciled", outcome), 0)
+  })
+}
+
+/** 自愈重注册后新 SW 还在 installing：等它 active（最多 30s）再重订阅。 */
+async function restorePushWhenActive(reg: ServiceWorkerRegistration) {
+  const deadline = Date.now() + PUSH_RESTORE_WAIT_MS
+  while (!reg.active && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  if (!reg.active) return
+  reconcilePushThrottled(reg, true)
 }
 
 /** 带超时的完整重置：返回 null 表示浏览器 SW 组件没有结算（wedge 确诊）。 */
@@ -85,6 +118,9 @@ function SwCleanup() {
       try {
         const regs = await navigator.serviceWorker.getRegistrations()
         if (regs.length === 0 && !navigator.serviceWorker.controller) return
+        // 遗留 registration 上还挂着推送订阅：清掉它等于静默关掉用户的提醒渠道，
+        // 保留（在线功能不受影响；用户在设置里关推送或关离线缓存时才真正注销）
+        if ((await Promise.all(regs.map(registrationHasPush))).some(Boolean)) return
         await detachServiceWorker(8_000)
       } catch {
         // 清理失败不影响在线功能，不打扰用户
@@ -200,8 +236,13 @@ function ReloadPromptInner() {
       }
       setInterval(check, UPDATE_CHECK_INTERVAL_MS)
       document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") check()
+        if (document.visibilityState === "visible") {
+          check()
+          reconcilePushThrottled(r)
+        }
       })
+      if (r.active) reconcilePushThrottled(r, true)
+      else void restorePushWhenActive(r)
       // 安装失败自愈（R178 P1-1）：install 阶段预缓存拉取失败会让新 SW 变
       // redundant，注册长期停在无 active 状态、离线彻底不可用。注册后延时
       // 复查一次：既无 active 也无 installing 即视为安装失败，update() 重试
@@ -220,10 +261,8 @@ function ReloadPromptInner() {
             const precacheKey = keys.find((k) => k.includes("precache"))
             const entries = precacheKey ? await (await caches.open(precacheKey)).keys() : []
             if (entries.length > 0) return
-            const regs = await navigator.serviceWorker.getRegistrations()
-            await Promise.all(regs.map((reg) => reg.unregister().catch(() => false)))
-            await Promise.all(keys.map((k) => caches.delete(k).catch(() => false)))
-            await navigator.serviceWorker.register(`/sw.js?reinstall=${Date.now()}`, { scope: "/" })
+            reportSwError(new SwHealEvent("SwEmptyPrecacheHeal", "active SW with empty precache; hard reset"), 0)
+            await hardResetAndRegister()
           } catch {
             // 自愈失败不打扰用户；设置页仍有可见的手动修复出路
           }

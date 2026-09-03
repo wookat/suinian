@@ -53,7 +53,7 @@ import {
   type PushPreferences,
   type TestConnectionResult,
 } from "@/lib/api"
-import { detectPushSupport, currentSubscription, enablePush, disablePush } from "@/lib/push"
+import { detectPushSupport, currentSubscription, enablePush, disablePush, forgetPushIntent, rememberPushIntent } from "@/lib/push"
 import { detachServiceWorker, isOfflineCacheEnabled, setOfflineCacheEnabled } from "@/lib/sw-control"
 import { RecoveryCodeCard } from "@/pages/auth"
 import type { TagCount } from "@/lib/types"
@@ -458,7 +458,10 @@ function BrowserNotificationsCard() {
           return
         }
         const subscribed = !!sub && config.subscriptions.some((x) => x.endpoint === sub.endpoint)
-        setState(subscribed && Notification.permission === "granted" ? "on" : "off")
+        const on = subscribed && Notification.permission === "granted"
+        // R314 前开的推送没有意图标记：在这里确认两侧一致后补上，之后订阅丢失才能自动补回
+        if (on) rememberPushIntent()
+        setState(on ? "on" : "off")
       } catch {
         if (!cancelled) setState("off")
       }
@@ -997,6 +1000,7 @@ export function SettingsPage() {
       )
     )
       return
+    forgetPushIntent()
     saveSettings({ apiBaseUrl: "", apiToken: "", useMock: true, onboarded: false, tourSeen: true })
     window.location.hash = "#/"
     window.location.reload()
@@ -1008,6 +1012,7 @@ export function SettingsPage() {
     setAccountMsg(null)
     try {
       await deleteAccount()
+      forgetPushIntent()
       saveSettings({ apiBaseUrl: "", apiToken: "", useMock: true, onboarded: false, tourSeen: true })
       window.location.hash = "#/"
       window.location.reload()

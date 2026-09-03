@@ -21,10 +21,11 @@ export function titleEchoesContent(title: string | null | undefined, content: st
  * 不逐字转写笔记；单笔记直答时原文只与它的笔记卡片同屏出现。
  */
 export const SAFETY_PROMISE =
-  "什么都能丢：我们不保证认得出每一种危险内容，但保证跨笔记聚合、推送、导出与工具接口不会逐字转写你的笔记；你问某条自己的笔记时，原文只会连同它的笔记卡片一起出现。含远程地址/取回执行原语/编码串的内容默认折叠，一键展开；日常命令备忘直接展示，复制前会提醒核对，请勿直接执行。"
+  "什么都能丢：我们不保证认得出每一种危险内容，但保证跨笔记聚合、推送、导出与工具接口不会逐字转写你的笔记；你问某条自己的笔记时，原文只会连同它的笔记卡片一起出现，口令/密钥类短串在问答区也只给占位。含远程地址/取回执行原语/编码串/口令密钥的内容默认折叠，一键展开；日常命令备忘直接展示，破坏性命令（rm -rf / dd / DROP TABLE 等）单独高警示。在笔记卡片内复制这类内容（菜单复制、选中后 Ctrl+C/右键复制）都会先提醒核对，请勿直接执行。"
 
 export const EXEC_TITLE_PLACEHOLDER = "含可执行命令的记录（已折叠）"
 export const BROAD_TITLE_PLACEHOLDER = "含端点/代码形态内容的记录（已折叠）"
+export const CREDENTIAL_TITLE_PLACEHOLDER = "含口令/密钥类内容的记录（已折叠）"
 
 export interface FoldableNote {
   title?: string | null
@@ -35,26 +36,33 @@ export interface FoldableNote {
   fold_reason?: string | null
 }
 
-export type NoteFoldLevel = "strict" | "broad" | "code"
+export type NoteFoldLevel = "strict" | "broad" | "code" | "destructive" | "credential"
 
 /**
- * 折叠强度（R312 P0-3）：
+ * 折叠强度（R312 P0-3 → R314 P0-2）：
  * - strict：危险命令（红色警示，默认折叠）；
  * - broad：远程端点 / 取回执行原语 / 编码串 / 混淆书写（中性提示，默认折叠）；
+ * - credential：口令/密钥/连接串口令段（默认折叠，建议标为敏感）；
+ * - destructive：破坏性命令 rm -rf / dd / DROP TABLE 等（默认展示，高警示横幅，复制前确认）；
  * - code：本机命令行 / SQL 等日常命令备忘（默认展示，复制/执行前警示）。
  */
 export function noteFoldLevel(
   n: Pick<FoldableNote, "contains_executable_command" | "fold" | "fold_reason">
 ): NoteFoldLevel | null {
   if (n.contains_executable_command === true || n.fold_reason === "strict") return "strict"
-  if (n.fold === true) return n.fold_reason === "broad:code" ? "code" : "broad"
+  if (n.fold === true) {
+    if (n.fold_reason === "broad:code") return "code"
+    if (n.fold_reason === "broad:destructive") return "destructive"
+    if (n.fold_reason === "broad:credential") return "credential"
+    return "broad"
+  }
   return null
 }
 
-/** 笔记是否默认折叠（strict / broad 折；code 展示但复制时警示） */
+/** 笔记是否默认折叠（strict / broad / credential 折；code / destructive 展示但复制时警示） */
 export function noteFolded(n: Pick<FoldableNote, "contains_executable_command" | "fold" | "fold_reason">): boolean {
   const level = noteFoldLevel(n)
-  return level === "strict" || level === "broad"
+  return level === "strict" || level === "broad" || level === "credential"
 }
 
 /**
@@ -70,7 +78,9 @@ export function noteDisplayLabel(n: FoldableNote, max: number): string {
       ? n.title || EXEC_TITLE_PLACEHOLDER
       : level === "broad"
         ? n.title || BROAD_TITLE_PLACEHOLDER
-        : n.title || n.content || ""
+        : level === "credential"
+          ? n.title || CREDENTIAL_TITLE_PLACEHOLDER
+          : n.title || n.content || ""
   return raw.replace(/\s+/g, " ").trim().slice(0, max)
 }
 

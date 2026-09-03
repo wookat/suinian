@@ -19,7 +19,7 @@ import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolve
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
-import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads, detachZeroSignalThreadMembers } from "./threads";
+import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads, detachZeroSignalThreadMembers, retitleUntitledThreads } from "./threads";
 import {
   createRebuildJob,
   getActiveThreadJob,
@@ -247,7 +247,8 @@ type AskProduced =
 
 /**
  * R312：服务端按结构化列组装的确定性记账/极值答案（路由自身置的布尔标记，客户端不可注入）：笔记原文只以
- * ask.ts `ledgerLabel` 进入且组装时已逐条按聚合口径收口，出口不再对整答做资料重合复核（金额/日期数字与笔记巧合）。
+ * ask.ts `ledgerLabel` 进入且组装时已逐条按聚合口径收口。R314 P2（audit-r313 §4.5）：出口不再因此跳过整答收口——
+ * 仍按聚合层走 `closeAggregateVerbatim`，只按位置豁免系统格式化的日期/金额数值（`composedNumericTokens`）。
  * 其它确定性路由（计数/主题概括/列举）仍走完整分层收口。
  */
 const LEDGER_COMPOSED_KEY_RE = /^(?:finance_[a-z_]+|ledger_row_extreme|extreme_aggregate)$/;
@@ -329,7 +330,10 @@ app.use("/api/ask", async (c, next) => {
             tier: detTier,
             composedLabels: ledgerComposed,
           });
-      if (ledgerComposed) fin.verbatim_closed_spans = body.answer.split(VERBATIM_SPAN_PLACEHOLDER).length - 1;
+      // 记账路由：组装时 ledgerLabel 已收的标签级占位（已在 body.answer 里，不在资料单元中，出口收口不会重计）
+      // 与出口整答收口的新增占位合计为出口统计。
+      const labelClosed = ledgerComposed ? body.answer.split(VERBATIM_SPAN_PLACEHOLDER).length - 1 : 0;
+      if (labelClosed > 0) fin.verbatim_closed_spans = (fin.verbatim_closed_spans ?? 0) + labelClosed;
       if (!preFinalized) {
         if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
         else if (fin.changed) console.log(`ask: deterministic answer rewritten at exit (${fin.reason ?? "link_scrub"})`);
@@ -6745,6 +6749,8 @@ export default {
       ctx.waitUntil(sweepRecentDuplicateThreads(env));
       // resume queued/stale async rebuild jobs (survives the request-side slice dying)
       ctx.waitUntil(resumeThreadJobs(env));
+      // R314 P1-4: re-title threads still 「未命名线索」 after rebuild/cluster summaries failed
+      ctx.waitUntil(retitleUntitledThreads(env));
       // web push: todo due reminders (at most once per todo) + daily review push (once per user per local day)
       ctx.waitUntil(sweepTodoReminders(env));
       ctx.waitUntil(sweepDailyReviewPush(env));

@@ -460,12 +460,15 @@ export function AskChat({
                         targetIndex != null ? m.refs!.find((r) => r.index === targetIndex)?.note : undefined
                       const noteLabel = targetNote ? noteDisplayLabel(targetNote, 12) : null
                       return (
-                        <div className="flex min-w-0 flex-wrap items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-800 [overflow-wrap:anywhere] dark:text-amber-300">
+                        <div
+                          data-testid="isolation-banner"
+                          className="flex min-w-0 flex-wrap items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]"
+                        >
                           <ShieldAlert className="size-3.5 shrink-0" />
                           <span className="min-w-0 flex-1">
                             {loc
-                              ? `回答第 ${loc.para} 段中的内容已被安全隔离，未采纳${noteLabel ? `（关于「${noteLabel}」的那条笔记）` : ""}；笔记原文仍在，未被修改。`
-                              : "部分内容已被安全隔离，未采纳；笔记原文仍在，未被修改。"}
+                              ? `回答第 ${loc.para} 段有一段笔记内容未进入回答${noteLabel ? `（关于「${noteLabel}」的那条笔记）` : ""}：含地址/编码/命令形态或疑似指令的内容会被隔离，不一定是问题；笔记原文未改动，点开引用卡片即可查看。`
+                              : "有一段笔记内容未进入回答：含地址/编码/命令形态或疑似指令的内容会被隔离，不一定是问题；笔记原文未改动，点开引用卡片即可查看。"}
                           </span>
                           {targetIndex != null && (
                             <Button
@@ -496,7 +499,7 @@ export function AskChat({
                           关于原文回显的说明
                         </summary>
                         <p className="pt-1">
-                          只引用一条你自己的笔记时，回答可以原样呈现，原文同时在下方引用卡片里；跨多条笔记的聚合回答不逐字转写原文（重合句子换占位）。空白/换行/零宽字符可能被归一化，完全逐字内容请打开引用的笔记卡片查看。
+                          只引用一条你自己的笔记时，回答可以原样呈现（口令/密钥类短串除外，只给占位），原文同时在下方引用卡片里；跨多条笔记的聚合回答不逐字转写原文（给概括与卡片指引，重合句子换占位）。空白/换行/零宽字符可能被归一化，完全逐字内容请打开引用的笔记卡片查看。
                         </p>
                       </details>
                     )}

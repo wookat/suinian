@@ -136,7 +136,14 @@ export function closeThreadSummary(
   return { summary: closed.answer, verbatimSpans: closed.count };
 }
 
-export async function summarizeThread(env: Env, threadId: string, fallbackTitle?: string): Promise<void> {
+export type SummarizeOutcome = "ok" | "empty" | "failed";
+
+/**
+ * R314 P1-4（audit-r313 §0.2-7）：返回值区分「模型无输出/超时/解析失败」（failed）与「无笔记」（empty），
+ * 调用方据此重试；此前 void + 静默 return 使重建期间任何一次 8s 超时都把线索永久留在「未命名线索」，
+ * 只能等次日 refreshThreads。
+ */
+export async function summarizeThread(env: Env, threadId: string, fallbackTitle?: string): Promise<SummarizeOutcome> {
   try {
 
     const { results: notes } = await env.DB.prepare(
@@ -145,7 +152,7 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
       .bind(threadId)
       .all<{ title: string | null; content: string; meta: string | null; created_at: string }>();
     const rows = notes ?? [];
-    if (rows.length === 0) return;
+    if (rows.length === 0) return "empty";
     // R306 P0-1：摘要生成前对危险笔记打标（模型可见），摘要落库时再加警示兜底
     const reasons = rows.map((n) => noteRowBroadFoldReason(n));
     const dangerous = reasons.filter((r) => r === "strict").length;
@@ -172,11 +179,12 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
         { role: "user", content: digest },
       ],
     });
-    if (!text) return;
+    if (!text) return "failed";
     const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return;
+    if (!m) return "failed";
     const obj = JSON.parse(m[0]) as { title?: string; summary?: string };
-    if (obj.title || obj.summary) {
+    if (!obj.title && !obj.summary) return "failed";
+    {
       // R310 P0-1：摘要与标题都是 AI 复述面，落库前过与 Ask 相同的逐字复述收口
       const closedSummary = obj.summary ? closeThreadSummary(spacifyCjk(obj.summary), rows) : null;
       const closedTitle = closeThreadSummary(spacifyCjk((obj.title || fallbackTitle || UNTITLED_THREAD).slice(0, 50)), rows, { title: true });
@@ -203,9 +211,52 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
         )
         .run();
     }
+    return "ok";
   } catch (err) {
     console.error(`threads: summarizeThread failed for thread=${threadId}`, err);
+    return "failed";
   }
+}
+
+/** 重建 summarize 阶段对失败线索的补跑轮数（首轮之外）。 */
+export const SUMMARIZE_RETRY_ROUNDS = 2;
+/** 每次 10 分钟 cron 最多补标题的线索数（每条一次 ≤8s 模型调用）。 */
+const RETITLE_SWEEP_LIMIT = 12;
+
+/**
+ * R314 P1-4：10 分钟 cron 补跑——重建 / 分拣后仍是「未命名线索」且 3 分钟内未更新过的线索
+ * 再要一次标题。只挑 note_count>0、无活动重建任务的用户（任务在跑时线索归任务管）。
+ * 标题仍落回「未命名」的（聚合层命中原文）会持续被扫到，但每轮最多 RETITLE_SWEEP_LIMIT 条，
+ * 且 updated_at 被刷新 ⇒ 至少 3 分钟后才再试，不形成热循环。Never throws.
+ */
+export async function retitleUntitledThreads(env: Env, limit = RETITLE_SWEEP_LIMIT): Promise<{ scanned: number; titled: number }> {
+  const out = { scanned: 0, titled: 0 };
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, title FROM threads
+        WHERE title = ? AND note_count > 0
+          AND updated_at < datetime('now', '-3 minutes')
+          AND user_id NOT IN (SELECT user_id FROM thread_jobs WHERE status IN ('queued','running'))
+        ORDER BY updated_at ASC LIMIT ?`
+    )
+      .bind(UNTITLED_THREAD, limit)
+      .all<{ id: string; title: string }>();
+    for (const t of results ?? []) {
+      out.scanned++;
+      const r = await summarizeThread(env, t.id);
+      if (r === "ok") {
+        const row = await env.DB.prepare("SELECT title FROM threads WHERE id = ?").bind(t.id).first<{ title: string }>();
+        if (row && row.title !== UNTITLED_THREAD) out.titled++;
+      } else {
+        // 失败也刷新 updated_at：下一轮 3 分钟后再试，避免同一条卡住整批
+        await env.DB.prepare("UPDATE threads SET updated_at = datetime('now') WHERE id = ?").bind(t.id).run();
+      }
+    }
+    if (out.scanned > 0) console.log(`threads: retitle sweep scanned=${out.scanned} titled=${out.titled}`);
+  } catch (err) {
+    console.error("threads: retitleUntitledThreads failed", err);
+  }
+  return out;
 }
 
 export async function attachNoteToThread(env: Env, noteId: string, threadId: string): Promise<void> {
@@ -521,7 +572,7 @@ export async function pickThreadByDeepseek(env: Env, note: NoteRow): Promise<str
 
 /** Resumable rebuild state, persisted as JSON in thread_jobs.state. */
 export interface RebuildState {
-  phase: "reset" | "cluster" | "second_pass" | "summarize" | "done";
+  phase: "reset" | "cluster" | "second_pass" | "summarize" | "summarize_retry" | "done";
   /** (created_at, id) cursor within the current phase's chronological scan. */
   cursorCreatedAt: string;
   cursorId: string;
@@ -531,6 +582,10 @@ export interface RebuildState {
   /** summarize-phase progress: threads summarized so far / to summarize. */
   summarized?: number;
   summarizeTotal?: number;
+  /** R314 P1-4：summarize 阶段模型失败的线索 id，主扫描完后按轮补跑。 */
+  summarizeRetry?: string[];
+  summarizeRetryFailed?: string[];
+  summarizeRetryRound?: number;
   threads: number;
   useGraph: boolean;
 }
@@ -665,21 +720,16 @@ export async function rebuildStep(env: Env, userId: string, state: RebuildState,
         .all<{ id: string }>();
       const rows = results ?? [];
       if (rows.length === 0) {
-        // 摘要齐全后统一折叠重复线索（R150 P1-3）：重建过程中分裂出的同主题
-        // 线索此刻标题/代表已就绪，不再等日更周期
-        await mergeDuplicateThreads(env, userId);
-        const cnt = await env.DB.prepare(
-          "SELECT COUNT(*) AS c FROM threads WHERE user_id = ? AND note_count > 0"
-        )
-          .bind(userId)
-          .first<{ c: number }>();
-        state.threads = cnt?.c ?? 0;
-        state.phase = "done";
-        console.log(`threads: rebuild for user=${userId} ideas=${state.total} threads=${state.threads}`);
-        return state;
+        if ((state.summarizeRetry ?? []).length > 0) {
+          state.phase = "summarize_retry";
+          state.summarizeRetryRound = 0;
+          return state;
+        }
+        return finishRebuild(env, userId, state);
       }
       for (const t of rows) {
-        await summarizeThread(env, t.id);
+        const r = await summarizeThread(env, t.id);
+        if (r === "failed") (state.summarizeRetry ??= []).push(t.id);
         state.summarized = (state.summarized ?? 0) + 1;
         state.cursorId = t.id;
         if (Date.now() >= deadline) return state;
@@ -687,6 +737,44 @@ export async function rebuildStep(env: Env, userId: string, state: RebuildState,
     }
     return state;
   }
+  if (state.phase === "summarize_retry") {
+    // R314 P1-4：主扫描里模型超时/无输出的线索按轮补跑（每轮一次），超过轮数交给 10 分钟 cron 的 retitle 兜底
+    // summarizeRetry = 本轮待跑队列；summarizeRetryFailed = 本轮已失败、留给下一轮
+    while (Date.now() < deadline) {
+      const pending = state.summarizeRetry ?? [];
+      const failed = state.summarizeRetryFailed ?? [];
+      const round = state.summarizeRetryRound ?? 0;
+      if (pending.length === 0) {
+        if (failed.length === 0 || round + 1 >= SUMMARIZE_RETRY_ROUNDS) {
+          state.summarizeRetry = [];
+          state.summarizeRetryFailed = [];
+          return finishRebuild(env, userId, state);
+        }
+        state.summarizeRetry = failed;
+        state.summarizeRetryFailed = [];
+        state.summarizeRetryRound = round + 1;
+        continue;
+      }
+      const tid = pending[0];
+      const r = await summarizeThread(env, tid);
+      state.summarizeRetry = pending.slice(1);
+      if (r === "failed") state.summarizeRetryFailed = [...failed, tid];
+    }
+    return state;
+  }
+  return state;
+}
+
+async function finishRebuild(env: Env, userId: string, state: RebuildState): Promise<RebuildState> {
+  // 摘要齐全后统一折叠重复线索（R150 P1-3）：重建过程中分裂出的同主题
+  // 线索此刻标题/代表已就绪，不再等日更周期
+  await mergeDuplicateThreads(env, userId);
+  const cnt = await env.DB.prepare("SELECT COUNT(*) AS c FROM threads WHERE user_id = ? AND note_count > 0")
+    .bind(userId)
+    .first<{ c: number }>();
+  state.threads = cnt?.c ?? 0;
+  state.phase = "done";
+  console.log(`threads: rebuild for user=${userId} ideas=${state.total} threads=${state.threads}`);
   return state;
 }
 

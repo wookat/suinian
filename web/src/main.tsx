@@ -5,6 +5,7 @@ import App from './App.tsx'
 import { initTheme } from './lib/theme'
 import { loadSettings } from './lib/settings'
 import { scrubApiCacheForToken } from './lib/api-cache'
+import { reconcilePushSubscription } from './lib/push'
 
 initTheme()
 
@@ -19,6 +20,8 @@ if ('serviceWorker' in navigator) {
     if (data && data.type === 'push-navigate' && typeof data.url === 'string') {
       window.location.href = data.url
     }
+    // SW 在 pushsubscriptionchange 里重订阅后交给页面同步服务端（push-sw.js）
+    if (data && data.type === 'push-resubscribed') void reconcilePushSubscription()
   })
 }
 

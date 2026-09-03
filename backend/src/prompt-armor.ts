@@ -1594,6 +1594,10 @@ export const INSTRUCTION_ISOLATED_MARK = "〔已隔离笔记内指令，未采�
 export const VERBATIM_REDIRECT_NOTICE =
   "〔原文查看〕问答区不逐字转写笔记原文；点开下方引用的笔记卡片即可查看完整原文。";
 
+/** R314 P1-1：聚合层照抄型问法下答案变成占位墙时，以概括 + 此指引替代残句（角标紧跟在后）。 */
+export const AGGREGATE_VERBATIM_GUIDE =
+  "〔原文查看〕已找到相关笔记，但跨多条笔记的回答不逐字转写原文；请点开下方引用的笔记卡片查看完整内容。";
+
 /** 原文请求下可执行管道的警示前缀（R276 P1-1：不裸给，但尊重用户的原文请求）。 */
 export const EXEC_PIPELINE_WARN_MARK = "〔警示：以下命令会下载并执行远程代码，请勿直接运行〕";
 
@@ -1626,6 +1630,18 @@ export const EXEC_DEGRADED_NOTICE =
  * Markdown/JSON 附带字段。
  */
 export const EXEC_OUTLET_WARN_TAG = "〔警示：含可执行命令，勿执行〕";
+/** R280 P1-6：verbatim 点名索要模板类笔记时，指令措辞段的引用标注（由 isolateNoteInstructions 插入）。 */
+export const QUOTE_MARK = "〔笔记原文引用（含指令措辞，系统未采纳执行）〕";
+/**
+ * R314 P0-2：直答层凭证形态短串（PIN/口令/密钥/连接串口令段）的记号级占位：只换掉取值本身，句子其余部分保留，
+ * 原文在引用卡片里（卡片自身按 broad:credential 默认折叠，一键展开）。
+ */
+export const CREDENTIAL_SPAN_PLACEHOLDER = "〔凭证略，点开引用的笔记卡片查看〕";
+/**
+ * R314 P0-2/P1-3：答案里出现破坏性命令（rm -rf / dd / mkfs / DROP TABLE 等）时插在该行之前的警示行——直答层允许展示，
+ * 但不得作为纯文本混在答案里。渲染层据此标记画高警示卡。
+ */
+export const DESTRUCTIVE_WARN_MARK = "〔警示：以下为破坏性命令（会删除/覆写数据），请勿直接执行，先核对对象与参数〕";
 export const EXEC_OUTLET_WARN_LINE =
   "⚠️ 本条笔记含可执行命令/危险指令（如下载执行远程代码），仅供查阅，请勿直接执行。";
 
@@ -1677,6 +1693,13 @@ export const BROAD_OUTLET_WARN_LINE =
   "ℹ️ 本条笔记含远程端点、命令形态代码或编码/不透明内容（宽判据折叠，可能只是技术备忘），仅供查阅，请勿直接执行。";
 /** 宽判据折叠笔记的标题被置空后的占位。 */
 export const BROAD_TITLE_PLACEHOLDER = "含端点/代码形态内容的记录（已折叠）";
+/** R314 P0-2/P1-3：破坏性命令笔记的出口短标 / 整行警示（默认展示，高警示）。 */
+export const DESTRUCTIVE_OUTLET_TAG = "〔警示：含破坏性命令（会删除/覆写数据），勿直接执行〕";
+export const DESTRUCTIVE_OUTLET_WARN_LINE =
+  "⚠️ 本条笔记含破坏性命令（会删除/覆写数据，如 rm -rf / dd / DROP TABLE），仅供查阅，请勿直接执行，执行前先核对对象与参数。";
+/** R314 P0-2：凭证形态笔记的出口短标 / 整行提示（默认折叠，点开查看）。 */
+export const CREDENTIAL_OUTLET_FOLD_TAG = "〔已折叠：含口令/密钥类内容，点开查看〕";
+export const CREDENTIAL_OUTLET_WARN_LINE = "🔒 本条笔记含口令/密钥类内容（已折叠），建议标为敏感笔记加密保存。";
 /**
  * 批量出口（导出 JSON/MD、备份 ZIP、MCP）整体风险声明：账号只要存在任何宽判据命中，
  * 文件头/响应头/manifest 即带此声明与禁执行说明——不依赖逐条严判。
@@ -1689,13 +1712,19 @@ export const OUTLET_GLOBAL_RISK_HEADER_VALUE = "broad-fold; do-not-execute; see-
 /** 出口行内短标：严判据 → 危险警示；宽判据 → 折叠短标；无命中 → 空串。 */
 export function foldOutletTag(reason: BroadFoldReason | null): string {
   if (reason === null) return "";
-  return reason === "strict" ? EXEC_OUTLET_WARN_TAG : BROAD_OUTLET_FOLD_TAG;
+  if (reason === "strict") return EXEC_OUTLET_WARN_TAG;
+  if (reason === "broad:destructive") return DESTRUCTIVE_OUTLET_TAG;
+  if (reason === "broad:credential") return CREDENTIAL_OUTLET_FOLD_TAG;
+  return BROAD_OUTLET_FOLD_TAG;
 }
 
-/** 出口整行警示：严判据 → EXEC_OUTLET_WARN_LINE；宽判据 → BROAD_OUTLET_WARN_LINE。 */
+/** 出口整行警示：严判据 → EXEC_OUTLET_WARN_LINE；宽判据 → BROAD_OUTLET_WARN_LINE（破坏性 / 凭证各有专用文案）。 */
 export function foldOutletWarnLine(reason: BroadFoldReason | null): string | null {
   if (reason === null) return null;
-  return reason === "strict" ? EXEC_OUTLET_WARN_LINE : BROAD_OUTLET_WARN_LINE;
+  if (reason === "strict") return EXEC_OUTLET_WARN_LINE;
+  if (reason === "broad:destructive") return DESTRUCTIVE_OUTLET_WARN_LINE;
+  if (reason === "broad:credential") return CREDENTIAL_OUTLET_WARN_LINE;
+  return BROAD_OUTLET_WARN_LINE;
 }
 
 /**
@@ -1760,6 +1789,8 @@ const SPOOFED_CONTROL_MARK_RE = new RegExp(
     // R310：逐字复述收口占位同样防仿冒（真占位由 closeVerbatimOverlap 在最末尾插入）
     "〔原文片段略[^〕\n]{0,40}(?:〕|$)",
     "〔已折叠[^〕\n]{0,60}(?:〕|$)",
+    // R314：凭证占位 / 原文查看指引同样防仿冒（真占位由收口层在剥除之后插入）
+    "〔凭证略[^〕\n]{0,40}(?:〕|$)",
   ].join("|"),
   "g"
 );
@@ -4014,11 +4045,15 @@ export function noteMetaExecFragment(meta: string | { exec_fragment?: boolean } 
 //   "broad:opaque"      编码块/不透明串（base64/hex/摩尔斯/转义串/长密文样 token）
 //   "broad:obfuscated"  结构化分隔的标签串（`a 杠 b 杠 c`、逐字母拆分的标签）——与词表/TLD 无关
 //   "broad:error"       判定自身抛错（fail-closed：折叠）
+//   "broad:credential"  R314 P0-2：凭证形态（PIN/口令/密钥/连接串口令段）——默认折叠，直答层取值占位
+//   "broad:destructive" R314 P0-2/P1-3：破坏性命令（rm -rf / dd / mkfs / DROP TABLE）——默认展示但高警示卡
 export type BroadFoldReason =
   | "strict"
   | "broad:endpoint"
   | "broad:fetch"
   | "broad:code"
+  | "broad:credential"
+  | "broad:destructive"
   | "broad:opaque"
   | "broad:obfuscated"
   | "broad:error";
@@ -4091,7 +4126,11 @@ export function broadFoldReason(content: string | null | undefined): BroadFoldRe
     // 命令形态：脚本文件名 / 管道给壳 / 取回・执行・外连原语（不要求地址同现）。
     const commandShape = BROAD_COMMAND_SHAPE_RE.test(text) || BROAD_COMMAND_SHAPE_RE.test(cmdSurface);
     if (commandShape) return "broad:fetch";
-    // 命令行 / 壳函数 / SQL 语句形态：不取回、不外连的本机命令也折（`tar -czf`、`rm -rf`、`DROP TABLE`）。
+    // R314 P0-2：凭证形态先于命令形态（`PGPASSWORD=x psql …` / 连接串不再被归为「命令备忘」默认展示）。
+    if (credentialValueTokens(text).length > 0) return "broad:credential";
+    // R314 P0-2/P1-3：破坏性命令单列（高警示卡），与日常命令备忘分级。
+    if (isDestructiveCommandText(text)) return "broad:destructive";
+    // 命令行 / 壳函数 / SQL 语句形态：不取回、不外连的本机命令也折（`tar -czf`、`ALTER TABLE`）。
     if (BROAD_SHELL_LINE_RE.test(text) || BROAD_SHELL_FUNC_RE.test(text) || BROAD_SQL_LINE_RE.test(text)) return "broad:code";
     // 编码块 / 不透明串：摩尔斯、\x/%xx/八进制转义、长 base64/hex、密文样 token。
     // URL 内的短 id（视频 BV 号 / Figma 文件 id / 搜索词）是书签常态：URL 里的不透明串要 ≥20 才算。
@@ -6020,7 +6059,6 @@ export function isolateNoteInstructions(
     verbatim && /模板|提示词|话术|prompt/i.test(question) && dataText
       ? foldCompact(dataText)
       : null;
-  const QUOTE_MARK = "〔笔记原文引用（含指令措辞，系统未采纳执行）〕";
   // R284 F-1b（audit-r283）：命中段扩展到整行一体处置——多语句 `;` 切段会把
   // 同一逻辑行的危险代码切成多段，只替换命中段会留下前后缀残片
   // （如 `package main; import(…);〔警示〕func main{…}`）。扩到行界后整行
@@ -6180,6 +6218,148 @@ export function credentialAssertionReason(answer: string, dataText: string | und
     return `credential-assertion:${val.length}`;
   }
   return null;
+}
+
+// ---- R314 P0-2：凭证取值提取（折叠优先级 / 直答豁免收窄，不是承诺边界） ----
+// 资料单元里「<凭证词> [连接词] <取值>」的取值本身（PIN 90210 / 口令 k7f2a1 / 连接串 user:pw@host 的 pw 段）。
+// 与 credentialAssertionReason 的区别：那边看答案里的断言且只拦「不在明文里」的高熵串；这边看资料里的取值，
+// 不论长短（≥ 4 字），在答案里出现即按位占位。对新载体的覆盖不保证（符号口令 / 没有凭证词的裸串不在此列）。
+const CREDENTIAL_VALUE_SUBJECT_RE = new RegExp(
+  `(?:${CREDENTIAL_SUBJECT_RE.source}|\\bpins?\\b|pin\\s*码|passcode|解锁码|开锁码|门禁码|密令|暗号|接入码|接入密码|wifi\\s*密码|连接串|连接字符串|主机密码|登录码|api\\s*secret|client[\\s_-]?secret|bearer|auth[\\s_-]?token)`,
+  "i"
+);
+const CREDENTIAL_VALUE_RE = new RegExp(
+  `${CREDENTIAL_VALUE_SUBJECT_RE.source}[^\\n，,。；;]{0,16}?(?:是|為|为|＝|=|:|：|叫做|叫|设成|設成|设置为|改成|写作|写成|用|is|was|equals?|は|が|는|은|이|가|\\s)\\s*[「『"'\`\\[（(]?\\s*([A-Za-z0-9!@#$%^&*_+\\-=./?~{}|]{4,64})`,
+  "gi"
+);
+const CONNECTION_STRING_PW_RE = /[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:([^\s@/]{3,64})@/gi;
+const CREDENTIAL_KV_RE = /\b(?:password|passwd|pwd|pass|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\s*[=:]\s*["']?([A-Za-z0-9!@#$%^&*_+\-=./?~{}|]{4,64})/gi;
+/** 取值后紧跟单位/量词 ⇒ 是数量不是凭证（「密码 8 位以上」「密钥 2024 年更换」）。 */
+const CREDENTIAL_UNIT_TRAIL_RE = /^[ \t]*(?:年|月|日|号|位|天|个|次|元|块|分|秒|小时|点|%|周|字|行|条|页)/;
+
+function credentialShapedValue(v: string): boolean {
+  const s = v.replace(CREDENTIAL_TRAIL_RE, "");
+  if (s.length < 4) return false;
+  if (/^\d+$/.test(s)) return s.length >= 4 && s.length <= 12;
+  if (/^[A-Za-z]+$/.test(s)) return s.length >= 8 && !/^(?:true|false|null|none|unknown|password|passwd|secret|token|admin|root|user|test|demo|example|sample|default|changeme|redacted|hidden|unset|empty)$/i.test(s);
+  return /[A-Za-z]/.test(s) && /[\d!@#$%^&*_+\-=./?~{}|]/.test(s);
+}
+
+/** 资料单元里的凭证形态取值（去重）。 */
+export function credentialValueTokens(text: string | null | undefined): string[] {
+  const src = text ?? "";
+  if (!src) return [];
+  const out = new Set<string>();
+  const consider = (raw: string, after: string): void => {
+    const v = raw.replace(CREDENTIAL_TRAIL_RE, "");
+    if (!credentialShapedValue(v)) return;
+    if (CREDENTIAL_UNIT_TRAIL_RE.test(after)) return;
+    out.add(v);
+  };
+  for (const m of src.matchAll(CREDENTIAL_VALUE_RE)) {
+    const raw = m[1] ?? "";
+    if (!raw) continue;
+    const end = (m.index ?? 0) + m[0].length;
+    consider(raw, src.slice(end, end + 4));
+  }
+  for (const m of src.matchAll(CONNECTION_STRING_PW_RE)) if (m[1]) out.add(m[1]);
+  for (const m of src.matchAll(CREDENTIAL_KV_RE)) {
+    const raw = m[1] ?? "";
+    const end = (m.index ?? 0) + m[0].length;
+    consider(raw, src.slice(end, end + 4));
+  }
+  return [...out];
+}
+
+/** 答案里出现的资料凭证取值区间（原下标；折叠面比对，原面要求前后不是字母/数字）。 */
+export function credentialValueSpans(answer: string, units: string[]): Array<{ start: number; end: number }> {
+  const tokens = new Set<string>();
+  for (const u of units) for (const t of credentialValueTokens(u)) tokens.add(t);
+  if (tokens.size === 0) return [];
+  const a = foldForOverlap(answer);
+  if (a.folded.length === 0) return [];
+  const out: Array<{ start: number; end: number }> = [];
+  for (const t of tokens) {
+    const ft = foldPlain(t);
+    if (ft.length < 3) continue;
+    let at = a.folded.indexOf(ft);
+    while (at !== -1) {
+      const start = a.starts[at];
+      const end = a.ends[at + ft.length - 1];
+      const before = start > 0 ? answer[start - 1] : "";
+      const after = end < answer.length ? answer[end] : "";
+      if (!/[A-Za-z0-9]/.test(before) && !/[A-Za-z0-9]/.test(after)) out.push({ start, end });
+      at = a.folded.indexOf(ft, at + 1);
+    }
+  }
+  return out;
+}
+
+/** 直答层：凭证取值按记号级换为 CREDENTIAL_SPAN_PLACEHOLDER（句子其余保留）。 */
+export function closeCredentialValues(answer: string, units: string[]): { answer: string; count: number } {
+  const spans = credentialValueSpans(answer, units).sort((x, y) => x.start - y.start);
+  if (spans.length === 0) return { answer, count: 0 };
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const s of spans) {
+    const last = merged[merged.length - 1];
+    if (last && s.start <= last.end) last.end = Math.max(last.end, s.end);
+    else merged.push({ ...s });
+  }
+  let out = "";
+  let cursor = 0;
+  for (const s of merged) {
+    out += answer.slice(cursor, s.start) + CREDENTIAL_SPAN_PLACEHOLDER;
+    cursor = s.end;
+  }
+  out += answer.slice(cursor);
+  return { answer: out, count: merged.length };
+}
+
+// ---- R314 P0-2/P1-3：破坏性命令（与日常命令备忘 broad:code 分级） ----
+// 会删除/覆写数据或不可逆的命令形态：递归删除、块设备写入、格式化、粉碎、DDL 删表/库、无条件 DELETE、强制推送/硬重置、
+// 集群/容器/基础设施销毁、Windows 递归删除、fork bomb。只影响展示级别（高警示卡 + 答案内警示行），不是安全边界。
+const DESTRUCTIVE_COMMAND_RE = new RegExp(
+  [
+    "(?:^|[\\s;&|`$(：:「『\"'（(])(?:sudo\\s+|doas\\s+)?(?:",
+    [
+      "rm\\s+(?:-{1,2}[A-Za-z-]+\\s+)*-[A-Za-z]*[rR][A-Za-z]*\\b",
+      "rm\\s+(?:-{1,2}[A-Za-z-]+\\s+)*--recursive\\b",
+      "dd\\s+(?:[a-z]+=\\S+\\s+)*(?:if|of)=",
+      "mkfs(?:\\.\\w+)?\\s",
+      "wipefs\\s",
+      "shred\\s",
+      "(?:fdisk|parted|sgdisk|gdisk)\\s+/dev/",
+      "(?:chmod|chown)\\s+-[a-zA-Z]*R[a-zA-Z]*\\s+\\S+\\s+/(?:\\s|$)",
+      "git\\s+(?:push\\s+[^\\n]*(?:-f\\b|--force\\b)|reset\\s+--hard|clean\\s+-[a-zA-Z]*[fd][a-zA-Z]*|branch\\s+-D\\b)",
+      "kubectl\\s+delete\\s",
+      "docker\\s+(?:system\\s+prune|volume\\s+(?:rm|prune)|rm\\s+-[a-z]*f|rmi\\s)",
+      "terraform\\s+destroy",
+      "(?:format|diskpart)\\s+[a-z]:",
+      "(?:del|erase)\\s+(?:/[a-z]\\s+)*/[sq]\\b",
+      "(?:rd|rmdir)\\s+/s\\b",
+      "Remove-Item\\s+[^\\n]*-Recurse",
+      "truncate\\s+-s\\s*0\\s",
+    ].join("|"),
+    ")",
+    "|>\\s*/dev/(?:sd|hd|vd|xvd|nvme|mmcblk)[a-z0-9]*",
+    "|\\b(?:drop\\s+(?:table|database|schema|index|view|user|collection|role)\\b|truncate\\s+(?:table\\s+)?[\\w.`\"]+|delete\\s+from\\s+[\\w.`\"]+\\s*(?:;|$|where\\s+(?:1\\s*=\\s*1|true)\\b))",
+    "|:\\(\\)\\s*\\{\\s*:\\|:&\\s*\\};:",
+    "|(?:^|[\\s;&|`$(：:「『\"'（(])(?:db|mongo)\\.(?:\\w+\\.)?(?:dropDatabase|drop)\\(",
+    "|flushall\\b|flushdb\\b",
+  ].join(""),
+  "im"
+);
+
+/** 文本是否含破坏性命令形态（原面或命令归一面）。 */
+export function isDestructiveCommandText(text: string | null | undefined): boolean {
+  const t = text ?? "";
+  if (!t.trim()) return false;
+  if (DESTRUCTIVE_COMMAND_RE.test(t)) return true;
+  try {
+    return DESTRUCTIVE_COMMAND_RE.test(normalizeCommandText(t));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -6498,9 +6678,22 @@ export function verbatimOverlapSpans(
 
 /** 纯标点的编码段（摩尔斯等）：≥4 个由空白隔开的标点簇。 */
 const PUNCT_CODE_RUN_RE = /(?:[.\-·•_・−–—]{1,7}[ \t]+){3,}[.\-·•_・−–—]{1,7}/g;
+/** 符号编码段（旗帜字母 / 箭头 / 数学符号 / 盲文等 So/Sm 类）：≥ 3 个符号码位的连续段（可含空白 / 零宽连接符）。
+ * 这类字符在 NFKC+字母数字归一后为空串，LCS 基线无从比对（audit-r313 §4.1 (c)），按原面码位序列比对。 */
+const SYMBOL_CODE_RUN_RE = /(?![\x00-\x7f])[\p{So}\p{Sm}](?:[\s\u200d\ufe0f]*(?![\x00-\x7f])[\p{So}\p{Sm}]){2,}/gu;
 
 /** 答案中的逐字重合片段替换为占位；返回替换数。占位前后的角标/引号保留，相邻占位合并。 */
 export function closeVerbatimOverlap(
+  answer: string,
+  opts: { units: string[]; broadUnits?: string[]; question?: string }
+): { answer: string; count: number } {
+  // R314 P0-1：系统标记整串哨兵化（见 maskSystemMarks），不再按开头文本放行。
+  const mask = maskSystemMarks(answer, [...opts.units, ...(opts.broadUnits ?? [])]);
+  const inner = closeVerbatimOverlapMasked(mask.masked, opts);
+  return mask.masked === answer ? inner : { answer: mask.restore(inner.answer), count: inner.count };
+}
+
+function closeVerbatimOverlapMasked(
   answer: string,
   opts: { units: string[]; broadUnits?: string[]; question?: string }
 ): { answer: string; count: number } {
@@ -6521,9 +6714,7 @@ export function closeVerbatimOverlap(
           exemptText: opts.question,
         })
       : []),
-  ]
-    .map((s) => ({ ...s, raw: false }))
-    .filter((s) => !CONTROL_MARK_SPAN_RE.test(answer.slice(s.start, s.end)));
+  ].map((s) => ({ ...s, raw: false }));
   // 折叠面只看字母/数字，纯标点的编码段（摩尔斯 `.-. . .-..`）在折叠面上不可见 ⇒ 对宽判据
   // 单元里的标点编码段按原面（空白归一）比对。
   const broadUnits = opts.broadUnits ?? [];
@@ -6543,7 +6734,7 @@ export function closeVerbatimOverlap(
   const merged: Array<{ start: number; end: number; raw: boolean }> = [];
   for (const s of spans) {
     const last = merged[merged.length - 1];
-    if (last && (s.start <= last.end || !/[\p{L}\p{N}]/u.test(answer.slice(last.end, s.start)))) {
+    if (last && (s.start <= last.end || !/[\p{L}\p{N}\uE000-\uE1FF]/u.test(answer.slice(last.end, s.start)))) {
       last.end = Math.max(last.end, s.end);
       last.raw = last.raw || s.raw;
     } else merged.push({ ...s });
@@ -6612,7 +6803,9 @@ export function closeVerbatimOverlap(
   let out = "";
   let cursor = 0;
   for (const s of flat) {
-    out += answer.slice(cursor, s.start) + VERBATIM_SPAN_PLACEHOLDER;
+    // 区间内的系统标记哨兵（maskSystemMarks）不随原文一起换掉，原位保留到占位后。
+    const sys = (answer.slice(s.start, s.end).match(SYSTEM_MARK_SENTINEL_RE) ?? []).join("");
+    out += answer.slice(cursor, s.start) + VERBATIM_SPAN_PLACEHOLDER + sys;
     cursor = s.end;
   }
   out += answer.slice(cursor);
@@ -6721,10 +6914,21 @@ const CITATION_MARK_RE = /[[［]\d{1,2}[\]］]/g;
 export function closeAggregateVerbatim(
   answer: string,
   units: string[],
-  opts: { visibleUnit?: string } = {}
+  opts: { visibleUnit?: string; structuralExempt?: string } = {}
 ): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
   const live = units.filter((u) => typeof u === "string" && u.trim().length > 0);
   if (live.length === 0 || !answer) return { answer, count: 0, spans: [] };
+  // R314 P0-1：系统标记按整串白名单带外识别（哨兵化后不参与比对），不再按开头文本放行任何区间。
+  const mask = maskSystemMarks(answer, live);
+  const inner = closeAggregateVerbatimMasked(mask.masked, live, opts);
+  return mask.masked === answer ? inner : { ...inner, answer: mask.restore(inner.answer) };
+}
+
+function closeAggregateVerbatimMasked(
+  answer: string,
+  live: string[],
+  opts: { visibleUnit?: string; structuralExempt?: string }
+): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
   // 单笔记直答层：命中片段若本身就出现在同屏引用卡片的那条笔记里（其它单元只是重复它——图谱三元组的实体名、
   // 分片单元、内容相近的未引用笔记），收口对攻击者无收益，不计。
   const visible = opts.visibleUnit ? foldPlain(opts.visibleUnit) : "";
@@ -6733,9 +6937,15 @@ export function closeAggregateVerbatim(
     const f = foldPlain(answer.slice(s.start, s.end));
     return f.length > 0 && visible.includes(f);
   };
-  const raw = verbatimOverlapSpans(answer, live, { lcs: AGGREGATE_LCS_CHARS, lineMin: AGGREGATE_LINE_CHARS, pieces: true }).filter(
-    (s) => !CONTROL_MARK_SPAN_RE.test(answer.slice(s.start, s.end)) && !inVisible(s)
-  );
+  const raw = verbatimOverlapSpans(answer, live, {
+    lcs: AGGREGATE_LCS_CHARS,
+    lineMin: AGGREGATE_LINE_CHARS,
+    pieces: true,
+    // 聚合层没有问句豁免；structuralExempt 只由确定性记账路由传入（系统自己格式化的日期/金额，见 composedNumericTokens）。
+    exemptText: opts.structuralExempt,
+  }).filter((s) => !inVisible(s));
+  // R314 P0-2：资料单元里的凭证取值（<8 字的 PIN/口令/连接串口令段）在聚合层也是命中——只增不减的补充，不影响 LCS8 基线。
+  for (const s of credentialValueSpans(answer, live)) if (!inVisible(s)) raw.push(s);
   // 纯标点编码段（摩尔斯等）在折叠面不可见，按原面（空白归一）比对。
   const ws = (x: string): string => x.replace(/\s+/g, " ").trim();
   const runs: string[] = [];
@@ -6746,6 +6956,18 @@ export function closeAggregateVerbatim(
       if (runs.some((x) => x.includes(r) || r.includes(x)) && !(visible && ws(opts.visibleUnit ?? "").includes(r)))
         raw.push({ start: m.index, end: m.index + m[0].length });
     }
+  // 符号编码段（旗帜字母 / 箭头 / 数学 / 盲文）：归一后为空，按去空白的原面码位序列比对（与标点编码段同为只增不减的补充）。
+  const sym = (x: string): string => x.replace(/[\s\u200d\ufe0f]+/g, "");
+  const symRuns: string[] = [];
+  for (const u of live) for (const m of u.matchAll(SYMBOL_CODE_RUN_RE)) symRuns.push(sym(m[0]));
+  if (symRuns.length > 0) {
+    const visSym = visible ? sym(opts.visibleUnit ?? "") : "";
+    for (const m of answer.matchAll(SYMBOL_CODE_RUN_RE)) {
+      const r = sym(m[0]);
+      if (symRuns.some((x) => x.includes(r) || r.includes(x)) && !(visSym && visSym.includes(r)))
+        raw.push({ start: m.index, end: m.index + m[0].length });
+    }
+  }
   return replaceHitSentences(answer, raw);
 }
 
@@ -6774,7 +6996,9 @@ function replaceHitSentences(
     const seg = answer.slice(b.start, b.end);
     const lead = LIST_LEAD_RE.exec(seg)?.[0] ?? "";
     const marks = [...new Set(seg.slice(lead.length).match(CITATION_MARK_RE) ?? [])].join("");
-    out += answer.slice(cursor, b.start) + lead + VERBATIM_SPAN_PLACEHOLDER + marks;
+    // 句内已哨兵化的系统标记（maskSystemMarks）随占位一起保留在句首，不被整句占位吞掉。
+    const sys = (seg.match(SYSTEM_MARK_SENTINEL_RE) ?? []).join("");
+    out += answer.slice(cursor, b.start) + lead + sys + VERBATIM_SPAN_PLACEHOLDER + marks;
     cursor = b.end;
   }
   out += answer.slice(cursor);
@@ -6797,27 +7021,53 @@ function replaceHitSentences(
  */
 export function closeVerbatimForTier(
   answer: string,
-  opts: { units: string[]; execFragmentUnits?: string[]; tier?: TrustTier; exemptText?: string }
+  opts: { units: string[]; execFragmentUnits?: string[]; tier?: TrustTier; exemptText?: string; structuralExempt?: string }
 ): { answer: string; count: number; aggregate: number } {
   const tier = opts.tier ?? AGGREGATE_TIER;
   const frag = opts.execFragmentUnits ?? [];
   if (tier.kind === "aggregate") {
-    const closed = closeAggregateVerbatim(answer, [...opts.units, ...frag]);
+    const closed = closeAggregateVerbatim(answer, [...opts.units, ...frag], { structuralExempt: opts.structuralExempt });
     return { answer: closed.answer, count: closed.count, aggregate: closed.count };
   }
   const direct = tier.directUnit;
   const others = [...opts.units, ...frag].filter((u) => u !== direct);
   const strong = closeAggregateVerbatim(answer, others, { visibleUnit: direct });
+  // R314 P0-2：直答单元里的凭证取值（PIN/口令/密钥/连接串口令段）在直答层也不逐字——记号级占位，句子其余保留，
+  // 原文在引用卡片里。这是直答豁免的收窄（折叠优先级），不是承诺边界。
+  const cred = closeCredentialValues(strong.answer, [direct]);
   const directFolded = frag.includes(direct) || defaultFoldedReason(broadFoldReason(direct));
-  if (!directFolded) return { answer: strong.answer, count: strong.count, aggregate: strong.count };
-  const guard = closeVerbatimOverlap(strong.answer, { units: [], broadUnits: [direct], question: opts.exemptText });
-  return { answer: guard.answer, count: strong.count + guard.count, aggregate: strong.count };
+  if (!directFolded) return { answer: cred.answer, count: strong.count + cred.count, aggregate: strong.count };
+  const guard = closeVerbatimOverlap(cred.answer, { units: [], broadUnits: [direct], question: opts.exemptText });
+  return { answer: guard.answer, count: strong.count + cred.count + guard.count, aggregate: strong.count };
 }
 
 /** R312 P0-3：默认折叠的宽判据形态。broad:code（本机命令行 / SQL 等日常命令备忘）改为默认展示 + 复制警示，
- * 不在此列；broad:fetch（取回・执行原语 / 脚本名 / 管道给壳）与 endpoint/opaque/obfuscated/strict 照旧默认折叠。 */
+ * 不在此列；broad:fetch（取回・执行原语 / 脚本名 / 管道给壳）与 endpoint/opaque/obfuscated/strict 照旧默认折叠。
+ * R314 P0-2：broad:destructive（rm -rf / dd / mkfs / DROP TABLE 等破坏性命令）与 broad:code 同样默认展示，但渲染为高警示卡，
+ * 答案里出现时必附 DESTRUCTIVE_WARN_MARK；broad:credential（凭证形态）默认折叠。 */
 export function defaultFoldedReason(reason: BroadFoldReason | null): boolean {
-  return reason !== null && reason !== "broad:code";
+  return reason !== null && reason !== "broad:code" && reason !== "broad:destructive";
+}
+
+/** 确定性记账路由答案里系统自己格式化的日期/金额/百分比符串（结构化字段来源，不是笔记自由文本）。 */
+export function composedNumericTokens(answer: string): string[] {
+  return (answer.match(/[\d¥￥.,%年月日时分:：\-\/]{4,}/g) ?? []).filter((t) => /\d/.test(t));
+}
+
+/** 答案里的破坏性命令行前插入 DESTRUCTIVE_WARN_MARK（已有则不重复）；返回插入数。 */
+export function markDestructiveCommandLines(answer: string): { answer: string; count: number } {
+  if (!DESTRUCTIVE_COMMAND_RE.test(answer)) return { answer, count: 0 };
+  const lines = answer.split("\n");
+  const out: string[] = [];
+  let count = 0;
+  for (const line of lines) {
+    if (isDestructiveCommandText(line) && out[out.length - 1] !== DESTRUCTIVE_WARN_MARK) {
+      out.push(DESTRUCTIVE_WARN_MARK);
+      count++;
+    }
+    out.push(line);
+  }
+  return { answer: out.join("\n"), count };
 }
 
 /** 答案里被逐字收口吃掉的实义字符（字母/数字）占比：≥ VERBATIM_ECHO_DOMINANT 视为「整答只是照抄原文」，
@@ -6842,8 +7092,65 @@ export function verbatimEchoRatio(
   return 1 - meaningful(closed.answer) / before;
 }
 
-/** 系统控制标记自身不算复述（它们不是笔记原文，但可能与笔记里仿冒的标记同形）。 */
-const CONTROL_MARK_SPAN_RE = /^[\s〔〕（）()]*(?:已隔离|代码安全判别|警示|原文查看|原文片段略|已移除外部链接|笔记原文引用|本次回答处于代码安全判别降级窗口|上面被隔离的段落)/u;
+// ---- R314 P0-1：系统占位/标记的带外识别（audit-r313 §4.2/§4.3） ----
+// R313 之前用 CONTROL_MARK_SPAN_RE（「以 警示：/已隔离/原文查看… 开头」）判定命中区间是不是系统占位——这是
+// 文本形态判据：笔记正文开头写「警示：」就整行被当占位放行（生产 J28）。R314 起不再按形态放行任何区间：
+// 系统自产的占位/标记是一组**闭合的精确整串**（下表，等价哈希白名单），收口前把答案里出现的这些整串换成
+// 折叠面不可见的私用区哨兵（不含字母/数字，foldForOverlap 直接丢掉），收口后原位还原。因此：
+//  · 只有与白名单**整串精确相等**的文本才不参与重合比对——前缀相同、内含相同、形态相似一律照常收口；
+//  · 白名单整串是固定系统文案，不含任何笔记内容，即使笔记里抄了同一整串也不构成原文泄漏；
+//  · 本轮收口自身插入的占位在下一轮（SSE 累积 / 多轮 / 线索摘要复核）同样按整串识别，不再依赖「开头几个字」。
+// 白名单只能追加系统常量；禁止加入任何带通配/前缀语义的条目。
+const SYSTEM_MARK_SENTINEL = "\uE000";
+const SYSTEM_MARK_SENTINEL_RE = /\uE000[\uE100-\uE1FF]/g;
+function systemMarkTexts(): readonly string[] {
+  // 长串优先，避免短串是长串前缀时先被替换（VERBATIM_REDIRECT_NOTICE 以 〔原文查看〕 开头）。
+  return [
+    INSTRUCTION_ISOLATED_MARK,
+    VERBATIM_REDIRECT_NOTICE,
+    AGGREGATE_VERBATIM_GUIDE,
+    LINK_ONLY_REDIRECT_NOTICE,
+    ISOLATION_NOTICE_ANSWER,
+    CREDENTIAL_REFUSAL_ANSWER,
+    EXEC_PIPELINE_WARN_MARK,
+    EXEC_ISOLATED_MARK,
+    EXEC_DEGRADED_ISOLATED_MARK,
+    EXEC_INSTALLER_WARN_MARK,
+    EXEC_DEGRADED_NOTICE,
+    EXEC_CONSERVATIVE_NOTICE,
+    EXEC_OUTLET_WARN_TAG,
+    BROAD_OUTLET_FOLD_TAG,
+    DESTRUCTIVE_WARN_MARK,
+    QUOTE_MARK,
+    VERBATIM_SPAN_PLACEHOLDER,
+    CREDENTIAL_SPAN_PLACEHOLDER,
+    LINK_REMOVED_MARK,
+  ]
+    .filter((m) => m.length > 0)
+    .sort((a, b) => b.length - a.length);
+}
+/**
+ * 把答案里整串出现的系统标记换成哨兵 `\uE000` + 序号字符（U+E100 起）；restore 原位还原。
+ * 白名单是系统常量的**整串**（不是前缀/形态）；且某条资料单元若本身就包含该整串，这串在本次收口中不再享白名单
+ * （笔记里的同形文本照常收口，哪怕系统自己的那一处也连带占位：fail-closed）。
+ */
+export function maskSystemMarks(answer: string, units: readonly string[] = []): { masked: string; restore: (s: string) => string } {
+  const marks = systemMarkTexts();
+  const found: string[] = [];
+  // 私用区哨兵不可能是合法答案字符：输入里已有的一律剥掉，笔记内容无法借它伪造「已登记」。
+  let masked = answer.replace(SYSTEM_MARK_SENTINEL_RE, "");
+  for (const m of marks) {
+    if (!masked.includes(m)) continue;
+    if (units.some((u) => u.includes(m))) continue;
+    masked = masked.split(m).join(`${SYSTEM_MARK_SENTINEL}${String.fromCharCode(0xe100 + found.length)}`);
+    found.push(m);
+    if (found.length >= 0xff) break;
+  }
+  if (found.length === 0 && masked === answer) return { masked: answer, restore: (s) => s };
+  const restore = (s: string): string =>
+    s.replace(/\uE000([\uE100-\uE1FF])/g, (_m, c: string) => found[c.charCodeAt(0) - 0xe100] ?? "");
+  return { masked, restore };
+}
 
 /**
  * /api/ask 单一收口点（R274 P0-1）+ R310 P0-1 逐字复述硬约束：所有既有隔离/剥除层跑完之后，
@@ -6853,7 +7160,10 @@ const CONTROL_MARK_SPAN_RE = /^[\s〔〕（）()]*(?:已隔离|代码安全判�
 export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): FinalizeAskAnswerResult {
   const core = finalizeAskAnswerCore(answer, opts);
   const units = opts.dataUnits && opts.dataUnits.length > 0 ? opts.dataUnits : opts.dataText ? [opts.dataText] : [];
-  if (units.length === 0 || opts.composedLabels) return core;
+  if (units.length === 0) return withDestructiveMarks(core);
+  // R314 P2（audit-r313 §4.5）：composedLabels 不再跳过收口。确定性记账答案里来自笔记的只有已单独收口的标签（ledgerLabel）；
+  // 日期/金额是结构化字段的系统格式化产物，按位置摸除（与问句豁免同机制），其余文本照常走聚合收口。
+  const structuralExempt = opts.composedLabels ? composedNumericTokens(core.answer).join("\n") : undefined;
   // R312 P0-1：按信任域收口。未显式给 tier 时按确定性事实推定（与 index.ts echoTierOf 同口径）：答案恰好点到 1 个
   // 资料单元（角标唯一，或无角标且只有 1 个单元）⇒ app 出口单笔记直答；否则聚合（fail-closed）。
   // 生产 Ask/MCP/回顾都显式传 tier（MCP 强制聚合），这里只兜未传 tier 的调用方。分片笔记一并作为资料单元。
@@ -6865,25 +7175,74 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
     execFragmentUnits: opts.execFragmentUnits,
     tier,
     exemptText: opts.verbatimExempt ?? opts.question,
+    structuralExempt,
   });
   if (closed.count === 0) {
     // 直答层什么都没收时，verbatim 问法附带的「问答区不逐字转写」指引与实际交付自相矛盾，去掉。
     const suffix = `\n\n${VERBATIM_REDIRECT_NOTICE}`;
     if (tier.kind === "single_note_direct" && core.answer.endsWith(suffix))
-      return { ...core, answer: core.answer.slice(0, -suffix.length) };
-    return core;
+      return withDestructiveMarks({ ...core, answer: core.answer.slice(0, -suffix.length) });
+    return withDestructiveMarks(core);
   }
   let out = closed.answer;
   // 占位后只剩无意义残片时，给出可读的指引而不是一串标点。
-  const meaningful = out
-    .split(VERBATIM_SPAN_PLACEHOLDER)
-    .join("")
-    .replace(/[[［]\d{1,2}[\]］]/g, "")
-    .replace(/[\s。，；：！？、,.;:!?\-—~～()（）“”"「」]/g, "");
+  const meaningful = placeholderFreeText(out);
   if (meaningful.length < 4) out = VERBATIM_REDIRECT_NOTICE;
+  // R314 P1-1（audit-r313 §5.3）：聚合层照抄型问法下答案变成「占位墙」（≥ 2 个占位且实义字不足）时，不把残句递给
+  // 用户：只保留未被占位的概括句，整答附一次卡片查看指引（角标归并到指引句，引用卡片照常呈现）。
+  else if (tier.kind === "aggregate") out = collapsePlaceholderWall(out);
   const tag = `verbatim:lcs=${closed.count};verbatim_closed_spans=${closed.aggregate}`;
   const reason = core.reason ? `${core.reason};${tag}` : tag;
-  return { ...core, answer: out, changed: true, reason, verbatim_spans: closed.count, verbatim_closed_spans: closed.aggregate };
+  return withDestructiveMarks({ ...core, answer: out, changed: true, reason, verbatim_spans: closed.count, verbatim_closed_spans: closed.aggregate });
+}
+
+function placeholderFreeText(s: string): string {
+  return s
+    .split(VERBATIM_SPAN_PLACEHOLDER)
+    .join("")
+    .split(CREDENTIAL_SPAN_PLACEHOLDER)
+    .join("")
+    .split(VERBATIM_REDIRECT_NOTICE)
+    .join("")
+    .split(AGGREGATE_VERBATIM_GUIDE)
+    .join("")
+    .replace(/[[［]\d{1,2}[\]］]/g, "")
+    .replace(/[\s。，；：！？、,.;:!?\-—~～()（）“”"「」*#>]/g, "");
+}
+
+/** 占位墙→概括 + 指引：保留不含占位的行，含占位的行整行去掉（角标归并），末尾附一次 VERBATIM_REDIRECT_NOTICE。 */
+export function collapsePlaceholderWall(answer: string): string {
+  const ph = VERBATIM_SPAN_PLACEHOLDER;
+  const phCount = answer.split(ph).length - 1;
+  if (phCount < 2) return answer;
+  const lines = answer.split("\n");
+  const phLines = lines.filter((l) => l.includes(ph));
+  const meaningfulInPhLines = phLines.reduce((n, l) => n + placeholderFreeText(l).length, 0);
+  // 占位行里还有实义内容（概括 + 局部占位）时不动；只处理「每行都只剩占位」的墙。
+  if (meaningfulInPhLines > phLines.length * 6) return answer;
+  const marks = new Set<string>();
+  const sysMarks = new Set<string>();
+  const kept: string[] = [];
+  const sys = systemMarkTexts().filter((m) => m !== ph && m !== VERBATIM_REDIRECT_NOTICE && m !== AGGREGATE_VERBATIM_GUIDE);
+  for (const l of lines) {
+    if (!l.includes(ph)) {
+      if (l.trim() && !l.includes(VERBATIM_REDIRECT_NOTICE)) kept.push(l);
+      continue;
+    }
+    for (const m of l.match(CITATION_MARK_RE) ?? []) marks.add(m);
+    // 被并掉的占位行里若带真系统标记（危险命令隔离/降级提示等），提示语义不能随行丢失
+    for (const m of sys) if (l.includes(m)) sysMarks.add(m);
+  }
+  const keptText = kept.join("\n");
+  const extraSys = [...sysMarks].filter((m) => !keptText.includes(m));
+  return [...kept, ...extraSys, `${AGGREGATE_VERBATIM_GUIDE}${[...marks].join("")}`].join("\n").trim();
+}
+
+function withDestructiveMarks<T extends { answer: string; changed: boolean; reason?: string }>(r: T): T {
+  const marked = markDestructiveCommandLines(r.answer);
+  if (marked.count === 0) return r;
+  const tag = `destructive_mark=${marked.count}`;
+  return { ...r, answer: marked.answer, changed: true, reason: r.reason ? `${r.reason};${tag}` : tag };
 }
 
 function finalizeAskAnswerCore(
