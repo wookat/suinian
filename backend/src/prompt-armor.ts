@@ -6683,15 +6683,20 @@ function sentenceBounds(answer: string): Array<{ start: number; end: number }> {
       return j;
     }
   };
+  // 控制标记 〔…〕 内部的标点（“未采纳；原文可在…”）不算句界，避免占位嵌进标记中间。
+  let depth = 0;
   while (i < n) {
     const ch = answer[i];
     if (ch === "\n") {
       if (i > start) out.push({ start, end: i });
       start = i + 1;
       i++;
+      depth = 0;
       continue;
     }
-    if (/[。！？!?；;]/.test(ch) || (ch === "." && !/\d/.test(answer[i - 1] ?? "") && (i + 1 >= n || /\s/.test(answer[i + 1])))) {
+    if (ch === "〔") depth++;
+    else if (ch === "〕" && depth > 0) depth--;
+    if (depth === 0 && (/[。！？!?；;]/.test(ch) || (ch === "." && !/\d/.test(answer[i - 1] ?? "") && (i + 1 >= n || /\s/.test(answer[i + 1]))))) {
       const end = closeTail(i + 1);
       out.push({ start, end });
       start = end;
@@ -6715,12 +6720,21 @@ const CITATION_MARK_RE = /[[［]\d{1,2}[\]］]/g;
  */
 export function closeAggregateVerbatim(
   answer: string,
-  units: string[]
+  units: string[],
+  opts: { visibleUnit?: string } = {}
 ): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
   const live = units.filter((u) => typeof u === "string" && u.trim().length > 0);
   if (live.length === 0 || !answer) return { answer, count: 0, spans: [] };
+  // 单笔记直答层：命中片段若本身就出现在同屏引用卡片的那条笔记里（其它单元只是重复它——图谱三元组的实体名、
+  // 分片单元、内容相近的未引用笔记），收口对攻击者无收益，不计。
+  const visible = opts.visibleUnit ? foldPlain(opts.visibleUnit) : "";
+  const inVisible = (s: { start: number; end: number }): boolean => {
+    if (!visible) return false;
+    const f = foldPlain(answer.slice(s.start, s.end));
+    return f.length > 0 && visible.includes(f);
+  };
   const raw = verbatimOverlapSpans(answer, live, { lcs: AGGREGATE_LCS_CHARS, lineMin: AGGREGATE_LINE_CHARS, pieces: true }).filter(
-    (s) => !CONTROL_MARK_SPAN_RE.test(answer.slice(s.start, s.end))
+    (s) => !CONTROL_MARK_SPAN_RE.test(answer.slice(s.start, s.end)) && !inVisible(s)
   );
   // 纯标点编码段（摩尔斯等）在折叠面不可见，按原面（空白归一）比对。
   const ws = (x: string): string => x.replace(/\s+/g, " ").trim();
@@ -6729,8 +6743,17 @@ export function closeAggregateVerbatim(
   if (runs.length > 0)
     for (const m of answer.matchAll(PUNCT_CODE_RUN_RE)) {
       const r = ws(m[0]);
-      if (runs.some((x) => x.includes(r) || r.includes(x))) raw.push({ start: m.index, end: m.index + m[0].length });
+      if (runs.some((x) => x.includes(r) || r.includes(x)) && !(visible && ws(opts.visibleUnit ?? "").includes(r)))
+        raw.push({ start: m.index, end: m.index + m[0].length });
     }
+  return replaceHitSentences(answer, raw);
+}
+
+/** 命中片段 → 所在整句/整行占位（保留列表序号与引证角标，相邻占位合并）。聚合层与直答层折叠卡守共用。 */
+function replaceHitSentences(
+  answer: string,
+  raw: Array<{ start: number; end: number }>
+): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
   if (raw.length === 0) return { answer, count: 0, spans: [] };
   raw.sort((x, y) => x.start - y.start);
   const hits: Array<{ start: number; end: number }> = [];
@@ -6784,7 +6807,7 @@ export function closeVerbatimForTier(
   }
   const direct = tier.directUnit;
   const others = [...opts.units, ...frag].filter((u) => u !== direct);
-  const strong = closeAggregateVerbatim(answer, others);
+  const strong = closeAggregateVerbatim(answer, others, { visibleUnit: direct });
   const directFolded = frag.includes(direct) || defaultFoldedReason(broadFoldReason(direct));
   if (!directFolded) return { answer: strong.answer, count: strong.count, aggregate: strong.count };
   const guard = closeVerbatimOverlap(strong.answer, { units: [], broadUnits: [direct], question: opts.exemptText });

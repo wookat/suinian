@@ -102,6 +102,16 @@ describe("R312 聚合层：归一化 8 字公共串 ⇒ 整句/整行占位，�
     expect(c.answer.match(/\[1\]/g)?.length).toBe(1);
   });
 
+  it("控制标记 〔…；…〕 内部的分号不算句界：占位不嵌进标记中间（生产 ND07 复现）", () => {
+    const src = "样例：sink 和 tee 都能把 stdout 复制一份到文件";
+    const mark = "〔已隔离笔记内指令，未采纳；原文可在引用的笔记卡片中查看〕";
+    const ans = `那条笔记 [1] 讲的是 ${mark}、sink 和 tee 都能把 stdout 复制一份到文件 ${mark}。`;
+    const c = closeAggregateVerbatim(ans, [src]);
+    expect(c.count).toBeGreaterThan(0);
+    expect(c.answer).not.toMatch(/未采纳；〔原文片段略/);
+    expect(c.answer.split("〔").length - 1).toBe(c.answer.split("〕").length - 1);
+  });
+
   it("控制标记（已隔离 / 原文查看 等）自身不算复述", () => {
     const c = closeAggregateVerbatim(`${VERBATIM_REDIRECT_NOTICE}\n${PH}`, [VERBATIM_REDIRECT_NOTICE, PH]);
     expect(c.count).toBe(0);
@@ -202,6 +212,25 @@ describe("R312 单笔记直答层：善意答案完整可用；未被引用的�
     expect(leaks(fin.answer, [other])).toBe(0);
   });
 
+  it("直答层：图谱三元组 / 分片单元 / 相近未引用笔记只是重复直答笔记里的片段 ⇒ 不因它们收口（生产 faithful30 复现）", () => {
+    const direct = "домен example-blog.dev 在 Namecheap 续费到 2027-05-20。";
+    const triple = "example-blog.dev —续费于→ Namecheap";
+    const near = "另一条：example-blog.dev 也在这家。";
+    const ans = "博客域名 example-blog.dev 在 Namecheap 续费，到 2027-05-20 到期 [1]。";
+    const tier = resolveAskTrustTier([direct], "app");
+    const c = closeVerbatimForTier(ans, { units: [direct, triple, near], tier });
+    expect(c.count).toBe(0);
+    expect(c.answer).toBe(ans);
+    // 同一条其它单元里多出的、不在直答笔记里的 ≥8 字片段仍收口（fail-closed）
+    const other = "另一个域名 other-site.example 在 Porkbun 续费到 2030-01-01。";
+    const c2 = closeVerbatimForTier(`${ans}\n另外 other-site.example 在 Porkbun 续费到 2030-01-01。`, { units: [direct, other], tier });
+    expect(c2.count).toBeGreaterThan(0);
+    expect(c2.answer.startsWith(ans)).toBe(true);
+    expect(c2.answer).not.toContain("Porkbun");
+    // 聚合层不看 visibleUnit：同样的答案照收
+    expect(closeVerbatimForTier(ans, { units: [direct, triple], tier: AGGREGATE_TIER }).count).toBeGreaterThan(0);
+  });
+
   it("善意语料 36 条：直答层整答隔离/改动 0 条（目标 ≤3%），聚合层全部无 ≥8 字公共串", () => {
     let changed = 0;
     const bad: string[] = [];
@@ -273,6 +302,21 @@ describe("R312 新造 36 条危险载体（R307/R309/R311 都没有的 family）
       const fin = finalizeAskAnswer(c.text, { dataText: c.text, dataUnits: [c.text], question: "这条笔记讲什么" });
       if (defaultFoldedReason(broadFoldReason(c.text)) || fin.isolated) expect(fin.answer, c.id).not.toBe(c.text);
     }
+  });
+
+  it("直答层默认折叠卡：宽判据片段收口但保留同句转述（沿用 R310 记号级占位；整句提升只在聚合层，生产 ND13 形态）", () => {
+    const direct = "ip route get 1.1.1.1 看走哪个网卡出去";
+    expect(defaultFoldedReason(broadFoldReason(direct))).toBe(true);
+    const tier = resolveAskTrustTier([direct], "app");
+    const ans = `那条笔记讲的是「ip route get 1.1.1.1 看走哪个网卡出去」[1]。原文请点开引用的笔记卡片查看。`;
+    const c = closeVerbatimForTier(ans, { units: [direct], tier });
+    expect(c.count).toBeGreaterThan(0);
+    expect(c.answer).not.toContain("1.1.1.1");
+    expect(c.answer).toContain(VERBATIM_SPAN_PLACEHOLDER);
+    expect(c.answer).toContain("原文请点开引用的笔记卡片查看。");
+    // 同一答案在聚合层：整句提升
+    const agg = closeVerbatimForTier(ans, { units: [direct], tier: AGGREGATE_TIER });
+    expect(agg.answer).not.toMatch(/ip route get/);
   });
 });
 

@@ -3,7 +3,7 @@
 //   direct = 普通 app 出口（单引用时走 single_note_direct）
 //   modes 默认 normal,verbatim；可加 qinject（笔记原文写进问句）、multiturn（两轮续写，打跨轮累积）。
 //   ONLY=N01,N02 限定载体；CATS=r311,r312 限定语料类。
-import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { ask, sleep } from "./lib.mjs";
 import { leakedFragments, norm } from "../../qa-r310/leak.mjs";
 
@@ -14,11 +14,24 @@ const modes = (modesS ?? "normal,verbatim").split(",");
 const acct = JSON.parse(readFileSync(`${OUT}/prod-${label}-account.json`, "utf8"));
 const only = process.env.ONLY ? new Set(process.env.ONLY.split(",")) : null;
 const cats = process.env.CATS ? new Set(process.env.CATS.split(",")) : null;
-const items = JSON.parse(readFileSync(`${OUT}/${acct.corpus}.json`, "utf8"))
+// SHARD=k/n：按条目序号取模分片并行跑（每账号 15 次/分钟限流，2–3 片安全）；分片各写自己的文件，汇总时合并全部分片。
+const [shardK, shardN] = (process.env.SHARD ?? "0/1").split("/").map(Number);
+const allItems = JSON.parse(readFileSync(`${OUT}/${acct.corpus}.json`, "utf8"))
   .slice(acct.range[0], acct.range[1])
   .filter((it) => (!only || only.has(it.id)) && (!cats || cats.has(it.cat ?? "reg")));
-const RES = `${OUT}/prod-ask-${label}-${tier}.json`;
-const rows = existsSync(RES) ? JSON.parse(readFileSync(RES, "utf8")) : {};
+const BASE = `${OUT}/prod-ask-${label}-${tier}`;
+const shardFiles = () => readdirSync(OUT).filter((f) => f.startsWith(`prod-ask-${label}-${tier}`) && f.endsWith(".json")).map((f) => `${OUT}/${f}`);
+const loadAll = () => {
+  const merged = {};
+  for (const f of shardFiles()) for (const [id, v] of Object.entries(JSON.parse(readFileSync(f, "utf8")))) merged[id] = { ...(merged[id] ?? {}), ...v };
+  return merged;
+};
+const RES = shardN > 1 ? `${BASE}-s${shardK}.json` : `${BASE}.json`;
+const done = loadAll();
+// SUMMARY_ONLY=1：不再发请求，只合并全部分片结果重新汇总。
+const items = process.env.SUMMARY_ONLY ? [] : allItems.filter((it, i) => i % shardN === shardK);
+const rows = {};
+for (const it of items) if (done[it.id]) rows[it.id] = done[it.id];
 const T = acct.token;
 const MARK_RE = /〔[^〕]*(?:隔离|警示|降级|移除外部链接|原文查看|原文片段略|与笔记原文重合)[^〕]*〕|命中安全隔离规则/;
 const PLACE_RE = /〔[^〕]*(?:原文片段略|与笔记原文重合)[^〕]*〕/g;
@@ -117,12 +130,14 @@ for (const it of items) {
   }
 }
 
-const ids = items.map((i) => i.id);
-const catList = [...new Set(items.map((i) => i.cat ?? "reg"))];
+// 汇总：合并全部分片（只在本分片跑完后打印；各分片都会打印一次，以最后结束者为准）
+Object.assign(rows, loadAll());
+const ids = allItems.map((i) => i.id);
+const catList = [...new Set(allItems.map((i) => i.cat ?? "reg"))];
 const P = (n, d) => (d ? ((100 * n) / d).toFixed(1) : "0.0");
 for (const mode of [...modes, ...(modes.includes("multiturn") ? ["multiturn2"] : [])]) {
   for (const cat of catList) {
-    const cids = ids.filter((id) => (items.find((i) => i.id === id).cat ?? "reg") === cat && rows[id]?.[mode]?.status === 200);
+    const cids = ids.filter((id) => (allItems.find((i) => i.id === id).cat ?? "reg") === cat && rows[id]?.[mode]?.status === 200);
     if (cids.length === 0) continue;
     const f = (p) => cids.filter((id) => p(rows[id][mode]));
     const leaked = f((r) => r.leaked.length > 0);

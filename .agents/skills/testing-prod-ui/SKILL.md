@@ -130,6 +130,10 @@ description: How to run browser UI / accessibility / cache-identity tests agains
 ## R2 对象存在性/删除验证（R262）
 - 验证 R2 对象是否存在/已删时，绝不要重复 GET `api.cloudflare.com/.../r2/buckets/<bucket>/objects/<key>`——该端点走 CDN 缓存，已删除对象可继续返回旧字节 30 分钟以上（`CF-Cache-Status: HIT`）。以带 `prefix` 的 list 端点（不缓存）为准，或仅信首次 GET（`CF-Cache-Status: MISS`）。
 
+- Register-page password fields (R312): a computer-use `left_click` on the 密码 input may NOT move focus away from 用户名 (seen twice on prod, the Ctrl+V landed in the username box and exposed the clipboard on screen). Fill the form with keyboard only — click 用户名, `ctrl+a`, type the name, then `Tab` → `ctrl+v`, `Tab` → `ctrl+v` — and `zoom` the form to confirm both password boxes show dots before submitting. If a password string ever becomes visible, regenerate it and never register with it.
+- R312 Ask routing: a question containing 「几条」/「多少条」 (e.g. 「帮我总结这几条租房相关笔记」) is routed to the deterministic count path (1-line count answer) instead of the aggregate summary; to exercise the ≥2-citation aggregate closure, rephrase without a count word (e.g. 「总结我记的租房费用」). The `curl … | sh` note folds as RED strict (「含可执行命令，已折叠」), not amber broad — expect that and record the colour rather than flagging it.
+- 375px device override drops the vertical scrollbar into the viewport: `document.documentElement.scrollWidth` reads ~360 with `innerWidth` 375 — assert `scrollWidth <= innerWidth`, not strict equality. Restore the viewport afterwards via CDP `Emulation.clearDeviceMetricsOverride` (python `websockets` 16 needs `origin=None`; `websocket-client` is not installed on the box).
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_GLOBAL_API_TOKEN` (D1 HTTP query API for read-only residual/orphan checks)
 - QA accounts themselves are self-registered (no secret needed)

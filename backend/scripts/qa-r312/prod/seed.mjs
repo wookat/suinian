@@ -1,6 +1,6 @@
 // R312 生产入库 + 数据面出口（notes.list fold/fold_reason、search、export json/md、backup 头）。
 // 用法：node prod/seed.mjs <label> <carriers|benign> [fromIdx] [toIdx]
-//   label 形如 da/db/b → 账号 [QA-R312]<label>…；密码运行时随机，只落本地 out/（gitignore）。
+//   label 形如 da/db/b → 账号 [QA-R312]<label>…；密码运行时随机、不落盘（本地 out/ 状态只存 token，且 gitignore）。
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { register, postNote, req, sleep, QA_PREFIX } from "./lib.mjs";
 
@@ -17,6 +17,7 @@ if (existsSync(STATE)) {
   console.log("reuse", acct.name, "notes", Object.keys(acct.notes).length);
 } else {
   acct = await register(`${QA_PREFIX}${label}${Date.now().toString(36).slice(-4)}`);
+  delete acct.password;
   acct.notes = {};
   acct.corpus = corpus;
   acct.range = [Number(fromS ?? 0), toS ? Number(toS) : all.length];
@@ -41,7 +42,7 @@ const rows = Object.fromEntries(items.map((c) => [c.id, { family: c.family, cat:
     const r = await req(`/api/notes?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { token: T });
     for (const n of r.json?.notes ?? []) {
       const id = byNoteId.get(n.id);
-      if (!id) continue;
+      if (!id || !rows[id]) continue; // 复用账号里不在本次区间的旧笔记跳过
       rows[id].list_strict = n.contains_executable_command === true;
       rows[id].list_fold = n.fold === true;
       rows[id].list_fold_reason = n.fold_reason ?? null;
