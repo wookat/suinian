@@ -13,7 +13,7 @@ import { noteRowBroadFoldReason, type BroadFoldReason } from "./prompt-armor";
  *  `outlet_<x>_broad_only_notes`   宽命中但严未命中的差集（严判据漏判的可观测代理）；
  *  `outlet_<x>_broad_fold_requests` 本次请求存在任何宽命中（批量出口整体声明触发次数）。
  */
-export type GuardOutlet = "report" | "backup" | "export" | "push" | "thread" | "mcp" | "ask_ref" | "fragment" | "list" | "search" | "review";
+export type GuardOutlet = "report" | "backup" | "export" | "push" | "thread" | "mcp" | "ask" | "ask_ref" | "fragment" | "list" | "search" | "review";
 
 export async function bumpGuardEvents(env: Pick<Env, "DB">, rows: Array<[string, number]>): Promise<void> {
   const day = new Date().toISOString().slice(0, 10);
@@ -81,6 +81,38 @@ export function recordOutletFoldMarks(
       waitUntil(work);
     } catch {
       /* 单测/本地环境无 executionCtx：已 catch，不影响响应 */
+    }
+  }
+}
+
+/**
+ * R312 P1：聚合层强收口打点——「AI 出口实际收了多少」。双判据都没命中的载体在折叠面不可见，
+ * 但它一旦被 AI 复述就会被聚合层按公共串收掉——这里计的是真实收口片段数，不是危险判定次数。
+ *  `outlet_<x>_verbatim_closed_spans`    本次出口被强收口的片段数（零值也写行）；
+ *  `outlet_<x>_verbatim_closed_requests` 本次出口存在任何强收口。
+ */
+export function outletVerbatimClosedRows(outlet: GuardOutlet, spans: number): Array<[string, number]> {
+  const n = Math.max(0, spans);
+  return [
+    [`outlet_${outlet}_verbatim_closed_spans`, n],
+    [`outlet_${outlet}_verbatim_closed_requests`, n > 0 ? 1 : 0],
+  ];
+}
+
+export function recordOutletVerbatimClosed(
+  env: Pick<Env, "DB">,
+  outlet: GuardOutlet,
+  spans: number,
+  waitUntil?: (p: Promise<unknown>) => void
+): void {
+  const work = bumpGuardEvents(env, outletVerbatimClosedRows(outlet, spans)).catch((err) =>
+    console.error(`guard_events(${outlet}) verbatim write failed`, err)
+  );
+  if (waitUntil) {
+    try {
+      waitUntil(work);
+    } catch {
+      /* 单测/本地环境无 executionCtx */
     }
   }
 }

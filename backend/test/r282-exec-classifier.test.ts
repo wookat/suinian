@@ -15,6 +15,7 @@ import {
   EXEC_ISOLATED_MARK,
   EXEC_PIPELINE_WARN_MARK,
   VERBATIM_SPAN_PLACEHOLDER,
+  AGGREGATE_TIER,
 } from "../src/prompt-armor";
 
 const env = {} as never;
@@ -78,12 +79,14 @@ describe("R282 判别器结果与出口两态一致（无第三态、无残片�
   it("判别器未命中时不改动 benign 段（不因语义层引入误伤）", () => {
     const benign = "构建用 npm run build，部署用 wrangler deploy。";
     const fin = finalizeAskAnswer(benign, { dataText: benign, question: "怎么部署？", execDangerSegments: [] });
-    // R310 P0-1：AI 永不逐字复述——答案与资料逐字重合的片段确定性换占位（与隔离无关）；
-    // 断言改为「未隔离 + 唯一改动是 verbatim 收口」，比原「不变」多断言一层不泄原文。
+    // R312 P0-1：单笔记直答层（唯一资料单元，卡片同屏）不隔离、不收口；聚合层同一答案无例外强收口。
     expect(fin.isolated).toBe(false);
-    expect(fin.reason).toMatch(/^verbatim:lcs=\d+$/);
-    expect(fin.answer).not.toContain(EXEC_ISOLATED_MARK);
-    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+    expect(fin.answer).toBe(benign);
+    const agg = finalizeAskAnswer(benign, { dataText: benign, question: "怎么部署？", execDangerSegments: [], tier: AGGREGATE_TIER });
+    expect(agg.isolated).toBe(false);
+    expect(agg.reason).toMatch(/verbatim_closed_spans=[1-9]/);
+    expect(agg.answer).not.toContain(EXEC_ISOLATED_MARK);
+    expect(agg.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
   });
 
   it("确定性内核已命中的段，即使判别器未报告也照样隔离（fail-closed）", () => {

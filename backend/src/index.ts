@@ -15,7 +15,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, type BroadFoldReason } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, type BroadFoldReason } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -76,8 +76,8 @@ import { detectFileKind, buildFileNote, buildFileReply, FILE_FAILED_PLACEHOLDER,
 import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMPORT_ITEMS, type ImportSource, type ImportItem, type ImportFailure } from "./import";
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
-import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { recordOutletFoldMarks } from "./guard-events";
+import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES, BACKUP_AI_DERIVED_NOTICE, closeBackupDerived } from "./backup";
+import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
 import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
@@ -198,12 +198,17 @@ const ASK_ANSWER_CACHE_TTL_S = 180;
  * （去噪后逐条 role/content）与 graph 开关——同一问题在不同上下文/模式下是
  * 不同的请求，不能共享答案。
  */
-export function askAnswerCacheKeyMaterial(question: string, body: { history?: unknown; graph?: unknown } | null): string {
+export function askAnswerCacheKeyMaterial(
+  question: string,
+  body: { history?: unknown; graph?: unknown } | null,
+  outlet: AskOutlet = "app"
+): string {
   const history = sanitizeAskHistory(body?.history)
     .map((m) => `${m.role}:${m.content}`)
     .join("\u241e");
   const graph = body?.graph === false ? "nograph" : "graph";
-  return `${question}\n${graph}\n${history}`;
+  // R312：出口决定信任域（app 单笔记直答可逐字 / mcp 一律聚合），不同出口的收口产物不能共享缓存。
+  return `${question}\n${graph}\n${outlet}\n${history}`;
 }
 
 /**
@@ -240,6 +245,26 @@ type AskProduced =
   | { kind: "json"; outBody: Record<string, unknown>; headers: Headers; status: number }
   | { kind: "passthrough"; res: Response };
 
+/**
+ * R312：服务端按结构化列组装的确定性记账/极值答案（路由自身置的布尔标记，客户端不可注入）：笔记原文只以
+ * ask.ts `ledgerLabel` 进入且组装时已逐条按聚合口径收口，出口不再对整答做资料重合复核（金额/日期数字与笔记巧合）。
+ * 其它确定性路由（计数/主题概括/列举）仍走完整分层收口。
+ */
+const LEDGER_COMPOSED_KEY_RE = /^(?:finance_[a-z_]+|ledger_row_extreme|extreme_aggregate)$/;
+function isLedgerComposed(body: Record<string, unknown>): boolean {
+  return Object.entries(body).some(([k, v]) => v === true && LEDGER_COMPOSED_KEY_RE.test(k));
+}
+
+/**
+ * R312 P0-1：Ask 信任域由最终 references（同屏卡片）的去重笔记数 + 出口类型确定：恰好 1 条且能对应到
+ * 资料单元 ⇒ 单笔记直答；否则（0 条 / 多条 / MCP）聚合层。不看答案形态，不由模型决定。
+ */
+function askTierFromBody(body: Record<string, unknown>, unitByNoteId: Map<string, string>, outlet: AskOutlet): TrustTier {
+  const refs = Array.isArray(body.references) ? (body.references as Array<Record<string, unknown>>) : [];
+  const ids = [...new Set(refs.map((r) => (typeof r.note_id === "string" ? r.note_id : "")))];
+  return resolveAskTrustTier(ids.map((id) => unitByNoteId.get(id) ?? ""), outlet);
+}
+
 app.use("/api/ask", async (c, next) => {
   const wantsSse = (c.req.header("accept") ?? "").includes("text/event-stream");
   const reqBody = await c.req.json<{ question?: string; history?: unknown; graph?: unknown }>().catch(() => null);
@@ -251,7 +276,12 @@ app.use("/api/ask", async (c, next) => {
     const tok = auth.match(/^Bearer\s+(.+)$/i);
     const who = tok ? await authenticateToken(c.env.DB, tok[1]).catch(() => null) : null;
     const version = who ? await askUserDataVersion(c.env.DB, who.userId) : null;
-    if (version !== null) cacheKey = await askAnswerCacheKey(auth, askAnswerCacheKeyMaterial(question, reqBody), version);
+    if (version !== null)
+      cacheKey = await askAnswerCacheKey(
+        auth,
+        askAnswerCacheKeyMaterial(question, reqBody, askOutletOf(c.req.header(ASK_OUTLET_HEADER))),
+        version
+      );
   }
   const produce = async (): Promise<AskProduced> => {
     let outBody: Record<string, unknown> | null = null;
@@ -275,29 +305,47 @@ app.use("/api/ask", async (c, next) => {
       if (typeof body.answer !== "string") return { kind: "passthrough", res: c.res };
       const preFinalized = body.guard_finalized === true;
       if (preFinalized) delete body.guard_finalized;
-      const noteUnits = Array.isArray(body.notes)
-        ? (body.notes as Array<Record<string, unknown>>).map(
-            (n) => `${typeof n.title === "string" ? n.title : ""}\n${typeof n.content === "string" ? n.content : ""}`
-          )
-        : [];
+      const bodyNotes = Array.isArray(body.notes) ? (body.notes as Array<Record<string, unknown>>) : [];
+      const noteUnits = bodyNotes.map(
+        (n) => `${typeof n.title === "string" ? n.title : ""}\n${typeof n.content === "string" ? n.content : ""}`
+      );
+      const unitByNoteId = new Map(bodyNotes.map((n, i) => [typeof n.id === "string" ? n.id : "", noteUnits[i]] as const));
       const notesText = noteUnits.join("\n");
       const t0 = Date.now();
       // 已在路由内经同一 finalize 收口的生成分支不重复执行（stripSpoofedControlMarks
       // 会把本轮插入的真标注当仿冒剥掉，且路由内的资料面更完整）。
+      // R312 P0-2：确定性路由并入分层规则——单笔记直答允许逐字，聚合（多引用 / 零引用 / MCP）强收口；
+      // 不再有「只收宽判据单元」的降级口径（R311 §6：42/44 新载体零收口的根因）。
+      const detOutlet = askOutletOf(c.req.header(ASK_OUTLET_HEADER));
+      const ledgerComposed = !preFinalized && isLedgerComposed(body);
+      const detTier = ledgerComposed ? AGGREGATE_TIER : askTierFromBody(body, unitByNoteId, detOutlet);
       const fin = preFinalized
-        ? { answer: body.answer, changed: false, isolated: body.instruction_isolated === true }
-        : // R310 P0-1：确定性路由是模板 + 字面投影而非 AI 复述，逐字收口只收宽判据命中单元的任意片段。
-          finalizeAskAnswer(body.answer, { dataText: notesText, dataUnits: noteUnits, question, verbatimClosure: "broad" });
+        ? { answer: body.answer, changed: false, isolated: body.instruction_isolated === true, verbatim_closed_spans: 0 }
+        : finalizeAskAnswer(body.answer, {
+            dataText: notesText,
+            dataUnits: noteUnits,
+            question,
+            verbatimExempt: question,
+            tier: detTier,
+            composedLabels: ledgerComposed,
+          });
+      if (ledgerComposed) fin.verbatim_closed_spans = body.answer.split(VERBATIM_SPAN_PLACEHOLDER).length - 1;
       if (!preFinalized) {
         if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
         else if (fin.changed) console.log(`ask: deterministic answer rewritten at exit (${fin.reason ?? "link_scrub"})`);
+        recordOutletVerbatimClosed(c.env, detOutlet === "mcp" ? "mcp" : "ask", fin.verbatim_closed_spans ?? 0, (p) => c.executionCtx.waitUntil(p));
       }
       // P0-2：隔离语义同时由结构化字段承载，渲染层可据此区分真标注。
       // 确定性路由自身置的 instruction_isolated（建议标签退到占位提示）与出口隔离同样插字面标记。
       const isolatedOut = fin.isolated || body.instruction_isolated === true;
       const finAnswer =
         isolatedOut && !preFinalized && !hasGuardControlMark(fin.answer) ? `${INSTRUCTION_ISOLATED_MARK}\n${fin.answer}` : fin.answer;
-      outBody = { ...body, answer: finAnswer, ...(isolatedOut ? { instruction_isolated: true } : {}) };
+      outBody = {
+        ...body,
+        answer: finAnswer,
+        ...(preFinalized ? {} : { trust_tier: detTier.kind, verbatim_closed_spans: fin.verbatim_closed_spans ?? 0 }),
+        ...(isolatedOut ? { instruction_isolated: true } : {}),
+      };
       headers = new Headers(c.res.headers);
       const prevTiming = headers.get("Server-Timing");
       const finDur = Date.now() - t0;
@@ -4858,9 +4906,13 @@ app.post("/api/ask", async (c) => {
   const askGuardFragmentUnits = notes
     .filter((n) => !n.is_sensitive && noteMetaExecFragment(n.meta ?? null))
     .map((n) => `${n.title ?? ""}\n${n.content}`);
-  // R310 P0-1：宽判据命中的单元（与严判据无关）：其任意片段都不得出现在答案里。
-  const askGuardBroadUnits = [...askGuardUnits, ...askGuardFragmentUnits].filter((u) => broadFoldReason(u) !== null);
   const askGuardQuestion = `${question}\n${recallQuestion}`;
+  // R312 P0-1：信任域。出口类型由请求头确定（MCP 内部转发带 x-suinian-outlet: mcp）；引用数在 done 时从
+  // 最织 references 确定。流式逐段闸门只在「召回仅 1 条非弱源笔记且已出现 [1]」时才能确知 done 必为单笔记直答，
+  // 否则按聚合层扣段（fail-closed：done 只可能比流式更宽松，不存在先泄后收）。
+  const askOutlet = askOutletOf(c.req.header(ASK_OUTLET_HEADER));
+  const askUnitByNoteId = new Map(notes.map((n, i) => [n.id, askGuardNoteUnits[i]] as const));
+  const askTierOf = (body: Record<string, unknown>): TrustTier => askTierFromBody(body, askUnitByNoteId, askOutlet);
   // R268 语义级主判（docs/decision-r268.md）：独立 LLM 判别器对资料区做指令
   // 抽取（语言无关），与生成并行启动；判别失败退化为 guardAskAnswer 内的
   // 确定性资料派生句段剥除兜底，不阻断回答。
@@ -4969,8 +5021,20 @@ app.post("/api/ask", async (c) => {
   // R310 P0-1：整答只是照抄笔记原文（收口后实义字符所剩无几——短技术备忘尤其如此，
   // 模型把「讲的是什么」答成整行复制）时，改述重生一次：只许概括用途/主题并给引用，
   // 不许出现原文里的命令/参数/路径/链接 token。重生仍在照抄则维持原答案走确定性收口。
-  const echoOpts = { units: askGuardUnits, broadUnits: askGuardBroadUnits, question: askGuardQuestion };
-  const echoBefore = answer2 && !isRefusalAnswer(answer2) ? verbatimEchoRatio(answer2, echoOpts) : 0;
+  // R312：回声占比按信任域预判——答案此时只点到 1 条非弱源笔记则按单笔记直答计（允许逐字，不重生），否则按聚合层计。
+  const echoTierOf = (text: string): TrustTier => {
+    const cited = [...new Set([...text.matchAll(/[[［](\d{1,2})[\]］]/g)].map((m) => parseInt(m[1], 10)))].filter(
+      (n) => n >= 1 && n <= noteIds.length && !weakIds.has(noteIds[n - 1])
+    );
+    return resolveAskTrustTier(cited.map((n) => askGuardNoteUnits[n - 1]), askOutlet);
+  };
+  const echoOpts = (text: string) => ({
+    units: askGuardUnits,
+    execFragmentUnits: askGuardFragmentUnits,
+    tier: echoTierOf(text),
+    question,
+  });
+  const echoBefore = answer2 && !isRefusalAnswer(answer2) ? verbatimEchoRatio(answer2, echoOpts(answer2)) : 0;
   if (answer2 && echoBefore >= VERBATIM_ECHO_DOMINANT) {
     const before = echoBefore;
     const paraphrase = await chatComplete(c.env, {
@@ -4990,7 +5054,7 @@ app.post("/api/ask", async (c) => {
       ],
     });
     const cleaned = paraphrase ? scrubModelOutputInjectionArtifacts(stripDataMarks(paraphrase)) : "";
-    const after = cleaned ? verbatimEchoRatio(cleaned, echoOpts) : 1;
+    const after = cleaned ? verbatimEchoRatio(cleaned, echoOpts(cleaned)) : 1;
     if (cleaned && !isRefusalAnswer(cleaned) && !isDegenerateAnswer(cleaned) && after < before && after < VERBATIM_ECHO_DOMINANT) {
       console.log(`ask: echo-dominant answer paraphrased (${before.toFixed(2)} → ${after.toFixed(2)})`);
       answer2 = cleaned;
@@ -5593,16 +5657,19 @@ app.post("/api/ask", async (c) => {
       execPrewarm && execPrewarm.text === body.answer
         ? await execPrewarm.p
         : await classifyExecDanger(body.answer);
+    const tier = askTierOf(body);
     const fin = finalizeAskAnswer(body.answer, {
       dataText: askGuardData,
       dataUnits: askGuardUnits,
       execFragmentUnits: askGuardFragmentUnits,
-      broadFoldUnits: askGuardBroadUnits,
       question: askGuardQuestion,
+      verbatimExempt: question,
+      tier,
       execDangerSegments: cls.danger,
       execClassifierUnavailable: cls.unavailable,
       execConservativeVeto: cls.conservative,
     });
+    recordOutletVerbatimClosed(c.env, askOutlet === "mcp" ? "mcp" : "ask", fin.verbatim_closed_spans ?? 0, (p) => c.executionCtx.waitUntil(p));
     const genReason = typeof body.isolation_reason === "string" ? body.isolation_reason : null;
     if (fin.isolated) {
       console.log(`ask: note-embedded instruction isolated at generation exit (${fin.reason ?? "unattributed"})`);
@@ -5631,6 +5698,8 @@ app.post("/api/ask", async (c) => {
       ...bodyOut,
       answer: answerOut,
       guard_finalized: true,
+      trust_tier: tier.kind,
+      verbatim_closed_spans: fin.verbatim_closed_spans ?? 0,
       ...(isolated ? { instruction_isolated: true } : {}),
       ...(isolatedRefs.length > 0 ? { isolated_refs: isolatedRefs } : {}),
       // R292 P0-1：降级标记以判别器状态为权威源（不从答案文本反推）。
@@ -5690,6 +5759,12 @@ app.post("/api/ask", async (c) => {
       return null;
     };
     const weakIdsS = new Set(extraIds.filter((id) => (semScore.get(id) ?? 0) < ASK_CITATION_MIN_SCORE));
+    // R312：流式阶段的信任域预判（见 askTierOf 注）：召回仅 1 条非弱源笔记且已点到 [1] 才是单笔记直答。
+    let streamCitedFirst = false;
+    const streamTier = (): TrustTier =>
+      askOutlet === "app" && notes.length === 1 && !weakIdsS.has(notes[0].id) && streamCitedFirst
+        ? { kind: "single_note_direct", directUnit: askGuardNoteUnits[0] }
+        : AGGREGATE_TIER;
     const gateSegment = (segRaw: string): string | null => {
       // fail-closed：判别器超时/失败（demandsRawS 为 null）时 demand 集未知，
       // done 收口时判别器可能已就绪并剥除句段——期间不外发任何 delta，全部
@@ -5704,6 +5779,7 @@ app.post("/api/ask", async (c) => {
         return n >= 1 && n <= noteIds.length && !weakIdsS.has(noteIds[n - 1]) ? m : "";
       });
       const s = s0.replace(/\s*[[［]\d{1,2}[\]］]/g, "");
+      if (/[[［]0?1[\]］]/.test(s0)) streamCitedFirst = true;
       if (!s.trim()) return null;
       const danglingProbe = survivingMarkers.replace(/^[\s　]+/, "");
       if (cleanDanglingCitations(danglingProbe) !== danglingProbe) return hold("dangling_citation");
@@ -5712,12 +5788,14 @@ app.post("/api/ask", async (c) => {
       if (scrubDirectiveDemands(s, groundedDemandsS, askGuardQuestion) !== s) return hold("demand_scrub");
       if (scrubUnsourcedAmounts(s, askScrubSourceS) !== s) return hold("unsourced_amount");
       if (scrubUnsourcedNegations(s, askScrubSourceS) !== s) return hold("unsourced_negation");
+      const tierS = streamTier();
       const fin = finalizeAskAnswer(s, {
         dataText: askGuardData,
         dataUnits: askGuardUnits,
         execFragmentUnits: askGuardFragmentUnits,
-        broadFoldUnits: askGuardBroadUnits,
         question: askGuardQuestion,
+        verbatimExempt: question,
+        tier: tierS,
       });
       // 原文问法下 finalize 只在末尾附固定指引（VERBATIM_REDIRECT_NOTICE，done
       // 整答附一次）而正文逐字未动 ⇒ 句段可外发；任何正文改写/隔离仍整段扣下。
@@ -5730,10 +5808,11 @@ app.post("/api/ask", async (c) => {
       // R310 P0-1 / R309 P1-2：逐字复述收口按**累计已外发文本 + 本段**判，与 done 对整答的
       // 判定同口径——跨句段边界拼出的 ≥阈值公共串同样扣下，不存在「先泄后撤」窗口。
       if (
-        closeVerbatimOverlap(`${emittedText}${s}`, {
+        closeVerbatimForTier(`${emittedText}${s}`, {
           units: askGuardUnits,
-          broadUnits: askGuardBroadUnits,
-          question: askGuardQuestion,
+          execFragmentUnits: askGuardFragmentUnits,
+          tier: tierS,
+          exemptText: question,
         }).count > 0
       )
         return hold("verbatim_overlap");
@@ -6375,8 +6454,15 @@ app.get("/api/export", async (c) => {
       return noteToJsonDecrypted(c.env, n);
     })
   );
-  const threads = threadsR.results ?? [];
-  const reports = reportsR.results ?? [];
+  // R312 P0-2：线索/报告是聚合层 AI 文本，导出前按当前笔记明文复核一次（兜住 R312 前生成的旧文本）。
+  const derived = closeBackupDerived(
+    threadsR.results ?? [],
+    reportsR.results ?? [],
+    notes.map((n) => ({ id: n.id, thread_id: n.thread_id, content: n.content, is_sensitive: n.is_sensitive, created_at: n.created_at }))
+  );
+  const threads = derived.threads;
+  const reports = derived.reports;
+  recordOutletVerbatimClosed(c.env, "export", derived.spans, (p) => c.executionCtx.waitUntil(p));
 
   const strictMarked = notes.filter((n) => n.contains_executable_command).length;
   const broadMarked = notes.filter((n) => n.fold).length;
@@ -6388,6 +6474,7 @@ app.get("/api/export", async (c) => {
   if (format === "markdown" || format === "md") {
     let md = `# 碎念全量导出（${new Date().toISOString().slice(0, 10)}）\n\n共 ${notes.length} 条笔记、${threads.length} 条线索、${reports.length} 份周报。\n`;
     if (broadMarked > 0) md += `\n> ⚠️ ${OUTLET_GLOBAL_RISK_NOTICE}\n> 本次导出中宽判据折叠 ${broadMarked} 条（其中严判据判危 ${strictMarked} 条）。\n`;
+    md += `\n> ${BACKUP_AI_DERIVED_NOTICE}\n`;
     md += `\n## 笔记\n`;
     for (const n of notes) {
       // 折叠标记随导出走（R304 P0-A / R310 P0-2）：Markdown 无折叠交互，改为在原文前加
@@ -6421,6 +6508,12 @@ app.get("/api/export", async (c) => {
             },
           }
         : {}),
+      ai_derived: {
+        notice: BACKUP_AI_DERIVED_NOTICE,
+        raw_user_data: ["notes[].content", "notes[].tags"],
+        aggregate_closed_at_generation: ["threads[].title", "threads[].summary", "reports[].content_md"],
+        self_note_only: ["notes[].title", "notes[].url_title", "notes[].url_summary", "notes[].url_titles"],
+      },
       notes,
       threads,
       reports,

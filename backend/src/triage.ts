@@ -1,5 +1,6 @@
 import type { Category, Env, TriageResult } from "./types";
 import { chatComplete } from "./ai";
+import { closeAggregateVerbatim } from "./prompt-armor";
 
 const CATEGORIES: Category[] = ["idea", "todo", "collect", "data", "expense", "income", "transfer"];
 
@@ -1649,6 +1650,19 @@ export function applyTriageFixes(content: string, result: TriageResult, now: Dat
   return fixWeekdayDue(content, result, now, tz);
 }
 
+/**
+ * 分拣提示词里唯一的跨笔记内容是分类纠偏样例（其他笔记正文前 60 字）。标题若与某条样例
+ * 有 ≥8 归一化字公共串、却与本笔记正文没有，即模型抄了别的笔记 ⇒ 弃用标题（空串走既有兜底）。
+ */
+export function dropForeignEchoTitle(content: string, result: TriageResult, corrections: CategoryCorrection[]): TriageResult {
+  const title = result.title ?? "";
+  if (!title || corrections.length === 0) return result;
+  const foreign = closeAggregateVerbatim(title, corrections.map((c) => c.content)).count > 0;
+  if (!foreign) return result;
+  const own = closeAggregateVerbatim(title, [content]).count > 0;
+  return own ? result : { ...result, title: "" };
+}
+
 export async function triageNoteDetailed(
   content: string,
   env: Parameters<typeof chatComplete>[0],
@@ -1672,6 +1686,7 @@ export async function triageNoteDetailed(
   });
   let result = (text && parseTriageJson(text, tzOffsetString(now, tz))) || null;
   if (result) result = applyTriageFixes(content, result, now, tz);
+  if (result) result = dropForeignEchoTitle(content, result, corrections);
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {
     result = result

@@ -7,7 +7,24 @@ import {
   execDegradedTraceReason,
   scrubUnsolicitedConduct,
   dataSurfaceFullyBenign,
+  closeAggregateVerbatim,
+  VERBATIM_SPAN_PLACEHOLDER,
 } from "./prompt-armor";
+
+/**
+ * R312：确定性记账/极值答案里唯一的笔记原文入口。金额/币种/时间/计数来自结构化列，标签来自标题或正文首行
+ * （即笔记原文）；这些答案跨笔记聚合，属聚合层——标签与本条笔记 ≥AGGREGATE_LCS_CHARS 归一化字重合即整体换占位
+ * （原文在引用卡片里），不看标签形态、不设短文本例外。台账行名目（ledgerRowsMatching 解析出的 label）同口径。
+ */
+export function ledgerLabel(n: Pick<NoteRow, "title" | "content">, max = 40, firstLineOnly = true): string {
+  const src = n.title || (firstLineOnly ? n.content.split("\n")[0] : n.content) || "";
+  const text = src.replace(/\s+/g, " ").slice(0, max);
+  if (!text) return text;
+  return closeAggregateVerbatim(text, [`${n.title ?? ""}\n${n.content}`]).count > 0 ? VERBATIM_SPAN_PLACEHOLDER : text;
+}
+export function ledgerRowLabel(label: string, n: Pick<NoteRow, "title" | "content">): string {
+  return closeAggregateVerbatim(label, [`${n.title ?? ""}\n${n.content}`]).count > 0 ? VERBATIM_SPAN_PLACEHOLDER : label;
+}
 
 /**
  * Helpers for /api/ask retrieval quality (R54): deterministic time-range
@@ -1070,7 +1087,7 @@ export function buildFinanceExtremeAnswer(
     const when = formatShanghai(n.created_at);
     const desc = n.is_sensitive
       ? "（加密的敏感笔记，内容不在问答中展示）"
-      : `：${(n.title || n.content).replace(/\s+/g, " ").slice(0, 60)}`;
+      : `：${ledgerLabel(n, 60, false)}`;
     const cite = n.is_sensitive ? "" : ` [${i + 1}]`;
     if (count > 1) {
       const cur = n.currency || "CNY";
@@ -1124,7 +1141,7 @@ export function buildLedgerRowExtremeAnswer(
     if (n.is_sensitive) continue;
     const titleHit = terms.some((t) => (n.title ?? "").includes(t));
     for (const h of ledgerRowsMatching(n.content, titleHit ? null : terms)) {
-      rows.push({ ...h, currency: n.currency || "CNY", noteId: n.id });
+      rows.push({ ...h, label: ledgerRowLabel(h.label, n), currency: n.currency || "CNY", noteId: n.id });
     }
   }
   const negatives = rows.filter((r) => r.amount <= 0).length;
@@ -1645,13 +1662,13 @@ export function buildFinanceSubsetAnswer(
     const hits = rowHits.get(n.id);
     if (hits) {
       const cur = n.currency || "CNY";
-      const rowsTxt = hits.map((r) => `${r.label} ${formatAmount(r.amount, cur)}`).join("、");
-      const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+      const rowsTxt = hits.map((r) => `${ledgerRowLabel(r.label, n)} ${formatAmount(r.amount, cur)}`).join("、");
+      const text = ledgerLabel(n);
       return `- ${text} → ${rowsTxt}（台账行级明细，${date}）[${i + 1}]`;
     }
     const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
     const ledger = isLedgerAggregateNote(n) ? "，台账多笔合计" : "";
-    const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+    const text = ledgerLabel(n);
     return `- ${text}（${amount}${ledger}，${date}）[${i + 1}]`;
   });
   const sensitiveCnt = finance.filter((n) => n.is_sensitive).length;
@@ -1700,7 +1717,7 @@ export function buildFinanceSubsetAnswer(
       .slice(0, 5)
       .map((n) => {
         const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
-        const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+        const text = ledgerLabel(n);
         return `${text}（${amount}）`;
       });
     md += `\n（其中 ${tagOnly.length} 笔仅标签命中「${kw}」、标题/正文不含该词，已计入合计${tagItems.length > 0 ? `：${tagItems.join("、")}` : ""}；如认为不应计入，可按标签在时间流筛选后核对。）`;
@@ -1712,7 +1729,7 @@ export function buildFinanceSubsetAnswer(
   if (transfers.length > 0) {
     const tItems = transfers.map((n) => {
       const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
-      const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+      const text = ledgerLabel(n);
       return `${text}（${amount}，${formatShanghai(n.created_at).slice(0, 10)}）`;
     });
     md += `\n（另有 ${transfers.length} 笔资金往来/还款类记录（transfer，不计收支合计）：${tItems.join("、")}。）`;
@@ -1883,7 +1900,7 @@ export function buildFinanceListAnswer(
     const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
     const dir = direction === "both" ? (n.category === "income" ? "收入·" : "支出·") : "";
     const ledger = isLedgerAggregateNote(n) ? "，台账多笔合计" : "";
-    const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+    const text = ledgerLabel(n);
     return `- ${text}（${dir}${amount}${ledger}，${formatShanghai(n.created_at).slice(0, 10)}）[${i + 1}]`;
   });
   const sensitiveCnt = rows.filter((n) => n.is_sensitive).length;
@@ -2087,7 +2104,7 @@ export function buildFinanceThresholdAnswer(
   const visible = rows.filter((n) => !n.is_sensitive).slice(0, 20);
   const itemLines = visible.map((n, i) => {
     const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : "金额未识别";
-    const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+    const text = ledgerLabel(n);
     return `- ${text}（${amount}，${formatShanghai(n.created_at).slice(0, 10)}）[${i + 1}]`;
   });
   const sensitiveCnt = rows.filter((n) => n.is_sensitive).length;
@@ -2138,7 +2155,7 @@ export function buildExtremeAnswer(
   const label = EXTREME_LABELS[kind];
   const preview = note.is_sensitive
     ? "（加密的敏感笔记，内容不在问答中展示）"
-    : `：${(note.title || note.content).replace(/\s+/g, " ").slice(0, 60)}`;
+    : `：${ledgerLabel(note, 60, false)}`;
   const cite = note.is_sensitive ? "" : " [1]";
   return `你${label}的一条笔记记于 ${when}（北京时间）${cite}${preview}\n\n以上为数据库精确查询结果（不含已删除笔记）。`;
 }
@@ -2463,7 +2480,7 @@ export function buildFinanceClarifyAnswer(
   let included = 0;
   let excluded = 0;
   const lines = rows.map((n, i) => {
-    const text = (n.title || n.content.split("\n")[0] || "").replace(/\s+/g, " ").slice(0, 40);
+    const text = ledgerLabel(n);
     const amount = typeof n.amount === "number" && Number.isFinite(n.amount) ? formatAmount(n.amount, n.currency || "CNY") : null;
     let verdict: string;
     if (n.category === "transfer") {

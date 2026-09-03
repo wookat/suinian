@@ -9,6 +9,7 @@ import {
   INSTRUCTION_ISOLATED_MARK,
   EXEC_DEGRADED_ISOLATED_MARK,
   VERBATIM_SPAN_PLACEHOLDER, VERBATIM_REDIRECT_NOTICE,
+  AGGREGATE_TIER,
 } from "../src/prompt-armor";
 
 const IDEA_PARTS = [
@@ -33,12 +34,15 @@ describe("R298 P1-4 良性长文不误隔离", () => {
       question: "我关于笔记方法的想法是什么？",
       execDangerSegments: [],
     });
-    // R310 P0-1：不隔离；整篇逐字回显换占位 + 卡片指引（唯一改动是 verbatim 收口）
+    // R312 P0-1：单笔记直答层不隔离、不收口，整篇原样通过；聚合层则整篇逐字回显换占位 + 卡片指引。
     expect(f.isolated).toBe(false);
-    expect(f.reason).toMatch(/^verbatim:lcs=\d+$/);
-    expect(f.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
-    expect(f.answer).toContain(VERBATIM_REDIRECT_NOTICE);
-    expect(f.answer).not.toContain(IDEA_PARTS[0]);
+    expect(f.answer).toBe(long);
+    const agg = finalizeAskAnswer(long, { dataText: long, question: "我关于笔记方法的想法是什么？", execDangerSegments: [], tier: AGGREGATE_TIER });
+    expect(agg.isolated).toBe(false);
+    expect(agg.reason).toMatch(/verbatim_closed_spans=[1-9]/);
+    expect(agg.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+    expect(agg.answer).toContain(VERBATIM_REDIRECT_NOTICE);
+    expect(agg.answer).not.toContain(IDEA_PARTS[0]);
   });
 
   it(">1000 字长文（重复扩展）同样不触发指令隔离", () => {

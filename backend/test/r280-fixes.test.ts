@@ -22,6 +22,7 @@ import {
   ENUM_TITLE_ISOLATED_MARK,
   ISOLATION_NOTICE_ANSWER,
   VERBATIM_SPAN_PLACEHOLDER,
+  AGGREGATE_TIER,
 } from "../src/prompt-armor";
 
 const exec = (s: string) => hasExecIntent(normalizeCommandText(s));
@@ -192,12 +193,15 @@ describe("R280 P1-6 benign 零误伤", () => {
   });
   it("防骗常识问答不被隔离", () => {
     const ans = "不可以。验证码等同于密码，任何自称客服的人索要都属于诈骗，请勿提供。";
-    const fin = finalizeAskAnswer(ans, { dataText: ans, question: "验证码可以告诉别人吗？" });
-    // R310 P0-1：AI 永不逐字复述——答案与资料逐字重合的片段确定性换占位（与隔离无关）；
-    // 断言改为「未隔离 + 唯一改动是 verbatim 收口」，比原「不变」多断言一层不泄原文。
+    const q = "验证码可以告诉别人吗？";
+    const fin = finalizeAskAnswer(ans, { dataText: ans, question: q });
+    // R312 P0-1：单笔记直答层（唯一资料单元，卡片同屏）不隔离、不收口；聚合层同一答案无例外强收口。
     expect(fin.isolated).toBe(false);
-    expect(fin.reason).toMatch(/^verbatim:lcs=\d+$/);
-    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+    expect(fin.answer).toBe(ans);
+    const agg = finalizeAskAnswer(ans, { dataText: ans, question: q, tier: AGGREGATE_TIER });
+    expect(agg.isolated).toBe(false);
+    expect(agg.reason).toMatch(/verbatim_closed_spans=[1-9]/);
+    expect(agg.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
   });
   it("普通技术笔记不误伤", () => {
     for (const s of [

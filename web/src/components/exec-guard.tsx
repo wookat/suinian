@@ -6,15 +6,27 @@ import { Code2, Eye, EyeOff, TriangleAlert } from "lucide-react"
  * 所有展示笔记原文的出口（时间流卡片、问答引用卡片、搜索结果、今日回顾等）
  * 共用本组件——默认折叠原文，用户主动展开才显示（一次点击，不打断流）。
  *
- * 两档强度：
- * - strict：严判据 contains_executable_command 命中，红色警示「含可执行命令」；
- * - broad：宽判据 fold 命中（远程端点 / 命令形态代码 / 编码块 / 不透明 token），
- *   中性提示「含端点/代码形态内容」——可能只是技术备忘，但原文一律默认折叠。
+ * 三档强度（R312 P0-3）：
+ * - strict：严判据 contains_executable_command 命中，红色警示「含可执行命令」，默认折叠；
+ * - broad：宽判据 fold 命中（远程端点 / 取回执行原语 / 编码块 / 混淆书写），
+ *   中性提示「含端点/代码形态内容」，默认折叠；
+ * - code：本机命令行 / SQL 等日常命令备忘（fold_reason=broad:code），默认展示，
+ *   只在正文上方给一行「复制/执行前核对」提示（复制时另有确认）。
  * 这是用户自己的笔记：不删除、不改写，只避免「不带警示地把原文推到眼前」。
  */
-export type FoldLevel = "strict" | "broad"
+export type FoldLevel = "strict" | "broad" | "code"
+
+export const CODE_COPY_HINT = "命令备忘：复制或执行前请核对来源与参数"
 
 export function ExecGuardBadge({ level = "strict" }: { level?: FoldLevel }) {
+  if (level === "code") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+        <Code2 className="size-3" />
+        命令备忘
+      </span>
+    )
+  }
   if (level === "broad") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
@@ -32,7 +44,7 @@ export function ExecGuardBadge({ level = "strict" }: { level?: FoldLevel }) {
 }
 
 const COPY: Record<
-  FoldLevel,
+  Exclude<FoldLevel, "code">,
   { folded: string; revealed: string; help: string; border: string; pill: string; text: string }
 > = {
   strict: {
@@ -64,6 +76,17 @@ export function ExecGuard({
   level?: FoldLevel
 }) {
   const [revealed, setRevealed] = useState(false)
+  if (level === "code") {
+    return (
+      <div className="min-w-0 flex-1" data-fold-level="code">
+        <p className="mb-1.5 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+          <Code2 className="mt-0.5 size-3.5 shrink-0" />
+          {CODE_COPY_HINT}
+        </p>
+        {children}
+      </div>
+    )
+  }
   const copy = COPY[level]
   const Icon = level === "broad" ? Code2 : TriangleAlert
   if (!revealed) {

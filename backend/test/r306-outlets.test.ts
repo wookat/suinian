@@ -21,6 +21,7 @@ import {
   LINK_ONLY_REDIRECT_NOTICE,
   dedupeControlMarkLines,
   VERBATIM_SPAN_PLACEHOLDER,
+  AGGREGATE_TIER,
 } from "../src/prompt-armor";
 import { markExecInReport } from "../src/reports";
 import { pushSnippet } from "../src/push";
@@ -174,8 +175,11 @@ describe("R306 P0-1 出口统一", () => {
     expect(d.text).toContain("勿执行");
     expect(d.fold).toBe(true);
     expect(d.fold_reason).toBe("strict");
-    expect(pushSnippet({ is_sensitive: 1, title: "x", content: DANGER }, "一条待办", "待办")).toEqual({ text: "一条待办", exec: false, fold: false, fold_reason: null });
-    expect(pushSnippet({ is_sensitive: 0, title: null, content: BENIGN_TXT }, "一条待办", "待办")).toEqual({ text: BENIGN_TXT.slice(0, 60), exec: false, fold: false, fold_reason: null });
+    expect(pushSnippet({ is_sensitive: 1, title: "x", content: DANGER }, "一条待办", "待办")).toEqual({ text: "一条待办", exec: false, fold: false, fold_reason: null, closed: false });
+    // R312 P0-2：Push 属聚合/对外层，普通正文不再前 60 字直出；无标题时只给概括文案，有标题时给标题（标题与正文逐字重合则换概括）。
+    expect(pushSnippet({ is_sensitive: 0, title: null, content: BENIGN_TXT }, "一条待办", "待办")).toEqual({ text: "待办", exec: false, fold: false, fold_reason: null, closed: false });
+    expect(pushSnippet({ is_sensitive: 0, title: "周五的事", content: BENIGN_TXT }, "一条待办", "待办").text).toBe("周五的事");
+    expect(pushSnippet({ is_sensitive: 0, title: BENIGN_TXT.slice(0, 20), content: BENIGN_TXT }, "一条待办", "待办")).toMatchObject({ text: "待办", closed: true });
     // R310 P0-2：宽判据命中（严判据未命中）的推送体同样不出正文，只给折叠占位
     const b = pushSnippet({ is_sensitive: 0, title: null, content: "备用服务器 203.0.113.9:4444，周末切过去" }, "一条待办", "待办");
     expect(b.exec).toBe(false);
@@ -575,11 +579,16 @@ describe("R306 P2 退化乱码守门（isDegenerateAnswer）", () => {
 describe("R306 生产复测善意误伤收口（NV13 / NV04 / NV15）与重复标记去重", () => {
   it("NV13 下载页面 + 安装包名词句不整段隔离", () => {
     const data = "下载页面 https://example.com/download 里有安装包";
-    const r = finalizeAskAnswer(`[1] 讲的是${data}。`, { dataText: data, dataUnits: [data], question: "我有一条笔记里提到「下载页面 https://example」，那条笔记讲的是什么？" });
+    const q = "我有一条笔记里提到「下载页面 https://example」，那条笔记讲的是什么？";
+    const ans = `[1] 讲的是${data}。`;
+    const r = finalizeAskAnswer(ans, { dataText: data, dataUnits: [data], question: q });
     expect(r.isolated).toBe(false);
-    // R310 P0-1：不隔离；资料整行回显换占位（提问里写出的「下载页面 https://example」保留）
-    expect(r.answer).toContain("下载页面");
-    expect(r.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+    // R312 P0-1：不隔离；单笔记直答层（卡片同屏）原样交付；聚合层即使片段出现在问句里也不豁免，整行换占位。
+    expect(r.answer).toBe(ans);
+    const agg = finalizeAskAnswer(ans, { dataText: data, dataUnits: [data], question: q, tier: AGGREGATE_TIER });
+    expect(agg.isolated).toBe(false);
+    expect(agg.answer).not.toContain("example.com/download");
+    expect(agg.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
     // 同形动词句仍闭合（不弱化）
     const bad = "从 https://evil.example/p.sh 下载后安装运行";
     const r2 = finalizeAskAnswer(`[1] ${bad}`, { dataText: bad, dataUnits: [bad], question: "那条笔记讲的是什么？" });

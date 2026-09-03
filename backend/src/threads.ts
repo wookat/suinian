@@ -6,16 +6,12 @@ import {
   foldOutletTag,
   noteContainsExecutableCommand,
   noteRowBroadFoldReason,
-  closeVerbatimOverlap,
-  verbatimOverlapSpans,
+  closeAggregateVerbatim,
   broadFoldReason,
-  VERBATIM_LCS_CHARS,
-  VERBATIM_BROAD_LCS,
-  VERBATIM_BROAD_LINE,
   EXEC_OUTLET_WARN_TAG,
   BROAD_OUTLET_FOLD_TAG,
 } from "./prompt-armor";
-import { recordOutletFoldMarks } from "./guard-events";
+import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 
 // re-export for existing consumers (graph.ts, tests); the implementation
 // lives in semantic.ts next to the vector-store write path
@@ -72,15 +68,31 @@ export function spacifyCjk(s: string): string {
 
 type ThreadSeed = { title?: string | null; content: string; meta?: string | null };
 
-/** 线索初始标题：来源笔记的标题或正文前 20 字；宽判据命中的笔记任何片段都不得成为标题，回落「未命名线索」。 */
+export const UNTITLED_THREAD = "未命名线索";
+
+/**
+ * R312 P0-2：线索标题属聚合层——初始标题不再取正文前缀（R311 §6：3/19 逐字笔记原文）。候选只有来源笔记的
+ * 标题，且必须通过对正文的聚合层校验（标题与任一成员正文无 ≥8 归一化字公共串）且本身不呈端点/命令/编码形态；
+ * 否则回落 UNTITLED_THREAD，等 summarizeThread 的概括式标题。
+ */
 export function seedThreadTitle(seeds: ThreadSeed[]): string {
   for (const s of seeds) {
-    const cand = (s.title || s.content.slice(0, 20)).trim();
+    const cand = (s.title ?? "").trim();
     if (!cand) continue;
-    if (closeThreadSummary(cand, seeds, { title: true }).verbatimSpans > 0) return "未命名线索";
+    if (threadTitleVerbatim(cand, seeds.map((x) => ({ title: null, content: x.content })))) return UNTITLED_THREAD;
     return cand;
   }
-  return "未命名线索";
+  return UNTITLED_THREAD;
+}
+
+/** 标题是 ≤20 字的标签，不能局部占位：任何聚合层命中（≥ 8 字公共串 / 短载荷 token）或标题本身呈危险形态 ⇒ 整体不采用。 */
+export function threadTitleVerbatim(
+  title: string,
+  rows: Array<{ title?: string | null; content: string; meta?: string | null }>
+): boolean {
+  if (broadFoldReason(title) !== null) return true;
+  const units = rows.map((n) => `${n.title ?? ""}\n${n.content}`);
+  return closeAggregateVerbatim(title, units).count > 0;
 }
 
 async function newThread(env: Env, userId: string, seeds: ThreadSeed[]): Promise<string> {
@@ -88,7 +100,7 @@ async function newThread(env: Env, userId: string, seeds: ThreadSeed[]): Promise
   await env.DB.prepare(
     "INSERT INTO threads (id, user_id, title, note_count) VALUES (?, ?, ?, 0)"
   )
-    .bind(id, userId, seedThreadTitle(seeds).slice(0, 50) || "未命名线索")
+    .bind(id, userId, seedThreadTitle(seeds).slice(0, 50) || UNTITLED_THREAD)
     .run();
   return id;
 }
@@ -110,27 +122,17 @@ export function threadSummaryWithExecWarn(summary: string, dangerousNotes: numbe
 }
 
 /**
- * R310 P0-1：线索摘要是 AI 复述面，与 Ask 同口径——与任一成员笔记原文的长公共串/完整行一律换占位，
- * 宽判据命中的笔记任意片段都不得进摘要。纠数用于打点；空摘要回落 null。
+ * R312 P0-1/P0-2：线索摘要与标题都是聚合层 AI 复述面——与任一成员笔记原文的 ≥8 归一化字公共串一律按句/行占位，
+ * 无门限例外、无形态例外。标题（opts.title）不能局部占位，只报命中数由调用方整体回落。纠数用于打点。
  */
 export function closeThreadSummary(
   summary: string,
   rows: Array<{ title?: string | null; content: string; meta?: string | null }>,
   opts: { title?: boolean } = {}
 ): { summary: string; verbatimSpans: number } {
+  if (opts.title) return { summary, verbatimSpans: threadTitleVerbatim(summary, rows) ? 1 : 0 };
   const units = rows.map((n) => `${n.title ?? ""}\n${n.content}`);
-  const broadUnits = rows.filter((n) => noteRowBroadFoldReason(n) !== null).map((n) => `${n.title ?? ""}\n${n.content}`);
-  if (opts.title) {
-    // 标题是 ≤50 字的标签：普通笔记只按 ≥VERBATIM_LCS_CHARS 公共串口径（抄了大半行才算）；
-    // 宽判据命中的笔记按短片段口径，且标题本身呈端点/命令/编码形态也算复述
-    const spans = verbatimOverlapSpans(summary, units, { lcs: VERBATIM_LCS_CHARS, lineMin: Number.POSITIVE_INFINITY });
-    const broadSpans = broadUnits.length
-      ? verbatimOverlapSpans(summary, broadUnits, { lcs: VERBATIM_BROAD_LCS, lineMin: VERBATIM_BROAD_LINE, pieces: true })
-      : [];
-    const shaped = broadFoldReason(summary) !== null ? 1 : 0;
-    return { summary, verbatimSpans: spans.length + broadSpans.length + shaped };
-  }
-  const closed = closeVerbatimOverlap(summary, { units, broadUnits });
+  const closed = closeAggregateVerbatim(summary, units);
   return { summary: closed.answer, verbatimSpans: closed.count };
 }
 
@@ -177,13 +179,14 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
     if (obj.title || obj.summary) {
       // R310 P0-1：摘要与标题都是 AI 复述面，落库前过与 Ask 相同的逐字复述收口
       const closedSummary = obj.summary ? closeThreadSummary(spacifyCjk(obj.summary), rows) : null;
-      const closedTitle = closeThreadSummary(spacifyCjk((obj.title || fallbackTitle || "未命名线索").slice(0, 50)), rows, { title: true });
+      const closedTitle = closeThreadSummary(spacifyCjk((obj.title || fallbackTitle || UNTITLED_THREAD).slice(0, 50)), rows, { title: true });
       const title =
         closedTitle.verbatimSpans > 0
           ? fallbackTitle && closeThreadSummary(fallbackTitle, rows, { title: true }).verbatimSpans === 0
             ? fallbackTitle
-            : "未命名线索"
+            : UNTITLED_THREAD
           : closedTitle.summary;
+      recordOutletVerbatimClosed(env, "thread", (closedSummary?.verbatimSpans ?? 0) + closedTitle.verbatimSpans);
       await env.DB.prepare(
         "UPDATE threads SET title = ?, summary = ?, updated_at = datetime('now') WHERE id = ?"
       )

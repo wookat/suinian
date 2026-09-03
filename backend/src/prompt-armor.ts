@@ -4007,11 +4007,21 @@ export function noteMetaExecFragment(meta: string | { exec_fragment?: boolean } 
 // 返回值即折叠归因（随响应 fold_reason 外露）：
 //   "strict"            严判据/分片标记命中（最高优先级，出口带危险警示）
 //   "broad:endpoint"    任何远端端点形态（URL/IP/域名/邮箱/user@host，含拼读/分隔词/编码还原面）
-//   "broad:code"        命令/代码形态（围栏、代码行、命令/网络/执行原语、脚本文件名、管道给壳）
+//   "broad:fetch"       取回・执行・外连原语 / 脚本文件名 / 管道给壳（curl|wget|iwr|eval、`x.sh`、`| sh`）——
+//                       R312 P0-3：从 broad:code 拆出，仍默认折叠（R310 危险语料里的 broad 命中几乎全在这一形态）
+//   "broad:code"        本机命令行 / 壳函数 / SQL 语句形态（`tar -czf`、`docker compose up -d`、`ALTER TABLE`）——
+//                       R312 P0-3：默认展示，复制/执行时警示（日常命令备忘，对新危险语料覆盖≈0）
 //   "broad:opaque"      编码块/不透明串（base64/hex/摩尔斯/转义串/长密文样 token）
 //   "broad:obfuscated"  结构化分隔的标签串（`a 杠 b 杠 c`、逐字母拆分的标签）——与词表/TLD 无关
 //   "broad:error"       判定自身抛错（fail-closed：折叠）
-export type BroadFoldReason = "strict" | "broad:endpoint" | "broad:code" | "broad:opaque" | "broad:obfuscated" | "broad:error";
+export type BroadFoldReason =
+  | "strict"
+  | "broad:endpoint"
+  | "broad:fetch"
+  | "broad:code"
+  | "broad:opaque"
+  | "broad:obfuscated"
+  | "broad:error";
 
 /** 不透明串计入宽判据的最短长度（短于此的 base64 样串在普通文本里太常见）。 */
 const BROAD_OPAQUE_MIN_LEN = 12;
@@ -4054,6 +4064,20 @@ function broadObfuscatedShape(text: string): boolean {
 }
 
 /**
+ * R312 P0-3（audit-r311 §8.2 T2 折叠跨笔记不一致）：私网 IP（LOCAL_HOST_RE）在地址面里不计为远端端点，
+ * 但同样不可公网解析的保留后缀主机（`redis-prod.internal:6379`）却折——同一内网资源两种写法折叠结果相反。
+ * 宽判据的「非书签形态 host:port」检查把这类保留后缀与私网 IP 同等对待（RFC 6762 `.local`、RFC 8375 `.home.arpa`、
+ * ICANN 保留 `.internal`、RFC 2606/6761 `.test/.example/.invalid/.localhost`，及名称冲突冻结的 `.corp/.home/.lan/.intranet`）。
+ * 只影响折叠优先级，严判据（hasRemoteHostPort 等）不变。
+ */
+const NONPUBLIC_HOST_SUFFIX_RE = /\.(?:internal|local|localhost|home\.arpa|corp|home|lan|intranet|test|example|invalid)(?::\d{2,5})?$/i;
+
+export function nonpublicHost(endpoint: string): boolean {
+  const host = endpoint.trim().toLowerCase().split("@").pop() ?? "";
+  return NONPUBLIC_HOST_SUFFIX_RE.test(host) || LOCAL_HOST_RE.test(host.replace(/^\[/, ""));
+}
+
+/**
  * 宽判据（数据面默认折叠依据）。命中任一即折叠；`null` 才是「原文直接展示」。
  * 严判据命中优先返回 "strict"，出口据此决定警示强度。
  */
@@ -4066,7 +4090,7 @@ export function broadFoldReason(content: string | null | undefined): BroadFoldRe
     const addrSurface = normalizeAddressSurface(text);
     // 命令形态：脚本文件名 / 管道给壳 / 取回・执行・外连原语（不要求地址同现）。
     const commandShape = BROAD_COMMAND_SHAPE_RE.test(text) || BROAD_COMMAND_SHAPE_RE.test(cmdSurface);
-    if (commandShape) return "broad:code";
+    if (commandShape) return "broad:fetch";
     // 命令行 / 壳函数 / SQL 语句形态：不取回、不外连的本机命令也折（`tar -czf`、`rm -rf`、`DROP TABLE`）。
     if (BROAD_SHELL_LINE_RE.test(text) || BROAD_SHELL_FUNC_RE.test(text) || BROAD_SQL_LINE_RE.test(text)) return "broad:code";
     // 编码块 / 不透明串：摩尔斯、\x/%xx/八进制转义、长 base64/hex、密文样 token。
@@ -4081,9 +4105,10 @@ export function broadFoldReason(content: string | null | undefined): BroadFoldRe
     // 远端端点形态：书签型 URL（协议头 + 域名 + 路径）是收藏链接的常态，单独不折；
     // 以下任一同现即折：非书签形态（IP 字面 / user@host / host:port / 拼读・分隔・
     // 编码还原出来的地址 / defang）、代码面、取回・执行・交付・外连・外传语义、本机敏感源。
-    const raw = remoteEndpointForms(text, { includeEmails: true });
-    const restored = remoteEndpointForms(addrSurface, { includeEmails: true }).filter((e) => !raw.includes(e));
-    const cmdOnly = remoteEndpointForms(cmdSurface, { includeEmails: true }).filter((e) => !raw.includes(e));
+    const rawAll = remoteEndpointForms(text, { includeEmails: true });
+    const raw = rawAll.filter((e) => !nonpublicHost(e));
+    const restored = remoteEndpointForms(addrSurface, { includeEmails: true }).filter((e) => !rawAll.includes(e) && !nonpublicHost(e));
+    const cmdOnly = remoteEndpointForms(cmdSurface, { includeEmails: true }).filter((e) => !rawAll.includes(e) && !nonpublicHost(e));
     const endpoints = [...raw, ...restored, ...cmdOnly];
     if (endpoints.length === 0) {
       return null;
@@ -6253,10 +6278,16 @@ export interface FinalizeAskAnswerOpts {
    * （整行 / 说明语之后的片段本体 / ≥ VERBATIM_BROAD_LCS 的公共连续串）都不得出现在答案里。
    * 缺省时由 finalizeAskAnswer 自行按 dataUnits 逐条判宽判据。 */
   broadFoldUnits?: string[];
-  /** R310：逐字复述收口口径。"full"（缺省）= 任何资料单元的 ≥VERBATIM_LCS_CHARS 公共串 / 完整行都换占位，
-   * 用于模型生成的答案；"broad" = 只收宽判据命中单元的任意片段，用于确定性路由（模板 + 字面投影，
-   * 不是 AI 复述，但宽判据命中的原文同样不走答案通道）。 */
-  verbatimClosure?: "full" | "broad";
+  /** R312 P0-1：信任域（docs/decision-r312.md）。缺省 aggregate（fail-closed）：任何资料单元的
+   * ≥AGGREGATE_LCS_CHARS 归一化公共串按句/行占位，无门限例外、无形态例外、无问句豁免。
+   * single_note_direct 只在「答案只引用 1 条笔记且同屏有其卡片」时由调用方给出。 */
+  tier?: TrustTier;
+  /** R312：单笔记直答层的问句豁免文本——只能是用户逐字输入的问句（不含改写/历史）。聚合层忽略。 */
+  verbatimExempt?: string;
+  /** R312：服务端按结构化列（金额/币种/时间/计数）组装的确定性答案：笔记原文只以 `ledgerLabel` 进入，
+   * 组装时已逐条按聚合口径收口；这里不再对整答做资料重合复核（金额/日期数字与笔记的巧合公共串会把
+   * 结构化数值整行抹掉）。其它出口审计（外链/邮箱/指令隔离/危险残片）照常。 */
+  composedLabels?: boolean;
 }
 
 export type FinalizeAskAnswerResult = {
@@ -6267,6 +6298,8 @@ export type FinalizeAskAnswerResult = {
   reason?: string;
   /** R310：逐字复述收口替换的片段数（0 = 未触发）。 */
   verbatim_spans?: number;
+  /** R312 P1：其中聚合层强收口（≥AGGREGATE_LCS_CHARS 句/行级占位）的片段数，按出口打点用。 */
+  verbatim_closed_spans?: number;
 };
 
 /**
@@ -6589,10 +6622,211 @@ export function closeVerbatimOverlap(
   return { answer: out, count: merged.length };
 }
 
+// ---- R312 P0-1：按信任域分层的逐字收口（docs/decision-r312.md） ----
+// R311 证明「重合 且 达门限 且 不落例外」的收口范围仍由形态判据（shortPlainFactText /
+// plainFactLine / broadFoldReason）决定，泄漏率随语料新旧变化。R312 改为按信任域分层：
+//  - single_note_direct：用户问自己的笔记、答案只引用 1 条、同屏有该笔记卡片。原文本就在卡片里，
+//    收口对攻击者无收益、对用户是纯损失 ⇒ 允许逐字。唯一例外：该卡片本身默认折叠（严判据 /
+//    端点 / 不透明 / 混淆形态）时，答案不得替卡片「展开」——沿用宽判据任意片段口径。
+//  - aggregate：跨笔记聚合答案、周报/月报、回顾、线索摘要与标题、Push、MCP 全部工具、导出/备份中的
+//    AI 文本。与任一资料单元的归一化公共连续片段 ≥ AGGREGATE_LCS_CHARS（含纯文字）一律占位，且占位
+//    提升到完整句/完整行；不存在门限例外、形态例外或问句豁免。收口范围只由「哪些资料单元在场」决定。
+// 层级由确定性输入（引用笔记数、出口类型）决定，不允许 LLM 或形态分类器决定层级。
+export type TrustTier = { kind: "aggregate" } | { kind: "single_note_direct"; directUnit: string };
+export const AGGREGATE_TIER: TrustTier = { kind: "aggregate" };
+/** 聚合层公共连续片段门限（归一化字：NFKC + 小写 + 只保留字母/数字）。 */
+export const AGGREGATE_LCS_CHARS = 8;
+/** 聚合层资料完整行门限：与 LCS 同为 8——聚合层只有一条规则（公共串 ≥ 8 归一化字），不设第二套门限。 */
+export const AGGREGATE_LINE_CHARS = AGGREGATE_LCS_CHARS;
+
+/**
+ * Ask 出口的信任域：只有 app 出口（Web/Android，答案下方有引用卡片）且恰好引用 1 条笔记才是
+ * 单笔记直答；MCP/其它工具出口无卡片同屏，一律聚合层。零引用也是聚合层（没有卡片可对照）。
+ */
+export function resolveAskTrustTier(citedUnits: string[], outlet: AskOutlet): TrustTier {
+  if (outlet === "app" && citedUnits.length === 1 && citedUnits[0].trim()) return { kind: "single_note_direct", directUnit: citedUnits[0] };
+  return AGGREGATE_TIER;
+}
+
+/**
+ * 答案中实际点到的资料单元（角标 [n] → units[n-1]，去重、越界不计）。无角标且只有 1 个单元时视为点到该单元
+ * （单窗口调用）。与 index.ts 的 echoTierOf 同口径：层级由确定性事实（引用数、出口）决定。
+ */
+export function citedUnitsOf(answer: string, units: string[]): string[] {
+  const idx = [...new Set([...answer.matchAll(/[[［](\d{1,2})[\]］]/g)].map((m) => parseInt(m[1], 10)))].filter((n) => n >= 1 && n <= units.length);
+  if (idx.length === 0) return units.length === 1 ? [units[0]] : [];
+  return idx.map((n) => units[n - 1]);
+}
+
+export type AskOutlet = "app" | "mcp";
+/** MCP 内部转发 /api/ask 等路由时带的出口头：工具出口无引用卡片同屏，一律聚合层。客户端自带此头只会变严，不会变松。 */
+export const ASK_OUTLET_HEADER = "x-suinian-outlet";
+export function askOutletOf(header: string | undefined | null): AskOutlet {
+  return header === "mcp" ? "mcp" : "app";
+}
+
+/** 答案的句/行边界：换行、中英文句末标点（含其后的闭引号/括号与引证角标）。 */
+function sentenceBounds(answer: string): Array<{ start: number; end: number }> {
+  const out: Array<{ start: number; end: number }> = [];
+  const n = answer.length;
+  let start = 0;
+  let i = 0;
+  const closeTail = (j: number): number => {
+    // 句末标点之后紧跟的闭引号/闭括号/角标归入本句。
+    for (;;) {
+      while (j < n && /[”」』）)"'\]］]/.test(answer[j])) j++;
+      const m = /^\s*[[［]\d{1,2}[\]］]/.exec(answer.slice(j, j + 8));
+      if (m) {
+        j += m[0].length;
+        continue;
+      }
+      return j;
+    }
+  };
+  // 控制标记 〔…〕 内部的标点（“未采纳；原文可在…”）不算句界，避免占位嵌进标记中间。
+  let depth = 0;
+  while (i < n) {
+    const ch = answer[i];
+    if (ch === "\n") {
+      if (i > start) out.push({ start, end: i });
+      start = i + 1;
+      i++;
+      depth = 0;
+      continue;
+    }
+    if (ch === "〔") depth++;
+    else if (ch === "〕" && depth > 0) depth--;
+    if (depth === 0 && (/[。！？!?；;]/.test(ch) || (ch === "." && !/\d/.test(answer[i - 1] ?? "") && (i + 1 >= n || /\s/.test(answer[i + 1]))))) {
+      const end = closeTail(i + 1);
+      out.push({ start, end });
+      start = end;
+      i = end;
+      continue;
+    }
+    i++;
+  }
+  if (start < n) out.push({ start, end: n });
+  return out;
+}
+
+const LIST_LEAD_RE = /^[ \t]*(?:#{1,6}[ \t]+|>[ \t]*|\d{1,2}[.、)）][ \t]*|[-*+•][ \t]*|\[[ xX]\][ \t]*)*/;
+const CITATION_MARK_RE = /[[［]\d{1,2}[\]］]/g;
+
+/**
+ * 聚合层强收口。基线规则唯一且与形态无关：答案与任一资料单元的归一化公共连续片段 ≥ AGGREGATE_LCS_CHARS
+ * （含纯文字）⇒ 命中。另有两条**只增不减**的补充（不影响基线不变式）：资料单元里的端点/载荷形态短 token
+ * （`p.sh`、`id_rsa`，短于 8 字）与纯标点编码段（摩尔斯）。命中提升到答案的整句/整行后替换为占位（保留列表
+ * 序号与引证角标）。没有 shortPlainFactText / plainFactLine 例外，没有问句豁免；对所有单元一视同仁。
+ */
+export function closeAggregateVerbatim(
+  answer: string,
+  units: string[],
+  opts: { visibleUnit?: string } = {}
+): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
+  const live = units.filter((u) => typeof u === "string" && u.trim().length > 0);
+  if (live.length === 0 || !answer) return { answer, count: 0, spans: [] };
+  // 单笔记直答层：命中片段若本身就出现在同屏引用卡片的那条笔记里（其它单元只是重复它——图谱三元组的实体名、
+  // 分片单元、内容相近的未引用笔记），收口对攻击者无收益，不计。
+  const visible = opts.visibleUnit ? foldPlain(opts.visibleUnit) : "";
+  const inVisible = (s: { start: number; end: number }): boolean => {
+    if (!visible) return false;
+    const f = foldPlain(answer.slice(s.start, s.end));
+    return f.length > 0 && visible.includes(f);
+  };
+  const raw = verbatimOverlapSpans(answer, live, { lcs: AGGREGATE_LCS_CHARS, lineMin: AGGREGATE_LINE_CHARS, pieces: true }).filter(
+    (s) => !CONTROL_MARK_SPAN_RE.test(answer.slice(s.start, s.end)) && !inVisible(s)
+  );
+  // 纯标点编码段（摩尔斯等）在折叠面不可见，按原面（空白归一）比对。
+  const ws = (x: string): string => x.replace(/\s+/g, " ").trim();
+  const runs: string[] = [];
+  for (const u of live) for (const m of u.matchAll(PUNCT_CODE_RUN_RE)) runs.push(ws(m[0]));
+  if (runs.length > 0)
+    for (const m of answer.matchAll(PUNCT_CODE_RUN_RE)) {
+      const r = ws(m[0]);
+      if (runs.some((x) => x.includes(r) || r.includes(x)) && !(visible && ws(opts.visibleUnit ?? "").includes(r)))
+        raw.push({ start: m.index, end: m.index + m[0].length });
+    }
+  return replaceHitSentences(answer, raw);
+}
+
+/** 命中片段 → 所在整句/整行占位（保留列表序号与引证角标，相邻占位合并）。聚合层与直答层折叠卡守共用。 */
+function replaceHitSentences(
+  answer: string,
+  raw: Array<{ start: number; end: number }>
+): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
+  if (raw.length === 0) return { answer, count: 0, spans: [] };
+  raw.sort((x, y) => x.start - y.start);
+  const hits: Array<{ start: number; end: number }> = [];
+  for (const s of raw) {
+    const last = hits[hits.length - 1];
+    if (last && s.start <= last.end) last.end = Math.max(last.end, s.end);
+    else hits.push({ ...s });
+  }
+  // 句/行级提升：命中片段所在的每个句子/行整段占位。
+  const bounds = sentenceBounds(answer);
+  const marked = new Set<number>();
+  for (const h of hits) for (let k = 0; k < bounds.length; k++) if (bounds[k].start < h.end && h.start < bounds[k].end) marked.add(k);
+  let out = "";
+  let cursor = 0;
+  for (let k = 0; k < bounds.length; k++) {
+    if (!marked.has(k)) continue;
+    const b = bounds[k];
+    const seg = answer.slice(b.start, b.end);
+    const lead = LIST_LEAD_RE.exec(seg)?.[0] ?? "";
+    const marks = [...new Set(seg.slice(lead.length).match(CITATION_MARK_RE) ?? [])].join("");
+    out += answer.slice(cursor, b.start) + lead + VERBATIM_SPAN_PLACEHOLDER + marks;
+    cursor = b.end;
+  }
+  out += answer.slice(cursor);
+  // 相邻占位（中间只有空白/标点/角标）合并为一个，角标去重后保留。
+  const ph = VERBATIM_SPAN_PLACEHOLDER;
+  const adjacent = new RegExp(`${ph}([ \\t，,。.；;、]*(?:[[［]\\d{1,2}[\\]］][ \\t，,。.；;、]*)*)${ph}((?:[[［]\\d{1,2}[\\]］])*)`, "g");
+  for (let guard = 0; guard < 50; guard++) {
+    const next = out.replace(adjacent, (_m, a: string, b: string) => `${ph}${[...new Set(`${a}${b}`.match(CITATION_MARK_RE) ?? [])].join("")}`);
+    if (next === out) break;
+    out = next;
+  }
+  out = out.replace(/[“"「『`]\s*〔原文片段略，见引用笔记卡片〕\s*[”"」』`]/g, ph);
+  return { answer: out, count: hits.length, spans: hits };
+}
+
+/**
+ * 按信任域收口（finalizeAskAnswer 与 SSE 逐段闸门共用同一实现，REST/SSE/确定性路由同口径）。
+ * aggregate：全部单元强收口。single_note_direct：除直答单元外的全部单元强收口（未被引用的召回笔记
+ * 没有卡片同屏，不得逐字）；直答单元只在其卡片默认折叠时按宽判据任意片段口径收口（问句豁免只在这里）。
+ */
+export function closeVerbatimForTier(
+  answer: string,
+  opts: { units: string[]; execFragmentUnits?: string[]; tier?: TrustTier; exemptText?: string }
+): { answer: string; count: number; aggregate: number } {
+  const tier = opts.tier ?? AGGREGATE_TIER;
+  const frag = opts.execFragmentUnits ?? [];
+  if (tier.kind === "aggregate") {
+    const closed = closeAggregateVerbatim(answer, [...opts.units, ...frag]);
+    return { answer: closed.answer, count: closed.count, aggregate: closed.count };
+  }
+  const direct = tier.directUnit;
+  const others = [...opts.units, ...frag].filter((u) => u !== direct);
+  const strong = closeAggregateVerbatim(answer, others, { visibleUnit: direct });
+  const directFolded = frag.includes(direct) || defaultFoldedReason(broadFoldReason(direct));
+  if (!directFolded) return { answer: strong.answer, count: strong.count, aggregate: strong.count };
+  const guard = closeVerbatimOverlap(strong.answer, { units: [], broadUnits: [direct], question: opts.exemptText });
+  return { answer: guard.answer, count: strong.count + guard.count, aggregate: strong.count };
+}
+
+/** R312 P0-3：默认折叠的宽判据形态。broad:code（本机命令行 / SQL 等日常命令备忘）改为默认展示 + 复制警示，
+ * 不在此列；broad:fetch（取回・执行原语 / 脚本名 / 管道给壳）与 endpoint/opaque/obfuscated/strict 照旧默认折叠。 */
+export function defaultFoldedReason(reason: BroadFoldReason | null): boolean {
+  return reason !== null && reason !== "broad:code";
+}
+
 /** 答案里被逐字收口吃掉的实义字符（字母/数字）占比：≥ VERBATIM_ECHO_DOMINANT 视为「整答只是照抄原文」，
- * 生成侧应改述重生一次，而不是把占位残片递给用户。 */
+ * 生成侧应改述重生一次，而不是把占位残片递给用户。传入 tier 时按 R312 信任域口径计。 */
 export const VERBATIM_ECHO_DOMINANT = 0.5;
-export function verbatimEchoRatio(answer: string, opts: { units: string[]; broadUnits?: string[]; question?: string }): number {
+export function verbatimEchoRatio(
+  answer: string,
+  opts: { units: string[]; broadUnits?: string[]; question?: string; tier?: TrustTier; execFragmentUnits?: string[] }
+): number {
   const meaningful = (s: string): number =>
     s
       .split(VERBATIM_SPAN_PLACEHOLDER)
@@ -6601,7 +6835,9 @@ export function verbatimEchoRatio(answer: string, opts: { units: string[]; broad
       .replace(/[^\p{L}\p{N}]/gu, "").length;
   const before = meaningful(answer);
   if (before === 0) return 0;
-  const closed = closeVerbatimOverlap(answer, opts);
+  const closed = opts.tier
+    ? closeVerbatimForTier(answer, { units: opts.units, execFragmentUnits: opts.execFragmentUnits, tier: opts.tier, exemptText: opts.question })
+    : closeVerbatimOverlap(answer, opts);
   if (closed.count === 0) return 0;
   return 1 - meaningful(closed.answer) / before;
 }
@@ -6617,18 +6853,26 @@ const CONTROL_MARK_SPAN_RE = /^[\s〔〕（）()]*(?:已隔离|代码安全判�
 export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): FinalizeAskAnswerResult {
   const core = finalizeAskAnswerCore(answer, opts);
   const units = opts.dataUnits && opts.dataUnits.length > 0 ? opts.dataUnits : opts.dataText ? [opts.dataText] : [];
-  if (units.length === 0) return core;
-  // 分片笔记（同账号邻近拼接后判危险）无论单片形态如何都按宽判据单元收口：单片整行/记号都不得复述。
-  const broadUnits = [
-    ...(opts.broadFoldUnits ?? units.filter((u) => broadFoldReason(u) !== null)),
-    ...(opts.execFragmentUnits ?? []),
-  ];
-  const closed = closeVerbatimOverlap(core.answer, {
-    units: opts.verbatimClosure === "broad" ? [] : units,
-    broadUnits,
-    question: opts.question,
+  if (units.length === 0 || opts.composedLabels) return core;
+  // R312 P0-1：按信任域收口。未显式给 tier 时按确定性事实推定（与 index.ts echoTierOf 同口径）：答案恰好点到 1 个
+  // 资料单元（角标唯一，或无角标且只有 1 个单元）⇒ app 出口单笔记直答；否则聚合（fail-closed）。
+  // 生产 Ask/MCP/回顾都显式传 tier（MCP 强制聚合），这里只兜未传 tier 的调用方。分片笔记一并作为资料单元。
+  // 角标取隔离前后两个面的并集：隔离剥掉某条引用不能让原本的多引用答案「变成」单笔记直答（与生产按
+  // 生成侧 references 定层同口径，fail-closed）。
+  const tier: TrustTier = opts.tier ?? resolveAskTrustTier(citedUnitsOf(`${answer}\n${core.answer}`, units), "app");
+  const closed = closeVerbatimForTier(core.answer, {
+    units,
+    execFragmentUnits: opts.execFragmentUnits,
+    tier,
+    exemptText: opts.verbatimExempt ?? opts.question,
   });
-  if (closed.count === 0) return core;
+  if (closed.count === 0) {
+    // 直答层什么都没收时，verbatim 问法附带的「问答区不逐字转写」指引与实际交付自相矛盾，去掉。
+    const suffix = `\n\n${VERBATIM_REDIRECT_NOTICE}`;
+    if (tier.kind === "single_note_direct" && core.answer.endsWith(suffix))
+      return { ...core, answer: core.answer.slice(0, -suffix.length) };
+    return core;
+  }
   let out = closed.answer;
   // 占位后只剩无意义残片时，给出可读的指引而不是一串标点。
   const meaningful = out
@@ -6637,8 +6881,9 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
     .replace(/[[［]\d{1,2}[\]］]/g, "")
     .replace(/[\s。，；：！？、,.;:!?\-—~～()（）“”"「」]/g, "");
   if (meaningful.length < 4) out = VERBATIM_REDIRECT_NOTICE;
-  const reason = core.reason ? `${core.reason};verbatim:lcs=${closed.count}` : `verbatim:lcs=${closed.count}`;
-  return { ...core, answer: out, changed: true, reason, verbatim_spans: closed.count };
+  const tag = `verbatim:lcs=${closed.count};verbatim_closed_spans=${closed.aggregate}`;
+  const reason = core.reason ? `${core.reason};${tag}` : tag;
+  return { ...core, answer: out, changed: true, reason, verbatim_spans: closed.count, verbatim_closed_spans: closed.aggregate };
 }
 
 function finalizeAskAnswerCore(

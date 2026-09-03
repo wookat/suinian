@@ -7,7 +7,7 @@ import { decryptContent, decryptBytes, isEncryptedAttachment, ENC_PLACEHOLDER } 
 import { prepareNoteInsert } from "./note-store";
 import { backfillEmbeddings } from "./semantic";
 import { backfillGraphExtracts } from "./graph";
-import { clusterNote } from "./threads";
+import { clusterNote, UNTITLED_THREAD } from "./threads";
 import { SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 import { maybeSensitive } from "./triage";
 import { scrubDerivedMeta } from "./ingest";
@@ -18,12 +18,13 @@ import {
   broadFoldReason,
   foldSafeTitle,
   foldOutletWarnLine,
+  closeAggregateVerbatim,
   OUTLET_GLOBAL_RISK_NOTICE,
   OUTLET_GLOBAL_RISK_HEADER,
   OUTLET_GLOBAL_RISK_HEADER_VALUE,
   type BroadFoldReason,
 } from "./prompt-armor";
-import { recordOutletFoldMarks } from "./guard-events";
+import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 import { rejudgeExecFragmentsBulk } from "./exec-fragments";
 
 export const BACKUP_FORMAT = "suinian-backup";
@@ -96,6 +97,77 @@ export interface BackupManifest {
     broad_fold_notes: number;
     strict_marked_notes: number;
   };
+  /** R312 P0-2：原始笔记（用户自己的数据，逐字导出）与 AI 衍生文本（聚合层，生成时已强收口）的边界声明。 */
+  ai_derived: {
+    notice: string;
+    raw_user_data: string[];
+    aggregate_closed_at_generation: string[];
+    self_note_only: string[];
+  };
+}
+
+export const BACKUP_AI_DERIVED_NOTICE =
+  "notes.json 的 content/tags 是用户原始笔记（逐字导出，只做敏感脱敏与折叠标记）；threads.json 的 title/summary 与 reports.json 的 content_md 叙述是 AI 聚合文本，生成时已经聚合层强收口，导出时再按当前笔记复核一次（与笔记原文 ≥8 归一化字重合的句子换占位）；notes.json 的 url_summary/url_title 只基于本条笔记自身链接内容生成，title 在分拣时已剔除与其他笔记重合的抄写，不含其他笔记内容。";
+
+/** 报告口径下笔记可能涉及的窗口（周/月，宽放到前后各 1 天）。 */
+function reportWindow(r: Pick<WeeklyReportRow, "week_start" | "period">): { from: number; to: number } {
+  const start = Date.parse(r.week_start);
+  const days = r.period === "month" ? 31 : 7;
+  return { from: start - 86400_000, to: start + (days + 1) * 86400_000 };
+}
+
+/**
+ * R312 P0-2：导出前对线索标题/摘要与报告叙述做聚合层强收口复核：线索比对自己的笔记，报告比对周期内的
+ * 笔记（均只用非敏感明文）。返回新数组，不改入参。
+ */
+export function closeBackupDerived(
+  threads: ThreadRow[],
+  reports: WeeklyReportRow[],
+  notes: Array<{ id: string; thread_id: string | null; content: string; is_sensitive: boolean; created_at: string }>
+): { threads: ThreadRow[]; reports: WeeklyReportRow[]; spans: number } {
+  const plain = notes.filter((n) => !n.is_sensitive && n.content && n.content !== SENSITIVE_EXPORT_PLACEHOLDER);
+  const byThread = new Map<string, string[]>();
+  for (const n of plain) {
+    if (!n.thread_id) continue;
+    const list = byThread.get(n.thread_id) ?? [];
+    list.push(n.content);
+    byThread.set(n.thread_id, list);
+  }
+  let spans = 0;
+  const outThreads = threads.map((t) => {
+    const units = byThread.get(t.id) ?? [];
+    if (units.length === 0) return t;
+    let title = t.title;
+    let summary = t.summary;
+    if (title) {
+      const c = closeAggregateVerbatim(title, units);
+      if (c.count > 0) {
+        title = UNTITLED_THREAD;
+        spans += c.count;
+      }
+    }
+    if (summary) {
+      const c = closeAggregateVerbatim(summary, units);
+      if (c.count > 0) {
+        summary = c.answer;
+        spans += c.count;
+      }
+    }
+    return title === t.title && summary === t.summary ? t : { ...t, title, summary };
+  });
+  const outReports = reports.map((r) => {
+    const w = reportWindow(r);
+    const units = plain.filter((n) => {
+      const ts = Date.parse(n.created_at);
+      return Number.isFinite(ts) && ts >= w.from && ts <= w.to;
+    }).map((n) => n.content);
+    if (units.length === 0 || !r.content_md) return r;
+    const c = closeAggregateVerbatim(r.content_md, units);
+    if (c.count === 0) return r;
+    spans += c.count;
+    return { ...r, content_md: c.answer };
+  });
+  return { threads: outThreads, reports: outReports, spans };
 }
 
 function safeParse<T>(raw: string | null): T | null {
@@ -243,6 +315,21 @@ export async function buildBackupZip(
   }
   recordOutletFoldMarks(env, "backup", { strict: execMarked, broad: broadMarked }, waitUntil);
 
+  // R312 P0-2：threads/reports 是聚合层 AI 文本，生成时已强收口；导出时再按当前笔记明文复核一次，
+  // 兜住 R312 之前生成、尚未重建的旧线索/旧报告。
+  const threadIdOf = new Map(notes.map((n) => [n.id, n.thread_id]));
+  const closed = closeBackupDerived(threads, reports, backupNotes.map((b) => ({ ...b, thread_id: threadIdOf.get(b.id) ?? null })));
+  const closedThreads = closed.threads;
+  const closedReports = closed.reports;
+  if (closed.spans > 0) {
+    const closedTitle = new Map(closedThreads.map((t) => [t.id, t.title]));
+    for (const b of backupNotes) {
+      const tid = threadIdOf.get(b.id);
+      if (tid && closedTitle.has(tid)) b.thread_title = closedTitle.get(tid) ?? null;
+    }
+  }
+  recordOutletVerbatimClosed(env, "backup", closed.spans, waitUntil);
+
   const manifest: BackupManifest = {
     format: BACKUP_FORMAT,
     version: BACKUP_VERSION,
@@ -265,6 +352,12 @@ export async function buildBackupZip(
           },
         }
       : {}),
+    ai_derived: {
+      notice: BACKUP_AI_DERIVED_NOTICE,
+      raw_user_data: ["notes.json#content", "notes.json#tags", "media/"],
+      aggregate_closed_at_generation: ["threads.json#title", "threads.json#summary", "reports.json#content_md"],
+      self_note_only: ["notes.json#title", "notes.json#url_title", "notes.json#url_summary", "notes.json#url_titles"],
+    },
   };
 
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
@@ -304,8 +397,8 @@ export async function buildBackupZip(
         );
       }
       addJson("notes.json", backupNotes);
-      addJson("threads.json", threads);
-      addJson("reports.json", reports);
+      addJson("threads.json", closedThreads);
+      addJson("reports.json", closedReports);
       for (const m of mediaEntries) {
         if (failed || !env.MEDIA) break;
         const obj = await env.MEDIA.get(m.r2_key);
