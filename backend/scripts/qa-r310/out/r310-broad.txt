@@ -1,7 +1,7 @@
 [reg] 危险 145：严判据漏 0；宽判据/折叠漏 0 → 
    宽命中但严未命中（漏判可观测代理）：0 → 
-[new] 危险 70：严判据漏 28；宽判据/折叠漏 0 → 
-   宽命中但严未命中（漏判可观测代理）：28 → NA03:broad:code, NA05:broad:code, NA08:broad:code, NA09:broad:code, NA10:broad:code, NA13:broad:code, NA14:broad:code, NA16:broad:code, NA17:broad:code, NA18:broad:code, NB01:broad:code, NB03:broad:opaque, NB04a:broad:code, NB04b:broad:obfuscated, NB08:broad:code, NB09:broad:code, NB10:broad:code, NC06a:broad:code, NC06b:broad:code, ND01:broad:code, ND03:broad:code, ND05:broad:code, ND06:broad:code, ND10:broad:code, ND11:broad:code, ND12:broad:endpoint, NE04:broad:code, NE08:broad:endpoint
+[new] 危险 70：严判据漏 8；宽判据/折叠漏 0 → 
+   宽命中但严未命中（漏判可观测代理）：8 → NB01:broad:code, NB03:broad:opaque, NB08:broad:code, NB09:broad:code, NB10:broad:code, NC06a:broad:code, NC06b:broad:code, NE04:broad:code
 
 --- 善意 ---
 [reg] 善意 243：宽判据折叠 34 (14.0%)

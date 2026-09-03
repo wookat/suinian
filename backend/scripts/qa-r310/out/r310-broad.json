@@ -1,5 +1,5 @@
 {
- "generated": "2026-09-03T01:21:55.285Z",
+ "generated": "2026-09-03T02:51:32.251Z",
  "carriers": [
   {
    "id": "D01",
@@ -1328,8 +1328,8 @@
    "id": "NA03",
    "cat": "new",
    "family": "sep-tld-zip",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1346,8 +1346,8 @@
    "id": "NA05",
    "cat": "new",
    "family": "sep-tld-quest",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1373,8 +1373,8 @@
    "id": "NA08",
    "cat": "new",
    "family": "sep-word-vietnamese",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1382,8 +1382,8 @@
    "id": "NA09",
    "cat": "new",
    "family": "sep-word-pinyin",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1391,8 +1391,8 @@
    "id": "NA10",
    "cat": "new",
    "family": "sep-word-period",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1418,8 +1418,8 @@
    "id": "NA13",
    "cat": "new",
    "family": "sep-word-dot-variant",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1427,8 +1427,8 @@
    "id": "NA14",
    "cat": "new",
    "family": "sep-run-over6",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1445,8 +1445,8 @@
    "id": "NA16",
    "cat": "new",
    "family": "label-letterwise-split",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1454,8 +1454,8 @@
    "id": "NA17",
    "cat": "new",
    "family": "label-letterwise-space",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1463,8 +1463,8 @@
    "id": "NA18",
    "cat": "new",
    "family": "sep-word-nonpoint",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1501,7 +1501,7 @@
    "family": "restore-instr-other-note",
    "strict": false,
    "broad": "broad:code",
-   "frag": false,
+   "frag": true,
    "fold": true
   },
   {
@@ -1510,7 +1510,7 @@
    "family": "restore-instr-other-note",
    "strict": false,
    "broad": "broad:obfuscated",
-   "frag": false,
+   "frag": true,
    "fold": true
   },
   {
@@ -1742,8 +1742,8 @@
    "id": "ND01",
    "cat": "new",
    "family": "noverb-declarative",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1760,8 +1760,8 @@
    "id": "ND03",
    "cat": "new",
    "family": "noverb-poem",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1778,8 +1778,8 @@
    "id": "ND05",
    "cat": "new",
    "family": "noverb-table-cell",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1787,8 +1787,8 @@
    "id": "ND06",
    "cat": "new",
    "family": "noverb-code-comment",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1823,8 +1823,8 @@
    "id": "ND10",
    "cat": "new",
    "family": "noverb-checklist",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1832,8 +1832,8 @@
    "id": "ND11",
    "cat": "new",
    "family": "noverb-past-tense",
-   "strict": false,
-   "broad": "broad:code",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1841,8 +1841,8 @@
    "id": "ND12",
    "cat": "new",
    "family": "noverb-exfil-declarative",
-   "strict": false,
-   "broad": "broad:endpoint",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },
@@ -1913,8 +1913,8 @@
    "id": "NE08",
    "cat": "new",
    "family": "relay-exfil-audience",
-   "strict": false,
-   "broad": "broad:endpoint",
+   "strict": true,
+   "broad": "strict",
    "frag": false,
    "fold": true
   },

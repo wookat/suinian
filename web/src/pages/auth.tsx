@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { createNote, login, recoverAccount, register } from "@/lib/api"
 import { clearDemoNotes, userDemoNotes } from "@/lib/mock"
 import { defaultApiBase, loadSettings, saveSettings } from "@/lib/settings"
-import { cn } from "@/lib/utils"
+import { cn, SAFETY_PROMISE } from "@/lib/utils"
 import type { Note } from "@/lib/types"
 
 type Mode = "register" | "login" | "recover"
@@ -503,6 +503,9 @@ export function AuthPage() {
               : "登录成功后会取回你的 API token 并写入本机配置。老账号如未设置过密码，请在设置页直接填 token。"}
         </p>
       </Card>
+      <p className="px-1 text-xs leading-relaxed text-muted-foreground" data-testid="safety-promise">
+        {SAFETY_PROMISE}
+      </p>
     </div>
   )
 }

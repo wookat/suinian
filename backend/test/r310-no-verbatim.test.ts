@@ -181,6 +181,31 @@ describe("R310 语料：危险 215（R307 145 + R309 70）", () => {
     expect(diff.length).toBeGreaterThan(0);
   });
 
+  it("P1 检测器最小闭合（只影响折叠优先级，不是安全边界）：R309 70 条严判据漏判 42 → ≤ 8，且残余全在宽判据内", () => {
+    const strictMiss = NEW309.filter((c) => !noteContainsExecutableCommand(c.text) && !frag.has(c.id));
+    expect(strictMiss.length).toBeLessThanOrEqual(8);
+    expect(strictMiss.filter((c) => broadFoldReason(c.text) === null)).toEqual([]);
+    // 分隔词脱离 TLD/词表/≤6 长度；hasRestoreInstruction 跨笔记；陈述/表格/清单/收件人形态；片段夹在说明句中
+    for (const id of ["NA03", "NA05", "NA08", "NA09", "NA10", "NA13", "NA16", "NA17", "NA18", "ND01", "ND03", "ND05", "ND06", "ND10", "ND11", "ND12", "NE08"]) {
+      const c = NEW309.find((x) => x.id === id)!;
+      expect(noteContainsExecutableCommand(c.text), id).toBe(true);
+    }
+    const a = NEW309.find((x) => x.id === "NC06a")!;
+    const b = NEW309.find((x) => x.id === "NC06b")!;
+    expect([...fragmentExecNoteIds([{ id: "a", content: a.text }, { id: "b", content: b.text }])].sort()).toEqual(["a", "b"]);
+  });
+
+  it("P1 陈述/表格/清单/收件人形态的善意对照不误判为严判据", () => {
+    for (const t of [
+      "| 步骤 | 内容 |\n| 1 | 看 docs.example.com 的部署文档 |\n| 2 | 在终端里跑 npm test |",
+      "☐ 给妈妈打电话\n☐ 看完 blog.example.com 那篇关于终端配色的文章",
+      "客服邮箱是 support@example.com，客户投诉最后都会出现在那个收件箱里",
+      "setup.sh 今天在终端里报了个错，明天再看",
+    ]) {
+      expect(noteContainsExecutableCommand(t), t).toBe(false);
+    }
+  });
+
   it("Ask 回显 × normal/verbatim × 判别器两态：答案里无任何 ≥12 字危险片段（任意片段口径）", () => {
     const leaks: string[] = [];
     for (const c of CARRIERS) {

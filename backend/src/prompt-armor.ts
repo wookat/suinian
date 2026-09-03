@@ -2998,6 +2998,18 @@ type SemanticExecSignals = {
   contentAsInput: boolean;
   /** 本机敏感源读取 + 网络载荷原语 + 远端端点（协议无关的外传结构）。 */
   exfilCarrier: boolean;
+  /**
+   * R310 P1：**陈述句 / 表格 / checklist 形态**的「远程脚本 → 终端」交付——没有任何动词
+   * （「p.sh 的内容就是这台机器接下来的全部动作」「| 1 | …/p.sh |⏎| 2 | 终端里那一行 |」
+   * 「☐ …/p.sh —— 终端」）。远程脚本引用 ∧ 受体（终端/解释器/本机）∧（交付关系 ∨ 同一
+   * 结构块的相邻行）。
+   */
+  scriptToTerminalDeclarative: boolean;
+  /**
+   * R310 P1：**外传收件人形态**——不写动作，只写「资料最后出现在某个收件箱 / 发一份到
+   * 某邮箱」。自有资料/本机敏感源 ∧ 远端收件人（邮箱/端点）∧ 收件关系。
+   */
+  exfilRecipient: boolean;
   /** 脚本文件名在场（可执行载荷的落地形态）。 */
   scriptFile: boolean;
 };
@@ -3020,6 +3032,46 @@ function hasLiteralAddressForm(text: string): boolean {
 /** 登录动作紧跟主机/账号@主机（跳板机投放：「登录 ops@bastion.example.io 后执行…」）。 */
 const SEM_LOGIN_HOST_RE =
   /(?:登录|登陆|登入|ssh|scp|sftp|telnet|log\s?in|로그인|ログイン)[^\n]{0,6}(?:[\w.+-]+@)?(?:[\p{L}\p{N}_-]+\.)+[a-z]{2,24}/iu;
+
+/** 远程脚本引用：远端脚本路径，或脚本文件名 + 同条里的远端地址。 */
+const SEM_SCRIPT_REF_RE = new RegExp(`${REMOTE_SCRIPT_PATHY_RE.source}|${SCRIPT_FILE_NAME_RE.source}`, "i");
+/** 交付受体：终端/解释器/壳，或「这台机器/本机/主机」。 */
+const SEM_DELIVERY_TARGET_RE =
+  /终端|終端|命令行|命令列|解释器|解釋器|外壳|外殼|提示符|\bstdin\b|\bshell\b|\bterminal\b|\bconsole\b|\b(?:ba|z|da)?sh\b|\bpowershell\b|\bcmd\b|这台机器|這台機器|本机|本機|这台电脑|這台電腦|主机接下来|主機接下來/i;
+/** 无动词交付关系：「就是/都是…输入」「落在…里」「接下来的（全部）动作」「喂给」「每一行都是」。 */
+const SEM_DECLARATIVE_DELIVERY_RE =
+  /就是|即是|都是|落在|落进|落進|接下来的?(?:全部)?动作|接下來的?(?:全部)?動作|喂给|餵給|喂了|餵了|作为.{0,6}输入|作為.{0,6}輸入|当.{0,4}输入|當.{0,4}輸入|那一行|逐行|每一行|is\s+(?:what|the)\s+(?:the\s+)?(?:terminal|shell|machine)|becomes?\b|goes\s+(?:in|to)\s+the\s+(?:terminal|shell)/i;
+/** 表格行 / checklist 行 / 破折号引出的受体：结构块本身就是「一步接一步」的交付形态。 */
+const SEM_STRUCT_ROW_RE = /^\s*(?:\|.*\||[☐☑☒□■✓✔✗•●○◦▪▫-]\s.*|\d{1,2}[.)、]\s.*)$/m;
+
+function scriptToTerminalDeclarative(folded: string): boolean {
+  if (!SEM_SCRIPT_REF_RE.test(folded) || !SEM_DELIVERY_TARGET_RE.test(folded)) return false;
+  if (SEM_DECLARATIVE_DELIVERY_RE.test(folded)) return true;
+  // 结构块：脚本引用行与受体行是相邻的表格/清单行。
+  const lines = folded.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (!SEM_STRUCT_ROW_RE.test(lines[i]) || !SEM_SCRIPT_REF_RE.test(lines[i])) continue;
+    for (const j of [i - 1, i + 1]) {
+      const l = lines[j];
+      if (l !== undefined && SEM_STRUCT_ROW_RE.test(l) && SEM_DELIVERY_TARGET_RE.test(l)) return true;
+    }
+    if (/[—–-]{1,2}\s*(?:终端|終端|shell|terminal)/i.test(lines[i])) return true;
+  }
+  return false;
+}
+
+/** 自有资料 / 本机敏感源：外传的客体。 */
+const SEM_OWN_DATA_RE =
+  /我的(?:记录|記錄|笔记|筆記|资料|資料|数据|數據|所有|全部)|(?:所有|全部|整理完.{0,6})(?:的)?(?:记录|記錄|笔记|筆記)|\bmy\s+(?:notes?|records?|data)\b|\ball\s+(?:my\s+)?notes\b/i;
+/** 收件关系：出现在/发一份到/送到/寄到 … 收件箱/邮箱/端点。 */
+const SEM_RECIPIENT_RE =
+  /收件箱|收件人|邮箱里|郵箱裡|信箱里|信箱裡|\binbox\b|\bmailbox\b|(?:发|發|寄|送|传|傳|转|轉|抄)(?:一份|一封|一遍|过去|過去|出去)?(?:到|给|給|至)\s*(?:[\w.+-]+@|https?:\/\/|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)|\b(?:send|forward|mail|email|cc)\s+(?:a\s+copy\s+|it\s+|them\s+)?to\s+[\w.+-]+@/i;
+
+function exfilRecipientForm(folded: string): boolean {
+  if (!SEM_RECIPIENT_RE.test(folded)) return false;
+  if (!LOCAL_SECRET_SOURCE_RE.test(folded) && !SEM_OWN_DATA_RE.test(folded)) return false;
+  return hasRemoteEndpointForm(folded, { ignoreAllowlist: true }) || /[\w.+-]+@(?:[\w-]+\.)+[a-z]{2,24}/i.test(folded);
+}
 
 function semanticExecSignals(text: string): SemanticExecSignals {
   const foldedOnly = foldHomoglyphs(stripInvisibleCarriers(text)).normalize("NFKC");
@@ -3079,6 +3131,8 @@ function semanticExecSignals(text: string): SemanticExecSignals {
       LOCAL_SECRET_SOURCE_RE.test(folded) &&
       LOCAL_READ_ENCODE_RE.test(folded) &&
       NET_CARRIER_RE.test(folded),
+    scriptToTerminalDeclarative: remoteAddr && scriptToTerminalDeclarative(folded),
+    exfilRecipient: exfilRecipientForm(folded),
     fetch: SEM_FETCH_RE.test(folded) || PINYIN_FETCH_RE.test(folded),
     handoffInterp: handoff && interp,
     run: SEM_RUN_RE.test(stripNegatedRun(folded)) || PINYIN_RUN_RE.test(folded),
@@ -3186,6 +3240,8 @@ export function execSemanticGateReason(text: string): string | null {
   if (s.decodeAddrRun) return "semantic:decode-addr+fetch-run";
   if (s.bidiExec) return "semantic:bidi+exec";
   if (s.exfilCarrier) return "semantic:exfil-carrier";
+  if (s.exfilRecipient) return "semantic:exfil-recipient";
+  if (s.scriptToTerminalDeclarative) return "semantic:script-to-terminal-declarative";
   if (s.addrEvasion && (s.scriptFile || s.interp || s.fetch || s.run || s.exfil || s.handoffInterp))
     return "semantic:evasive-addr+exec-role";
   if (s.remoteAddr && s.contentAsInput) return "semantic:remote-content-as-input";
@@ -3194,6 +3250,8 @@ export function execSemanticGateReason(text: string): string | null {
   // addr 上，放在 addr 前置之前——否则自然语言危险句 11/11 不进判别器。
   if (s.loginHost && (s.run || s.exfil || s.fetch)) return "semantic:login-host+action";
   if (s.remoteAddr && s.exfil) return "semantic:addr+exfil";
+  // R310 P1：远端地址 + 脚本文件 + 执行语义（无取回词：「把 host 的 p.sh 跑起来」）也送判。
+  if (s.remoteAddr && s.scriptFile && s.run) return "semantic:addr+script+run";
   if (!s.addr) {
     // 语义危险判据已成立时无条件开门（门必不窄于处置判据）。
     return execSemanticDangerReason(text) === null ? null : "semantic:danger-reason";
@@ -3330,48 +3388,98 @@ function foldSepWords(s: string): string {
  * 已知公共 TLD 时，分隔词即「点」。约束保证误伤下界：
  *  - 标签必须是纯 ASCII 字母数字/连字符（可解析域名的标签面本就如此）；
  *  - 分隔词必须**不含 ASCII 字母数字**（自然语言的「点」在任何非拉丁书写
- *    系统里都如此），长度 ≤ 6；
+ *    系统里都如此），长度不限（R310 P1：去掉 ≤ 6 常量，分隔词长度不是语义）；
  *  - 多个分隔词必须**逐字相同**（口述地址时同一个词重复），因此中文正文里
  *    「在 example 和 net」这类单分隔的偶然结构不命中；
  *  - 至少 3 个标签且末段 ∈ COMMON_TLDS。
  * 新语言不需要补词表：任何语言的「点」都落在这个结构里。
  */
 function foldStructuralSepWords(input: string): string {
-  if (!/[^\s\w.,]/.test(input)) return input;
+  // 纯 ASCII 词文本只在出现「同一短词隔一个词重复」（a period b period c）时才值得扫。
+  if (!/[^\s\w.,]/.test(input) && !/\b([A-Za-z][A-Za-z0-9]{1,9}) \S+ \1 /.test(input)) return input;
   return input.split("\n").map(foldStructuralSepWordsLine).join("\n");
 }
 
 const STRUCT_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/;
-const STRUCT_SEP_RE = /^[^\sA-Za-z0-9]{1,6}$/u;
+const STRUCT_SEP_RE = /^[^\sA-Za-z0-9]+$/u;
+/** 拉丁书写系统里的「点」也可能是一个普通单词（dian / period / chấm / d0t）：短单词形。 */
+const STRUCT_WORD_SEP_RE = /^[A-Za-z][A-Za-z0-9\u00C0-\u024F\u1E00-\u1EFF]{1,9}$/u;
+/** 末段为字母标签（2–24），不要求在公共 TLD 表里——新 TLD（zip / quest / mov）年年增加。 */
+const STRUCT_TAIL_RE = /^[A-Za-z]{2,24}$/;
+/** 同行有脚本文件名 / 取回・执行・管道・终端语义时，非公共 TLD 的结构地址也按端点折。 */
+const STRUCT_CONTEXT_RE =
+  /\b(?:curl|wget|bash|sh|zsh|iex|powershell|python|node|pipe|download|fetch|run|exec)\b|管道|下载|下載|取回|拉取|拉下|执行|執行|运行|運行|终端|終端|跑/i;
+
+/** 词元：标签本体 + 前后粘连的非标签字符（CJK 正文里「去relay3」「net（念作点）取」）。 */
+function structToken(tok: string): { lead: string; label: string; trail: string } | null {
+  const m = /^([^A-Za-z0-9]*)([A-Za-z0-9][A-Za-z0-9-]{0,62})([^A-Za-z0-9-][\s\S]*)?$/.exec(tok);
+  if (!m) return null;
+  return { lead: m[1], label: m[2], trail: m[3] ?? "" };
+}
 
 function foldStructuralSepWordsLine(line: string): string {
   const toks = [...line.matchAll(/\S+/g)];
   if (toks.length < 5) return line;
+  const hasContext = SCRIPT_FILE_NAME_RE.test(line) || STRUCT_CONTEXT_RE.test(line);
   let out = "";
   let cursor = 0;
   for (let i = 0; i < toks.length; i++) {
     if (toks[i].index < cursor) continue;
-    if (!STRUCT_LABEL_RE.test(toks[i][0])) continue;
-    const labels = [toks[i][0]];
+    const first = structToken(toks[i][0]);
+    if (!first || first.trail.length > 0) continue;
+    const labels = [first.label];
     let sep: string | null = null;
+    let wordSep = false;
     let j = i + 1;
+    let endAt = toks[i].index + toks[i][0].length;
     for (; j + 1 < toks.length + 1; j += 2) {
       const s = toks[j]?.[0];
-      const l = toks[j + 1]?.[0];
-      if (s === undefined || l === undefined) break;
-      if (!STRUCT_SEP_RE.test(s) || (sep !== null && s !== sep)) break;
-      if (!STRUCT_LABEL_RE.test(l)) break;
+      const lt = toks[j + 1]?.[0];
+      if (s === undefined || lt === undefined) break;
+      const isSym = STRUCT_SEP_RE.test(s);
+      const isWord = !isSym && STRUCT_WORD_SEP_RE.test(s);
+      if (!isSym && !isWord) break;
+      if (sep !== null && s !== sep) break;
+      const l = structToken(lt);
+      if (!l || l.lead.length > 0) break;
       sep = s;
-      labels.push(l);
+      wordSep = isWord;
+      labels.push(l.label);
+      endAt = toks[j + 1].index + l.label.length;
+      if (l.trail.length > 0) {
+        j += 2;
+        break;
+      }
     }
     if (labels.length < 3) continue;
-    if (!COMMON_TLDS.has(labels[labels.length - 1].toLowerCase())) continue;
-    const start = toks[i].index;
-    const end = toks[j - 1].index + toks[j - 1][0].length;
-    out += line.slice(cursor, start) + labels.join(".");
-    cursor = end;
+    const tail = labels[labels.length - 1];
+    const knownTld = COMMON_TLDS.has(tail.toLowerCase());
+    // 词形分隔（and / dian）在自然语言里天然常见：末段须为公共 TLD，或同行带取回/执行语境。
+    if (wordSep && !knownTld && !hasContext) continue;
+    if (!knownTld && (!STRUCT_TAIL_RE.test(tail) || !hasContext)) continue;
+    const start = toks[i].index + first.lead.length;
+    const host = labels.join(".");
+    out += line.slice(cursor, start) + (knownTld ? host : `http://${host}`);
+    cursor = endAt;
   }
   return out + line.slice(cursor);
+}
+
+/**
+ * 逐字母拆写的标签（`r-e-l-a-y-3` / `e x a m p l e` / `n·e·t`）：≥3 个单字符由同一类
+ * 分隔符（连字符 / 空格 / 下划线 / 间隔点）串起，其中至少含一个 ASCII 字母，合并回标签；
+ * 汉字数字（三）按数字并入。纯数字串（电话 / 编号）与含「.」的串不动。
+ */
+const LETTERWISE_RUN_RE = /(?<![A-Za-z0-9])[A-Za-z0-9一二三四五六七八九零〇](?:[ \-_·•][A-Za-z0-9一二三四五六七八九零〇]){2,}(?![A-Za-z0-9])/gu;
+const CJK_DIGIT: Record<string, string> = { 零: "0", 〇: "0", 一: "1", 二: "2", 三: "3", 四: "4", 五: "5", 六: "6", 七: "7", 八: "8", 九: "9" };
+function foldLetterwiseLabels(input: string): string {
+  if (!/[A-Za-z][ \-_·•][A-Za-z0-9一二三四五六七八九零〇][ \-_·•][A-Za-z0-9一二三四五六七八九零〇]/u.test(input)) return input;
+  return input.replace(LETTERWISE_RUN_RE, (run) => {
+    const seps = new Set(run.replace(/[A-Za-z0-9一二三四五六七八九零〇]/gu, ""));
+    if (seps.size !== 1) return run;
+    if (!/[A-Za-z]/.test(run)) return run;
+    return run.replace(/[ \-_·•]/g, "").replace(/[一二三四五六七八九零〇]/gu, (d) => CJK_DIGIT[d] ?? d);
+  });
 }
 
 /**
@@ -3540,7 +3648,7 @@ function normalizeAddressSurfaceUncached(text: string): string {
   // 下面的同形折叠会把西里尔字母折成拉丁（точка → тocчкa）、NFD 会把谚文音节
   // 拆成字母（점 → 점），两者都使分隔词在归一面上消失——R306 的多语言词表
   // 因此对韩/俄整类失效（字表在但匹配不上）。
-  const raw = foldStructuralSepWords(foldSepWords(foldDefangedSeparators(decoded)));
+  const raw = foldSepWords(foldStructuralSepWords(foldDefangedSeparators(foldLetterwiseLabels(decoded))));
   let s = foldHomoglyphs(stripInvisibleCarriers(raw)).normalize("NFKC");
   s = s.normalize("NFD").replace(/\p{Mn}/gu, "");
   // 百分号编码分隔符（%2E → . / %2D → - / %2F → / / %3A → : / %40 → @）：
@@ -4000,7 +4108,7 @@ const FRAG_WINDOW = 6;
  * 只要把每片写长一点就整族失效（audit-r309 §14.3）。放宽到 800——拼接判定仍要求
  * 「拼出各片单独都没有的新端点」，长度不再是安全依据。
  */
-const FRAG_MAX_LEN = 800;
+export const FRAG_MAX_LEN = 800;
 
 export interface FragmentCandidate {
   id: string;
@@ -4050,14 +4158,39 @@ export function fragmentExecNoteIds(notes: FragmentCandidate[]): Set<string> {
  * 单独都没有的端点即成立；良性相邻笔记各自的地址在差集里，因此不会互相连坐。
  */
 function stitchedWindowIsDangerous(win: FragmentCandidate[]): boolean {
+  // 端点集合取原文 ∪ 地址判定面（拼读/分隔/还原说明折叠后）：还原说明与密文分别
+  // 落在两条笔记里时（R309 NB04a/b），只有拼接面才解得出地址。
+  const endpointsOf = (t: string): string[] => [
+    ...remoteEndpointForms(t, { ignoreAllowlist: true, includeEmails: true }),
+    ...remoteEndpointForms(normalizeAddressSurface(t), { ignoreAllowlist: true, includeEmails: true }),
+  ];
   const own = new Set<string>();
-  for (const n of win) for (const e of remoteEndpointForms(n.content ?? "", { ignoreAllowlist: true, includeEmails: true })) own.add(e);
+  for (const n of win) for (const e of endpointsOf(n.content ?? "")) own.add(e);
+  // 还原说明与密文/不透明串分落两条（R310 P1：hasRestoreInstruction 去掉同笔记位置约束）：
+  // 单条都不同时具备「说明 + 密文」而拼接后具备，也算拼出了新信息。
+  const restoreSplit =
+    !win.some((n) => hasRestoreInstruction(n.content ?? "") && cipherishToken(n.content ?? "")) &&
+    win.some((n) => hasRestoreInstruction(n.content ?? "")) &&
+    win.some((n) => cipherishToken(n.content ?? ""));
   for (const stitched of stitchWindow(win)) {
-    const forms = remoteEndpointForms(stitched, { ignoreAllowlist: true, includeEmails: true });
-    if (!forms.some((e) => !own.has(e))) continue;
+    const forms = endpointsOf(stitched);
+    if (!forms.some((e) => !own.has(e)) && !restoreSplit) continue;
     if (noteContainsExecutableCommand(stitched)) return true;
   }
   return false;
+}
+
+/** 密文样/不透明串：末段非公共 TLD 的点分标签串、长 base64/hex、摩尔斯段。 */
+function cipherishToken(text: string): boolean {
+  for (const m of text.matchAll(/(?<![\w.])[A-Za-z0-9-]{2,}(?:\.[A-Za-z0-9-]{2,}){1,}(?![\w.])/g)) {
+    const tail = m[0].slice(m[0].lastIndexOf(".") + 1).toLowerCase();
+    if (!COMMON_TLDS.has(tail) && /[A-Za-z]/.test(tail)) return true;
+  }
+  if (B64_BLOB_RE.test(text) || /(?<![\w])[0-9a-f]{16,}(?![\w])/i.test(text)) return true;
+  PUNCT_CODE_RUN_RE.lastIndex = 0;
+  const morse = PUNCT_CODE_RUN_RE.test(text);
+  PUNCT_CODE_RUN_RE.lastIndex = 0;
+  return morse;
 }
 
 /**
@@ -4079,7 +4212,7 @@ function fragmentPiece(content: string, opts?: { keepTrailingSpace?: boolean; fi
 }
 
 /** 片段本身是否带代码/地址形态（ASCII 标识符・路径・管道・协议头残片）。 */
-function fragmentLooksLikeCode(content: string): boolean {
+export function fragmentLooksLikeCode(content: string): boolean {
   return /[A-Za-z][A-Za-z0-9]*[\/.:|@\-_][A-Za-z0-9\/.:|@\-_ ]*|[\/.:|@\-_][A-Za-z0-9]{2,}|\b(?:cur|url|wget|htt|tps?|sh|bash|iex)\b/.test(
     fragmentPiece(content)
   );
@@ -4111,6 +4244,9 @@ function stitchWindow(win: FragmentCandidate[]): string[] {
   const rawPieces = win.map((n) => fragmentPiece(n.content, { keepTrailingSpace: true }));
   const rawFirstPieces = win.map((n) => fragmentPiece(n.content, { keepTrailingSpace: true, firstSep: true }));
   const wholes = win.map((n) => n.content.trim());
+  // 片段夹在说明句中间（`把 curl http://relay3.exa 这半句` / `另半句 mple.net/p.sh | bash 拼上去`）：
+  // 取每条里最长的代码形态连续段再拼（R310 P1，R309 NC06 实测漏判）。
+  const codeRuns = win.map((n) => fragmentCodeRun(n.content));
   return [
     ...new Set([
       pieces.join(""),
@@ -4121,8 +4257,22 @@ function stitchWindow(win: FragmentCandidate[]): string[] {
       rawFirstPieces.join(""),
       wholes.join(""),
       wholes.join(" "),
+      codeRuns.join(""),
+      codeRuns.join(" "),
     ]),
   ];
+}
+
+const CODE_RUN_RE = /[A-Za-z0-9][A-Za-z0-9:\/.|@\-_~%=?&+ ]*[A-Za-z0-9\/.|]/g;
+/** 内容里最长的代码形态连续段（含 / . : | @ 之一，或壳/取回词）；没有则回落到分界后片段。 */
+function fragmentCodeRun(content: string): string {
+  let best = "";
+  for (const m of content.matchAll(CODE_RUN_RE)) {
+    const run = m[0].trim();
+    if (!/[\/.:|@]|\b(?:cur|curl|wget|htt|https?|sh|bash|iex|powershell)\b/.test(run)) continue;
+    if (run.length > best.length) best = run;
+  }
+  return best.length > 0 ? best : fragmentPiece(content);
 }
 
 export function execCombinationGateReason(answer: string): string | null {
@@ -4154,6 +4304,9 @@ export function execSemanticDangerReason(text: string): string | null {
   if (s.spelled && (s.run || s.handoffInterp || s.fetch)) return "semantic-danger:spelled-cmd";
   // R308 P0-1：协议无关的外传结构（本机敏感源 → 网络载荷原语 → 远端）。
   if (s.exfilCarrier) return "semantic-danger:exfil-carrier";
+  // R310 P1：外传收件人形态 / 无动词的脚本→终端陈述、表格、清单形态。
+  if (s.exfilRecipient) return "semantic-danger:exfil-recipient";
+  if (s.scriptToTerminalDeclarative) return "semantic-danger:script-to-terminal-declarative";
   // R308 P0-1：地址只在归一/解码面上存在（拼读/去牙/位移/编码）——规避形态本身
   // 就是信号；再与任一执行语义角色（脚本文件/解释器/取回/执行/外传）同现即判危，
   // 不依赖任何语言的动词表（韩/俄/阿等只要写了 payload.sh / bash 就命中）。
@@ -5911,6 +6064,44 @@ export const VERBATIM_LINE_CHARS = 12;
 export const VERBATIM_BROAD_LCS = 12;
 export const VERBATIM_BROAD_LINE = 5;
 
+/**
+ * 宽判据命中单元里的「端点/载荷形态 token」：文件名、主机/IP/邮箱、编码串、转义串、管道给壳、
+ * 取回原语行、本机敏感源路径、拆字母标签。它们不设最短长度——`p.sh`、`id_rsa` 这类短 token 在
+ * 摘要句里被夹带出来，就是 audit-r309 P1-1「分片逐片回显」的形态，长度阈值挡不住，只能按形态挡。
+ * 只对宽判据命中的单元生效（善意笔记里的 github.com 不受影响）。
+ */
+const BROAD_FRAGMENT_TOKEN_RES: RegExp[] = [
+  /[\w.-]+\.(?:sh|bash|zsh|ps1|bat|cmd|vbs|hta|exe|msi|run|py|js|rb|pl|php|jar|tgz|tar\.gz|zip|txt|sock|pem|key)\b/gi,
+  /(?:https?|ftp|hxxps?|ssh|scp|sftp|telnet|javascript|data):[^\s"'<>]{4,}/gi,
+  /\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{2,5})?\b/g,
+  /\b(?:[a-z0-9-]+\.){1,}[a-z]{2,24}(?::\d{2,5})?(?:\/[^\s"'<>]*)?/gi,
+  /[\w.+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/gi,
+  /\bxn--[a-z0-9-]+/gi,
+  /(?<![\w])[0-9a-f]{16,}(?![\w])/gi,
+  /(?<![\w+/])[A-Za-z0-9+/_-]{16,}={0,2}(?![A-Za-z0-9+/])/g,
+  /\b[A-Z2-7]{12,}={0,6}\b/g,
+  /(?:\\x[0-9a-f]{2}){3,}/gi,
+  /(?:\\[0-7]{3}){3,}/g,
+  /(?:%[0-9a-f]{2}){4,}/gi,
+  /\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b|\|\s*(?:iex|powershell|pwsh|python\d?|perl|ruby|node)\b/gi,
+  /\b(?:curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|Invoke-Expression|certutil|bitsadmin|mshta|rundll32|regsvr32|nc|ncat|netcat|socat)\b[^\n]{0,60}/gi,
+  /\/dev\/tcp\/[^\s]+/g,
+  /(?:id_rsa|id_ed25519|\.ssh\/[^\s]*|\.aws\/credentials|\.netrc|\/etc\/(?:passwd|shadow))/gi,
+  /\b[a-z][a-z0-9-]*(?:[ \-_·•.][a-z0-9]){3,}\b/gi,
+];
+export function broadFragmentTokens(unit: string): string[] {
+  const out = new Set<string>();
+  for (const re of BROAD_FRAGMENT_TOKEN_RES) {
+    for (const m of unit.matchAll(re)) {
+      const t = m[0].trim();
+      if (foldPlain(t).length >= 3) out.add(t);
+      // 路径型 token 的每一段也是片段（`~/.ssh/id_rsa` 里的 `id_rsa`、URL 里的文件名）。
+      for (const seg of t.split(/[/\\]+/)) if (seg !== t && foldPlain(seg).length >= 3) out.add(seg);
+    }
+  }
+  return [...out];
+}
+
 interface FoldedText {
   folded: string;
   /** folded[i] 对应原文的 [start, end) 。 */
@@ -5982,6 +6173,7 @@ export function verbatimOverlapSpans(
         if (fp.length >= opts.lineMin && fp !== fl) markAll(fp);
       }
     }
+    if (opts.pieces) for (const t of broadFragmentTokens(u)) markAll(foldPlain(t));
   }
   for (let i = 0; i + L <= a.folded.length; i++) {
     const g = a.folded.slice(i, i + L);
@@ -6016,6 +6208,9 @@ export function verbatimOverlapSpans(
   return spans;
 }
 
+/** 纯标点的编码段（摩尔斯等）：≥4 个由空白隔开的标点簇。 */
+const PUNCT_CODE_RUN_RE = /(?:[.\-·•_・−–—]{1,7}[ \t]+){3,}[.\-·•_・−–—]{1,7}/g;
+
 /** 答案中的逐字重合片段替换为占位；返回替换数。占位前后的角标/引号保留，相邻占位合并。 */
 export function closeVerbatimOverlap(
   answer: string,
@@ -6038,15 +6233,30 @@ export function closeVerbatimOverlap(
         })
       : []),
   ]
-    .filter((s) => !CONTROL_MARK_SPAN_RE.test(answer.slice(s.start, s.end)))
-    .sort((x, y) => x.start - y.start);
+    .map((s) => ({ ...s, raw: false }))
+    .filter((s) => !CONTROL_MARK_SPAN_RE.test(answer.slice(s.start, s.end)));
+  // 折叠面只看字母/数字，纯标点的编码段（摩尔斯 `.-. . .-..`）在折叠面上不可见 ⇒ 对宽判据
+  // 单元里的标点编码段按原面（空白归一）比对。
+  const broadUnits = opts.broadUnits ?? [];
+  if (broadUnits.length > 0) {
+    const ws = (x: string): string => x.replace(/\s+/g, " ").trim();
+    const runs: string[] = [];
+    for (const u of broadUnits) for (const m of u.matchAll(PUNCT_CODE_RUN_RE)) runs.push(ws(m[0]));
+    if (runs.length > 0)
+      for (const m of answer.matchAll(PUNCT_CODE_RUN_RE)) {
+        const r = ws(m[0]);
+        if (runs.some((x) => x.includes(r) || r.includes(x))) spans.push({ start: m.index, end: m.index + m[0].length, raw: true });
+      }
+  }
+  spans.sort((x, y) => x.start - y.start);
   if (spans.length === 0) return { answer, count: 0 };
   // 合并重叠/相邻（中间只隔空白标点）的区间。
-  const merged: Array<{ start: number; end: number }> = [];
+  const merged: Array<{ start: number; end: number; raw: boolean }> = [];
   for (const s of spans) {
     const last = merged[merged.length - 1];
     if (last && (s.start <= last.end || !/[\p{L}\p{N}]/u.test(answer.slice(last.end, s.start)))) {
       last.end = Math.max(last.end, s.end);
+      last.raw = last.raw || s.raw;
     } else merged.push({ ...s });
   }
   // 逐行落占位：跨行区间按答案换行切开，每行保留列表序号/项目符（编号连续性），
@@ -6060,7 +6270,7 @@ export function closeVerbatimOverlap(
       const atLineStart = from === answer.lastIndexOf("\n", from - 1) + 1;
       const lead = atLineStart ? /^[ \t]*(?:\d{1,2}[.、)）]|[-*+•])[ \t]*/.exec(answer.slice(from, to + 4)) : null;
       const start = Math.min(to, from + (lead ? lead[0].length : 0));
-      if (/[\p{L}\p{N}]/u.test(answer.slice(start, to))) pieces.push({ start, end: to });
+      if (s.raw || /[\p{L}\p{N}]/u.test(answer.slice(start, to))) pieces.push({ start, end: to });
       from = to + 1;
     }
   }
@@ -6089,9 +6299,11 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
   const core = finalizeAskAnswerCore(answer, opts);
   const units = opts.dataUnits && opts.dataUnits.length > 0 ? opts.dataUnits : opts.dataText ? [opts.dataText] : [];
   if (units.length === 0) return core;
-  const broadUnits =
-    opts.broadFoldUnits ??
-    [...units, ...(opts.execFragmentUnits ?? [])].filter((u) => broadFoldReason(u) !== null);
+  // 分片笔记（同账号邻近拼接后判危险）无论单片形态如何都按宽判据单元收口：单片整行/记号都不得复述。
+  const broadUnits = [
+    ...(opts.broadFoldUnits ?? units.filter((u) => broadFoldReason(u) !== null)),
+    ...(opts.execFragmentUnits ?? []),
+  ];
   const closed = closeVerbatimOverlap(core.answer, {
     units: opts.verbatimClosure === "broad" ? [] : units,
     broadUnits,

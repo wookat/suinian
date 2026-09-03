@@ -15,6 +15,13 @@ export function titleEchoesContent(title: string | null | undefined, content: st
   return norm(title) === norm(content)
 }
 
+/**
+ * 产品安全承诺（R310）：不承诺认得出每一种危险内容（检测器只决定折叠优先级），
+ * 承诺的是结构性边界：AI 永不逐字复述笔记原文，原文只在用户点开的卡片里。
+ */
+export const SAFETY_PROMISE =
+  "什么都能丢：我们不保证认得出每一种危险内容，但保证任何笔记原文都不会被 AI 念给你或悄悄递回——AI 只给摘要和引用卡片，原文要你自己点开看；含端点/命令形态的内容默认折叠，一键展开，请勿直接执行。"
+
 export const EXEC_TITLE_PLACEHOLDER = "含可执行命令的记录（已折叠）"
 export const BROAD_TITLE_PLACEHOLDER = "含端点/代码形态内容的记录（已折叠）"
 
