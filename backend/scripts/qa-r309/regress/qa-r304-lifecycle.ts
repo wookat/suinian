@@ -9,6 +9,7 @@
  * QA 账号一律 [QA-R309] 前缀、口令运行时随机生成，跑完即注销；不触碰 u_boss。
  */
 import { unzipSync, strFromU8 } from "fflate";
+import { randomBytes } from "node:crypto";
 
 const API = process.env.SUINIAN_API_BASE ?? "https://suinian-api.zalize.com";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -47,7 +48,8 @@ async function main() {
     body: JSON.stringify({ name, password }),
   });
   console.log(`registered ${name}`);
-  const SECRET = "Zx7Qm2Vp9Kt4";
+  // 敏感笔记中的假口令：运行时随机，避免仓库内出现口令形态字面量（审查方副本与原脚本的唯一逻辑差异）
+  const SECRET = `Zx${randomBytes(5).toString("hex")}`;
   try {
     // 敏感笔记 + 一条普通笔记
     const sens = (
