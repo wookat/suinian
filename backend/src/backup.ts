@@ -12,8 +12,18 @@ import { SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 import { maybeSensitive } from "./triage";
 import { scrubDerivedMeta } from "./ingest";
 import { storeOriginal, type MediaType } from "./media";
-import { noteContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_OUTLET_WARN_LINE } from "./prompt-armor";
-import { recordOutletExecMarks } from "./guard-events";
+import {
+  noteContainsExecutableCommand,
+  noteMetaExecFragment,
+  broadFoldReason,
+  foldSafeTitle,
+  foldOutletWarnLine,
+  OUTLET_GLOBAL_RISK_NOTICE,
+  OUTLET_GLOBAL_RISK_HEADER,
+  OUTLET_GLOBAL_RISK_HEADER_VALUE,
+  type BroadFoldReason,
+} from "./prompt-armor";
+import { recordOutletFoldMarks } from "./guard-events";
 import { rejudgeExecFragmentsBulk } from "./exec-fragments";
 
 export const BACKUP_FORMAT = "suinian-backup";
@@ -68,6 +78,9 @@ export interface BackupNote {
   /** R306 P0-1：危险执行标注随备份走（不经 noteToJson 的出口） */
   contains_executable_command: boolean;
   exec_warning?: string;
+  /** R310 P0-2：宽判据折叠字段（strict ⊂ broad），机器可读。 */
+  fold?: boolean;
+  fold_reason?: BroadFoldReason | null;
 }
 
 export interface BackupManifest {
@@ -76,6 +89,13 @@ export interface BackupManifest {
   exported_at: string;
   include_sensitive: boolean;
   counts: { notes: number; threads: number; reports: number; attachments: number; attachments_redacted: number };
+  /** R310 P0-3：账号存在任何宽判据命中即带整体风险声明与禁执行开关。 */
+  content_risk?: {
+    notice: string;
+    do_not_execute: true;
+    broad_fold_notes: number;
+    strict_marked_notes: number;
+  };
 }
 
 function safeParse<T>(raw: string | null): T | null {
@@ -131,6 +151,7 @@ export async function buildBackupZip(
   const mediaEntries: { path: string; r2_key: string }[] = [];
   let attachmentsRedacted = 0;
   let execMarked = 0;
+  let broadMarked = 0;
   // every note goes into the backup, including ones still waiting for AI
   // triage (category stays null and gets sorted after restore). Fail-closed:
   // besides confirmed-sensitive notes, a redacted (default) backup also
@@ -183,10 +204,14 @@ export async function buildBackupZip(
       });
     }
     const execFlag = !redacted && (noteContainsExecutableCommand(content) || noteMetaExecFragment(meta));
-    if (execFlag) {
-      execMarked++;
-      title = execSafeTitle(title, content);
+    // R310 P0-2：折叠以宽判据为准，严判据只决定警示强度
+    const foldReason: BroadFoldReason | null = execFlag ? "strict" : redacted ? null : broadFoldReason(content);
+    if (execFlag) execMarked++;
+    if (foldReason !== null) {
+      broadMarked++;
+      title = foldSafeTitle(title, content, foldReason);
     }
+    const warnLine = foldOutletWarnLine(foldReason);
     backupNotes.push({
       id: n.id,
       source: n.source,
@@ -211,10 +236,12 @@ export async function buildBackupZip(
       updated_at: n.updated_at,
       attachments: backupAtts,
       contains_executable_command: execFlag,
-      ...(execFlag ? { exec_warning: EXEC_OUTLET_WARN_LINE } : {}),
+      fold: foldReason !== null,
+      fold_reason: foldReason,
+      ...(warnLine ? { exec_warning: warnLine } : {}),
     });
   }
-  recordOutletExecMarks(env, "backup", execMarked, waitUntil);
+  recordOutletFoldMarks(env, "backup", { strict: execMarked, broad: broadMarked }, waitUntil);
 
   const manifest: BackupManifest = {
     format: BACKUP_FORMAT,
@@ -228,6 +255,16 @@ export async function buildBackupZip(
       attachments: mediaEntries.length,
       attachments_redacted: attachmentsRedacted,
     },
+    ...(broadMarked > 0
+      ? {
+          content_risk: {
+            notice: OUTLET_GLOBAL_RISK_NOTICE,
+            do_not_execute: true as const,
+            broad_fold_notes: broadMarked,
+            strict_marked_notes: execMarked,
+          },
+        }
+      : {}),
   };
 
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
@@ -255,6 +292,17 @@ export async function buildBackupZip(
   const drive = async () => {
     try {
       addJson("manifest.json", manifest);
+      if (manifest.content_risk) {
+        // 打开 ZIP 的人（或代理）第一眼能看到的纯文本声明，不依赖解析 manifest
+        const f = new ZipDeflate("README-CONTENT-RISK.txt", { level: 6 });
+        zip.add(f);
+        f.push(
+          strToU8(
+            `${manifest.content_risk.notice}\n\n宽判据折叠：${manifest.content_risk.broad_fold_notes} 条；严判据判危：${manifest.content_risk.strict_marked_notes} 条。\n逐条标记见 notes.json 的 fold / fold_reason / exec_warning 字段。\n`
+          ),
+          true
+        );
+      }
       addJson("notes.json", backupNotes);
       addJson("threads.json", threads);
       addJson("reports.json", reports);
@@ -304,6 +352,7 @@ export async function buildBackupZip(
       // 明文包文件名带 -full 后缀，桌面上与脱敏包肉眼可分
       "Content-Disposition": `attachment; filename="suinian-backup-${date}${includeSensitive ? "-full" : ""}.zip"`,
       "Cache-Control": "private, no-store",
+      ...(manifest.content_risk ? { [OUTLET_GLOBAL_RISK_HEADER]: OUTLET_GLOBAL_RISK_HEADER_VALUE } : {}),
     },
   });
 }

@@ -1,0 +1,4092 @@
+{
+ "generated": "2026-09-03T01:21:55.285Z",
+ "carriers": [
+  {
+   "id": "D01",
+   "cat": "reg",
+   "family": "defang-bracket",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D02",
+   "cat": "reg",
+   "family": "defang-paren",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D03",
+   "cat": "reg",
+   "family": "defang-fullwidth-paren",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D04",
+   "cat": "reg",
+   "family": "defang-brace",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D05",
+   "cat": "reg",
+   "family": "defang-doubledot",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D06",
+   "cat": "reg",
+   "family": "defang-dot-space",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D07",
+   "cat": "reg",
+   "family": "defang-word-dot",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D08",
+   "cat": "reg",
+   "family": "protocol-defang-hxxp",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D09",
+   "cat": "reg",
+   "family": "protocol-defang-hxxps",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D10",
+   "cat": "reg",
+   "family": "protocol-defang-star",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D11",
+   "cat": "reg",
+   "family": "defang-underscore",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D12",
+   "cat": "reg",
+   "family": "defang-star-wrap",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D13",
+   "cat": "reg",
+   "family": "defang-plus",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D14",
+   "cat": "reg",
+   "family": "defang-tilde",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D15",
+   "cat": "reg",
+   "family": "defang-colon",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D16",
+   "cat": "reg",
+   "family": "defang-slash",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "D17",
+   "cat": "reg",
+   "family": "defang-percent-sep",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "C01",
+   "cat": "reg",
+   "family": "plain-curl-bash",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "C02",
+   "cat": "reg",
+   "family": "plain-wget-sh",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "C03",
+   "cat": "reg",
+   "family": "plain-powershell-iwr",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "C04",
+   "cat": "reg",
+   "family": "plain-python-c",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "C05",
+   "cat": "reg",
+   "family": "plain-pipe-node",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "C06",
+   "cat": "reg",
+   "family": "plain-nc-shell",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "C07",
+   "cat": "reg",
+   "family": "plain-eval-fetch",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "E01",
+   "cat": "reg",
+   "family": "quoted-printable",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "E02",
+   "cat": "reg",
+   "family": "hex-escape",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "E03",
+   "cat": "reg",
+   "family": "punycode-defang",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "E04",
+   "cat": "reg",
+   "family": "base64-cmd",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "E05",
+   "cat": "reg",
+   "family": "ip-decimal",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "E06",
+   "cat": "reg",
+   "family": "ip-hex",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "E07",
+   "cat": "reg",
+   "family": "ipv6",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "E08",
+   "cat": "reg",
+   "family": "ipv4-port",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "E09",
+   "cat": "reg",
+   "family": "user-at-host",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "E10",
+   "cat": "reg",
+   "family": "newline-split-domain",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "W01",
+   "cat": "reg",
+   "family": "allowlist-github",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "W02",
+   "cat": "reg",
+   "family": "allowlist-gist",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "W03",
+   "cat": "reg",
+   "family": "allowlist-pastebin",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "W04",
+   "cat": "reg",
+   "family": "allowlist-cfpages",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "W05",
+   "cat": "reg",
+   "family": "allowlist-vercel",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "I01",
+   "cat": "reg",
+   "family": "inj-ignore",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "I02",
+   "cat": "reg",
+   "family": "inj-system",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "I03",
+   "cat": "reg",
+   "family": "inj-tool",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "SP1",
+   "cat": "reg",
+   "family": "split-a",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "SP2",
+   "cat": "reg",
+   "family": "split-b",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "N01",
+   "cat": "reg",
+   "family": "password-assign",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "U01",
+   "cat": "reg",
+   "family": "unicode-flag-sep",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "U02",
+   "cat": "reg",
+   "family": "unicode-zwj-family",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "U03",
+   "cat": "reg",
+   "family": "unicode-skin-tone",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "U04",
+   "cat": "reg",
+   "family": "unicode-combining",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "U05",
+   "cat": "reg",
+   "family": "unicode-rtl-mark",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "B01",
+   "cat": "reg",
+   "family": "base32-cmd",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "B02",
+   "cat": "reg",
+   "family": "base45-like",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "B03",
+   "cat": "reg",
+   "family": "rot13-domain",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "B04",
+   "cat": "reg",
+   "family": "reverse-domain",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "T01",
+   "cat": "reg",
+   "family": "concat-shell-var",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "T02",
+   "cat": "reg",
+   "family": "concat-js-template",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "T03",
+   "cat": "reg",
+   "family": "concat-python-join",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "T04",
+   "cat": "reg",
+   "family": "printf-octal",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "P01",
+   "cat": "reg",
+   "family": "pipe-multi",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "P02",
+   "cat": "reg",
+   "family": "pipe-xargs",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "P03",
+   "cat": "reg",
+   "family": "punct-run",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "P04",
+   "cat": "reg",
+   "family": "pipe-char-sep",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "P05",
+   "cat": "reg",
+   "family": "comma-sep",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "H01",
+   "cat": "reg",
+   "family": "hidden-head",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "H02",
+   "cat": "reg",
+   "family": "hidden-tail",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "H03",
+   "cat": "reg",
+   "family": "long-prefix-noise",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "H04",
+   "cat": "reg",
+   "family": "fenced-code",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "H05",
+   "cat": "reg",
+   "family": "yaml-embed",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "H06",
+   "cat": "reg",
+   "family": "json-embed",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "H07",
+   "cat": "reg",
+   "family": "table-embed",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "H08",
+   "cat": "reg",
+   "family": "quote-embed",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "H09",
+   "cat": "reg",
+   "family": "html-tag-embed",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "H10",
+   "cat": "reg",
+   "family": "log-prefix",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "H11",
+   "cat": "reg",
+   "family": "continuation-line",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "W06",
+   "cat": "reg",
+   "family": "allowlist-npm",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "W07",
+   "cat": "reg",
+   "family": "allowlist-docker",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "W08",
+   "cat": "reg",
+   "family": "allowlist-shorturl",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "W09",
+   "cat": "reg",
+   "family": "allowlist-cdn",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "W10",
+   "cat": "reg",
+   "family": "allowlist-objstore",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "N02",
+   "cat": "reg",
+   "family": "password-word",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "N03",
+   "cat": "reg",
+   "family": "nl-imperative-cn",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "N04",
+   "cat": "reg",
+   "family": "nl-imperative-en",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "N05",
+   "cat": "reg",
+   "family": "nl-imperative-es",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X01",
+   "cat": "reg",
+   "family": "nl-chinese-dian",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X02",
+   "cat": "reg",
+   "family": "nl-chinese-juhao",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X03",
+   "cat": "reg",
+   "family": "nl-english-dot",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X04",
+   "cat": "reg",
+   "family": "nl-mixed-dit",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X05",
+   "cat": "reg",
+   "family": "nl-verbose-insert",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X06",
+   "cat": "reg",
+   "family": "emoji-sep",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X07",
+   "cat": "reg",
+   "family": "arrow-sep",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X08",
+   "cat": "reg",
+   "family": "bullet-sep",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X09",
+   "cat": "reg",
+   "family": "zwsp-sep",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X10",
+   "cat": "reg",
+   "family": "fullwidth-dot",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X11",
+   "cat": "reg",
+   "family": "ideographic-dot",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X12",
+   "cat": "reg",
+   "family": "onedot-leader",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X13",
+   "cat": "reg",
+   "family": "inline-code-split",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X14",
+   "cat": "reg",
+   "family": "md-bold-split",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X15",
+   "cat": "reg",
+   "family": "md-link-defang",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X16",
+   "cat": "reg",
+   "family": "mixed-len-sep",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X17",
+   "cat": "reg",
+   "family": "space-word-space",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X18",
+   "cat": "reg",
+   "family": "double-percent",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X19",
+   "cat": "reg",
+   "family": "html-entity-dot",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X20",
+   "cat": "reg",
+   "family": "html-entity-hex",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X21",
+   "cat": "reg",
+   "family": "unicode-escape-js",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X22",
+   "cat": "reg",
+   "family": "fullwidth-cmd",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X23",
+   "cat": "reg",
+   "family": "ssh-remote-cmd",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X24",
+   "cat": "reg",
+   "family": "curl-unix-socket-proxy",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X25",
+   "cat": "reg",
+   "family": "dns-tunnel-exfil",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X26",
+   "cat": "reg",
+   "family": "scp-then-exec",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X27",
+   "cat": "reg",
+   "family": "ansible-remote",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X28",
+   "cat": "reg",
+   "family": "nl-de",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X29",
+   "cat": "reg",
+   "family": "nl-fr",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "X30",
+   "cat": "reg",
+   "family": "nl-ja",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R01",
+   "cat": "reg",
+   "family": "nl-korean-jeom",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R02",
+   "cat": "reg",
+   "family": "nl-russian-tochka",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R03",
+   "cat": "reg",
+   "family": "nl-arabic-nuqta",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R04",
+   "cat": "reg",
+   "family": "morse-domain",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R05",
+   "cat": "reg",
+   "family": "caesar-shift-domain",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R06",
+   "cat": "reg",
+   "family": "qr-encoded-url",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R07",
+   "cat": "reg",
+   "family": "emoji-alphabet-url",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R08",
+   "cat": "reg",
+   "family": "css-content-url",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R09",
+   "cat": "reg",
+   "family": "svg-onload-exec",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R10",
+   "cat": "reg",
+   "family": "ical-description-exec",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R11",
+   "cat": "reg",
+   "family": "vcard-note-exec",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R12",
+   "cat": "reg",
+   "family": "systemd-execstart",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R13",
+   "cat": "reg",
+   "family": "crontab-remote-exec",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R14",
+   "cat": "reg",
+   "family": "bookmark-javascript-uri",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R15",
+   "cat": "reg",
+   "family": "homoglyph-cyr-grk",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R16",
+   "cat": "reg",
+   "family": "icmp-tunnel-exfil",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R17",
+   "cat": "reg",
+   "family": "webrtc-exfil",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R18a",
+   "cat": "reg",
+   "family": "multinote-3frag",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "R18b",
+   "cat": "reg",
+   "family": "multinote-3frag",
+   "strict": false,
+   "broad": null,
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "R18c",
+   "cat": "reg",
+   "family": "multinote-3frag",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "R19",
+   "cat": "reg",
+   "family": "data-uri-b64-script",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R20",
+   "cat": "reg",
+   "family": "pwsh-downloadstring-iex",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R21",
+   "cat": "reg",
+   "family": "git-alias-exec",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R22",
+   "cat": "reg",
+   "family": "npm-postinstall-exec",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R23",
+   "cat": "reg",
+   "family": "hex-x-escape-shell",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R24",
+   "cat": "reg",
+   "family": "zwsp-scheme-eval",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R25",
+   "cat": "reg",
+   "family": "shortcut-run-remote",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R26",
+   "cat": "reg",
+   "family": "decimal-ip-pipe",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R27",
+   "cat": "reg",
+   "family": "no-verb-semantic-exec",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R28",
+   "cat": "reg",
+   "family": "no-verb-stdin-shell",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R29",
+   "cat": "reg",
+   "family": "reg-run-key-exec",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "R30",
+   "cat": "reg",
+   "family": "base32-domain-whole",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA01",
+   "cat": "new",
+   "family": "sep-tld-xyz",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA02",
+   "cat": "new",
+   "family": "sep-tld-top",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA03",
+   "cat": "new",
+   "family": "sep-tld-zip",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA04",
+   "cat": "new",
+   "family": "sep-tld-com-cn",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA05",
+   "cat": "new",
+   "family": "sep-tld-quest",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA06",
+   "cat": "new",
+   "family": "sep-word-thai",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA07",
+   "cat": "new",
+   "family": "sep-word-hebrew",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA08",
+   "cat": "new",
+   "family": "sep-word-vietnamese",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA09",
+   "cat": "new",
+   "family": "sep-word-pinyin",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA10",
+   "cat": "new",
+   "family": "sep-word-period",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA11",
+   "cat": "new",
+   "family": "sep-word-punto",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA12",
+   "cat": "new",
+   "family": "sep-word-ponto",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA13",
+   "cat": "new",
+   "family": "sep-word-dot-variant",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA14",
+   "cat": "new",
+   "family": "sep-run-over6",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA15",
+   "cat": "new",
+   "family": "sep-run-ellipsis",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA16",
+   "cat": "new",
+   "family": "label-letterwise-split",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA17",
+   "cat": "new",
+   "family": "label-letterwise-space",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NA18",
+   "cat": "new",
+   "family": "sep-word-nonpoint",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NB01",
+   "cat": "new",
+   "family": "cipher-no-instr-wink",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NB02",
+   "cat": "new",
+   "family": "rot13-no-instr",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NB03",
+   "cat": "new",
+   "family": "b64-no-instr",
+   "strict": false,
+   "broad": "broad:opaque",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NB04a",
+   "cat": "new",
+   "family": "restore-instr-other-note",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NB04b",
+   "cat": "new",
+   "family": "restore-instr-other-note",
+   "strict": false,
+   "broad": "broad:obfuscated",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NB05",
+   "cat": "new",
+   "family": "restore-instr-in-filename",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NB06",
+   "cat": "new",
+   "family": "restore-instr-as-question",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NB07",
+   "cat": "new",
+   "family": "restore-instr-team-convention",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NB08",
+   "cat": "new",
+   "family": "morse-no-instr",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NB09",
+   "cat": "new",
+   "family": "hexbytes-no-instr",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NB10",
+   "cat": "new",
+   "family": "reversed-no-instr",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NC01a",
+   "cat": "new",
+   "family": "frag4-adjacent",
+   "strict": false,
+   "broad": null,
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC01b",
+   "cat": "new",
+   "family": "frag4-adjacent",
+   "strict": false,
+   "broad": null,
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC01c",
+   "cat": "new",
+   "family": "frag4-adjacent",
+   "strict": false,
+   "broad": null,
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC01d",
+   "cat": "new",
+   "family": "frag4-adjacent",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC02a",
+   "cat": "new",
+   "family": "frag6",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC02b",
+   "cat": "new",
+   "family": "frag6",
+   "strict": false,
+   "broad": null,
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC02c",
+   "cat": "new",
+   "family": "frag6",
+   "strict": false,
+   "broad": null,
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC02d",
+   "cat": "new",
+   "family": "frag6",
+   "strict": false,
+   "broad": null,
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC02e",
+   "cat": "new",
+   "family": "frag6",
+   "strict": false,
+   "broad": "broad:endpoint",
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC02f",
+   "cat": "new",
+   "family": "frag6",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC03a",
+   "cat": "new",
+   "family": "frag-far-apart",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC03b",
+   "cat": "new",
+   "family": "frag-far-apart",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC04c",
+   "cat": "new",
+   "family": "frag-shuffled",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC04a",
+   "cat": "new",
+   "family": "frag-shuffled",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC04b",
+   "cat": "new",
+   "family": "frag-shuffled",
+   "strict": false,
+   "broad": null,
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC05a",
+   "cat": "new",
+   "family": "frag-cross-tag",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC05b",
+   "cat": "new",
+   "family": "frag-cross-tag",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": true,
+   "fold": true
+  },
+  {
+   "id": "NC06a",
+   "cat": "new",
+   "family": "frag-cross-outlet",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NC06b",
+   "cat": "new",
+   "family": "frag-cross-outlet",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "ND01",
+   "cat": "new",
+   "family": "noverb-declarative",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "ND02",
+   "cat": "new",
+   "family": "noverb-question",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "ND03",
+   "cat": "new",
+   "family": "noverb-poem",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "ND04",
+   "cat": "new",
+   "family": "noverb-lyrics",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "ND05",
+   "cat": "new",
+   "family": "noverb-table-cell",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "ND06",
+   "cat": "new",
+   "family": "noverb-code-comment",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "ND07",
+   "cat": "new",
+   "family": "noverb-log-line",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "ND08",
+   "cat": "new",
+   "family": "noverb-promise",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "ND09",
+   "cat": "new",
+   "family": "noverb-recipe-style",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "ND10",
+   "cat": "new",
+   "family": "noverb-checklist",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "ND11",
+   "cat": "new",
+   "family": "noverb-past-tense",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "ND12",
+   "cat": "new",
+   "family": "noverb-exfil-declarative",
+   "strict": false,
+   "broad": "broad:endpoint",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NE01",
+   "cat": "new",
+   "family": "relay-3rd-order",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NE02",
+   "cat": "new",
+   "family": "relay-4th-order",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NE03",
+   "cat": "new",
+   "family": "relay-roleplay-ops",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NE04",
+   "cat": "new",
+   "family": "relay-roleplay-quote",
+   "strict": false,
+   "broad": "broad:code",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NE05",
+   "cat": "new",
+   "family": "relay-negative-frame",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NE06",
+   "cat": "new",
+   "family": "relay-negative-frame-en",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NE07",
+   "cat": "new",
+   "family": "relay-conditional",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NE08",
+   "cat": "new",
+   "family": "relay-exfil-audience",
+   "strict": false,
+   "broad": "broad:endpoint",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NE09",
+   "cat": "new",
+   "family": "relay-format-instruction",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  },
+  {
+   "id": "NE10",
+   "cat": "new",
+   "family": "relay-system-note-style",
+   "strict": true,
+   "broad": "strict",
+   "frag": false,
+   "fold": true
+  }
+ ],
+ "new309": 70,
+ "benign": [
+  {
+   "id": "OF01",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF02",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF03",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF04",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF05",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF06",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF07",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF08",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF09",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF10",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF11",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF12",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF13",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF14",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF15",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF16",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF17",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF18",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF19",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF20",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF21",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF22",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF23",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "OF24",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF25",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF26",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF27",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF28",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF29",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF30",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC01",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC02",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC03",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC04",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC05",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC06",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC07",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC08",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC09",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC10",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC11",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC12",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC13",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC14",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC15",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC16",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC17",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC18",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC19",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": "broad:code"
+  },
+  {
+   "id": "LC20",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": "broad:code"
+  },
+  {
+   "id": "LC21",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "LC22",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC23",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC24",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC25",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC26",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC27",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC28",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC29",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC30",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC31",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC32",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC33",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC34",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "LC35",
+   "cat": "reg",
+   "family": "local-cmd",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL01",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL02",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL03",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL04",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL05",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL06",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL07",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL08",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL09",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL10",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL11",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL12",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL13",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL14",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL15",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL16",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL17",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL18",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL19",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL20",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL21",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL22",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL23",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL24",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL25",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL26",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL27",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL28",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL29",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DL30",
+   "cat": "reg",
+   "family": "daily",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV01",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV02",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV03",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV04",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV05",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "NV06",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV07",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV08",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV09",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": "broad:opaque"
+  },
+  {
+   "id": "NV10",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV11",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV12",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "NV13",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV14",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV15",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV16",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV17",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV18",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV19",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NV20",
+   "cat": "reg",
+   "family": "navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "AD01",
+   "cat": "reg",
+   "family": "security-advice",
+   "strict": false,
+   "broad": "broad:code"
+  },
+  {
+   "id": "AD02",
+   "cat": "reg",
+   "family": "security-advice",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "AD03",
+   "cat": "reg",
+   "family": "security-advice",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "AD04",
+   "cat": "reg",
+   "family": "security-advice",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "AD05",
+   "cat": "reg",
+   "family": "security-advice",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "AD06",
+   "cat": "reg",
+   "family": "security-advice",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "AD07",
+   "cat": "reg",
+   "family": "security-advice",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "AD08",
+   "cat": "reg",
+   "family": "security-advice",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "AD09",
+   "cat": "reg",
+   "family": "security-advice",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "AD10",
+   "cat": "reg",
+   "family": "security-advice",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DC01",
+   "cat": "reg",
+   "family": "tech-doc",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DC02",
+   "cat": "reg",
+   "family": "tech-doc",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DC03",
+   "cat": "reg",
+   "family": "tech-doc",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DC04",
+   "cat": "reg",
+   "family": "tech-doc",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DC05",
+   "cat": "reg",
+   "family": "tech-doc",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DC06",
+   "cat": "reg",
+   "family": "tech-doc",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DC07",
+   "cat": "reg",
+   "family": "tech-doc",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DC08",
+   "cat": "reg",
+   "family": "tech-doc",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DC09",
+   "cat": "reg",
+   "family": "tech-doc",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "DC10",
+   "cat": "reg",
+   "family": "tech-doc",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK01",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK02",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK03",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK04",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK05",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK06",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK07",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK08",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK09",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK10",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK11",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK12",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK13",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK14",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "WK15",
+   "cat": "reg",
+   "family": "work",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS01",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS02",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS03",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS04",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS05",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS06",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS07",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS08",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS09",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS10",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS11",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS12",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS13",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS14",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "CS15",
+   "cat": "reg",
+   "family": "code-snippet",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O201",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O202",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O203",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O204",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "O205",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O206",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O207",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O208",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O209",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O210",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O211",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O212",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O213",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O214",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O215",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O216",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O217",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O218",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O219",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "O220",
+   "cat": "reg",
+   "family": "overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NN01",
+   "cat": "reg",
+   "family": "r307-navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NN02",
+   "cat": "reg",
+   "family": "r307-navigation",
+   "strict": false,
+   "broad": "broad:opaque"
+  },
+  {
+   "id": "NN03",
+   "cat": "reg",
+   "family": "r307-navigation",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "NN04",
+   "cat": "reg",
+   "family": "r307-navigation",
+   "strict": false,
+   "broad": "broad:opaque"
+  },
+  {
+   "id": "NN05",
+   "cat": "reg",
+   "family": "r307-navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NN06",
+   "cat": "reg",
+   "family": "r307-navigation",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "NN07",
+   "cat": "reg",
+   "family": "r307-navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NN08",
+   "cat": "reg",
+   "family": "r307-navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NN09",
+   "cat": "reg",
+   "family": "r307-navigation",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "NN10",
+   "cat": "reg",
+   "family": "r307-navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NN11",
+   "cat": "reg",
+   "family": "r307-navigation",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NN12",
+   "cat": "reg",
+   "family": "r307-navigation",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "ND01",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "ND02",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "ND03",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "ND04",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "ND05",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "ND06",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": "broad:code"
+  },
+  {
+   "id": "ND07",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "ND08",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "ND09",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": "broad:code"
+  },
+  {
+   "id": "ND10",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "ND11",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "ND12",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "ND13",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "ND14",
+   "cat": "reg",
+   "family": "r307-netdiag",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "SE01",
+   "cat": "reg",
+   "family": "r307-security-edu",
+   "strict": true,
+   "broad": "strict"
+  },
+  {
+   "id": "SE02",
+   "cat": "reg",
+   "family": "r307-security-edu",
+   "strict": false,
+   "broad": "broad:code"
+  },
+  {
+   "id": "SE03",
+   "cat": "reg",
+   "family": "r307-security-edu",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "SE04",
+   "cat": "reg",
+   "family": "r307-security-edu",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "SE05",
+   "cat": "reg",
+   "family": "r307-security-edu",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "SE06",
+   "cat": "reg",
+   "family": "r307-security-edu",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "SE07",
+   "cat": "reg",
+   "family": "r307-security-edu",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "SE08",
+   "cat": "reg",
+   "family": "r307-security-edu",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "SE09",
+   "cat": "reg",
+   "family": "r307-security-edu",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "SE10",
+   "cat": "reg",
+   "family": "r307-security-edu",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "SE11",
+   "cat": "reg",
+   "family": "r307-security-edu",
+   "strict": false,
+   "broad": "broad:code"
+  },
+  {
+   "id": "SE12",
+   "cat": "reg",
+   "family": "r307-security-edu",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "RC01",
+   "cat": "reg",
+   "family": "r307-code",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "RC02",
+   "cat": "reg",
+   "family": "r307-code",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "RC03",
+   "cat": "reg",
+   "family": "r307-code",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "RC04",
+   "cat": "reg",
+   "family": "r307-code",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "RC05",
+   "cat": "reg",
+   "family": "r307-code",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "RC06",
+   "cat": "reg",
+   "family": "r307-code",
+   "strict": false,
+   "broad": "broad:code"
+  },
+  {
+   "id": "RC07",
+   "cat": "reg",
+   "family": "r307-code",
+   "strict": false,
+   "broad": "broad:code"
+  },
+  {
+   "id": "RC08",
+   "cat": "reg",
+   "family": "r307-code",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "RC09",
+   "cat": "reg",
+   "family": "r307-code",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "RC10",
+   "cat": "reg",
+   "family": "r307-code",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "RC11",
+   "cat": "reg",
+   "family": "r307-code",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "RC12",
+   "cat": "reg",
+   "family": "r307-code",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF301",
+   "cat": "reg",
+   "family": "r307-overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF302",
+   "cat": "reg",
+   "family": "r307-overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF303",
+   "cat": "reg",
+   "family": "r307-overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF304",
+   "cat": "reg",
+   "family": "r307-overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF305",
+   "cat": "reg",
+   "family": "r307-overfold",
+   "strict": false,
+   "broad": "broad:opaque"
+  },
+  {
+   "id": "OF306",
+   "cat": "reg",
+   "family": "r307-overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF307",
+   "cat": "reg",
+   "family": "r307-overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "OF308",
+   "cat": "reg",
+   "family": "r307-overfold",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSP01",
+   "cat": "new",
+   "family": "r309-sepword-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSP02",
+   "cat": "new",
+   "family": "r309-sepword-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSP03",
+   "cat": "new",
+   "family": "r309-sepword-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSP04",
+   "cat": "new",
+   "family": "r309-sepword-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSP05",
+   "cat": "new",
+   "family": "r309-sepword-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSP06",
+   "cat": "new",
+   "family": "r309-sepword-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSP07",
+   "cat": "new",
+   "family": "r309-sepword-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSP08",
+   "cat": "new",
+   "family": "r309-sepword-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSP09",
+   "cat": "new",
+   "family": "r309-sepword-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSP10",
+   "cat": "new",
+   "family": "r309-sepword-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NTL01",
+   "cat": "new",
+   "family": "r309-newgtld-nav",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NTL02",
+   "cat": "new",
+   "family": "r309-newgtld-nav",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NTL03",
+   "cat": "new",
+   "family": "r309-newgtld-nav",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NTL04",
+   "cat": "new",
+   "family": "r309-newgtld-nav",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NTL05",
+   "cat": "new",
+   "family": "r309-newgtld-nav",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NTL06",
+   "cat": "new",
+   "family": "r309-newgtld-nav",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NTL07",
+   "cat": "new",
+   "family": "r309-newgtld-nav",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NTL08",
+   "cat": "new",
+   "family": "r309-newgtld-nav",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NDC01",
+   "cat": "new",
+   "family": "r309-decode-legit",
+   "strict": false,
+   "broad": "broad:code"
+  },
+  {
+   "id": "NDC02",
+   "cat": "new",
+   "family": "r309-decode-legit",
+   "strict": false,
+   "broad": "broad:obfuscated"
+  },
+  {
+   "id": "NDC03",
+   "cat": "new",
+   "family": "r309-decode-legit",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NDC04",
+   "cat": "new",
+   "family": "r309-decode-legit",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NDC05",
+   "cat": "new",
+   "family": "r309-decode-legit",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NDC06",
+   "cat": "new",
+   "family": "r309-decode-legit",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NDC07",
+   "cat": "new",
+   "family": "r309-decode-legit",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NDC08",
+   "cat": "new",
+   "family": "r309-decode-legit",
+   "strict": false,
+   "broad": "broad:opaque"
+  },
+  {
+   "id": "NSR01",
+   "cat": "new",
+   "family": "r309-note-series",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSR02",
+   "cat": "new",
+   "family": "r309-note-series",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSR03",
+   "cat": "new",
+   "family": "r309-note-series",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSR04",
+   "cat": "new",
+   "family": "r309-note-series",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSR05",
+   "cat": "new",
+   "family": "r309-note-series",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSR06",
+   "cat": "new",
+   "family": "r309-note-series",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSR07",
+   "cat": "new",
+   "family": "r309-note-series",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSR08",
+   "cat": "new",
+   "family": "r309-note-series",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSR09",
+   "cat": "new",
+   "family": "r309-note-series",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSH01",
+   "cat": "new",
+   "family": "r309-shape-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSH02",
+   "cat": "new",
+   "family": "r309-shape-noise",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "NSH03",
+   "cat": "new",
+   "family": "r309-shape-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSH04",
+   "cat": "new",
+   "family": "r309-shape-noise",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "NSH05",
+   "cat": "new",
+   "family": "r309-shape-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSH06",
+   "cat": "new",
+   "family": "r309-shape-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSH07",
+   "cat": "new",
+   "family": "r309-shape-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSH08",
+   "cat": "new",
+   "family": "r309-shape-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NSH09",
+   "cat": "new",
+   "family": "r309-shape-noise",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NRB01",
+   "cat": "new",
+   "family": "r309-relay-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NRB02",
+   "cat": "new",
+   "family": "r309-relay-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NRB03",
+   "cat": "new",
+   "family": "r309-relay-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NRB04",
+   "cat": "new",
+   "family": "r309-relay-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NRB05",
+   "cat": "new",
+   "family": "r309-relay-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NRB06",
+   "cat": "new",
+   "family": "r309-relay-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NRB07",
+   "cat": "new",
+   "family": "r309-relay-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NRB08",
+   "cat": "new",
+   "family": "r309-relay-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NRB09",
+   "cat": "new",
+   "family": "r309-relay-benign",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "NRB10",
+   "cat": "new",
+   "family": "r309-relay-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NOB01",
+   "cat": "new",
+   "family": "r309-ops-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NOB02",
+   "cat": "new",
+   "family": "r309-ops-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NOB03",
+   "cat": "new",
+   "family": "r309-ops-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NOB04",
+   "cat": "new",
+   "family": "r309-ops-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NOB05",
+   "cat": "new",
+   "family": "r309-ops-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NOB06",
+   "cat": "new",
+   "family": "r309-ops-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NOB07",
+   "cat": "new",
+   "family": "r309-ops-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NOB08",
+   "cat": "new",
+   "family": "r309-ops-benign",
+   "strict": false,
+   "broad": "broad:endpoint"
+  },
+  {
+   "id": "NOB09",
+   "cat": "new",
+   "family": "r309-ops-benign",
+   "strict": false,
+   "broad": null
+  },
+  {
+   "id": "NOB10",
+   "cat": "new",
+   "family": "r309-ops-benign",
+   "strict": false,
+   "broad": null
+  }
+ ]
+}

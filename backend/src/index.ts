@@ -11,12 +11,11 @@ import {
   applyNotePatch,
   replaceNoteContent,
   applyTriage,
-  setNoteAiTitle,
   prepareTagsUpdate,
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, type BroadFoldReason } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -78,7 +77,7 @@ import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPO
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES } from "./backup";
-import { recordOutletExecMarks } from "./guard-events";
+import { recordOutletFoldMarks } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
 import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
@@ -276,20 +275,22 @@ app.use("/api/ask", async (c, next) => {
       if (typeof body.answer !== "string") return { kind: "passthrough", res: c.res };
       const preFinalized = body.guard_finalized === true;
       if (preFinalized) delete body.guard_finalized;
-      const notesText = Array.isArray(body.notes)
-        ? (body.notes as Array<Record<string, unknown>>)
-            .map((n) => `${typeof n.title === "string" ? n.title : ""}\n${typeof n.content === "string" ? n.content : ""}`)
-            .join("\n")
-        : "";
+      const noteUnits = Array.isArray(body.notes)
+        ? (body.notes as Array<Record<string, unknown>>).map(
+            (n) => `${typeof n.title === "string" ? n.title : ""}\n${typeof n.content === "string" ? n.content : ""}`
+          )
+        : [];
+      const notesText = noteUnits.join("\n");
       const t0 = Date.now();
       // 已在路由内经同一 finalize 收口的生成分支不重复执行（stripSpoofedControlMarks
       // 会把本轮插入的真标注当仿冒剥掉，且路由内的资料面更完整）。
       const fin = preFinalized
         ? { answer: body.answer, changed: false, isolated: body.instruction_isolated === true }
-        : finalizeAskAnswer(body.answer, { dataText: notesText, question });
+        : // R310 P0-1：确定性路由是模板 + 字面投影而非 AI 复述，逐字收口只收宽判据命中单元的任意片段。
+          finalizeAskAnswer(body.answer, { dataText: notesText, dataUnits: noteUnits, question, verbatimClosure: "broad" });
       if (!preFinalized) {
         if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
-        else if (fin.changed) console.log("ask: external link scrubbed from deterministic answer");
+        else if (fin.changed) console.log(`ask: deterministic answer rewritten at exit (${fin.reason ?? "link_scrub"})`);
       }
       // P0-2：隔离语义同时由结构化字段承载，渲染层可据此区分真标注。
       // 确定性路由自身置的 instruction_isolated（建议标签退到占位提示）与出口隔离同样插字面标记。
@@ -1403,11 +1404,13 @@ export function normalizeStoredTodoDue(v: string | null): string | null {
 }
 
 function noteToJson(n: NoteRow) {
+  // R310 P0-2：折叠判定以宽判据为准（strict ⊂ broad），严判据只决定警示强度。
   const exec = noteRowContainsExecutableCommand(n);
+  const foldReason: BroadFoldReason | null = exec ? "strict" : n.is_sensitive ? null : noteRowBroadFoldReason(n);
   return {
     ...n,
-    // 危险笔记的标题显示在正文折叠警示之外：抄入原文/地址/编码串的标题一律置空
-    title: exec ? execSafeTitle(n.title, n.content) : n.title,
+    // 折叠笔记的标题显示在正文折叠警示之外：抄入原文/地址/编码串的标题一律置空
+    title: foldReason !== null ? foldSafeTitle(n.title, n.content, foldReason) : n.title,
     todo_due: normalizeStoredTodoDue(n.todo_due),
     tags: JSON.parse(n.tags || "[]") as string[],
     meta: parseNoteMeta(n.meta),
@@ -1418,7 +1421,19 @@ function noteToJson(n: NoteRow) {
     // 今日回顾 / MCP 全部经由本序列化点，出口共用同一判定
     // R308 P0-1：分片投放（meta.exec_fragment）与内容判定同口径。
     contains_executable_command: exec,
+    // R310 P0-2：宽判据折叠字段——渲染层以 fold 为折叠依据，fold_reason 决定警示强度
+    //（strict = 危险警示，broad:* = 折叠短标）。contains_executable_command 保留为兼容字段。
+    fold: foldReason !== null,
+    fold_reason: foldReason,
     content_enc: undefined,
+  };
+}
+
+/** R310 P0-4：已序列化笔记的严/宽命中计数（list/search/ask_ref/export 出口打点）。 */
+function outletFoldCounts(notes: Array<{ contains_executable_command?: boolean; fold?: boolean }>): { strict: number; broad: number } {
+  return {
+    strict: notes.filter((n) => n.contains_executable_command).length,
+    broad: notes.filter((n) => n.fold).length,
   };
 }
 
@@ -2004,10 +2019,12 @@ app.get("/api/notes", async (c) => {
         ["total", Date.now() - t0],
       ])
     );
+    recordOutletFoldMarks(c.env, "search", outletFoldCounts(notes), (p) => c.executionCtx.waitUntil(p));
     return c.json({ notes, next_cursor: next });
   }
 
   const notes = await withAttachments(c.env, await Promise.all(page.map((n) => noteToJsonDecrypted(c.env, n))));
+  recordOutletFoldMarks(c.env, "list", outletFoldCounts(notes), (p) => c.executionCtx.waitUntil(p));
 
   // opportunistic sweep: a visible pending note older than the in-request
   // retry window means its async triage died (isolate evicted / AI burst
@@ -2183,25 +2200,35 @@ app.patch("/api/notes/:id", async (c) => {
         `patch-retriage note=${id}`
       )
     );
-  } else if (typeof body.content === "string" && body.content !== existing.content && typeof body.title !== "string") {
-    // content changed without an explicit title: recompute the AI title so
-    // search/export never keep showing the stale pre-edit title
-    c.executionCtx.waitUntil(capped(recomputeTitle(c.env, id, body.content), PIPELINE_TIMEOUT_MS, `patch-title note=${id}`));
+  } else if (typeof body.content === "string" && body.content !== existing.content) {
+    // content changed: re-run the full triage (title / category / amount /
+    // currency / tags, manual_override respected) so search, export and the
+    // deterministic ledger never keep serving the pre-edit values
+    c.executionCtx.waitUntil(capped(retriageAfterEdit(c.env, id, userId, body.content), PIPELINE_TIMEOUT_MS, `patch-retriage note=${id}`));
   }
   return c.json({ note: await noteToJsonDecrypted(c.env, note!) });
 });
 
-/** Regenerate only the AI title after a content edit (never touches category/tags/due). */
-export async function recomputeTitle(env: Env, noteId: string, content: string): Promise<void> {
-  const row = await env.DB.prepare("SELECT meta, is_sensitive FROM notes WHERE id = ?")
-    .bind(noteId)
-    .first<{ meta: string | null; is_sensitive: number }>();
-  // 敏感笔记的 title 永远保持置空，绝不重算出可能含秘密值的标题
-  if (row?.is_sensitive) return;
-  if (parseNoteMeta(row?.meta ?? null)?.manual_override?.title) return;
-  const triage = await triageNote(content, env);
-  if (!triage || !triage.title) return;
-  await setNoteAiTitle(env.DB, noteId, triage.title);
+/**
+ * Re-triage a note after the user edited its content. Goes through
+ * `applyTriage` (same DAO as create / cron retriage): AI title, category,
+ * amount, currency, tags are re-derived from the new text; hand-set fields
+ * (manual_override) stay; CAS on updated_at so a concurrent edit wins.
+ * Sensitive rows are left alone (title stays empty, ciphertext untouched).
+ */
+export async function retriageAfterEdit(env: Env, noteId: string, userId: string, content: string): Promise<void> {
+  const row = await env.DB.prepare("SELECT is_sensitive, created_at FROM notes WHERE id = ? AND user_id = ?")
+    .bind(noteId, userId)
+    .first<{ is_sensitive: number; created_at: string }>();
+  if (!row || row.is_sensitive) return;
+  const topTags = await loadTopTags(env.DB, userId).catch(() => [] as string[]);
+  const corrections = await loadCategoryCorrections(env.DB, userId).catch(() => []);
+  const tz = await loadUserTz(env, userId);
+  const noteTime = new Date(Date.parse(`${row.created_at.replace(" ", "T")}Z`));
+  const anchor = Number.isFinite(noteTime.getTime()) ? noteTime : new Date();
+  const triage = await triageNote(content, env, topTags, tz, corrections, anchor);
+  if (!triage) return;
+  await applyTriage(env, noteId, triage, content);
 }
 
 /** Delete one owned note and its attachments/embedding/graph rows; caller reconciles threads. */
@@ -4828,6 +4855,8 @@ app.post("/api/ask", async (c) => {
   const askGuardFragmentUnits = notes
     .filter((n) => !n.is_sensitive && noteMetaExecFragment(n.meta ?? null))
     .map((n) => `${n.title ?? ""}\n${n.content}`);
+  // R310 P0-1：宽判据命中的单元（与严判据无关）：其任意片段都不得出现在答案里。
+  const askGuardBroadUnits = [...askGuardUnits, ...askGuardFragmentUnits].filter((u) => broadFoldReason(u) !== null);
   const askGuardQuestion = `${question}\n${recallQuestion}`;
   // R268 语义级主判（docs/decision-r268.md）：独立 LLM 判别器对资料区做指令
   // 抽取（语言无关），与生成并行启动；判别失败退化为 guardAskAnswer 内的
@@ -5310,7 +5339,12 @@ app.post("/api/ask", async (c) => {
     references.map((r) => noteToJsonDecrypted(c.env, byId.get(r.note_id)!))
   );
   // R306 P0-1：引用卡片出口打点（数据面标注随 noteToJson 走，这里只计发生率）
-  recordOutletExecMarks(c.env, "ask_ref", refNotes.filter((n) => n.contains_executable_command).length, (p) => c.executionCtx.waitUntil(p));
+  recordOutletFoldMarks(
+    c.env,
+    "ask_ref",
+    { strict: refNotes.filter((n) => n.contains_executable_command).length, broad: refNotes.filter((n) => n.fold).length },
+    (p) => c.executionCtx.waitUntil(p)
+  );
   if (!answer2) {
     return { answer: "（AI 暂不可用）已找到相关记录，见 references。", references, notes: refNotes };
   }
@@ -5525,6 +5559,7 @@ app.post("/api/ask", async (c) => {
       dataText: askGuardData,
       dataUnits: askGuardUnits,
       execFragmentUnits: askGuardFragmentUnits,
+      broadFoldUnits: askGuardBroadUnits,
       question: askGuardQuestion,
       execDangerSegments: cls.danger,
       execClassifierUnavailable: cls.unavailable,
@@ -5611,6 +5646,7 @@ app.post("/api/ask", async (c) => {
     // 各闸门扣段计数（R290 P1 可观测性）：随 done 事件以 sse_held 下发，
     // 让「delta 少/无」在生产可归因到具体闸门，而不是黑盒。
     const heldCounts: Record<string, number> = {};
+    let emittedText = "";
     const hold = (reason: string): null => {
       heldCounts[reason] = (heldCounts[reason] ?? 0) + 1;
       return null;
@@ -5642,6 +5678,7 @@ app.post("/api/ask", async (c) => {
         dataText: askGuardData,
         dataUnits: askGuardUnits,
         execFragmentUnits: askGuardFragmentUnits,
+        broadFoldUnits: askGuardBroadUnits,
         question: askGuardQuestion,
       });
       // 原文问法下 finalize 只在末尾附固定指引（VERBATIM_REDIRECT_NOTICE，done
@@ -5652,6 +5689,16 @@ app.post("/api/ask", async (c) => {
         (fin.answer !== s && fin.answer !== `${s}\n\n${VERBATIM_REDIRECT_NOTICE}`)
       )
         return hold("finalize_rewrite");
+      // R310 P0-1 / R309 P1-2：逐字复述收口按**累计已外发文本 + 本段**判，与 done 对整答的
+      // 判定同口径——跨句段边界拼出的 ≥阈值公共串同样扣下，不存在「先泄后撤」窗口。
+      if (
+        closeVerbatimOverlap(`${emittedText}${s}`, {
+          units: askGuardUnits,
+          broadUnits: askGuardBroadUnits,
+          question: askGuardQuestion,
+        }).count > 0
+      )
+        return hold("verbatim_overlap");
       if (scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) !== s) return hold("link_scrub");
       // 拒答形句段扣下不外发：整答为拒答时下游会走复问重试/诚实拒答通道整体
       // 替换答案（isRefusalAnswer 分支），先发的拒答 delta 会被 done 撤回。
@@ -5715,6 +5762,7 @@ app.post("/api/ask", async (c) => {
             if (s) {
               if (firstDeltaAt === null) firstDeltaAt = Date.now();
               deltaCount++;
+              emittedText += s;
               send("delta", { text: s });
             }
           }
@@ -5922,16 +5970,16 @@ app.get("/api/threads/:id", async (c) => {
 // when the daily cron hasn't produced them yet.
 app.get("/api/review/today", async (c) => {
   const { date, items } = await getTodayReview(c.env, c.get("userId"));
-  return c.json({
-    date,
-    items: items.map((it) => ({
-      id: it.id,
-      kind: it.kind,
-      kind_label: it.kind_label,
-      comment: it.comment,
-      note: noteToJson(it.note),
-    })),
-  });
+  const out = items.map((it) => ({
+    id: it.id,
+    kind: it.kind,
+    kind_label: it.kind_label,
+    comment: it.comment,
+    note: noteToJson(it.note),
+  }));
+  // R310 P0-4（P2-1）：回顾出口打点，严/宽/差集
+  recordOutletFoldMarks(c.env, "review", outletFoldCounts(out.map((it) => it.note)), (p) => c.executionCtx.waitUntil(p));
+  return c.json({ date, items: out });
 });
 
 // ---- GET /api/preferences ----
@@ -6292,16 +6340,24 @@ app.get("/api/export", async (c) => {
   const threads = threadsR.results ?? [];
   const reports = reportsR.results ?? [];
 
-  recordOutletExecMarks(c.env, "export", notes.filter((n) => n.contains_executable_command).length, (p) => c.executionCtx.waitUntil(p));
+  const strictMarked = notes.filter((n) => n.contains_executable_command).length;
+  const broadMarked = notes.filter((n) => n.fold).length;
+  recordOutletFoldMarks(c.env, "export", { strict: strictMarked, broad: broadMarked }, (p) => c.executionCtx.waitUntil(p));
+  // R310 P0-3：账号存在任何宽判据命中即整体风险声明（文件头 + 响应头），不依赖逐条严判。
+  const riskHeaders: Record<string, string> =
+    broadMarked > 0 ? { [OUTLET_GLOBAL_RISK_HEADER]: OUTLET_GLOBAL_RISK_HEADER_VALUE } : {};
   const format = c.req.query("format");
   if (format === "markdown" || format === "md") {
-    let md = `# 碎念全量导出（${new Date().toISOString().slice(0, 10)}）\n\n共 ${notes.length} 条笔记、${threads.length} 条线索、${reports.length} 份周报。\n\n## 笔记\n`;
+    let md = `# 碎念全量导出（${new Date().toISOString().slice(0, 10)}）\n\n共 ${notes.length} 条笔记、${threads.length} 条线索、${reports.length} 份周报。\n`;
+    if (broadMarked > 0) md += `\n> ⚠️ ${OUTLET_GLOBAL_RISK_NOTICE}\n> 本次导出中宽判据折叠 ${broadMarked} 条（其中严判据判危 ${strictMarked} 条）。\n`;
+    md += `\n## 笔记\n`;
     for (const n of notes) {
-      // 危险标记随导出走（R304 P0-A）：Markdown 无折叠交互，改为在原文前加
-      // 明确风险警示行（JSON 导出经 noteToJson 已带 contains_executable_command）
-      // 警示行紧跟标题、先于元数据；危险笔记的链接字段不单列（地址只在警示之后的原文里出现）
-      const execWarn = n.contains_executable_command ? `\n> ${EXEC_OUTLET_WARN_LINE}\n` : "";
-      const link = n.url && !n.contains_executable_command ? ` | 链接：${n.url}` : "";
+      // 折叠标记随导出走（R304 P0-A / R310 P0-2）：Markdown 无折叠交互，改为在原文前加
+      // 警示行（严判据危险警示 / 宽判据折叠警示）；JSON 导出经 noteToJson 已带 fold/fold_reason。
+      // 警示行紧跟标题、先于元数据；折叠笔记的链接字段不单列（地址只在警示之后的原文里出现）
+      const warnLine = foldOutletWarnLine(n.fold_reason);
+      const execWarn = warnLine ? `\n> ${warnLine}\n` : "";
+      const link = n.url && !n.fold ? ` | 链接：${n.url}` : "";
       md += `\n### ${exportMdHeading(n)}\n${execWarn}- 时间：${n.created_at} | 分类：${CATEGORY_LABEL[n.category ?? ""] ?? n.category ?? "未分拣"} | 标签：${(n.tags as string[]).join(", ") || "无"}${link}\n\n${n.content}\n`;
     }
     md += `\n## 思考线索\n`;
@@ -6311,14 +6367,29 @@ app.get("/api/export", async (c) => {
     return c.body(md, 200, {
       "content-type": "text/markdown; charset=utf-8",
       "content-disposition": `attachment; filename="suinian-export.md"`,
+      ...riskHeaders,
     });
   }
-  return c.json({
-    exported_at: new Date().toISOString(),
-    notes,
-    threads,
-    reports,
-  });
+  return c.json(
+    {
+      exported_at: new Date().toISOString(),
+      ...(broadMarked > 0
+        ? {
+            content_risk: {
+              notice: OUTLET_GLOBAL_RISK_NOTICE,
+              do_not_execute: true,
+              broad_fold_notes: broadMarked,
+              strict_marked_notes: strictMarked,
+            },
+          }
+        : {}),
+      notes,
+      threads,
+      reports,
+    },
+    200,
+    riskHeaders
+  );
 });
 
 /**
@@ -6326,8 +6397,15 @@ app.get("/api/export", async (c) => {
  * 把标题撕成代码块、警示行落进围栏；N01/N02/X25 标题不可定位）：只取首个非空
  * 行、剥掉 Markdown 结构字符、限长，空则回落到笔记 id，保证每条都有可定位标题。
  */
-export function exportMdHeading(n: { id: string; title: string | null; content: string; contains_executable_command?: boolean }): string {
-  if (n.contains_executable_command) return `${execSafeTitle(n.title, n.content) ?? EXEC_TITLE_PLACEHOLDER}（${n.id}）`;
+export function exportMdHeading(n: {
+  id: string;
+  title: string | null;
+  content: string;
+  contains_executable_command?: boolean;
+  fold_reason?: BroadFoldReason | null;
+}): string {
+  const reason: BroadFoldReason | null = n.contains_executable_command ? "strict" : n.fold_reason ?? null;
+  if (reason !== null) return `${foldDisplayTitle(n, reason)}（${n.id}）`;
   const first = (n.title || n.content || "")
     .split("\n")
     .map((l) => l.replace(/[`#>*_\[\]|]/g, "").trim())

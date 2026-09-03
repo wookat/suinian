@@ -244,7 +244,9 @@ describe("R300 生产 post 探针回归（c10/n08/n13/n17，verbatim 泄漏）",
   it("良性对照：登录控制台查账单/发合同到邮箱不误伤", () => {
     for (const data of ["登录 console.aws.amazon.com 查看账单。", "明天把合同扫描件发送到 hr@company.com。"]) {
       const out = fin(data, { dataText: data, question: VQ });
-      expect(out.changed).toBe(false);
+      // R310 P0-1：不误伤 = 不隔离；答案即原文时唯一改动是 verbatim 占位
+      expect(out.isolated).toBe(false);
+      expect(out.reason).toMatch(/^verbatim:lcs=\d+$/);
     }
   });
 });

@@ -2,8 +2,17 @@ import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { findGraphThreadMate } from "./graph";
 import { ensureNoteEmbedding, cosineSim, noteHasSemanticSignal } from "./semantic";
-import { execOutletTag, noteContainsExecutableCommand, noteRowContainsExecutableCommand, EXEC_OUTLET_WARN_TAG } from "./prompt-armor";
-import { recordOutletExecMarks } from "./guard-events";
+import {
+  foldOutletTag,
+  noteContainsExecutableCommand,
+  noteRowBroadFoldReason,
+  closeVerbatimOverlap,
+  verbatimOverlapSpans,
+  VERBATIM_LCS_CHARS,
+  EXEC_OUTLET_WARN_TAG,
+  BROAD_OUTLET_FOLD_TAG,
+} from "./prompt-armor";
+import { recordOutletFoldMarks } from "./guard-events";
 
 // re-export for existing consumers (graph.ts, tests); the implementation
 // lives in semantic.ts next to the vector-store write path
@@ -74,11 +83,34 @@ async function newThread(env: Env, userId: string, title: string): Promise<strin
  * a one-line summary right away, not only after the daily cron) and reused by
  * the daily refresh. Never throws.
  */
-/** 线索摘要出口的危险警示：摘要本身含命令，或线索内有危险笔记时都带标。 */
-export function threadSummaryWithExecWarn(summary: string, dangerousNotes: number): string {
+/** 线索摘要出口的危险警示：摘要本身含命令，或线索内有危险笔记时都带标；
+ * R310：只有宽判据命中（broadNotes > dangerousNotes）时带折叠短标。 */
+export function threadSummaryWithExecWarn(summary: string, dangerousNotes: number, broadNotes = 0): string {
   if (summary.includes(EXEC_OUTLET_WARN_TAG)) return summary;
   if (dangerousNotes > 0 || noteContainsExecutableCommand(summary)) return `${EXEC_OUTLET_WARN_TAG} ${summary}`;
+  if (summary.includes(BROAD_OUTLET_FOLD_TAG)) return summary;
+  if (broadNotes > 0) return `${BROAD_OUTLET_FOLD_TAG} ${summary}`;
   return summary;
+}
+
+/**
+ * R310 P0-1：线索摘要是 AI 复述面，与 Ask 同口径——与任一成员笔记原文的长公共串/完整行一律换占位，
+ * 宽判据命中的笔记任意片段都不得进摘要。纠数用于打点；空摘要回落 null。
+ */
+export function closeThreadSummary(
+  summary: string,
+  rows: Array<{ title?: string | null; content: string; meta?: string | null }>,
+  opts: { title?: boolean } = {}
+): { summary: string; verbatimSpans: number } {
+  const units = rows.map((n) => `${n.title ?? ""}\n${n.content}`);
+  if (opts.title) {
+    // 标题是 ≤50 字的标签：只按 ≥VERBATIM_LCS_CHARS 公共串口径（抄了大半行才算），不按整行/宽判据短片段口径
+    const spans = verbatimOverlapSpans(summary, units, { lcs: VERBATIM_LCS_CHARS, lineMin: Number.POSITIVE_INFINITY });
+    return { summary, verbatimSpans: spans.length };
+  }
+  const broadUnits = rows.filter((n) => noteRowBroadFoldReason(n) !== null).map((n) => `${n.title ?? ""}\n${n.content}`);
+  const closed = closeVerbatimOverlap(summary, { units, broadUnits });
+  return { summary: closed.answer, verbatimSpans: closed.count };
 }
 
 export async function summarizeThread(env: Env, threadId: string, fallbackTitle?: string): Promise<void> {
@@ -92,11 +124,13 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
     const rows = notes ?? [];
     if (rows.length === 0) return;
     // R306 P0-1：摘要生成前对危险笔记打标（模型可见），摘要落库时再加警示兜底
-    const dangerous = rows.filter((n) => noteRowContainsExecutableCommand(n)).length;
-    recordOutletExecMarks(env, "thread", dangerous);
+    const reasons = rows.map((n) => noteRowBroadFoldReason(n));
+    const dangerous = reasons.filter((r) => r === "strict").length;
+    const broad = reasons.filter((r) => r !== null).length;
+    recordOutletFoldMarks(env, "thread", { strict: dangerous, broad });
     const digest = rows
       .map((n, i) => {
-        const tag = execOutletTag(n.content, n.meta);
+        const tag = foldOutletTag(reasons[i]);
         return `${i + 1}. (${n.created_at.slice(0, 10)}) ${tag ? `${tag} ` : ""}${(n.title || n.content).slice(0, 200)}`;
       })
       .join("\n");
@@ -120,12 +154,27 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
     if (!m) return;
     const obj = JSON.parse(m[0]) as { title?: string; summary?: string };
     if (obj.title || obj.summary) {
+      // R310 P0-1：摘要与标题都是 AI 复述面，落库前过与 Ask 相同的逐字复述收口
+      const closedSummary = obj.summary ? closeThreadSummary(spacifyCjk(obj.summary), rows) : null;
+      const closedTitle = closeThreadSummary(spacifyCjk((obj.title || fallbackTitle || "未命名线索").slice(0, 50)), rows, { title: true });
+      const title =
+        closedTitle.verbatimSpans > 0
+          ? fallbackTitle && closeThreadSummary(fallbackTitle, rows, { title: true }).verbatimSpans === 0
+            ? fallbackTitle
+            : "未命名线索"
+          : closedTitle.summary;
       await env.DB.prepare(
         "UPDATE threads SET title = ?, summary = ?, updated_at = datetime('now') WHERE id = ?"
       )
         .bind(
-          spacifyCjk((obj.title || fallbackTitle || "未命名线索").slice(0, 50)),
-          obj.summary ? threadSummaryWithExecWarn(spacifyCjk(obj.summary), dangerous) : dangerous > 0 ? EXEC_OUTLET_WARN_TAG : null,
+          title,
+          closedSummary
+            ? threadSummaryWithExecWarn(closedSummary.summary, dangerous, broad)
+            : dangerous > 0
+              ? EXEC_OUTLET_WARN_TAG
+              : broad > 0
+                ? BROAD_OUTLET_FOLD_TAG
+                : null,
           threadId
         )
         .run();

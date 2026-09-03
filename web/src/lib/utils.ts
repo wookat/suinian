@@ -16,18 +16,45 @@ export function titleEchoesContent(title: string | null | undefined, content: st
 }
 
 export const EXEC_TITLE_PLACEHOLDER = "含可执行命令的记录（已折叠）"
+export const BROAD_TITLE_PLACEHOLDER = "含端点/代码形态内容的记录（已折叠）"
+
+export interface FoldableNote {
+  title?: string | null
+  content: string
+  is_sensitive: number
+  contains_executable_command?: boolean
+  fold?: boolean
+  fold_reason?: string | null
+}
+
+/** 笔记是否默认折叠（R310 P0-2：宽判据 fold 或严判据二者之一；严判据只决定警示强度） */
+export function noteFolded(n: Pick<FoldableNote, "contains_executable_command" | "fold">): boolean {
+  return n.fold === true || n.contains_executable_command === true
+}
+
+/** 折叠强度：strict = 危险命令（红色警示）；broad = 形态命中（中性提示，可能只是技术备忘） */
+export function noteFoldLevel(
+  n: Pick<FoldableNote, "contains_executable_command" | "fold" | "fold_reason">
+): "strict" | "broad" | null {
+  if (n.contains_executable_command === true || n.fold_reason === "strict") return "strict"
+  if (n.fold === true) return "broad"
+  return null
+}
 
 /**
  * 笔记在引用卡标签 / 横幅 / 图谱节点等「一行标题位」的展示文本。敏感笔记用
- * 占位；危险笔记（服务端已把不安全标题置空）绝不回落到正文，用占位；其余
- * 照旧 title→content 回落。
+ * 占位；折叠笔记（服务端已把不安全标题置空）绝不回落到正文，按折叠强度用占位；
+ * 其余照旧 title→content 回落。
  */
-export function noteDisplayLabel(
-  n: { title?: string | null; content: string; is_sensitive: number; contains_executable_command?: boolean },
-  max: number
-): string {
+export function noteDisplayLabel(n: FoldableNote, max: number): string {
   if (n.is_sensitive === 1) return "敏感内容"
-  const raw = n.contains_executable_command ? n.title || EXEC_TITLE_PLACEHOLDER : n.title || n.content || ""
+  const level = noteFoldLevel(n)
+  const raw =
+    level === "strict"
+      ? n.title || EXEC_TITLE_PLACEHOLDER
+      : level === "broad"
+        ? n.title || BROAD_TITLE_PLACEHOLDER
+        : n.title || n.content || ""
   return raw.replace(/\s+/g, " ").trim().slice(0, max)
 }
 

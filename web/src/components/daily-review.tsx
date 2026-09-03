@@ -6,7 +6,7 @@ import { ExecGuard } from "@/components/exec-guard"
 import { getTodayReview } from "@/lib/api"
 import { onReviewNotesChanged } from "@/lib/review-bus"
 import { useSettingsVersion } from "@/lib/settings"
-import { cn, parseServerTime, titleEchoesContent } from "@/lib/utils"
+import { cn, noteFoldLevel, parseServerTime, titleEchoesContent } from "@/lib/utils"
 import type { DailyReviewItem } from "@/lib/types"
 
 const COLLAPSE_KEY = "suinian.review.collapsed"
@@ -144,8 +144,8 @@ export function DailyReview({
                   <Eye className="size-3" /> 敏感内容，点击查看
                 </span>
               </button>
-            ) : item.note.contains_executable_command ? (
-              <ExecGuard compact>
+            ) : noteFoldLevel(item.note) !== null ? (
+              <ExecGuard compact level={noteFoldLevel(item.note) ?? "strict"}>
                 <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:5] overflow-hidden">
                   {item.note.content}
                 </p>

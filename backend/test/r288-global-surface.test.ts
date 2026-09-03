@@ -239,8 +239,10 @@ describe("R288 P1-1：善意语料误伤量化（权威 54 + 官方安装/CI 20 
       const c = OFFICIAL_INSTALL.find((x) => x.id === id)!;
       const firstToken = c.text.split(/\s+/)[0];
       const online = finalizeAskAnswer(c.text, { dataText: c.text, question: "这条笔记写了什么" });
-      expect(online.answer, `${id}/online`).toContain(firstToken);
+      // R310 P0-1：在线态不走 EXEC 整答隔离（白名单分级仍有效），但安装命令整行原文不逐字交付
+      // （占位或既有指令隔离标记二者之一），原文只能点开卡片看
       expect(online.answer).not.toContain(EXEC_ISOLATED_MARK);
+      expect(online.answer, `${id}/online`).not.toContain(c.text.split("\n")[0]);
       const degraded = finalizeAskAnswer(c.text, {
         dataText: c.text,
         question: "这条笔记写了什么",

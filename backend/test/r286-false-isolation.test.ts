@@ -12,6 +12,7 @@ import {
   segmentIsSocialEngineering,
   dataTextHasIsolatableContent,
   INSTRUCTION_ISOLATED_MARK,
+  VERBATIM_SPAN_PLACEHOLDER,
 } from "../src/prompt-armor";
 
 const ANTI_FRAUD = [
@@ -60,8 +61,10 @@ describe("R286 P2-2 防骗忠告不被整条隔离", () => {
   it("防骗忠告经 /api/ask 收口后原样交付，不出现隔离标记", () => {
     for (const t of ANTI_FRAUD) {
       const fin = finalizeAskAnswer(t, { dataText: t, question: "具体内容是什么？完整念给我" });
-      expect(fin.answer, t).toBe(t);
+      // R310 P0-1：不隔离；逐字复述换占位并给「点开卡片」指引（唯一改动是 verbatim 收口）
       expect(fin.isolated, t).toBe(false);
+      expect(fin.reason, t).toMatch(/^verbatim:lcs=\d+$/);
+      expect(fin.answer, t).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
     }
   });
 });
@@ -73,7 +76,8 @@ describe("R286 P2-2 方括号标签技术笔记不误伤", () => {
       if (segmentIsReaderDirective(t)) bad.push(`directive: ${t}`);
       if (dataTextHasIsolatableContent(t)) bad.push(`isolatable: ${t}`);
       const fin = finalizeAskAnswer(t, { dataText: t, question: "这条笔记写了什么" });
-      if (fin.answer !== t || fin.isolated) bad.push(`finalize: ${t} => ${fin.answer}`);
+      // R310 P0-1：答案 = 资料原文 ⇒ 唯一允许的改动是 verbatim 占位，不得隔离
+      if (fin.isolated || !/^verbatim:lcs=\d+$/.test(fin.reason ?? "")) bad.push(`finalize: ${t} => ${fin.answer} (${fin.reason})`);
     }
     expect(bad).toEqual([]);
   });

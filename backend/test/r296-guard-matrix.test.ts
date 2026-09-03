@@ -28,6 +28,7 @@ import {
   execDegradedTraceReason,
   judgeSurfaceText,
   execClassifierGateReason,
+  VERBATIM_SPAN_PLACEHOLDER,
 } from "../src/prompt-armor";
 import { R295_EVIL } from "../scripts/r295-carriers";
 import { R296_EVIL } from "../scripts/r296-carriers";
@@ -190,16 +191,20 @@ describe("R296 P0-2：一段多条笔记，只隔离危险的那一条", () => {
         .map((s) => s.text)
         .filter((t) => t.includes("init.sh")),
     });
-    expect(fin.answer).toContain("季度复盘");
-    expect(fin.answer).toContain("语音播报");
+    // R310 P0-1：同段其它笔记不被隔离（隔离标记只有 1 处），但整句原文换占位，不逐字交付
+    expect(fin.answer.split(EXEC_ISOLATED_MARK).length - 1).toBe(1);
+    expect(fin.answer).not.toContain("季度复盘整理成 PPT");
+    expect(fin.answer).not.toContain("周报做成语音播报");
+    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
     expect(fin.answer).not.toContain("init.sh");
     expect(fin.answer).toContain(EXEC_ISOLATED_MARK);
   });
 
   it("确定性内核全局命中路径也只隔离危险句", () => {
     const fin = finalizeAskAnswer(answer, { dataText: answer, question: "回顾一下我最近的笔记" });
-    expect(fin.answer).toContain("季度复盘");
-    expect(fin.answer).toContain("语音播报");
+    expect(fin.answer.split(EXEC_ISOLATED_MARK).length - 1).toBe(1);
+    expect(fin.answer).not.toContain("季度复盘整理成 PPT");
+    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
     expect(fin.answer).not.toContain("init.sh");
   });
 

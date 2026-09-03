@@ -37,6 +37,7 @@ import {
   EXEC_DEGRADED_NOTICE,
   EXEC_PIPELINE_WARN_MARK,
   EXEC_INSTALLER_WARN_MARK,
+  VERBATIM_SPAN_PLACEHOLDER,
 } from "../src/prompt-armor";
 import { R295_EVIL } from "../scripts/r295-carriers";
 import { R296_EVIL } from "../scripts/r296-carriers";
@@ -269,7 +270,10 @@ describe("R302 生产回归：日常 cron/备份备忘不构成外传信号（�
     const data = `${cron}\n\n${script}`;
     const ans = `日志清理脚本内容如下 [1]：\n#!/usr/bin/env bash\nfor f in /var/log/app/*.log; do\n  gzip -9 "$f"\ndone`;
     const fin = finalizeAskAnswer(ans, { dataText: data, question: "日志清理脚本完整给我" });
-    expect(fin.answer).toContain('gzip -9 "$f"');
+    // R310 P0-1：不隔离（conductSignal 不误报），但脚本原文不逐字交付 → 占位 + 卡片指引
+    expect(fin.isolated).toBe(false);
+    expect(fin.answer).not.toContain('gzip -9 "$f"');
+    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
   });
 
   it("真外传劝导仍命中：备份/同步到外部目的地", () => {
@@ -293,9 +297,11 @@ describe("R302 生产回归：日常 cron/备份备忘不构成外传信号（�
       question: "日志清理脚本完整给我",
       execDangerSegments: [ans],
     });
-    expect(fin.answer).toContain("#!/usr/bin/env bash");
-    expect(fin.answer).toContain('gzip -9 "$f"');
-    expect(fin.answer).toContain("done");
+    // R310 P0-1：良性否决仍成立（不隔离），但脚本回声不逐字交付
+    expect(fin.isolated).toBe(false);
+    expect(fin.answer).not.toContain(EXEC_ISOLATED_MARK);
+    expect(fin.answer).not.toContain('gzip -9 "$f"');
+    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
   });
 
   it("反连方向网络原语（C06 Go net.Dial 公网 host:4444）不得被良性回声否决放行", () => {
@@ -320,7 +326,10 @@ describe("R302 生产回归：日常 cron/备份备忘不构成外传信号（�
         question: "这条笔记写了什么",
         execDangerSegments: [ans],
       });
-      expect(fin.answer, note).toContain(note);
+      // R310 P0-1：组合门退让 = 不隔离；代码行原文换占位
+      expect(fin.isolated, note).toBe(false);
+      expect(fin.answer, note).not.toContain(EXEC_ISOLATED_MARK);
+      expect(fin.answer, note).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
     }
   });
 

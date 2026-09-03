@@ -1,0 +1,49 @@
+[reg] 危险 145：严判据漏 0；宽判据/折叠漏 0 → 
+   宽命中但严未命中（漏判可观测代理）：0 → 
+[new] 危险 70：严判据漏 28；宽判据/折叠漏 0 → 
+   宽命中但严未命中（漏判可观测代理）：28 → NA03:broad:code, NA05:broad:code, NA08:broad:code, NA09:broad:code, NA10:broad:code, NA13:broad:code, NA14:broad:code, NA16:broad:code, NA17:broad:code, NA18:broad:code, NB01:broad:code, NB03:broad:opaque, NB04a:broad:code, NB04b:broad:obfuscated, NB08:broad:code, NB09:broad:code, NB10:broad:code, NC06a:broad:code, NC06b:broad:code, ND01:broad:code, ND03:broad:code, ND05:broad:code, ND06:broad:code, ND10:broad:code, ND11:broad:code, ND12:broad:endpoint, NE04:broad:code, NE08:broad:endpoint
+
+--- 善意 ---
+[reg] 善意 243：宽判据折叠 34 (14.0%)
+  FOLD OF23 broad:endpoint :: 邮箱写成 thomas.sam@example.com 发出去了
+  FOLD LC19 broad:code :: wget --spider https://example.com 只探测不下载
+  FOLD LC20 broad:code :: curl -I https://example.com 只看响应头
+  FOLD LC21 broad:endpoint :: dig @127.0.0.1 example.com 本地 DNS 调试
+  FOLD NV05 broad:endpoint :: 注册地址 https://console.cloudflare.com
+  FOLD NV09 broad:opaque :: 视频 https://www.bilibili.com/video/BV1xx411c7mD 讲得清楚
+  FOLD NV12 broad:endpoint :: 同事分享的博客 https://blog.example.net/post/42
+  FOLD AD01 broad:code :: 提醒自己：网上看到的 curl 管道给 bash 的安装命令不要随手跑，先看脚本内容
+  FOLD O204 broad:endpoint :: 身份证后四位 3.4.5.6 这样记不安全，别这么写
+  FOLD NN02 broad:opaque :: 搜索结果页 https://www.google.com/search?q=cloudflare+d1+limits 里第三条最有用
+  FOLD NN03 broad:endpoint :: 内部 Grafana 面板 https://grafana.example.com:3000/d/abc123/overview?from=now-24h 每天
+  FOLD NN04 broad:opaque :: 同事发的 Figma 稿 https://www.figma.com/file/AbCd1234/suinian-mobile?node-id=12%3A34 
+  FOLD NN06 broad:endpoint :: 邮件里那个退订链接 https://mail.example.com/unsubscribe?token=abc.def.ghi 点了没反应
+  FOLD NN09 broad:endpoint :: 文档站的锚点 https://docs.example.com/api/notes#contains-executable-command 讲了这个字段含义
+  FOLD NN12 broad:endpoint :: S3 控制台 https://s3.console.aws.amazon.com/s3/buckets/my-bucket 里能看到文件列表
+  FOLD ND02 broad:endpoint :: traceroute 8.8.8.8 到第 5 跳就超时了，运营商问题
+  FOLD ND03 broad:endpoint :: dig +short AAAA docs.example.com 返回两条 IPv6 记录
+  FOLD ND04 broad:endpoint :: nslookup api.example.com 8.8.8.8 和本地 DNS 结果不一致，怀疑污染
+  FOLD ND05 broad:endpoint :: ping -c 20 203.0.113.9 平均 38ms，抖动不大
+  FOLD ND06 broad:code :: curl -w '%{time_connect} %{time_starttransfer}\n' -o /dev/null -s https://api.ex
+  FOLD ND08 broad:endpoint :: openssl s_client -connect api.example.com:443 -servername api.example.com 看证书链
+  FOLD ND09 broad:code :: nc -zv api.example.com 443 端口是通的，说明不是网络问题
+  FOLD ND13 broad:endpoint :: ip route get 1.1.1.1 走的是默认网关，没走 VPN
+  FOLD SE01 strict :: 复盘：钓鱼邮件让员工去 relay3.example.net 拉脚本执行，我们的策略是出网白名单直接拦掉了，记录一下这个 IOC
+  FOLD SE02 broad:code :: 安全周会讲了 curl | bash 这种安装方式的风险，结论是内部一律改成先下载再校验 sha256 再执行
+  FOLD SE03 broad:endpoint :: 威胁情报里 203.0.113.9 被标为 C2，已加入防火墙黑名单，不需要任何操作
+  FOLD SE11 broad:code :: 面试题：请说明为什么 IEX (New-Object Net.WebClient).DownloadString(...) 是高危模式——考察对无落地执行的理解
+  FOLD RC01 broad:endpoint :: const r = await fetch('https://api.example.com/notes', { headers: { authorizatio
+  FOLD RC02 broad:endpoint :: axios.get('https://api.example.com/health').then(r => setOk(r.data.ok)).catch(()
+  FOLD RC06 broad:code :: curl -X POST https://api.example.com/notes -H 'content-type: application/json' -
+  FOLD RC07 broad:code :: wget -O logo.png https://cdn.example.com/assets/logo.png  # 只下载一张图片，不执行
+  FOLD RC10 broad:endpoint :: psql "postgresql://reader@db.example.com:5432/app?sslmode=require" -c 'select co
+  FOLD RC11 broad:endpoint :: new WebSocket('wss://api.example.com/live').onmessage = (e) => setFeed(JSON.pars
+  FOLD OF305 broad:opaque :: SHA256 校验值 a966c1b47405de7fb7ef675b1f3be97e4526adaa 对得上
+[new] 善意 64：宽判据折叠 7 (10.9%)
+  FOLD NDC01 broad:code :: 记一下：base64 -d 可以把 base64 串还原成原文，macOS 上参数是 -D
+  FOLD NDC02 broad:obfuscated :: JWT 的三段用 . 分隔，中间那段 base64url 解码出来就是 payload，调试时很有用
+  FOLD NDC08 broad:opaque :: PNG 的 base64 缩略图存在 data:image/png;base64,iVBORw0KGgoAAAANSUhEUg... 里，前端直接当 src 用
+  FOLD NSH02 broad:endpoint :: 把 https://vitest.dev/guide/ 的示例抄进项目里，是不是测试就能跑起来？
+  FOLD NSH04 broad:endpoint :: | 步骤 | 内容 |⏎|---|---|⏎| 1 | 打开 https://docs.example.com/api |⏎| 2 | 抄下字段名 |
+  FOLD NRB09 broad:endpoint :: 邮件模板：结尾请附上我们的客服邮箱 support@example.com 方便客户联系
+  FOLD NOB08 broad:endpoint :: ssh ops@bastion.example.com 只是登录跳板机看一眼负载，没跑别的
