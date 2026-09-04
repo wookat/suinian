@@ -13,6 +13,7 @@ import {
 import { TimelinePage } from "@/pages/timeline"
 import { Onboarding } from "@/components/onboarding"
 import { ReloadPrompt } from "@/components/reload-prompt"
+import { PageCopyGuard } from "@/components/exec-guard"
 import { PageHeader } from "@/components/page-header"
 import { RightRail } from "@/components/right-rail"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -345,6 +346,7 @@ export default function App() {
       </nav>
 
       <ReloadPrompt />
+      <PageCopyGuard />
     </div>
   )
 }

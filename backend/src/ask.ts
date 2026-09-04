@@ -754,6 +754,9 @@ export function buildFinanceMomAnswer(
 /** 问的是「记了多少条/几条笔记」这类计数（金额类交财务路径优先处理）。 */
 const COUNT_Q_RE = /(?:多少|几)\s*[条篇](?:笔记|记录)?|(?:记|写|存|收藏|保存)[了过]?[^？?。]{0,8}(?:多少|几)\s*[条篇个样件]/;
 
+/** 指代 + 内容询问：问的是「那几条」的内容 / 各自写了什么，不是数量。 */
+const COUNT_CONTENT_ASK_RE = /[那这]几\s*[条篇]|各(?:自)?(?:写|说|记|讲|是)了?(?:什么|啥)|(?:写|记|说|讲)[了的](?:什么|啥)|分别(?:是|写|说)|内容(?:是|为)/;
+
 const COUNT_STRIP_RES: RegExp[] = [
   STRIP_RES[0], // 时间短语，与财务聚合同一口径
   /到目前为止|截止到?现在|截至现在|至今|目前|现在|为止|开始记录以来|一共|总共|合计|总计|共计|加起来|到底|大概|大约|多少|几/g,
@@ -801,6 +804,8 @@ const COUNT_QUALIFIER_STRIP_RES: RegExp[] = [
  */
 export function countQueryIntent(question: string): CountQuery | null {
   if (!COUNT_Q_RE.test(question)) return null;
+  // 「那几条笔记各写了什么」是内容问句而非计数（audit-r315 §3.5 计数误路由）
+  if (COUNT_CONTENT_ASK_RE.test(question)) return null;
   // 金额/账目类计数（几笔支出、花了多少）由财务聚合路径处理
   if (FINANCE_WORD_RE.test(question)) return null;
   if (FACT_QUERY_RE.test(question)) return null;

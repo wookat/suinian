@@ -18,9 +18,10 @@ import { COPY_CONFIRM, copyNeedsConfirm } from "@/lib/copy-confirm"
  * - code：本机命令行 / SQL 等日常命令备忘（fold_reason=broad:code），默认展示，
  *   只在正文上方给一行「复制/执行前核对」提示。
  *
- * 复制路径（R314 P0-3）：本组件在自己的正文区域监听 copy 事件（选中 + Ctrl+C / 右键复制 /
+ * 复制路径（R314 P0-3 → R316 P1-2）：本组件在自己的正文区域监听 copy 事件（选中 + Ctrl+C / 右键复制 /
  * 展开后复制都会经过这里）——strict / destructive / credential / broad 先弹确认再写剪贴板；
- * code 放行原生复制、只给一行提醒。监听范围只限被标记笔记的正文区，不是全局拦截。
+ * code 放行原生复制、只给一行提醒。卡片外的两条路径（整页 Ctrl+A 全选复制、问答答案区选中复制）由
+ * PageCopyGuard 兜底：只在**选区确实覆盖了被标记正文**时才接管，普通文字 / 输入框复制不经过它。
  * 这是用户自己的笔记：不删除、不改写，只避免「不带警示地把原文推到眼前 / 推进终端」。
  */
 export type FoldLevel = "strict" | "broad" | "code" | "destructive" | "credential"
@@ -102,6 +103,75 @@ const COPY: Record<
 
 function selectionText(): string {
   return typeof window === "undefined" ? "" : (window.getSelection()?.toString() ?? "")
+}
+
+const CONFIRM_SEVERITY: Record<FoldLevel, number> = { strict: 4, destructive: 3, credential: 2, broad: 1, code: 0 }
+
+function isFoldLevel(v: string | null | undefined): v is FoldLevel {
+  return v === "strict" || v === "broad" || v === "code" || v === "destructive" || v === "credential"
+}
+
+/** 选区覆盖到的、需要确认的被标记正文中最高的一档；未覆盖任何标记正文则 null。 */
+export function guardedLevelInSelection(sel: Selection | null, root: ParentNode): FoldLevel | null {
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null
+  let top: FoldLevel | null = null
+  const guarded = root.querySelectorAll<HTMLElement>("[data-copy-guard]")
+  for (const el of guarded) {
+    const level = el.dataset.copyGuard
+    if (!isFoldLevel(level) || !copyNeedsConfirm(level)) continue
+    for (let i = 0; i < sel.rangeCount; i++) {
+      if (!sel.getRangeAt(i).intersectsNode(el)) continue
+      if (top === null || CONFIRM_SEVERITY[level] > CONFIRM_SEVERITY[top]) top = level
+      break
+    }
+  }
+  return top
+}
+
+function isEditableTarget(t: EventTarget | null): boolean {
+  if (!(t instanceof HTMLElement)) return false
+  return t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable
+}
+
+/**
+ * 页面级复制兜底（R316 P1-2，audit-r315 §5.2）：整页 Ctrl+A + Ctrl+C 的 copy 事件目标是 body，不经过任何
+ * CopyGuard 容器。这里在 document 上监听一次，只在选区**与某个被标记正文相交**时才接管（弹同一套确认，确认后把
+ * 选中文本原样写入剪贴板）；输入框 / 富文本内的复制、CopyGuard 已处理过的事件（defaultPrevented）、
+ * 未触及标记正文的普通选区都直接放行——不是全局拦截。
+ */
+export function PageCopyGuard() {
+  const [pending, setPending] = useState<{ text: string; level: FoldLevel } | null>(null)
+  useEffect(() => {
+    function onCopy(e: globalThis.ClipboardEvent) {
+      if (e.defaultPrevented || isEditableTarget(e.target)) return
+      const sel = window.getSelection()
+      const level = guardedLevelInSelection(sel, document)
+      if (level === null) return
+      const text = sel?.toString() ?? ""
+      if (!text) return
+      e.preventDefault()
+      setPending({ text, level })
+    }
+    document.addEventListener("copy", onCopy)
+    return () => document.removeEventListener("copy", onCopy)
+  }, [])
+  const copy = COPY_CONFIRM[pending?.level ?? "strict"]
+  return (
+    <ConfirmDialog
+      open={pending !== null}
+      title={copy.title}
+      description={`${copy.description}（本次选区覆盖了带此标记的笔记正文。）`}
+      confirmLabel="仍要复制"
+      onConfirm={() => {
+        const text = pending?.text ?? ""
+        setPending(null)
+        navigator.clipboard.writeText(text).catch(() => {
+          // clipboard unavailable
+        })
+      }}
+      onCancel={() => setPending(null)}
+    />
+  )
 }
 
 /**

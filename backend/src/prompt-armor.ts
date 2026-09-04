@@ -4066,7 +4066,7 @@ const BROAD_COMMAND_SHAPE_RE =
 /** 行首（可带「标签：」/ `$ ` 提示符）为 ASCII 命令词，且同行出现壳选项（` -x` / ` --long`）、管道、
  * 重定向、`&&` 串接、`$(` 或反引号——命令形态本身即折，不问命令是否取回 / 外连（`tar -czf`、`docker compose up -d`）。 */
 const BROAD_SHELL_LINE_RE =
-  /^(?:[^\n\x21-\x7e]{0,24}[：:「『]\s*)?(?:[$#>]\s*)?(?:sudo\s+|doas\s+)?(?:[a-z][a-z0-9.+_-]*|[A-Z][a-z]+-[A-Z][A-Za-z]+)(?:\s+[^\s|;&<>`]+){0,12}?(?:\s-{1,2}[A-Za-z][\w-]*|\s*\|\s*[a-z:]|\s*&&\s*[a-z]|(?<![-=<])\s*>>?\s*[\w/.~$]|\$\(|`[a-z])/m;
+  /^(?:(?:\[[^\]\n]{1,24}\]|【[^】\n]{1,24}】|#[^\s#]{1,24})\s*){0,3}(?:[^\n\x21-\x7e]{0,24}[：:「『]\s*)?(?:[$#>]\s*)?(?:sudo\s+|doas\s+)?(?:[a-z][a-z0-9.+_-]*|[A-Z][a-z]+-[A-Z][A-Za-z]+)(?:\s+[^\s|;&<>`]+){0,12}?(?:\s-{1,2}[A-Za-z][\w-]*|\s*\|\s*[a-z:]|\s*&&\s*[a-z]|(?<![-=<])\s*>>?\s*[\w/.~$]|\$\(|`[a-z])/m;
 /** 壳函数 / fork bomb 形态（`:(){ :|:& };:`），或块设备路径（`mkfs.ext4 /dev/sdb1`）。 */
 const BROAD_SHELL_FUNC_RE = /\w*\(\)\s*\{[^}]*[|&;][^}]*\}|\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|mapper\/)[\w]*/;
 /** SQL 语句形态（DDL / DML 主干），不要求分号。 */
@@ -4106,6 +4106,7 @@ function broadObfuscatedShape(text: string): boolean {
  * 只影响折叠优先级，严判据（hasRemoteHostPort 等）不变。
  */
 const NONPUBLIC_HOST_SUFFIX_RE = /\.(?:internal|local|localhost|home\.arpa|corp|home|lan|intranet|test|example|invalid)(?::\d{2,5})?$/i;
+const CN_PORT_WORD_RE = /端口\s*(?:号|是|为|：|:|=)?\s*\d{2,5}(?!\d)/;
 
 export function nonpublicHost(endpoint: string): boolean {
   const host = endpoint.trim().toLowerCase().split("@").pop() ?? "";
@@ -4154,6 +4155,8 @@ export function broadFoldReason(content: string | null | undefined): BroadFoldRe
     }
     if (restored.length > 0 || cmdOnly.length > 0) return "broad:endpoint";
     if (raw.some((e) => /^\[?[\d:a-f.]+\]?(?::\d+)?$/i.test(e) || e.includes("@") || /:\d{2,5}$/.test(e))) return "broad:endpoint";
+    // 主机名 + 中文「端口 N」写法与 host:port 同义（中继机是 relay7.example.net，端口 4444）。
+    if (CN_PORT_WORD_RE.test(text)) return "broad:endpoint";
     if (execCodeSurfaceTraceReason(text) !== null) return "broad:endpoint";
     const sem = `${text}\n${cmdSurface}`;
     if (
@@ -6184,7 +6187,7 @@ const CREDENTIAL_ASSERT_RE = new RegExp(
 // 取值尾部的标点/引号剥离。引号类用 \uXXXX 转义写出：write-path-guard 的
 // 字符串字面量扫描器是朴素正则，字符类里的裸引号会被它当成未闭合字符串，
 // 在本文件这个体量上造成灾难性回溯。
-const CREDENTIAL_TRAIL_RE = /[。．.,，、；;：:!！?？)）\]」』\u0022\u0027\u0060]+$/;
+const CREDENTIAL_TRAIL_RE = /[。．.,，、；;：:!！?？)）\]」』（(\[「『{<\u0022\u0027\u0060]+$/;
 
 /** 高熵取值判定：长度 + 字符类混合 / 十六进制 / 常见凭据前缀。 */
 function isHighEntropySecret(v: string): boolean {
@@ -6217,82 +6220,284 @@ export function credentialAssertionReason(answer: string, dataText: string | und
   return null;
 }
 
-// ---- R314 P0-2：凭证取值提取（折叠优先级 / 直答豁免收窄，不是承诺边界） ----
+// ---- R314 P0-2 → R316 P0：凭证取值提取（折叠优先级 / 直答豁免收窄，不是承诺边界） ----
 // 资料单元里「<凭证词> [连接词] <取值>」的取值本身（PIN 90210 / 口令 k7f2a1 / 连接串 user:pw@host 的 pw 段）。
 // 与 credentialAssertionReason 的区别：那边看答案里的断言且只拦「不在明文里」的高熵串；这边看资料里的取值，
-// 不论长短（≥ 4 字），在答案里出现即按位占位。对新载体的覆盖不保证（符号口令 / 没有凭证词的裸串不在此列）。
+// 不论长短（≥ 4 字），在答案里出现即按位占位。
+// R316（audit-r315 §4.2）：判据按凭证**属性面**而不是样本枚举——
+//   - 书写面：先 NFKC（全角数字 / 全角标点 / 全角字母归半角）再判；
+//   - 语义标注面：中文暗号 / 接头暗语 / 通关密语 / 安全词 等与「密码」同级；
+//   - 取值形态面：ASCII 串 / 纯符号串 / 多词短语（≥ 3 词）/ 短中文串（汉字 2–12，紧跟连接词）；
+//   - 拆段面：凭证词同条里「a / b / c」「a、b、c」等同分隔符分段的短字母数字段，各段与拼接串都登记；
+//   - 出口面：答案里出现取值整串、取值的 ≥ 2 字混合子段（拆段补全）、符号串的连续公共段 ⇒ 占位。
 const CREDENTIAL_VALUE_SUBJECT_RE = new RegExp(
-  `(?:${CREDENTIAL_SUBJECT_RE.source}|\\bpins?\\b|pin\\s*码|passcode|解锁码|开锁码|门禁码|密令|暗号|接入码|接入密码|wifi\\s*密码|连接串|连接字符串|主机密码|登录码|api\\s*secret|client[\\s_-]?secret|bearer|auth[\\s_-]?token)`,
+  `(?:${CREDENTIAL_SUBJECT_RE.source}|\\bpins?\\b|pin\\s*码|passcode|解锁码|开锁码|门禁码|密令|暗号|暗语|暗码|接头(?:用)?语|对答|应答词|通关(?:密语|口令|暗语)|安全词|safe\\s*word|code\\s*word|watchword|接入码|接入密码|wifi\\s*密码|连接串|连接字符串|主机密码|登录码|api\\s*secret|client[\\s_-]?secret|bearer|auth[\\s_-]?token|master\\s*key|encryption\\s*key|recovery\\s*(?:code|key|phrase)|seed\\s*phrase|mnemonic|助记词|助记短语|恢复短语|安全短语|种子短语|加密短语|口令短语|短语口令|密语)`,
   "i"
 );
+// 连接词：断言 / 赋值 / 冒号；「用」与空白只对 ASCII 取值生效（中文取值必须有显式连接词，免把普通名词短语当口令）。
+const CREDENTIAL_LINK_STRICT = "是|為|为|＝|=|:|：|叫做|叫|设成|設成|设置为|改成|写作|写成|定为|定成|is|was|equals?|は|が|는|은|이|가";
+const CREDENTIAL_VALUE_CHARS = "A-Za-z0-9!@#$%^&*()_+\\-=./?~{}|<>\\[\\];:";
 const CREDENTIAL_VALUE_RE = new RegExp(
-  `${CREDENTIAL_VALUE_SUBJECT_RE.source}[^\\n，,。；;]{0,16}?(?:是|為|为|＝|=|:|：|叫做|叫|设成|設成|设置为|改成|写作|写成|用|is|was|equals?|は|が|는|은|이|가|\\s)\\s*[「『"'\`\\[（(]?\\s*([A-Za-z0-9!@#$%^&*_+\\-=./?~{}|]{4,64})`,
+  `${CREDENTIAL_VALUE_SUBJECT_RE.source}[^\\n，,。；;]{0,16}?(?:${CREDENTIAL_LINK_STRICT}|用|\\s)\\s*[「『\u0022\u0027\u0060\\[（(]?\\s*([${CREDENTIAL_VALUE_CHARS}]{4,64})`,
   "gi"
 );
-const CONNECTION_STRING_PW_RE = /[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:([^\s@/]{3,64})@/gi;
+// 多词短语口令（correct horse battery staple）：≥ 3 个字母词，空格 / 连字符分隔；跟在显式连接词后。
+const CREDENTIAL_PHRASE_RE = new RegExp(
+  `${CREDENTIAL_VALUE_SUBJECT_RE.source}[^\\n，,。；;]{0,16}?(?:${CREDENTIAL_LINK_STRICT})\\s*[「『\u0022\u0027\u0060\\[（(]?\\s*([A-Za-z]{2,}(?:[ \\-][A-Za-z]{2,}){2,11})(?![A-Za-z0-9])`,
+  "gi"
+);
+// 中文多词短语（助记词 苹果 铅笔 海浪 钟楼）：≥ 3 个汉字词，空格 / 顿号 / 斜线分隔，跟在连接词后；整串登记。
+const CREDENTIAL_CJK_PHRASE_RE = new RegExp(
+  `${CREDENTIAL_VALUE_SUBJECT_RE.source}[^\\n，,。；;]{0,16}?(?:${CREDENTIAL_LINK_STRICT})\\s*[「『\u0022\u0027\u0060\\[（(]?\\s*([\\u3400-\\u4dbf\\u4e00-\\u9fff]{1,8}(?:[ \u3000、/][\\u3400-\\u4dbf\\u4e00-\\u9fff]{1,8}){2,11})(?=$|[\\s，,。；;：:！!？?）)」』\u0022\u0027])`,
+  "gim"
+);
+// 分组书写的数字 PIN（4 7 1 9 0 2 / 47-19-02）：凭证词 + 连接词后 4–12 位数字按空格 / 连字符分组；登记去分隔符的整串。
+const CREDENTIAL_SPACED_PIN_RE = new RegExp(
+  `${CREDENTIAL_VALUE_SUBJECT_RE.source}[^\\n，,。；;]{0,16}?(?:${CREDENTIAL_LINK_STRICT}|\\s)\\s*(\\d{1,4}(?:[ \\-]\\d{1,4}){1,11})(?![\\d])`,
+  "gi"
+);
+// 分组数字里的日期形态（2026-09-04 / 04-09-2026）不是 PIN
+const GROUPED_DATE_RE = /^(?:\d{4}[ \-]\d{1,2}[ \-]\d{1,2}|\d{1,2}[ \-]\d{1,2}[ \-]\d{4})$/;
+// 带序号标签的拆段（第一段 Qw7 / 第二段 xz2 / 第三段 Lp9）：凭证词同条里按出现顺序拼接。
+const CREDENTIAL_LABELED_SEGMENT_RE =
+  /(?:第\s*[一二三四五六七八九十\d]+\s*(?:段|节|部分|块|截|组)|前半|前段|中段|中间段|后半|后段|末段)[^\n\S]*[：:]?[^\n\S]*([A-Za-z0-9]{2,12})(?![A-Za-z0-9])/g;
+// 短中文口令（蓝鲸八十八 / 三个八加两个零）：显式连接词后紧跟 2–12 个汉字，到标点 / 空白 / 行尾为止。
+// 凭证词与连接词之间只允许 空白 / 的 / ASCII 标识符 / 括注（「验证码都是骗子」「口令不是那个」的 都是 / 不是 不算连接词）。
+const CREDENTIAL_CJK_RE = new RegExp(
+  `${CREDENTIAL_VALUE_SUBJECT_RE.source}(?:\\s|的|[A-Za-z0-9_]|[（(][^）)\\n]{0,12}[）)])*(?<![都也就才不没并非皆全])(?:${CREDENTIAL_LINK_STRICT})\\s*[「『\u0022\u0027\u0060\\[（(]?\\s*([\\u3400-\\u4dbf\\u4e00-\\u9fff]{2,12})(?=$|[\\s，,。；;：:！!？?、）)」』\u0022\u0027])`,
+  "gim"
+);
+// 中文取值：以功能词 / 指代词开头，或含语法虚词（的 / 了 / 是 / 不 …），或是「数词 + 时间・数量量词」（八位数 / 三月五号）⇒ 描述句不是口令
+// （「密码是我的生日」「口令是每天签到」「暗号是那个」）。单字 天 / 月 / 年 本身不排除（「天王盖地虎」「月黑风高」是口令）。
+const CREDENTIAL_CJK_STOP_RE =
+  /^(?:多少|什么|啥|未知|不知|忘记|忘了|空白|留空|没有|无|同上|一样|相同|见|如下|另记|待定|随机|自定|自设|默认|每|那|这|哪|谁|怎|我|你|他|她|它|自己|老|同|原|旧|新的)|[的了着过是在有不没无非吗呢吧啊呀就都也才把被让给向从对和与或及但而请需要应该可能会将只很太更越最][\u4e00-\u9fff]*|(?:每|今|明|昨|上|下|本|前|后|去|当|次|年|月|周|日)(?:天|周|月|年|日|次|时|季|底|初|末)|[零〇一二三四五六七八九十百千万两几\d]+(?:天|周|月|年|日|号|位|次|小时|分钟|点|元|块|折|遍|轮|页|层|楼|岁)/;
+const CONNECTION_STRING_PW_RE = /[a-z][a-z0-9+.-]*:\/\/(?:[^\s:/@]*:)?([^\s@/:]{3,64})@/gi;
 // 无凭证词的登录句式（R313 J27「用 tr7q92x 登录后」）：取值须字母+数字/符号混合且 ≥ 6 字，免误收「用 iPhone 登录」。
-const LOGIN_VALUE_RE = /(?:用|以|凭|使用|with)\s*([A-Za-z0-9!@#$%^&*_+\-=./?~{}|]{6,64})\s*(?:登录|登陆|登入|解锁|认证|鉴权|连上|连接|进去|to log ?in|to auth)/gi;
-const CREDENTIAL_KV_RE = /\b(?:password|passwd|pwd|pass|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\s*[=:]\s*["']?([A-Za-z0-9!@#$%^&*_+\-=./?~{}|]{4,64})/gi;
+const LOGIN_VALUE_RE = new RegExp(
+  `(?:用|以|凭|使用|with)\\s*([${CREDENTIAL_VALUE_CHARS}]{6,64})\\s*(?:登录|登陆|登入|解锁|认证|鉴权|连上|连接|进去|to log ?in|to auth)`,
+  "gi"
+);
+const CREDENTIAL_KV_RE = new RegExp(
+  `\\b(?:password|passwd|pwd|pass|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|passphrase|pin)\\s*[=:]\\s*[\u0022\u0027]?([${CREDENTIAL_VALUE_CHARS}]{4,64})`,
+  "gi"
+);
+// 拆段面（R308 分片经验）：凭证词同条里 ≥ 2 段、同一分隔符、每段 2–8 位字母数字，整体含数字与字母。
+const CREDENTIAL_SEGMENTED_RE = /(?<![A-Za-z0-9])([A-Za-z0-9]{2,8})((?:[ \t]*(?:[/、|·•,，;；\-—–]|\r?\n)[ \t]*[A-Za-z0-9]{2,8}){1,7})(?![A-Za-z0-9])/g;
+const CREDENTIAL_SEGMENT_SEP_RE = /[ \t]*(?:[/、|·•,，;；\-—–]|\r?\n)[ \t]*/g;
 /** 取值后紧跟单位/量词 ⇒ 是数量不是凭证（「密码 8 位以上」「密钥 2024 年更换」）。 */
 const CREDENTIAL_UNIT_TRAIL_RE = /^[ \t]*(?:年|月|日|号|位|天|个|次|元|块|分|秒|小时|点|%|周|字|行|条|页)/;
+const SYMBOL_ONLY_RE = /^[!-/:-@[-`{-~]+$/;
+const CREDENTIAL_PHRASE_SEP_RE = /[\s\u3000、,，/]+/;
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+const ASCII_PUNCT_RE = /[!-/:-@[-`{-~]/;
 
 function credentialShapedValue(v: string): boolean {
+  if (SYMBOL_ONLY_RE.test(v)) return v.length >= 6;
   const s = v.replace(CREDENTIAL_TRAIL_RE, "");
   if (s.length < 4) return false;
   if (/^\d+$/.test(s)) return s.length >= 4 && s.length <= 12;
   if (/^[A-Za-z]+$/.test(s)) return s.length >= 8 && !/^(?:true|false|null|none|unknown|password|passwd|secret|token|admin|root|user|test|demo|example|sample|default|changeme|redacted|hidden|unset|empty)$/i.test(s);
-  return /[A-Za-z]/.test(s) && /[\d!@#$%^&*_+\-=./?~{}|]/.test(s);
+  return /[A-Za-z]/.test(s) && (/\d/.test(s) || ASCII_PUNCT_RE.test(s));
 }
 
-/** 资料单元里的凭证形态取值（去重）。 */
+function credentialPhraseValue(v: string): boolean {
+  const words = v.toLowerCase().split(/[ -]+/).filter(Boolean);
+  if (words.length < 3) return false;
+  // 常见说明句（"is not set yet" / "same as before" / "the usual one"）不是短语口令。
+  const stop = new Set(["the", "a", "an", "is", "are", "was", "not", "no", "yes", "same", "as", "before", "usual", "one", "my", "your", "our", "and", "or", "of", "to", "in", "on", "for", "with", "it", "this", "that", "set", "yet", "unknown", "none", "null", "see", "below", "above"]);
+  return words.filter((w) => !stop.has(w)).length >= 3;
+}
+
+function credentialCjkValue(v: string): boolean {
+  if (v.length < 2 || v.length > 12) return false;
+  return !CREDENTIAL_CJK_STOP_RE.test(v);
+}
+
+/** 资料单元里的凭证形态取值（去重；NFKC 归一化面上的写法）。 */
 export function credentialValueTokens(text: string | null | undefined): string[] {
-  const src = text ?? "";
-  if (!src) return [];
+  const raw = text ?? "";
+  if (!raw) return [];
+  const src = raw.normalize("NFKC");
   const out = new Set<string>();
-  const consider = (raw: string, after: string): void => {
-    const v = raw.replace(CREDENTIAL_TRAIL_RE, "");
+  const consider = (value: string, after: string): void => {
+    // 纯符号取值（!@#$%^&*）只剥全角句读尾巴，ASCII 标点本身就是载荷
+    const v = SYMBOL_ONLY_RE.test(value) ? value.replace(/[。．，、；：！？）」』]+$/, "") : value.replace(CREDENTIAL_TRAIL_RE, "");
+    if (/:\/\//.test(v)) return; // 连接串整串不登记（主机 / 端口不是凭证），口令段由 CONNECTION_STRING_PW_RE 取
     if (!credentialShapedValue(v)) return;
     if (CREDENTIAL_UNIT_TRAIL_RE.test(after)) return;
     out.add(v);
   };
   for (const m of src.matchAll(CREDENTIAL_VALUE_RE)) {
-    const raw = m[1] ?? "";
-    if (!raw) continue;
+    const v = m[1] ?? "";
+    if (!v) continue;
     const end = (m.index ?? 0) + m[0].length;
-    consider(raw, src.slice(end, end + 4));
+    consider(v, src.slice(end, end + 4));
+  }
+  for (const m of src.matchAll(CREDENTIAL_PHRASE_RE)) {
+    const v = (m[1] ?? "").trim();
+    if (credentialPhraseValue(v)) out.add(v);
+  }
+  for (const m of src.matchAll(CREDENTIAL_CJK_RE)) {
+    const v = m[1] ?? "";
+    if (credentialCjkValue(v)) out.add(v);
+  }
+  for (const m of src.matchAll(CREDENTIAL_CJK_PHRASE_RE)) {
+    const v = (m[1] ?? "").trim();
+    const words = v.split(/[ \u3000、/]+/).filter(Boolean);
+    // 每个词都不是描述句（「的 / 了 / 是」等虚词开头的不算），≥ 3 词才算短语口令
+    if (words.length >= 3 && words.every((w) => credentialCjkValue(w))) out.add(v);
+  }
+  for (const m of src.matchAll(CREDENTIAL_SPACED_PIN_RE)) {
+    const grouped = m[1] ?? "";
+    const digits = grouped.replace(/[ \-]/g, "");
+    const end = (m.index ?? 0) + m[0].length;
+    if (GROUPED_DATE_RE.test(grouped) || digits.length < 4 || digits.length > 12) continue;
+    if (!CREDENTIAL_UNIT_TRAIL_RE.test(src.slice(end, end + 4))) out.add(digits);
   }
   for (const m of src.matchAll(CONNECTION_STRING_PW_RE)) if (m[1]) out.add(m[1]);
   for (const m of src.matchAll(LOGIN_VALUE_RE)) {
     const v = (m[1] ?? "").replace(CREDENTIAL_TRAIL_RE, "");
-    if (/[A-Za-z]/.test(v) && /[\d!@#$%^&*_+\-=./?~{}|]/.test(v) && !/^[A-Za-z]+\d{1,2}$/.test(v)) out.add(v);
+    if (/[A-Za-z]/.test(v) && (/\d/.test(v) || ASCII_PUNCT_RE.test(v)) && !/^[A-Za-z]+\d{1,2}$/.test(v)) out.add(v);
   }
   for (const m of src.matchAll(CREDENTIAL_KV_RE)) {
-    const raw = m[1] ?? "";
+    const v = m[1] ?? "";
     const end = (m.index ?? 0) + m[0].length;
-    consider(raw, src.slice(end, end + 4));
+    consider(v, src.slice(end, end + 4));
+  }
+  if (CREDENTIAL_VALUE_SUBJECT_RE.test(src)) {
+    for (const m of src.matchAll(CREDENTIAL_SEGMENTED_RE)) {
+      const pieces = [m[1] ?? "", ...(m[2] ?? "").split(CREDENTIAL_SEGMENT_SEP_RE).filter(Boolean)];
+      const seps = [...(m[2] ?? "").matchAll(CREDENTIAL_SEGMENT_SEP_RE)].map((x) => x[0].trim() || "\n");
+      if (pieces.length < 2 || new Set(seps).size !== 1) continue;
+      const joined = pieces.join("");
+      // 每段都含数字、整体含字母：日期 2024-03-05 / 电话 138-0000 / 路径 5432/app / 词组 a-b-c 都不是拆段密钥
+      if (joined.length < 6 || !/[A-Za-z]/.test(joined) || !pieces.every((p) => /\d/.test(p))) continue;
+      out.add(joined);
+      for (const p of pieces) if (p.length >= 2) out.add(p);
+    }
+    const labeled = [...src.matchAll(CREDENTIAL_LABELED_SEGMENT_RE)].map((m) => m[1] ?? "").filter(Boolean);
+    if (labeled.length >= 2) {
+      const joined = labeled.join("");
+      if (joined.length >= 6 && /[A-Za-z]/.test(joined) && /\d/.test(joined)) {
+        out.add(joined);
+        for (const p of labeled) if (p.length >= 2) out.add(p);
+      }
+    }
   }
   return [...out];
 }
 
-/** 答案里出现的资料凭证取值区间（原下标；折叠面比对，原面要求前后不是字母/数字）。 */
+/** 符号面：NFKC 后只保留 ASCII 标点的投影（含原下标映射），用于纯符号口令的出口比对。 */
+function symbolFace(text: string): FoldedText {
+  let folded = "";
+  const starts: number[] = [];
+  const ends: number[] = [];
+  let pos = 0;
+  for (const ch of text) {
+    const len = ch.length;
+    for (const c of ch.normalize("NFKC")) {
+      if (ASCII_PUNCT_RE.test(c)) {
+        folded += c;
+        starts.push(pos);
+        ends.push(pos + len);
+      }
+    }
+    pos += len;
+  }
+  return { folded, starts, ends };
+}
+
+/** 最长公共子串（返回在 a 中的起点与长度）。 */
+function longestCommonRun(a: string, b: string): { at: number; len: number } {
+  let best = { at: 0, len: 0 };
+  const prev = new Array<number>(b.length + 1).fill(0);
+  const cur = new Array<number>(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : 0;
+      if (cur[j] > best.len) best = { at: i - cur[j], len: cur[j] };
+    }
+    for (let j = 0; j <= b.length; j++) {
+      prev[j] = cur[j];
+      cur[j] = 0;
+    }
+  }
+  return best;
+}
+
+/** 答案里出现的资料凭证取值区间（原下标；折叠面比对，原面要求前后不是字母/数字）。
+ * R316：整串之外，还收 (a) 取值的字母数字子段——答案里独立出现的 ≥ 2 字混合段 / ≥ 4 位数字段 / ≥ 5 位字母段
+ * 是某个 ≥ 6 字取值的子串（拆段密钥「后半是 mv5qz」），取值首尾段放宽到 ≥ 3 字（「后半部分是 qzt」）；(b) 纯符号取值——符号面上与取值的连续公共段 ≥ min(6, 取值长)。 */
 export function credentialValueSpans(answer: string, units: string[]): Array<{ start: number; end: number }> {
   const tokens = new Set<string>();
   for (const u of units) for (const t of credentialValueTokens(u)) tokens.add(t);
   if (tokens.size === 0) return [];
-  const a = foldForOverlap(answer);
-  if (a.folded.length === 0) return [];
   const out: Array<{ start: number; end: number }> = [];
-  for (const t of tokens) {
-    const ft = foldPlain(t);
-    if (ft.length < 3) continue;
-    let at = a.folded.indexOf(ft);
-    while (at !== -1) {
+  // 引证角标的数字不参与比对（「mv5qz [1]」折叠后不能变成 mv5qz1），等长空白替换以保持原面偏移。
+  const a = foldForOverlap(answer.replace(CITATION_MARK_RE, (m) => " ".repeat(m.length)));
+  const alnumTokens = [...tokens].filter((t) => !SYMBOL_ONLY_RE.test(t));
+  if (a.folded.length > 0 && alnumTokens.length > 0) {
+    const pushBounded = (at: number, len: number): void => {
       const start = a.starts[at];
-      const end = a.ends[at + ft.length - 1];
+      const end = a.ends[at + len - 1];
       const before = start > 0 ? answer[start - 1] : "";
       const after = end < answer.length ? answer[end] : "";
       if (!/[A-Za-z0-9]/.test(before) && !/[A-Za-z0-9]/.test(after)) out.push({ start, end });
-      at = a.folded.indexOf(ft, at + 1);
+    };
+    for (const t of alnumTokens) {
+      const ft = foldPlain(t);
+      if (ft.length < 3) continue;
+      let at = a.folded.indexOf(ft);
+      while (at !== -1) {
+        pushBounded(at, ft.length);
+        at = a.folded.indexOf(ft, at + 1);
+      }
+    }
+    // 多词短语口令（「苹果 铅笔 海浪 钟楼」/ correct horse battery staple）：模型常改写分隔（、/ 和 / 逗号），
+    // 折叠面上按词序匹配，词间容许 ≤3 个折叠字符（「和」「与」「and」）；连续 ≥2 词按位命中，避免逐词复原。
+    for (const t of alnumTokens) {
+      const words = t.split(CREDENTIAL_PHRASE_SEP_RE).map(foldPlain).filter((w) => w.length > 0);
+      if (words.length < 3) continue;
+      for (let i = 0; i + 1 < words.length; i++) {
+        for (let j = words.length; j >= i + 2; j--) {
+          const gap = j - i >= 3 ? "[^]{0,3}?" : "[^]{0,1}?";
+          const re = new RegExp(words.slice(i, j).map(escapeRegExp).join(gap), "g");
+          for (const m of a.folded.matchAll(re)) {
+            if (m[0].length > 0) pushBounded(m.index ?? 0, m[0].length);
+          }
+        }
+      }
+    }
+    const long = alnumTokens.map(foldPlain).filter((ft) => ft.length >= 6 && /[a-z0-9]/.test(ft));
+    if (long.length > 0) {
+      for (const m of a.folded.matchAll(/[a-z0-9]+/g)) {
+        const run = m[0];
+        const at = m.index ?? 0;
+        const mixed = /\d/.test(run) && /[a-z]/.test(run);
+        const ok = mixed ? run.length >= 2 : /^\d+$/.test(run) ? run.length >= 4 : run.length >= 5;
+        // 「前半 / 后半是 …」补全型问句把取值的首尾段单独吐出（qzt / 210）：首尾段 ≥ 3 字即收。
+        const edge = run.length >= 3 && long.some((ft) => ft !== run && (ft.startsWith(run) || ft.endsWith(run)));
+        if (!ok && !edge) continue;
+        if (!long.some((ft) => ft !== run && ft.includes(run))) continue;
+        // 原面上该段须独立成词（前后非字母数字），否则是更长普通词的一部分
+        pushBounded(at, run.length);
+      }
+    }
+  }
+  const symbolTokens = [...tokens].filter((t) => SYMBOL_ONLY_RE.test(t));
+  if (symbolTokens.length > 0) {
+    const face = symbolFace(answer.replace(CITATION_MARK_RE, (m) => " ".repeat(m.length)));
+    for (const m of face.folded.matchAll(/[!-/:-@[-`{-~]{4,}/g)) {
+      const run = m[0];
+      for (const t of symbolTokens) {
+        const need = Math.min(6, t.length);
+        const lcr = longestCommonRun(run, t);
+        if (lcr.len < need) continue;
+        const at = (m.index ?? 0) + lcr.at;
+        out.push({ start: face.starts[at], end: face.ends[at + lcr.len - 1] });
+      }
     }
   }
   return out;
@@ -6411,51 +6616,111 @@ export function closeCredentialValues(answer: string, units: string[]): { answer
   return { answer: out, count: merged.length };
 }
 
-// ---- R314 P0-2/P1-3：破坏性命令（与日常命令备忘 broad:code 分级） ----
-// 会删除/覆写数据或不可逆的命令形态：递归删除、块设备写入、格式化、粉碎、DDL 删表/库、无条件 DELETE、强制推送/硬重置、
-// 集群/容器/基础设施销毁、Windows 递归删除、fork bomb。只影响展示级别（高警示卡 + 答案内警示行），不是安全边界。
-const DESTRUCTIVE_COMMAND_RE = new RegExp(
-  [
-    "(?:^|[\\s;&|`$(：:「『\"'（(])(?:sudo\\s+|doas\\s+)?(?:",
-    [
-      "rm\\s+(?:-{1,2}[A-Za-z-]+\\s+)*-[A-Za-z]*[rR][A-Za-z]*\\b",
-      "rm\\s+(?:-{1,2}[A-Za-z-]+\\s+)*--recursive\\b",
-      "dd\\s+(?:[a-z]+=\\S+\\s+)*(?:if|of)=",
-      "mkfs(?:\\.\\w+)?\\s",
-      "wipefs\\s",
-      "shred\\s",
-      "(?:fdisk|parted|sgdisk|gdisk)\\s+/dev/",
-      "(?:chmod|chown)\\s+-[a-zA-Z]*R[a-zA-Z]*\\s+\\S+\\s+/(?:\\s|$)",
-      "git\\s+(?:push\\s+[^\\n]*(?:-f\\b|--force\\b)|reset\\s+--hard|clean\\s+-[a-zA-Z]*[fd][a-zA-Z]*|branch\\s+-D\\b)",
-      "kubectl\\s+delete\\s",
-      "docker\\s+(?:system\\s+prune|volume\\s+(?:rm|prune)|rm\\s+-[a-z]*f|rmi\\s)",
-      "terraform\\s+destroy",
-      "(?:format|diskpart)\\s+[a-z]:",
-      "(?:del|erase)\\s+(?:/[a-z]\\s+)*/[sq]\\b",
-      "(?:rd|rmdir)\\s+/s\\b",
-      "Remove-Item\\s+[^\\n]*-Recurse",
-      "truncate\\s+-s\\s*0\\s",
-    ].join("|"),
-    ")",
-    "|>\\s*/dev/(?:sd|hd|vd|xvd|nvme|mmcblk)[a-z0-9]*",
-    "|\\b(?:drop\\s+(?:table|database|schema|index|view|user|collection|role)\\b|truncate\\s+(?:table\\s+)?[\\w.`\"]+|delete\\s+from\\s+[\\w.`\"]+\\s*(?:;|$|where\\s+(?:1\\s*=\\s*1|true)\\b))",
-    "|:\\(\\)\\s*\\{\\s*:\\|:&\\s*\\};:",
-    "|(?:^|[\\s;&|`$(：:「『\"'（(])(?:db|mongo)\\.(?:\\w+\\.)?(?:dropDatabase|drop)\\(",
-    "|flushall\\b|flushdb\\b",
-  ].join(""),
-  "im"
-);
+// ---- R314 P0-2/P1-3 → R316 P0：破坏性命令（与日常命令备忘 broad:code 分级） ----
+// 判据按**能力面**（capability）分族而不是命令名枚举（audit-r315 §4.2「泛化而非补规则」）：
+//   fs-delete       递归 / 强制删除、find -delete、Windows 递归删除、PowerShell -Recurse
+//   fs-overwrite    截断 / 清空文件（`: >`、`> file` 空重定向、truncate -s 0）、dd 写设备、块设备重定向
+//   disk-format     mkfs / wipefs / shred / 分区表 / format
+//   perm-recursive  递归改权限 / 属主到根
+//   vcs-history     git force push / reset --hard / clean -f / branch -D
+//   sql-ddl-dml     DROP / TRUNCATE / 无条件 DELETE / 无 WHERE 的 UPDATE（含引号包裹的内嵌 SQL）
+//   nosql-flush     dropDatabase / drop() / FLUSHALL / FLUSHDB
+//   cloud-storage   对象存储递归删除 / 删桶（aws s3 rm --recursive / rb --force、gsutil rm -r、az storage … delete）
+//   infra-destroy   kubectl delete、docker prune/rm -f、terraform destroy、wrangler d1/kv/r2 删除
+//   fork-bomb       `:(){ :|:& };:`
+//   natural-cn      中文自然语言的整表 / 整库 / 全盘删除（「把 notes 表整张删掉」「整个库清空」）
+// 只影响展示级别（高警示卡 + 答案内警示行），不是安全边界。
+const CMD_LEAD = "(?:^|[\\s;&|`$(：:「『\u0022\u0027（(])(?:sudo\\s+|doas\\s+)?";
+const QUOTE_LEAD = "(?:^|[\\s;&|`$(：:「『\u0022\u0027（(])";
+const SQL_IDENT = "[\\w.`\u0022\\[\\]]+";
+export const DESTRUCTIVE_FAMILIES: ReadonlyArray<{ readonly family: string; readonly re: RegExp }> = [
+  {
+    family: "fs-delete",
+    re: new RegExp(
+      `${CMD_LEAD}(?:rm\\s+(?:-{1,2}[A-Za-z-]+\\s+)*-[A-Za-z]*[rR][A-Za-z]*\\b|rm\\s+(?:-{1,2}[A-Za-z-]+\\s+)*--recursive\\b|find\\s+[^\\n]*?\\s-(?:delete\\b|exec\\s+rm\\b)|(?:del|erase)\\s+(?:/[a-z]\\s+)*/[sq]\\b|(?:rd|rmdir)\\s+/s\\b|Remove-Item\\s+[^\\n]*-Recurse\\b|rimraf\\s+\\S)`,
+      "im"
+    ),
+  },
+  {
+    family: "disk-format",
+    re: new RegExp(`${CMD_LEAD}(?:mkfs(?:\\.\\w+)?\\s|wipefs\\s|shred\\s|(?:fdisk|parted|sgdisk|gdisk)\\s+/dev/|(?:format|diskpart)\\s+[a-z]:|diskutil\\s+(?:erase\\w*|zeroDisk)\\b)`, "im"),
+  },
+  {
+    family: "fs-overwrite",
+    re: new RegExp(
+      `${CMD_LEAD}(?:dd\\s+(?:[a-z]+=\\S+\\s+)*(?:if|of)=|truncate\\s+-s\\s*0\\s|:\\s*>\\s*[\\w./~$-]+|cat\\s+/dev/null\\s*>\\s*[\\w./~$-]+)|(?:^|[;&|])\\s*>\\s*[\\w./~$-]+\\s*(?:$|[;&|])|>\\s*/dev/(?:sd|hd|vd|xvd|nvme|mmcblk)[a-z0-9]*`,
+      "im"
+    ),
+  },
+  {
+    family: "perm-recursive",
+    // 递归到根 / 系统顶层目录，或递归放开为 777 / 000 / a+rwx（任何路径）
+    re: new RegExp(
+      `${CMD_LEAD}(?:chmod|chown)\\s+-[a-zA-Z]*R[a-zA-Z]*\\s+(?:\\S+\\s+/(?:etc|usr|bin|sbin|lib|lib64|var|home|boot|root|opt|srv)?(?:\\s|$)|0?(?:777|000|666)\\s|(?:a|ugo)[+=]rwx\\s|o\\+w\\s)`,
+      "im"
+    ),
+  },
+  {
+    family: "vcs-history",
+    re: new RegExp(`${CMD_LEAD}git\\s+(?:push\\s+[^\\n]*(?:-f\\b|--force\\b)|reset\\s+--hard|clean\\s+-[a-zA-Z]*[fd][a-zA-Z]*|branch\\s+-D\\b|filter-branch\\b|filter-repo\\b)`, "im"),
+  },
+  {
+    family: "sql-ddl-dml",
+    re: new RegExp(
+      `\\b(?:drop\\s+(?:table|database|schema|index|view|user|collection|role|keyspace)\\b|truncate\\s+(?:table\\s+)?${SQL_IDENT}|delete\\s+from\\s+${SQL_IDENT}\\s*(?:[\u0022\u0027\u0060」』）)]+\\s*)?(?:;|$|[|&]|where\\s+(?:1\\s*=\\s*1|true)\\b)|update\\s+${SQL_IDENT}\\s+set\\s+${SQL_IDENT}\\s*=(?:(?!\\bwhere\\b)[^\\n;])*(?:;|$))`,
+      "im"
+    ),
+  },
+  {
+    family: "nosql-flush",
+    re: new RegExp(`${QUOTE_LEAD}(?:db|mongo)\\.(?:\\w+\\.)?(?:dropDatabase|drop)\\(|\\bflushall\\b|\\bflushdb\\b`, "im"),
+  },
+  {
+    family: "cloud-storage",
+    re: new RegExp(
+      `${CMD_LEAD}(?:aws\\s+s3\\s+(?:rm\\s+[^\\n]*--recursive|rb\\s+[^\\n]*--force)|aws\\s+s3api\\s+delete-(?:bucket|objects?)\\b|gsutil\\s+(?:-m\\s+)?rm\\s+-[a-z]*r|gcloud\\s+storage\\s+rm\\s+[^\\n]*(?:--recursive|-r\\b)|az\\s+storage\\s+(?:blob|container)\\s+delete(?:-batch)?\\b|rclone\\s+(?:purge|delete)\\s|oss(?:util)?\\s+rm\\s+[^\\n]*-r|mc\\s+rm\\s+[^\\n]*--recursive)`,
+      "im"
+    ),
+  },
+  {
+    family: "infra-destroy",
+    re: new RegExp(
+      `${CMD_LEAD}(?:kubectl\\s+delete\\s|docker\\s+(?:system\\s+prune|volume\\s+(?:rm|prune)|rm\\s+-[a-z]*f|rmi\\s)|terraform\\s+destroy|pulumi\\s+destroy|wrangler\\s+(?:d1\\s+(?:delete\\s|execute\\s+[^\\n]*(?:drop\\s+table|delete\\s+from|truncate))|kv\\s+(?:namespace\\s+delete|key\\s+delete|bulk\\s+delete)|r2\\s+(?:bucket\\s+delete|object\\s+delete))|helm\\s+(?:uninstall|delete)\\s|vercel\\s+(?:rm|remove)\\s|heroku\\s+(?:apps:destroy|pg:reset))`,
+      "im"
+    ),
+  },
+  { family: "fork-bomb", re: /:\(\)\s*\{\s*:\|:&\s*\};:/ },
+  {
+    family: "natural-cn",
+    // 「把 notes 表整张删掉」「整个库清空」「所有数据都删掉」：整体量词紧贴 表 / 库 / 桶 / 盘 / 数据 对象（只允许夹
+    // 「的」/ 空白 / ASCII 标识符），再接删除 / 清空动词。量词落在别的名词上（「表格里的空行全部删掉」）不算。
+    re: new RegExp(
+      [
+        "(?:表|库|数据库|数据表|集合|桶|存储桶|磁盘|硬盘|分区|数据|(?:数据|系统|启动|机械|固态|移动)盘|盘)(?:的|\\s|[A-Za-z0-9_])*(?:整张|整个|整库|整表|整盘|全部|全都|所有|全量|一并|统统)(?:都|地|再|先|直接|\\s)*(?:删掉|删除|删了|删光|清空|清掉|抹掉|抹除|格式化|格掉|格了|drop\\s*掉|truncate\\s*掉)",
+        "(?:整张|整个|整库|整表|整盘|全部|全都|所有|全量|统统)(?:的|\\s|[A-Za-z0-9_])*(?:表|库|数据库|数据表|集合|桶|存储桶|磁盘|硬盘|分区|数据|(?:数据|系统|启动|机械|固态|移动)盘)(?:都|也|再|先|直接|\\s)*(?:删掉|删除|删了|删光|清空|清掉|抹掉|抹除|格式化|格掉|格了|drop\\s*掉|truncate\\s*掉)",
+        "(?:删掉|删除|删了|删光|清空|清掉|抹掉|抹除|格式化|格掉)(?:整张|整个|整库|整表|整盘|全部|所有|全量)(?:的|\\s|[A-Za-z0-9_])*(?:表|库|数据库|数据表|集合|桶|存储桶|磁盘|硬盘|分区|数据|(?:数据|系统|启动|机械|固态|移动)盘)",
+      ].join("|")
+    ),
+  },
+];
+
+/** 命中的破坏性能力族（首个）；null 表示不是破坏性形态。 */
+export function destructiveCommandFamily(text: string | null | undefined): string | null {
+  const t = text ?? "";
+  if (!t.trim()) return null;
+  for (const f of DESTRUCTIVE_FAMILIES) if (f.re.test(t)) return f.family;
+  try {
+    const n = normalizeCommandText(t);
+    for (const f of DESTRUCTIVE_FAMILIES) if (f.re.test(n)) return f.family;
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 /** 文本是否含破坏性命令形态（原面或命令归一面）。 */
 export function isDestructiveCommandText(text: string | null | undefined): boolean {
-  const t = text ?? "";
-  if (!t.trim()) return false;
-  if (DESTRUCTIVE_COMMAND_RE.test(t)) return true;
-  try {
-    return DESTRUCTIVE_COMMAND_RE.test(normalizeCommandText(t));
-  } catch {
-    return false;
-  }
+  return destructiveCommandFamily(text) !== null;
 }
 
 /**
@@ -7294,14 +7559,62 @@ export function closeComposedAnswer(answer: string, units: string[]): { answer: 
   return { answer: out, count };
 }
 
-/** 答案里的破坏性命令行前插入 DESTRUCTIVE_WARN_MARK（已有则不重复）；返回插入数。 */
-export function markDestructiveCommandLines(answer: string): { answer: string; count: number } {
-  if (!DESTRUCTIVE_COMMAND_RE.test(answer)) return { answer, count: 0 };
+// 破坏动作词（答案改写成叙述句时的语义面）：与来源破坏性命令的操作对象同现 ⇒ 视为该命令的改写。
+const DESTRUCTIVE_INTENT_WORD_RE =
+  /清空|清掉|清理|清除|删掉|删除|删了|删光|抹掉|抹除|格式化|销毁|摧毁|拆掉|丢弃|重置|回滚|覆写|覆盖|截断|删库|删表|清库|清表|drop|truncate|delete|remove|wipe|purge|destroy|format|reset|prune|erase|flush|overwrite|zero|rm\b|del\b/i;
+const DESTRUCTIVE_OPERAND_STOP = new Set([
+  "sudo", "doas", "then", "with", "from", "table", "database", "schema", "index", "view", "user", "collection", "role",
+  "where", "true", "into", "set", "null", "execute", "command", "remote", "local", "recursive", "force", "auto", "approve",
+  "status", "progress", "name", "type", "exec", "delete", "drop", "truncate", "update", "remove", "item", "recurse", "system",
+  "volume", "prune", "destroy", "reset", "hard", "clean", "push", "origin", "main", "master", "branch", "https", "http",
+]);
+/** 来源破坏性命令行里的操作对象（路径 / 表名 / 桶名 / 设备 / 命名空间等 ≥ 4 字的非选项 token）。 */
+function destructiveOperands(line: string): string[] {
+  const out: string[] = [];
+  for (const m of line.normalize("NFKC").matchAll(/[A-Za-z0-9_][A-Za-z0-9_./:@~-]{3,}/g)) {
+    const tok = m[0].replace(/[.,;:]+$/, "");
+    if (tok.length < 4 || tok.startsWith("-")) continue;
+    if (/^[A-Za-z]+$/.test(tok) && DESTRUCTIVE_OPERAND_STOP.has(tok.toLowerCase())) continue;
+    out.push(tok.toLowerCase());
+  }
+  return out;
+}
+
+/**
+ * 答案里的破坏性命令行前插入 DESTRUCTIVE_WARN_MARK（已有则不重复）；返回插入数。
+ * R316 P1-3（audit-r315 §4.2）：警示不只按**答案文本**正则判，也按**来源折叠原因**判——
+ * `sources` 里判为破坏性的资料行，其操作对象出现在答案行且答案行带破坏动作词（「清空 /var/log/app.log」），
+ * 或答案行与该资料行有 ≥ 12 字的归一公共段（行内改写 / 引号包裹 / 尾随角标）时，同样视为破坏性行。
+ */
+export function markDestructiveCommandLines(answer: string, sources?: string[]): { answer: string; count: number } {
+  const srcLines: { operands: string[]; folded: string }[] = [];
+  for (const u of sources ?? []) {
+    if (!isDestructiveCommandText(u)) continue;
+    for (const l of u.split("\n")) {
+      if (!isDestructiveCommandText(l)) continue;
+      srcLines.push({ operands: destructiveOperands(l), folded: foldForOverlap(l).folded });
+    }
+  }
+  const fromSource = (line: string): boolean => {
+    if (srcLines.length === 0) return false;
+    const norm = line.normalize("NFKC").toLowerCase();
+    const intent = DESTRUCTIVE_INTENT_WORD_RE.test(norm);
+    const folded = foldForOverlap(line).folded;
+    for (const s of srcLines) {
+      if (intent && s.operands.some((o) => norm.includes(o))) return true;
+      if (s.folded.length >= 12 && folded.length >= 12 && longestCommonRun(folded, s.folded).len >= 12) return true;
+    }
+    return false;
+  };
   const lines = answer.split("\n");
   const out: string[] = [];
   let count = 0;
   for (const line of lines) {
-    if (isDestructiveCommandText(line) && out[out.length - 1] !== DESTRUCTIVE_WARN_MARK) {
+    if (!line.trim() || line === DESTRUCTIVE_WARN_MARK) {
+      out.push(line);
+      continue;
+    }
+    if ((isDestructiveCommandText(line) || fromSource(line)) && out[out.length - 1] !== DESTRUCTIVE_WARN_MARK) {
       out.push(DESTRUCTIVE_WARN_MARK);
       count++;
     }
@@ -7401,6 +7714,7 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
   const core = finalizeAskAnswerCore(answer, opts);
   const units = opts.dataUnits && opts.dataUnits.length > 0 ? opts.dataUnits : opts.dataText ? [opts.dataText] : [];
   if (units.length === 0) return withDestructiveMarks(core);
+  const provenance = [...units, ...(opts.execFragmentUnits ?? [])];
   // R312 P0-1：按信任域收口。未显式给 tier 时按确定性事实推定（与 index.ts echoTierOf 同口径）：答案恰好点到 1 个
   // 资料单元（角标唯一，或无角标且只有 1 个单元）⇒ app 出口单笔记直答；否则聚合（fail-closed）。
   // 生产 Ask/MCP/回顾都显式传 tier（MCP 强制聚合），这里只兜未传 tier 的调用方。分片笔记一并作为资料单元。
@@ -7424,8 +7738,8 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
     // 直答层什么都没收时，verbatim 问法附带的「问答区不逐字转写」指引与实际交付自相矛盾，去掉。
     const suffix = `\n\n${VERBATIM_REDIRECT_NOTICE}`;
     if (tier.kind === "single_note_direct" && core.answer.endsWith(suffix))
-      return withDestructiveMarks({ ...core, answer: core.answer.slice(0, -suffix.length) });
-    return withDestructiveMarks(core);
+      return withDestructiveMarks({ ...core, answer: core.answer.slice(0, -suffix.length) }, provenance);
+    return withDestructiveMarks(core, provenance);
   }
   let out = closed.answer;
   // 占位后只剩无意义残片时，给出可读的指引而不是一串标点。
@@ -7436,7 +7750,10 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
   else if (tier.kind === "aggregate") out = collapsePlaceholderWall(out);
   const tag = `verbatim:lcs=${closed.count};verbatim_closed_spans=${closed.aggregate}`;
   const reason = core.reason ? `${core.reason};${tag}` : tag;
-  return withDestructiveMarks({ ...core, answer: out, changed: true, reason, verbatim_spans: closed.count, verbatim_closed_spans: closed.aggregate });
+  return withDestructiveMarks(
+    { ...core, answer: out, changed: true, reason, verbatim_spans: closed.count, verbatim_closed_spans: closed.aggregate },
+    provenance
+  );
 }
 
 function placeholderFreeText(s: string): string {
@@ -7481,8 +7798,8 @@ export function collapsePlaceholderWall(answer: string): string {
   return [...kept, ...extraSys, `${AGGREGATE_VERBATIM_GUIDE}${[...marks].join("")}`].join("\n").trim();
 }
 
-function withDestructiveMarks<T extends { answer: string; changed: boolean; reason?: string }>(r: T): T {
-  const marked = markDestructiveCommandLines(r.answer);
+function withDestructiveMarks<T extends { answer: string; changed: boolean; reason?: string }>(r: T, sources?: string[]): T {
+  const marked = markDestructiveCommandLines(r.answer, sources);
   if (marked.count === 0) return r;
   const tag = `destructive_mark=${marked.count}`;
   return { ...r, answer: marked.answer, changed: true, reason: r.reason ? `${r.reason};${tag}` : tag };
@@ -8553,6 +8870,7 @@ export function scrubDataDerivedOpaqueRuns(
 // 不枚举标签词、不依赖能否还原地址。
 const CODE_WORD_SHAPE_RE = /[0-9=;:/&#$%@|\\<>{}\[\]`'"~+*_.-]/;
 const ASCII_TOKEN_RE = /[A-Za-z0-9][A-Za-z0-9=;:/&#$%@|\\<>{}\[\]`'"~+*_.-]*/g;
+const RESIDUE_SUBSTR_MIN = 5;
 const SHELL_ASSIGN_RE = /(?:^|[\s;])(?:export\s+|set\s+|let\s+|const\s+|var\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["'`]?([^\s;"'`]+)/g;
 
 function dangerLineIsDangerous(line: string): boolean {
@@ -8627,7 +8945,9 @@ export function scrubDangerCodeResidue(answer: string, dataText: string, dataUni
     if (/^[[［]?\d{1,2}[\]］]?$/.test(t)) return false; // 引文角标
     if (!CODE_WORD_SHAPE_RE.test(t)) return labels.has(t);
     if (benignTokens.has(t) && !dangerTokens.has(t)) return false;
-    return codeWords.some((c) => c.includes(t) || t.includes(c));
+    // 子串连坐只对 ≥5 字符的一侧生效：3–4 字符的善意记号（车次 `G31`、机型 `A320`）
+    // 极易是长哈希/编码串的偶然子串，而 <5 字符的半截回显本身不构成载荷。
+    return codeWords.some((c) => c === t || (t.length >= RESIDUE_SUBSTR_MIN && c.includes(t)) || (c.length >= RESIDUE_SUBSTR_MIN && t.includes(c)));
   };
   let changed = false;
   const out = answer
