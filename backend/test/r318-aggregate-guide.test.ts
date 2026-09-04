@@ -100,5 +100,6 @@ describe("R318 C2：结构化「概括 + 指引」", () => {
     expect(ledgerAmountText({ ...n, is_sensitive: 1 })).toBeNull();
     expect(ledgerAmountText({ ...n, category: "idea" })).toBeNull();
     expect(aggregateGuideItem({ ...n, category: "idea", title: "周末家教" }, 2).fallbackLine).toBe("［想法］（2026-09-04）");
+    expect(aggregateGuideItem({ ...n, category: "idea", title: null }, 3).line).toBe("［想法］（无标题笔记，2026-09-04）");
   });
 });

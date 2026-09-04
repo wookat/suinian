@@ -1628,9 +1628,10 @@ export function aggregateGuideItem(n: NoteRow, index: number): { index: number; 
   const day = (n.created_at || "").slice(0, 10);
   const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
   const amt = ledgerAmountText(n);
+  const text = enumNoteLineText(n);
   return {
     index,
-    line: `${enumNoteLineText(n)}（${day}）`,
+    line: day && text.includes(day) ? text : `${text}（${day}）`,
     fallbackLine: `［${label}］${amt ? `（${amt}）` : ""}（${day}）`,
   };
 }
