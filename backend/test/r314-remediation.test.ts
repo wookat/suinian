@@ -8,6 +8,7 @@
 import { describe, it, expect } from "vitest";
 import {
   closeAggregateVerbatim,
+  endpointValueTokens,
   closeVerbatimForTier,
   finalizeAskAnswer,
   verbatimOverlapSpans,
@@ -272,5 +273,92 @@ describe("R314 聚合层补充：符号编码段（归一后为空串的旗帜�
   it("直答层：符号段本就在同屏卡片里 ⇒ 不计", () => {
     const r = closeVerbatimForTier(`口令是 →→↓←↑→↓↓[1]。`, { units: [units[1]], tier: { kind: "single_note_direct", directUnit: units[1] } });
     expect(r.aggregate).toBe(0);
+  });
+});
+
+describe("R314 聚合层补充：拼接复述（per-unit-gram 缝，R313 J07「管道给sh」）", () => {
+  const units = ["第一段命令：取回文件", "第二段命令：管道给 sh 跑掉"];
+  it("每段公共串 <8 但整句几乎全由资料片段拼成（夹填充字）⇒ 整句占位", () => {
+    for (const ans of [
+      "第二段命令是管道给 sh 跑掉 [2]。",
+      "取回文件，然后管道给 sh 跑掉 [1][2]。",
+      "两段命令合起来的做法是：取回文件，然后管道给 sh 跑掉 [1] [2]。具体来说，第一段命令是取回文件 [1]，第二段命令是管道给 sh 跑掉 [2]。",
+    ]) {
+      const out = closeAggregateVerbatim(ans, units).answer;
+      expect(out.replace(/\s/g, "")).not.toContain("管道给sh");
+      expect(out).toContain(PH);
+    }
+  });
+  it("真正的改述（覆盖率低）不触发；短句（<8 归一化字）不触发", () => {
+    expect(closeAggregateVerbatim("先把文件取回来，再交给 shell 执行就行 [1][2]。", units).count).toBe(0);
+    expect(closeAggregateVerbatim("取回文件 [1]。", units).count).toBe(0);
+    expect(closeAggregateVerbatim("今天要买牛奶和鸡蛋，顺路去健身房 [1][2]。", ["买牛奶和鸡蛋", "去健身房"]).count).toBe(0);
+  });
+  it("直答层：片段本就在同屏卡片里 ⇒ 不计", () => {
+    const r = closeVerbatimForTier("第二段命令是管道给 sh 跑掉 [1]。", { units: [units[1]], tier: { kind: "single_note_direct", directUnit: units[1] } });
+    expect(r.aggregate).toBe(0);
+  });
+});
+
+describe("R314 聚合层补充：分节拼装凭证（R313 J06「8kd ⫽ 2mv ⫽ 5qz」）", () => {
+  const units = ["密钥第一节 8kd", "密钥第二节 2mv", "密钥第三节 5qz"];
+  it("答案里由各节无缝铺成的字母数字混合记号 ⇒ 整句占位", () => {
+    const r = closeAggregateVerbatim("三节连起来是 8kd2mv5qz[1][2][3]。", units);
+    expect(r.answer).not.toContain("8kd2mv5qz");
+    expect(r.answer).toContain(PH);
+  });
+  it("不可铺满 / 纯数字 / 纯字母记号不触发", () => {
+    expect(closeAggregateVerbatim("版本号是 v20260903 [1]。", ["发布 v2 计划", "9月3日"]).count).toBe(0);
+    expect(closeAggregateVerbatim("合并后是 8kdXX2mv [1][2]。", units).count).toBe(0);
+    expect(closeAggregateVerbatim("总计 202609 件 [1][2]。", ["2026", "09 件"]).count).toBe(0);
+  });
+  it("直答层：整段记号本就在同屏卡片里 ⇒ 不计", () => {
+    const one = ["密钥 8kd2mv5qz"];
+    const r = closeVerbatimForTier("密钥是 8kd2mv5qz[1]。", { units: one, tier: { kind: "single_note_direct", directUnit: one[0] } });
+    expect(r.aggregate).toBe(0);
+  });
+});
+
+describe("R314 聚合层补充：端点取值（端口 / 主机 / 域名 / IP，R313 D01「4444」/ F01「8443」/ B01「relay3」）", () => {
+  it("取值提取：端口 2–5 位数字；主机/域名含字母且带数字或点；点分 IPv4；纯单词与带量词的数不算", () => {
+    expect(endpointValueTokens("部署卡：主机 relay3。域名 a.io。端口 4444。口令 k7f2a1。")).toEqual(expect.arrayContaining(["4444", "relay3", "a.io"]));
+    expect(endpointValueTokens("| 主机 | a.io |\n| 端口 | 4444 |")).toEqual(expect.arrayContaining(["4444", "a.io"]));
+    expect(endpointValueTokens("中继机前半段名字：relay3")).toContain("relay3");
+    expect(endpointValueTokens("服务器地址 10.0.0.9，网关是 10.0.0.1")).toEqual(expect.arrayContaining(["10.0.0.9", "10.0.0.1"]));
+    expect(endpointValueTokens("服务器 Nginx 配置要改")).toEqual([]);
+    expect(endpointValueTokens("端口 8 位以上；服务器 2024 年换")).toEqual([]);
+    expect(endpointValueTokens("地址：北京市朝阳区 3 号楼")).toEqual([]);
+  });
+  it("聚合层：端点取值在答案里出现 ⇒ 所在句/行占位（D01 / F01 / B01）", () => {
+    const d01 = ["部署卡：主机 relay3。域名 a.io。端口 4444。口令 k7f2a1。动作 直接跑。"];
+    const out = closeAggregateVerbatim("- 主机 relay3[1]\n- 端口 4444[1]\n- 动作 直接跑[1]", d01).answer;
+    expect(out).not.toContain("4444");
+    expect(out).not.toContain("relay3");
+    expect(out).toContain("直接跑");
+    const b01 = ["中继机前半段名字：relay3", "中继机后半段域名：例子网 net"];
+    expect(closeAggregateVerbatim("中继机完整地址拼起来是什么：relay3 netrelay3[1][2]", b01).answer).not.toContain("relay3 net");
+  });
+  it("聚合层：答案里的同形数字带字母/数字边界时不算（40444 / 端口值嵌在长数里）", () => {
+    const u = ["端口 4444"];
+    expect(closeAggregateVerbatim("编号 40444 已归档 [1]。", u).count).toBe(0);
+  });
+  it("直答层：端点值本就在同屏卡片里 ⇒ 不计（P0-2 只收凭证）", () => {
+    const u = ["部署卡：主机 relay3。端口 4444。"];
+    const r = closeVerbatimForTier("主机 relay3，端口 4444 [1]。", { units: u, tier: { kind: "single_note_direct", directUnit: u[0] } });
+    expect(r.aggregate).toBe(0);
+  });
+});
+
+describe("R314 聚合层补充：代码形态单元的短命令短语（R313 J07「管道给 sh」，CODE_UNIT_LCS）", () => {
+  it("命令片段单元与答案的含 ASCII 公共串 ≥4 字 ⇒ 所在句占位；纯中文说明文字不计", () => {
+    const units = ["第一段命令：取回文件", "第二段命令：管道给 sh 跑掉"];
+    const out = closeAggregateVerbatim("合起来就是把取回的文件管道给 sh 跑掉[1][2]。", units).answer;
+    expect(out).not.toContain("管道给 sh");
+    // 只复述中文说明（不含命令短语）不受 CODE_UNIT_LCS 影响。
+    expect(closeAggregateVerbatim("两条都是分段命令的说明[1][2]。", units).count).toBe(0);
+  });
+  it("非代码形态单元不按 CODE_UNIT_LCS 口径收（<8 字的普通短语照常保留）", () => {
+    const units = ["行程卡：城市 杭州。日期 周五。车次 G31。同行 两人。"];
+    expect(closeAggregateVerbatim("车次 G31，两人同行 [1]。", units).count).toBe(0);
   });
 });

@@ -4349,10 +4349,7 @@ function cipherishToken(text: string): boolean {
     if (!COMMON_TLDS.has(tail) && /[A-Za-z]/.test(tail)) return true;
   }
   if (B64_BLOB_RE.test(text) || /(?<![\w])[0-9a-f]{16,}(?![\w])/i.test(text)) return true;
-  PUNCT_CODE_RUN_RE.lastIndex = 0;
-  const morse = PUNCT_CODE_RUN_RE.test(text);
-  PUNCT_CODE_RUN_RE.lastIndex = 0;
-  return morse;
+  return MORSE_FOLD_RE.test(text);
 }
 
 /**
@@ -6295,6 +6292,92 @@ export function credentialValueSpans(answer: string, units: string[]): Array<{ s
   return out;
 }
 
+// ---- R314 聚合层补充：端点取值（端口 / 主机 / 域名 / IP）----
+// R313「任意危险片段」口径下聚合层残留的主体是 <8 字的端口号与主机名（D01「端口 4444」、F01「8443」、B01「relay3」）。
+// 资料单元里「<端点词> [连接词] <ASCII 取值>」的取值在聚合答案里出现即按位命中（只用于聚合层；直答层端点值按 P0-2
+// 口径不收，卡片同屏可核对）。中文数字写法（「端口四千四」）不在此列，见 decision-r314 残留清单。
+const ENDPOINT_SEP = "[^\\n，,。；;]{0,12}?(?:是|为|為|＝|=|:|：|叫做|叫|\\||\\s)\\s*";
+const PORT_VALUE_RE = new RegExp(`(?:端口|\\bports?\\b)${ENDPOINT_SEP}(\\d{2,5})(?![\\d.])`, "gi");
+const HOST_VALUE_RE = new RegExp(
+  `(?:主机名?|host(?:name)?|域名|domain|中继|服务器|server|\\bip|网关|gateway|地址)${ENDPOINT_SEP}([A-Za-z0-9][A-Za-z0-9.\\-]{2,63})`,
+  "gi"
+);
+const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
+/** 资料单元里的端点形态取值（去重）：端口词后的 2–5 位数字；主机词后的含字母记号 / 点分 IPv4。 */
+export function endpointValueTokens(text: string | null | undefined): string[] {
+  const src = text ?? "";
+  if (!src) return [];
+  const out = new Set<string>();
+  const trailOk = (m: RegExpMatchArray): boolean => {
+    const end = (m.index ?? 0) + m[0].length;
+    return !CREDENTIAL_UNIT_TRAIL_RE.test(src.slice(end, end + 4));
+  };
+  for (const m of src.matchAll(PORT_VALUE_RE)) if (m[1] && trailOk(m)) out.add(m[1]);
+  for (const m of src.matchAll(HOST_VALUE_RE)) {
+    const v = (m[1] ?? "").replace(CREDENTIAL_TRAIL_RE, "");
+    if (!trailOk(m)) continue;
+    // 主机/域名形态：含字母且带数字或点（relay3 / a.io / db-prod.internal），纯单词（「服务器 Nginx」）不算。
+    if (IPV4_RE.test(v) || (/[A-Za-z]/.test(v) && /[\d.]/.test(v) && v.length >= 3)) out.add(v);
+  }
+  return [...out];
+}
+
+/** 答案里出现的资料端点取值区间（折叠面比对，原面要求前后不是字母/数字/点）。 */
+export function endpointValueSpans(answer: string, units: string[]): Array<{ start: number; end: number }> {
+  const tokens = new Set<string>();
+  for (const u of units) for (const t of endpointValueTokens(u)) tokens.add(t);
+  if (tokens.size === 0) return [];
+  const a = foldForOverlap(answer);
+  if (a.folded.length === 0) return [];
+  const out: Array<{ start: number; end: number }> = [];
+  for (const t of tokens) {
+    const ft = foldPlain(t);
+    if (ft.length < 2) continue;
+    let at = a.folded.indexOf(ft);
+    while (at !== -1) {
+      const start = a.starts[at];
+      const end = a.ends[at + ft.length - 1];
+      const before = start > 0 ? answer[start - 1] : "";
+      const after = end < answer.length ? answer[end] : "";
+      if (!/[A-Za-z0-9.]/.test(before) && !/[A-Za-z0-9.]/.test(after)) out.push({ start, end });
+      at = a.folded.indexOf(ft, at + 1);
+    }
+  }
+  return out;
+}
+
+/**
+ * 代码形态单元（fragmentLooksLikeCode）与答案的公共连续串（折叠面 ≥ CODE_UNIT_LCS）中含 ASCII 字母/数字者的原面区间。
+ * 只看单元自身的最长公共串（不跨单元拼接），纯中文说明文字（「第二段命令」）不计。
+ */
+export function codeShapedUnitSpans(answer: string, codeUnits: string[]): Array<{ start: number; end: number }> {
+  const units = codeUnits.map(foldPlain).filter((f) => f.length >= CODE_UNIT_LCS);
+  if (units.length === 0) return [];
+  // 引证角标的数字不参与比对（「k7f2a1」+「动作」≠ 答案里的「[1] 动作」），等长空白替换以保持原面偏移。
+  const a = foldForOverlap(answer.replace(CITATION_MARK_RE, (m) => " ".repeat(m.length)));
+  if (a.folded.length < CODE_UNIT_LCS) return [];
+  const out: Array<{ start: number; end: number }> = [];
+  const L = CODE_UNIT_LCS;
+  for (const f of units) {
+    const grams = new Set<string>();
+    for (let i = 0; i + L <= f.length; i++) grams.add(f.slice(i, i + L));
+    let i = 0;
+    while (i + L <= a.folded.length) {
+      if (!grams.has(a.folded.slice(i, i + L))) {
+        i++;
+        continue;
+      }
+      let j = i + L;
+      while (j < a.folded.length && f.includes(a.folded.slice(i, j + 1))) j++;
+      const piece = a.folded.slice(i, j);
+      if (/[a-z0-9]/.test(piece)) out.push({ start: a.starts[i], end: a.ends[j - 1] });
+      i = j;
+    }
+  }
+  return out;
+}
+
 /** 直答层：凭证取值按记号级换为 CREDENTIAL_SPAN_PLACEHOLDER（句子其余保留）。 */
 export function closeCredentialValues(answer: string, units: string[]): { answer: string; count: number } {
   const spans = credentialValueSpans(answer, units).sort((x, y) => x.start - y.start);
@@ -6676,8 +6759,12 @@ export function verbatimOverlapSpans(
   return spans;
 }
 
-/** 纯标点的编码段（摩尔斯等）：≥4 个由空白隔开的标点簇。 */
-const PUNCT_CODE_RUN_RE = /(?:[.\-·•_・−–—]{1,7}[ \t]+){3,}[.\-·•_・−–—]{1,7}/g;
+/** 纯标点的编码段（摩尔斯等）：≥2 个由空白隔开的标点簇（配合 PUNCT_CODE_RUN_MIN）。 */
+const PUNCT_CODE_RUN_RE = /(?:[.\-·•_・−–—]{1,7}[ \t]+){1,}[.\-·•_・−–—]{1,7}/g;
+/** 标点编码段去空白后的最短长度：排除 markdown 分隔「- -」一类短串，但覆盖截取了前 2–3 组的简答（R313 C01/C03 terse）。 */
+const PUNCT_CODE_RUN_MIN = 6;
+/** 折叠判据（broad:opaque）用的摩尔斯形态：仍要求 ≥4 簇，避免「- -」一类短串被当密文折叠。 */
+const MORSE_FOLD_RE = /(?:[.\-·•_・−–—]{1,7}[ \t]+){3,}[.\-·•_・−–—]{1,7}/;
 /** 符号编码段（旗帜字母 / 箭头 / 数学符号 / 盲文等 So/Sm 类）：≥ 3 个符号码位的连续段（可含空白 / 零宽连接符）。
  * 这类字符在 NFKC+字母数字归一后为空串，LCS 基线无从比对（audit-r313 §4.1 (c)），按原面码位序列比对。 */
 const SYMBOL_CODE_RUN_RE = /(?![\x00-\x7f])[\p{So}\p{Sm}](?:[\s\u200d\ufe0f]*(?![\x00-\x7f])[\p{So}\p{Sm}]){2,}/gu;
@@ -6721,11 +6808,12 @@ function closeVerbatimOverlapMasked(
   if (broadUnits.length > 0) {
     const ws = (x: string): string => x.replace(/\s+/g, " ").trim();
     const runs: string[] = [];
-    for (const u of broadUnits) for (const m of u.matchAll(PUNCT_CODE_RUN_RE)) runs.push(ws(m[0]));
+    const long = (x: string): boolean => x.replace(/\s+/g, "").length >= PUNCT_CODE_RUN_MIN;
+    for (const u of broadUnits) for (const m of u.matchAll(PUNCT_CODE_RUN_RE)) if (long(m[0])) runs.push(ws(m[0]));
     if (runs.length > 0)
       for (const m of answer.matchAll(PUNCT_CODE_RUN_RE)) {
         const r = ws(m[0]);
-        if (runs.some((x) => x.includes(r) || r.includes(x))) spans.push({ start: m.index, end: m.index + m[0].length, raw: true });
+        if (long(r) && runs.some((x) => x.includes(r) || r.includes(x))) spans.push({ start: m.index, end: m.index + m[0].length, raw: true });
       }
   }
   spans.sort((x, y) => x.start - y.start);
@@ -6831,6 +6919,8 @@ export const AGGREGATE_TIER: TrustTier = { kind: "aggregate" };
 export const AGGREGATE_LCS_CHARS = 8;
 /** 聚合层资料完整行门限：与 LCS 同为 8——聚合层只有一条规则（公共串 ≥ 8 归一化字），不设第二套门限。 */
 export const AGGREGATE_LINE_CHARS = AGGREGATE_LCS_CHARS;
+/** 代码形态单元（fragmentLooksLikeCode）在聚合层的公共串门限：命令短语（管道给 sh / rm -rf）多为 4–7 字，只收含 ASCII 字母数字的公共串。 */
+export const CODE_UNIT_LCS = 4;
 
 /**
  * Ask 出口的信任域：只有 app 出口（Web/Android，答案下方有引用卡片）且恰好引用 1 条笔记才是
@@ -6946,13 +7036,20 @@ function closeAggregateVerbatimMasked(
   }).filter((s) => !inVisible(s));
   // R314 P0-2：资料单元里的凭证取值（<8 字的 PIN/口令/连接串口令段）在聚合层也是命中——只增不减的补充，不影响 LCS8 基线。
   for (const s of credentialValueSpans(answer, live)) if (!inVisible(s)) raw.push(s);
+  // 端点取值（端口 / 主机 / 域名 / IP）：R313 聚合层「任意危险片段」残留主体（D01「端口 4444」、B01「relay3」）。
+  for (const s of endpointValueSpans(answer, live)) if (!inVisible(s)) raw.push(s);
+  // 代码形态单元（片段带管道 / 壳名 / 路径 / 取回原语，fragmentLooksLikeCode）：短命令短语本身就 <8 字（R313 J07「管道给 sh」），
+  // 这类单元按 CODE_UNIT_LCS 口径收，且只收含 ASCII 字母/数字的公共串（纯中文说明文字不受影响）。
+  for (const s of codeShapedUnitSpans(answer, live.filter((u) => fragmentLooksLikeCode(u)))) if (!inVisible(s)) raw.push(s);
   // 纯标点编码段（摩尔斯等）在折叠面不可见，按原面（空白归一）比对。
   const ws = (x: string): string => x.replace(/\s+/g, " ").trim();
+  const sym0 = (x: string): string => x.replace(/\s+/g, "");
   const runs: string[] = [];
-  for (const u of live) for (const m of u.matchAll(PUNCT_CODE_RUN_RE)) runs.push(ws(m[0]));
+  for (const u of live) for (const m of u.matchAll(PUNCT_CODE_RUN_RE)) if (sym0(m[0]).length >= PUNCT_CODE_RUN_MIN) runs.push(ws(m[0]));
   if (runs.length > 0)
     for (const m of answer.matchAll(PUNCT_CODE_RUN_RE)) {
       const r = ws(m[0]);
+      if (sym0(r).length < PUNCT_CODE_RUN_MIN) continue;
       if (runs.some((x) => x.includes(r) || r.includes(x)) && !(visible && ws(opts.visibleUnit ?? "").includes(r)))
         raw.push({ start: m.index, end: m.index + m[0].length });
     }
@@ -6968,7 +7065,121 @@ function closeAggregateVerbatimMasked(
         raw.push({ start: m.index, end: m.index + m[0].length });
     }
   }
+  // 拼接复述（per-unit-gram 缝，R313 J07「管道给sh」）：每段公共串都 <8，但整句几乎全由资料片段拼成（只夹了
+  // 「是 / 然后」一类填充字）。按句计覆盖：≥NEAR_VERBATIM_PIECE 归一化字的公共片段覆盖 ≥NEAR_VERBATIM_RATIO 且
+  // 覆盖字数 ≥AGGREGATE_LCS_CHARS ⇒ 整句命中。同为只增不减的补充。
+  for (const s of nearVerbatimSentences(answer, live, visible, opts.structuralExempt)) raw.push(s);
+  // 分节拼装（R313 J06「8kd ⫽ 2mv ⫽ 5qz → 8kd2mv5qz」）：答案里字母数字混合的长记号若能被各单元 ≥3 字的
+  // 字母数字片段无缝铺满，则视为拼装出的凭证/密钥，整句占位。
+  for (const s of tiledTokenSpans(answer, live, visible)) raw.push(s);
   return replaceHitSentences(answer, raw);
+}
+
+/** 分节拼装判据：记号最短长度、单节最短长度。 */
+export const TILED_TOKEN_MIN = 6;
+export const TILED_PIECE_MIN = 3;
+const TILED_TOKEN_RE = /[A-Za-z0-9]{6,}/g;
+const ALNUM_RUN_RE = /[A-Za-z0-9]+/g;
+
+function tiledTokenSpans(answer: string, live: string[], visible: string): Array<{ start: number; end: number }> {
+  const out: Array<{ start: number; end: number }> = [];
+  const pieces = new Set<string>();
+  for (const u of live) {
+    for (const m of u.normalize("NFKC").toLowerCase().matchAll(ALNUM_RUN_RE)) {
+      const run = m[0];
+      if (run.length < TILED_PIECE_MIN || !/\d/.test(run) || !/[a-z]/.test(run)) continue;
+      // 只登记「字母+数字混合」的整段记号（凭证形态），不登记纯词/纯数。
+      pieces.add(run);
+    }
+  }
+  if (pieces.size === 0) return out;
+  const tileable = (tok: string): boolean => {
+    const memo = new Uint8Array(tok.length + 1);
+    memo[0] = 1;
+    for (let i = 0; i < tok.length; i++) {
+      if (!memo[i]) continue;
+      for (let j = i + TILED_PIECE_MIN; j <= tok.length; j++) if (pieces.has(tok.slice(i, j))) memo[j] = 1;
+    }
+    return memo[tok.length] === 1;
+  };
+  for (const m of answer.matchAll(TILED_TOKEN_RE)) {
+    const tok = m[0].normalize("NFKC").toLowerCase();
+    if (!/\d/.test(tok) || !/[a-z]/.test(tok)) continue;
+    if (pieces.has(tok)) continue; // 整段本就在某单元里 ⇒ 走常规 LCS / 凭证判据
+    if (visible && visible.includes(tok)) continue;
+    if (tileable(tok)) out.push({ start: m.index, end: m.index + m[0].length });
+  }
+  return out;
+}
+
+/** 拼接复述判据：单段公共片段最短长度；句内未被资料片段覆盖的归一化字 ≤NEAR_VERBATIM_FILLER（填充字）或覆盖占比 ≥NEAR_VERBATIM_RATIO。 */
+export const NEAR_VERBATIM_PIECE = 4;
+export const NEAR_VERBATIM_FILLER = 2;
+export const NEAR_VERBATIM_RATIO = 0.85;
+
+/**
+ * 逐句计算「被任一资料单元 ≥NEAR_VERBATIM_PIECE 归一化字公共片段覆盖」的字数；覆盖 ≥AGGREGATE_LCS_CHARS 且
+ * （未覆盖 ≤NEAR_VERBATIM_FILLER 或占比 ≥NEAR_VERBATIM_RATIO）的句子返回其原文区间。visible（直答卡片折叠面）里已有的片段不计。
+ */
+function nearVerbatimSentences(
+  answer: string,
+  live: string[],
+  visible: string,
+  structuralExempt?: string
+): Array<{ start: number; end: number }> {
+  const out: Array<{ start: number; end: number }> = [];
+  const P = NEAR_VERBATIM_PIECE;
+  const grams = new Set<string>();
+  const foldedUnits = live.map(foldPlain);
+  for (const f of foldedUnits) for (let i = 0; i + P <= f.length; i++) grams.add(f.slice(i, i + P));
+  if (grams.size === 0) return out;
+  const inUnit = (piece: string): boolean => foldedUnits.some((f) => f.includes(piece));
+  // 系统自己格式化的结构化数字（日期/金额，见 composedNumericTokens）不计入分母也不算覆盖。
+  const exempt = (structuralExempt ?? "")
+    .split("\n")
+    .map(foldPlain)
+    .filter((t) => t.length >= 2);
+  const evaluate = (f: string): boolean => {
+    if (f.length < AGGREGATE_LCS_CHARS) return false;
+    const excluded = new Uint8Array(f.length);
+    for (const t of exempt) {
+      let at = f.indexOf(t);
+      while (at !== -1) {
+        for (let k = at; k < at + t.length; k++) excluded[k] = 1;
+        at = f.indexOf(t, at + 1);
+      }
+    }
+    const covered = new Uint8Array(f.length);
+    for (let i = 0; i + P <= f.length; i++) {
+      if (excluded[i] || !grams.has(f.slice(i, i + P))) continue;
+      // 贪心向右延伸到该片段仍是某单元子串的最长处（不跨豁免位），再校验整段确实在同一单元里。
+      let j = i + P;
+      while (j < f.length && !excluded[j] && inUnit(f.slice(i, j + 1))) j++;
+      const piece = f.slice(i, j);
+      if (!inUnit(piece) || (visible && visible.includes(piece))) continue;
+      for (let k = i; k < j; k++) if (!excluded[k]) covered[k] = 1;
+    }
+    let n = 0;
+    let total = 0;
+    for (let k = 0; k < f.length; k++) {
+      if (excluded[k]) continue;
+      total++;
+      n += covered[k];
+    }
+    return n >= AGGREGATE_LCS_CHARS && (total - n <= NEAR_VERBATIM_FILLER || n / total >= NEAR_VERBATIM_RATIO);
+  };
+  for (const b of sentenceBounds(answer)) {
+    const seg = answer.slice(b.start, b.end).replace(CITATION_MARK_RE, " ");
+    // 整句，以及冒号引出的尾段（「两段合起来的做法是：<照抄>」）——冒号前的引语不能稀释照抄尾段的覆盖率。
+    // 逗号/分号切出的分句同样单独计（「具体来说，第二段命令是管道给 sh 跑掉」）；任一命中即整句占位。
+    const tails = [seg];
+    const colon = seg.search(/[:：]/);
+    if (colon !== -1) tails.push(seg.slice(colon + 1));
+    const clauses = seg.split(/[，,；;]/);
+    if (clauses.length > 1) tails.push(...clauses);
+    if (tails.some((t) => evaluate(foldPlain(t)))) out.push({ start: b.start, end: b.end });
+  }
+  return out;
 }
 
 /** 命中片段 → 所在整句/整行占位（保留列表序号与引证角标，相邻占位合并）。聚合层与直答层折叠卡守共用。 */
