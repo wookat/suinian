@@ -45,6 +45,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { downloadNoteFile, refetchLink, retryMedia } from "@/lib/api"
 import { NoteAudio, NoteImage, isAudioAttachment, isImageAttachment } from "@/components/note-media"
 import { ExecGuard } from "@/components/exec-guard"
+import { COPY_CONFIRM } from "@/lib/copy-confirm"
 import { cn, formatTime, noteFoldLevel, parseServerTime, parseDue, dueHasTime, titleEchoesContent } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
 
@@ -1173,12 +1174,8 @@ export function NoteCard({
       />
       <ConfirmDialog
         open={confirmCopyOpen}
-        title={foldLevel === "strict" ? "复制含可执行命令的内容？" : "复制命令/代码形态内容？"}
-        description={
-          foldLevel === "strict"
-            ? "这条笔记含会下载执行远程代码或建立外连的命令。复制后请勿直接粘贴到终端执行，先核对来源。"
-            : "这条笔记含命令行或代码形态内容（可能只是你自己的备忘）。复制后请先核对参数与来源，再决定是否执行。"
-        }
+        title={COPY_CONFIRM[foldLevel ?? "broad"].title}
+        description={COPY_CONFIRM[foldLevel ?? "broad"].description}
         confirmLabel="仍要复制"
         onConfirm={() => {
           setConfirmCopyOpen(false)

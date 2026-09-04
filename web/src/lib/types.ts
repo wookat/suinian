@@ -54,6 +54,8 @@ export type FoldReason =
   | "broad:endpoint"
   | "broad:fetch"
   | "broad:code"
+  | "broad:credential"
+  | "broad:destructive"
   | "broad:opaque"
   | "broad:obfuscated"
   | "broad:error"

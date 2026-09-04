@@ -116,6 +116,15 @@ describe("guardAskAnswer", () => {
     expect(g.answer).toContain("AMD-EPYC-7742");
     expect(g.markerScrubbed).toBe(false);
   });
+  it("资料派生 emoji/箭头被剔单独回报 glyphScrubbed，不算 marker 剥除", () => {
+    const g = guardAskAnswer("动线是门口→客厅→阳台，心情 🌤️ [1]。", {
+      dataText: "动线：门口→客厅→阳台，扫地机按这个跑\n今天心情 🌤️🙂",
+      question: "扫地机动线怎么走？",
+    });
+    expect(g.answer).not.toContain("→");
+    expect(g.glyphScrubbed).toBe(true);
+    expect(g.markerScrubbed).toBe(false);
+  });
   it("干净答案原样通过", () => {
     const g = guardAskAnswer("上个月共支出 ¥103 [1][2]。", { dataText: "买书 58\n买书 45", question: "买书花了多少？" });
     expect(g.answer).toBe("上个月共支出 ¥103 [1][2]。");

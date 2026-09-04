@@ -19,7 +19,7 @@ import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolve
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
-import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads, detachZeroSignalThreadMembers } from "./threads";
+import { clusterNote, refreshThreads, reconcileThreads, mergeDuplicateThreads, sweepRecentDuplicateThreads, detachZeroSignalThreadMembers, retitleUntitledThreads } from "./threads";
 import {
   createRebuildJob,
   getActiveThreadJob,
@@ -247,7 +247,8 @@ type AskProduced =
 
 /**
  * R312：服务端按结构化列组装的确定性记账/极值答案（路由自身置的布尔标记，客户端不可注入）：笔记原文只以
- * ask.ts `ledgerLabel` 进入且组装时已逐条按聚合口径收口，出口不再对整答做资料重合复核（金额/日期数字与笔记巧合）。
+ * ask.ts `ledgerLabel` 进入且组装时已逐条按聚合口径收口。R314 P2（audit-r313 §4.5）：出口不再因此跳过整答收口——
+ * 按结构化数值 / 系统标记 / 角标切段后逐段走聚合口径收口（`closeComposedAnswer`），系统格式化的日期/金额不随段被抹。
  * 其它确定性路由（计数/主题概括/列举）仍走完整分层收口。
  */
 const LEDGER_COMPOSED_KEY_RE = /^(?:finance_[a-z_]+|ledger_row_extreme|extreme_aggregate)$/;
@@ -305,6 +306,7 @@ app.use("/api/ask", async (c, next) => {
       if (typeof body.answer !== "string") return { kind: "passthrough", res: c.res };
       const preFinalized = body.guard_finalized === true;
       if (preFinalized) delete body.guard_finalized;
+      const systemHint = takeSystemHint(body);
       const bodyNotes = Array.isArray(body.notes) ? (body.notes as Array<Record<string, unknown>>) : [];
       const noteUnits = bodyNotes.map(
         (n) => `${typeof n.title === "string" ? n.title : ""}\n${typeof n.content === "string" ? n.content : ""}`
@@ -329,7 +331,10 @@ app.use("/api/ask", async (c, next) => {
             tier: detTier,
             composedLabels: ledgerComposed,
           });
-      if (ledgerComposed) fin.verbatim_closed_spans = body.answer.split(VERBATIM_SPAN_PLACEHOLDER).length - 1;
+      // 记账路由：组装时 ledgerLabel 已收的标签级占位（已在 body.answer 里，不在资料单元中，出口收口不会重计）
+      // 与出口整答收口的新增占位合计为出口统计。
+      const labelClosed = ledgerComposed ? body.answer.split(VERBATIM_SPAN_PLACEHOLDER).length - 1 : 0;
+      if (labelClosed > 0) fin.verbatim_closed_spans = (fin.verbatim_closed_spans ?? 0) + labelClosed;
       if (!preFinalized) {
         if (fin.isolated) console.log("ask: note-embedded instruction isolated at answer exit");
         else if (fin.changed) console.log(`ask: deterministic answer rewritten at exit (${fin.reason ?? "link_scrub"})`);
@@ -342,7 +347,7 @@ app.use("/api/ask", async (c, next) => {
         isolatedOut && !preFinalized && !hasGuardControlMark(fin.answer) ? `${INSTRUCTION_ISOLATED_MARK}\n${fin.answer}` : fin.answer;
       outBody = {
         ...body,
-        answer: finAnswer,
+        answer: finAnswer + systemHint,
         ...(preFinalized ? {} : { trust_tier: detTier.kind, verbatim_closed_spans: fin.verbatim_closed_spans ?? 0 }),
         ...(isolatedOut ? { instruction_isolated: true } : {}),
       };
@@ -3479,6 +3484,19 @@ async function countSensitiveHits(env: Env, userId: string, terms: string[]): Pr
  * 只要账号确有加密敏感笔记，就给同一套解锁/搜索指引（凭据问法仅措辞更
  * 具体）。只输出计数与入口，绝不露标题/正文/凭据。
  */
+/**
+ * 系统自产的尾部提示（敏感笔记指引）带外下发：不进出口收口/隔离判定（它不含笔记内容，
+ * 只含固定文案与问句自身的关键词），由唯一出口在收口完成后原样附回。
+ */
+function systemHintField(hint: string): { system_hint?: string } {
+  return hint ? { system_hint: hint } : {};
+}
+function takeSystemHint(body: Record<string, unknown>): string {
+  const hint = typeof body.system_hint === "string" ? body.system_hint : "";
+  delete body.system_hint;
+  return hint;
+}
+
 async function sensitiveNoRecallHint(env: Env, userId: string, terms: string[], question: string): Promise<string> {
   const hits = await countSensitiveHits(env, userId, terms);
   const line = sensitiveHintLine(hits, terms);
@@ -4647,7 +4665,7 @@ app.post("/api/ask", async (c) => {
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, oorById.get(r.note_id)!))
     );
-    return c.json({ answer: answer + twHint, references, notes: refNotes, no_answer: true });
+    return c.json({ answer, references, notes: refNotes, no_answer: true, ...systemHintField(twHint) });
   }
   // 元问题保留旧的放宽行为（自我回顾类允许跨窗归纳，回答会带日期）
   if (notes.length === 0 && outOfRange.length > 0) {
@@ -4797,10 +4815,11 @@ app.post("/api/ask", async (c) => {
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
     );
     return c.json({
-      answer: answer + zeroHint,
+      answer,
       references,
       notes: refNotes,
       no_answer: true,
+      ...systemHintField(zeroHint),
       ...(held ? { instruction_isolated: true } : {}),
     });
   }
@@ -4823,11 +4842,12 @@ app.post("/api/ask", async (c) => {
       const relById = new Map(relSuggestions.map((n) => [n.id, n]));
       const refNotes = await Promise.all(references.map((r) => noteToJsonDecrypted(c.env, relById.get(r.note_id)!)));
       return c.json({
-        answer: answer + relHint,
+        answer,
         references,
         notes: refNotes,
         no_answer: true,
         relation_guard: true,
+        ...systemHintField(relHint),
         ...(held ? { instruction_isolated: true } : {}),
       });
     }
@@ -5146,8 +5166,9 @@ app.post("/api/ask", async (c) => {
     // span 剥除对「资料无任何指令/危险执行意图」的纯善意资料只是 verbatim
     // 改道（原文走笔记卡片），不是安全隔离，不置 instruction_isolated；
     // 资料含 demand 或可隔离内容时维持 fail-closed 置位不变。
-    const spanScrubIsIsolation =
-      g.spanScrubbed &&
+    // emoji/符号字符剔除（防水印）同口径：善意笔记里的 emoji/箭头被剔不单独构成隔离。
+    const scrubIsIsolation =
+      (g.spanScrubbed || g.glyphScrubbed) &&
       ((demands?.length ?? 0) > 0 ||
         demands === null ||
         echoedDataHasIsolatableContent(
@@ -5157,11 +5178,13 @@ app.post("/api/ask", async (c) => {
         ));
     if (g.conductScrubbed) isolateGen("guard:conduct");
     if (g.markerScrubbed) isolateGen("guard:marker");
-    if (spanScrubIsIsolation) isolateGen("guard:span");
+    if (g.glyphScrubbed && scrubIsIsolation) isolateGen("guard:glyph");
+    if (g.spanScrubbed && scrubIsIsolation) isolateGen("guard:span");
     if (g.directiveScrubbed) isolateGen("guard:directive");
     if (g.linkScrubbed) console.log("ask: external link scrubbed from answer");
     if (g.conductScrubbed) console.log("ask: unsolicited conduct scrubbed from answer");
     if (g.markerScrubbed) console.log("ask: data-derived marker scrubbed from answer");
+    if (g.glyphScrubbed) console.log("ask: data-derived glyph scrubbed from answer");
     if (g.spanScrubbed) console.log("ask: data-derived span scrubbed from answer");
     if (g.directiveScrubbed) console.log("ask: directive-demanded text scrubbed from answer");
     // R274（audit-r273 P1-2）：护栏剥空不再谎称「没找到」（与检索空不可区分，
@@ -5382,10 +5405,11 @@ app.post("/api/ask", async (c) => {
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
     );
     return {
-      answer: noAnswer + hint,
+      answer: noAnswer,
       references,
       notes: refNotes,
       no_answer: true,
+      ...systemHintField(hint),
       ...(held ? { instruction_isolated: true } : {}),
     };
   }
@@ -5652,6 +5676,7 @@ app.post("/api/ask", async (c) => {
   };
 
   const finalizeGenerationBody = async (body: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const systemHint = takeSystemHint(body);
     if (typeof body.answer !== "string") return { ...body, guard_finalized: true };
     const cls =
       execPrewarm && execPrewarm.text === body.answer
@@ -5696,7 +5721,7 @@ app.post("/api/ask", async (c) => {
     const answerOut = isolated && !hasGuardControlMark(fin.answer) ? `${INSTRUCTION_ISOLATED_MARK}\n${fin.answer}` : fin.answer;
     return {
       ...bodyOut,
-      answer: answerOut,
+      answer: answerOut + systemHint,
       guard_finalized: true,
       trust_tier: tier.kind,
       verbatim_closed_spans: fin.verbatim_closed_spans ?? 0,
@@ -6745,6 +6770,8 @@ export default {
       ctx.waitUntil(sweepRecentDuplicateThreads(env));
       // resume queued/stale async rebuild jobs (survives the request-side slice dying)
       ctx.waitUntil(resumeThreadJobs(env));
+      // R314 P1-4: re-title threads still 「未命名线索」 after rebuild/cluster summaries failed
+      ctx.waitUntil(retitleUntitledThreads(env));
       // web push: todo due reminders (at most once per todo) + daily review push (once per user per local day)
       ctx.waitUntil(sweepTodoReminders(env));
       ctx.waitUntil(sweepDailyReviewPush(env));
