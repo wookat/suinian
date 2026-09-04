@@ -6230,6 +6230,8 @@ const CREDENTIAL_VALUE_RE = new RegExp(
   "gi"
 );
 const CONNECTION_STRING_PW_RE = /[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:([^\s@/]{3,64})@/gi;
+// 无凭证词的登录句式（R313 J27「用 tr7q92x 登录后」）：取值须字母+数字/符号混合且 ≥ 6 字，免误收「用 iPhone 登录」。
+const LOGIN_VALUE_RE = /(?:用|以|凭|使用|with)\s*([A-Za-z0-9!@#$%^&*_+\-=./?~{}|]{6,64})\s*(?:登录|登陆|登入|解锁|认证|鉴权|连上|连接|进去|to log ?in|to auth)/gi;
 const CREDENTIAL_KV_RE = /\b(?:password|passwd|pwd|pass|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\s*[=:]\s*["']?([A-Za-z0-9!@#$%^&*_+\-=./?~{}|]{4,64})/gi;
 /** 取值后紧跟单位/量词 ⇒ 是数量不是凭证（「密码 8 位以上」「密钥 2024 年更换」）。 */
 const CREDENTIAL_UNIT_TRAIL_RE = /^[ \t]*(?:年|月|日|号|位|天|个|次|元|块|分|秒|小时|点|%|周|字|行|条|页)/;
@@ -6260,6 +6262,10 @@ export function credentialValueTokens(text: string | null | undefined): string[]
     consider(raw, src.slice(end, end + 4));
   }
   for (const m of src.matchAll(CONNECTION_STRING_PW_RE)) if (m[1]) out.add(m[1]);
+  for (const m of src.matchAll(LOGIN_VALUE_RE)) {
+    const v = (m[1] ?? "").replace(CREDENTIAL_TRAIL_RE, "");
+    if (/[A-Za-z]/.test(v) && /[\d!@#$%^&*_+\-=./?~{}|]/.test(v) && !/^[A-Za-z]+\d{1,2}$/.test(v)) out.add(v);
+  }
   for (const m of src.matchAll(CREDENTIAL_KV_RE)) {
     const raw = m[1] ?? "";
     const end = (m.index ?? 0) + m[0].length;
@@ -6295,7 +6301,8 @@ export function credentialValueSpans(answer: string, units: string[]): Array<{ s
 // ---- R314 聚合层补充：端点取值（端口 / 主机 / 域名 / IP）----
 // R313「任意危险片段」口径下聚合层残留的主体是 <8 字的端口号与主机名（D01「端口 4444」、F01「8443」、B01「relay3」）。
 // 资料单元里「<端点词> [连接词] <ASCII 取值>」的取值在聚合答案里出现即按位命中（只用于聚合层；直答层端点值按 P0-2
-// 口径不收，卡片同屏可核对）。中文数字写法（「端口四千四」）不在此列，见 decision-r314 残留清单。
+// 口径不收，卡片同屏可核对）。中文数字/谐音写法（「端口四千四」「主机叫中继三」「域名是例子点网」）按「端点词 + 连接词 +
+// 含中文数字或「点」的 2–8 字汉字串」取值（R313 盲测 G01/G03）。
 const ENDPOINT_SEP = "[^\\n，,。；;]{0,12}?(?:是|为|為|＝|=|:|：|叫做|叫|\\||\\s)\\s*";
 const PORT_VALUE_RE = new RegExp(`(?:端口|\\bports?\\b)${ENDPOINT_SEP}(\\d{2,5})(?![\\d.])`, "gi");
 const HOST_VALUE_RE = new RegExp(
@@ -6303,6 +6310,8 @@ const HOST_VALUE_RE = new RegExp(
   "gi"
 );
 const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+const CN_ENDPOINT_VALUE_RE = /(?:端口|主机名?|域名|中继|服务器|网关|地址)(?:名|号)?(?:是|为|為|叫做|叫|：|:|\s)*([\u4e00-\u9fff]{2,8})/g;
+const CN_NUMERAL_RE = /[零〇一二三四五六七八九十百千万两点杠]/;
 
 /** 资料单元里的端点形态取值（去重）：端口词后的 2–5 位数字；主机词后的含字母记号 / 点分 IPv4。 */
 export function endpointValueTokens(text: string | null | undefined): string[] {
@@ -6319,6 +6328,10 @@ export function endpointValueTokens(text: string | null | undefined): string[] {
     if (!trailOk(m)) continue;
     // 主机/域名形态：含字母且带数字或点（relay3 / a.io / db-prod.internal），纯单词（「服务器 Nginx」）不算。
     if (IPV4_RE.test(v) || (/[A-Za-z]/.test(v) && /[\d.]/.test(v) && v.length >= 3)) out.add(v);
+  }
+  for (const m of src.matchAll(CN_ENDPOINT_VALUE_RE)) {
+    const v = m[1] ?? "";
+    if (CN_NUMERAL_RE.test(v) && !/^(?:是|为|叫)/.test(v)) out.add(v);
   }
   return [...out];
 }
@@ -7004,7 +7017,7 @@ const CITATION_MARK_RE = /[[［]\d{1,2}[\]］]/g;
 export function closeAggregateVerbatim(
   answer: string,
   units: string[],
-  opts: { visibleUnit?: string; structuralExempt?: string } = {}
+  opts: { visibleUnit?: string } = {}
 ): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
   const live = units.filter((u) => typeof u === "string" && u.trim().length > 0);
   if (live.length === 0 || !answer) return { answer, count: 0, spans: [] };
@@ -7017,7 +7030,7 @@ export function closeAggregateVerbatim(
 function closeAggregateVerbatimMasked(
   answer: string,
   live: string[],
-  opts: { visibleUnit?: string; structuralExempt?: string }
+  opts: { visibleUnit?: string }
 ): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
   // 单笔记直答层：命中片段若本身就出现在同屏引用卡片的那条笔记里（其它单元只是重复它——图谱三元组的实体名、
   // 分片单元、内容相近的未引用笔记），收口对攻击者无收益，不计。
@@ -7031,8 +7044,6 @@ function closeAggregateVerbatimMasked(
     lcs: AGGREGATE_LCS_CHARS,
     lineMin: AGGREGATE_LINE_CHARS,
     pieces: true,
-    // 聚合层没有问句豁免；structuralExempt 只由确定性记账路由传入（系统自己格式化的日期/金额，见 composedNumericTokens）。
-    exemptText: opts.structuralExempt,
   }).filter((s) => !inVisible(s));
   // R314 P0-2：资料单元里的凭证取值（<8 字的 PIN/口令/连接串口令段）在聚合层也是命中——只增不减的补充，不影响 LCS8 基线。
   for (const s of credentialValueSpans(answer, live)) if (!inVisible(s)) raw.push(s);
@@ -7068,7 +7079,7 @@ function closeAggregateVerbatimMasked(
   // 拼接复述（per-unit-gram 缝，R313 J07「管道给sh」）：每段公共串都 <8，但整句几乎全由资料片段拼成（只夹了
   // 「是 / 然后」一类填充字）。按句计覆盖：≥NEAR_VERBATIM_PIECE 归一化字的公共片段覆盖 ≥NEAR_VERBATIM_RATIO 且
   // 覆盖字数 ≥AGGREGATE_LCS_CHARS ⇒ 整句命中。同为只增不减的补充。
-  for (const s of nearVerbatimSentences(answer, live, visible, opts.structuralExempt)) raw.push(s);
+  for (const s of nearVerbatimSentences(answer, live, visible)) raw.push(s);
   // 分节拼装（R313 J06「8kd ⫽ 2mv ⫽ 5qz → 8kd2mv5qz」）：答案里字母数字混合的长记号若能被各单元 ≥3 字的
   // 字母数字片段无缝铺满，则视为拼装出的凭证/密钥，整句占位。
   for (const s of tiledTokenSpans(answer, live, visible)) raw.push(s);
@@ -7121,12 +7132,7 @@ export const NEAR_VERBATIM_RATIO = 0.85;
  * 逐句计算「被任一资料单元 ≥NEAR_VERBATIM_PIECE 归一化字公共片段覆盖」的字数；覆盖 ≥AGGREGATE_LCS_CHARS 且
  * （未覆盖 ≤NEAR_VERBATIM_FILLER 或占比 ≥NEAR_VERBATIM_RATIO）的句子返回其原文区间。visible（直答卡片折叠面）里已有的片段不计。
  */
-function nearVerbatimSentences(
-  answer: string,
-  live: string[],
-  visible: string,
-  structuralExempt?: string
-): Array<{ start: number; end: number }> {
+function nearVerbatimSentences(answer: string, live: string[], visible: string): Array<{ start: number; end: number }> {
   const out: Array<{ start: number; end: number }> = [];
   const P = NEAR_VERBATIM_PIECE;
   const grams = new Set<string>();
@@ -7134,39 +7140,21 @@ function nearVerbatimSentences(
   for (const f of foldedUnits) for (let i = 0; i + P <= f.length; i++) grams.add(f.slice(i, i + P));
   if (grams.size === 0) return out;
   const inUnit = (piece: string): boolean => foldedUnits.some((f) => f.includes(piece));
-  // 系统自己格式化的结构化数字（日期/金额，见 composedNumericTokens）不计入分母也不算覆盖。
-  const exempt = (structuralExempt ?? "")
-    .split("\n")
-    .map(foldPlain)
-    .filter((t) => t.length >= 2);
   const evaluate = (f: string): boolean => {
     if (f.length < AGGREGATE_LCS_CHARS) return false;
-    const excluded = new Uint8Array(f.length);
-    for (const t of exempt) {
-      let at = f.indexOf(t);
-      while (at !== -1) {
-        for (let k = at; k < at + t.length; k++) excluded[k] = 1;
-        at = f.indexOf(t, at + 1);
-      }
-    }
     const covered = new Uint8Array(f.length);
     for (let i = 0; i + P <= f.length; i++) {
-      if (excluded[i] || !grams.has(f.slice(i, i + P))) continue;
-      // 贪心向右延伸到该片段仍是某单元子串的最长处（不跨豁免位），再校验整段确实在同一单元里。
+      if (!grams.has(f.slice(i, i + P))) continue;
+      // 贪心向右延伸到该片段仍是某单元子串的最长处，再校验整段确实在同一单元里。
       let j = i + P;
-      while (j < f.length && !excluded[j] && inUnit(f.slice(i, j + 1))) j++;
+      while (j < f.length && inUnit(f.slice(i, j + 1))) j++;
       const piece = f.slice(i, j);
       if (!inUnit(piece) || (visible && visible.includes(piece))) continue;
-      for (let k = i; k < j; k++) if (!excluded[k]) covered[k] = 1;
+      for (let k = i; k < j; k++) covered[k] = 1;
     }
     let n = 0;
-    let total = 0;
-    for (let k = 0; k < f.length; k++) {
-      if (excluded[k]) continue;
-      total++;
-      n += covered[k];
-    }
-    return n >= AGGREGATE_LCS_CHARS && (total - n <= NEAR_VERBATIM_FILLER || n / total >= NEAR_VERBATIM_RATIO);
+    for (let k = 0; k < f.length; k++) n += covered[k];
+    return n >= AGGREGATE_LCS_CHARS && (f.length - n <= NEAR_VERBATIM_FILLER || n / f.length >= NEAR_VERBATIM_RATIO);
   };
   for (const b of sentenceBounds(answer)) {
     const seg = answer.slice(b.start, b.end).replace(CITATION_MARK_RE, " ");
@@ -7232,12 +7220,12 @@ function replaceHitSentences(
  */
 export function closeVerbatimForTier(
   answer: string,
-  opts: { units: string[]; execFragmentUnits?: string[]; tier?: TrustTier; exemptText?: string; structuralExempt?: string }
+  opts: { units: string[]; execFragmentUnits?: string[]; tier?: TrustTier; exemptText?: string }
 ): { answer: string; count: number; aggregate: number } {
   const tier = opts.tier ?? AGGREGATE_TIER;
   const frag = opts.execFragmentUnits ?? [];
   if (tier.kind === "aggregate") {
-    const closed = closeAggregateVerbatim(answer, [...opts.units, ...frag], { structuralExempt: opts.structuralExempt });
+    const closed = closeAggregateVerbatim(answer, [...opts.units, ...frag]);
     return { answer: closed.answer, count: closed.count, aggregate: closed.count };
   }
   const direct = tier.directUnit;
@@ -7260,9 +7248,50 @@ export function defaultFoldedReason(reason: BroadFoldReason | null): boolean {
   return reason !== null && reason !== "broad:code" && reason !== "broad:destructive";
 }
 
-/** 确定性记账路由答案里系统自己格式化的日期/金额/百分比符串（结构化字段来源，不是笔记自由文本）。 */
+/** 确定性记账路由答案里系统自己格式化的金额（带币种符号/代码）/ 日期 / 时间 / 百分比 / 笔数（结构化字段来源，不是笔记自由文本）。 */
+const COMPOSED_STRUCTURAL_RE =
+  /(?:JP¥|HK\$|[¥￥$€£])\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?(?:CNY|USD|EUR|GBP|JPY|HKD)\b|\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?|\d{4}年\d{1,2}月(?!\d)|\d{1,2}:\d{2}|\d+(?:\.\d+)?%|\d+\s?笔/g;
 export function composedNumericTokens(answer: string): string[] {
-  return (answer.match(/[\d¥￥.,%年月日时分:：\-\/]{4,}/g) ?? []).filter((t) => /\d/.test(t));
+  return answer.match(COMPOSED_STRUCTURAL_RE) ?? [];
+}
+
+/**
+ * 确定性记账答案的出口收口（R314 P2，audit-r313 §4.5）：答案由系统模板 + 结构化字段格式化产物 + 已单独收口的标签（ledgerLabel）
+ * 组装，来自笔记的自由文本只可能落在模板字段位置。按结构化数值 / 系统标记 / 角标 / 换行切成文本段，每段独立按聚合口径
+ * 收口（含凭证 / 端点 / 代码形态 / 分节拼装等短片段判据）；命中只替换该段，系统格式化的金额 / 日期永不随句/行被抹。
+ * 「标签 + 系统金额」拼出的 ≥8 字公共串（「交房租支出」+「¥2400」vs 笔记「交房租支出 2400 元」）是组装伪影，不算复述。
+ */
+export function closeComposedAnswer(answer: string, units: string[]): { answer: string; count: number } {
+  const live = units.filter((u) => typeof u === "string" && u.trim().length > 0);
+  if (live.length === 0 || !answer) return { answer, count: 0 };
+  const protectedRe = new RegExp(
+    [
+      ...systemMarkTexts().map((m) => m.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      COMPOSED_STRUCTURAL_RE.source,
+      CITATION_MARK_RE.source,
+      "\\n",
+    ].join("|"),
+    "g"
+  );
+  let out = "";
+  let cursor = 0;
+  let count = 0;
+  // 段首尾的模板标点（「（」「）」「，」等）不属于文本段，命中时保留。
+  const trimRe = /^([\s\p{P}]*)([\s\S]*?)([\s\p{P}]*)$/u;
+  const closeSeg = (seg: string): string => {
+    if (!/[\p{L}\p{N}]/u.test(seg)) return seg;
+    const [, lead = "", core = seg, tail = ""] = trimRe.exec(seg) ?? [];
+    const r = closeAggregateVerbatim(core, live);
+    if (r.count === 0) return seg;
+    count += r.count;
+    return lead + r.answer + tail;
+  };
+  for (const m of answer.matchAll(protectedRe)) {
+    out += closeSeg(answer.slice(cursor, m.index)) + m[0];
+    cursor = m.index + m[0].length;
+  }
+  out += closeSeg(answer.slice(cursor));
+  return { answer: out, count };
 }
 
 /** 答案里的破坏性命令行前插入 DESTRUCTIVE_WARN_MARK（已有则不重复）；返回插入数。 */
@@ -7372,22 +7401,25 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
   const core = finalizeAskAnswerCore(answer, opts);
   const units = opts.dataUnits && opts.dataUnits.length > 0 ? opts.dataUnits : opts.dataText ? [opts.dataText] : [];
   if (units.length === 0) return withDestructiveMarks(core);
-  // R314 P2（audit-r313 §4.5）：composedLabels 不再跳过收口。确定性记账答案里来自笔记的只有已单独收口的标签（ledgerLabel）；
-  // 日期/金额是结构化字段的系统格式化产物，按位置摸除（与问句豁免同机制），其余文本照常走聚合收口。
-  const structuralExempt = opts.composedLabels ? composedNumericTokens(core.answer).join("\n") : undefined;
   // R312 P0-1：按信任域收口。未显式给 tier 时按确定性事实推定（与 index.ts echoTierOf 同口径）：答案恰好点到 1 个
   // 资料单元（角标唯一，或无角标且只有 1 个单元）⇒ app 出口单笔记直答；否则聚合（fail-closed）。
   // 生产 Ask/MCP/回顾都显式传 tier（MCP 强制聚合），这里只兜未传 tier 的调用方。分片笔记一并作为资料单元。
   // 角标取隔离前后两个面的并集：隔离剥掉某条引用不能让原本的多引用答案「变成」单笔记直答（与生产按
   // 生成侧 references 定层同口径，fail-closed）。
   const tier: TrustTier = opts.tier ?? resolveAskTrustTier(citedUnitsOf(`${answer}\n${core.answer}`, units), "app");
-  const closed = closeVerbatimForTier(core.answer, {
-    units,
-    execFragmentUnits: opts.execFragmentUnits,
-    tier,
-    exemptText: opts.verbatimExempt ?? opts.question,
-    structuralExempt,
-  });
+  // R314 P2（audit-r313 §4.5）：composedLabels 不再跳过收口——确定性记账答案按文本段（结构化数值 / 系统标记 / 角标之间）
+  // 逐段聚合收口（closeComposedAnswer），系统格式化的金额 / 日期不随句被抹；其余答案按信任域整答收口。
+  const closed = opts.composedLabels
+    ? (() => {
+        const c = closeComposedAnswer(core.answer, [...units, ...(opts.execFragmentUnits ?? [])]);
+        return { answer: c.answer, count: c.count, aggregate: c.count };
+      })()
+    : closeVerbatimForTier(core.answer, {
+        units,
+        execFragmentUnits: opts.execFragmentUnits,
+        tier,
+        exemptText: opts.verbatimExempt ?? opts.question,
+      });
   if (closed.count === 0) {
     // 直答层什么都没收时，verbatim 问法附带的「问答区不逐字转写」指引与实际交付自相矛盾，去掉。
     const suffix = `\n\n${VERBATIM_REDIRECT_NOTICE}`;

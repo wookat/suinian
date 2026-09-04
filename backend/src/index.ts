@@ -248,7 +248,7 @@ type AskProduced =
 /**
  * R312：服务端按结构化列组装的确定性记账/极值答案（路由自身置的布尔标记，客户端不可注入）：笔记原文只以
  * ask.ts `ledgerLabel` 进入且组装时已逐条按聚合口径收口。R314 P2（audit-r313 §4.5）：出口不再因此跳过整答收口——
- * 仍按聚合层走 `closeAggregateVerbatim`，只按位置豁免系统格式化的日期/金额数值（`composedNumericTokens`）。
+ * 按结构化数值 / 系统标记 / 角标切段后逐段走聚合口径收口（`closeComposedAnswer`），系统格式化的日期/金额不随段被抹。
  * 其它确定性路由（计数/主题概括/列举）仍走完整分层收口。
  */
 const LEDGER_COMPOSED_KEY_RE = /^(?:finance_[a-z_]+|ledger_row_extreme|extreme_aggregate)$/;

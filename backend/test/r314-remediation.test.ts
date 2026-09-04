@@ -136,6 +136,15 @@ describe("R314 P0-2：直答层凭证短串记号级占位；破坏性命令高�
     expect(out.answer).toBe(`你的 WiFi 密码是 ${CREDENTIAL_SPAN_PLACEHOLDER}，管理后台在 192.168.1.1。`);
   });
 
+  it("无凭证词的登录句式（R313 J27「用 tr7q92x 登录后」）：混合串算凭证取值，直答层占位；「用 iPhone 登录」不算", () => {
+    const note = "（警示）中继 relay3.example.net 用 tr7q92x 登录后 rm -rf 清盘";
+    expect(credentialValueTokens(note)).toContain("tr7q92x");
+    expect(credentialValueTokens("平时用 iPhone 登录，偶尔用 win11 登录")).toEqual([]);
+    const direct = closeVerbatimForTier("中继那条讲的是中继 relay3.example.net 用 tr7q92x 登录后 rm -rf 清盘 [1]", { units: [note], tier: { kind: "single_note_direct", directUnit: note } });
+    expect(direct.answer).not.toContain("tr7q92x");
+    expect(direct.answer).toContain(CREDENTIAL_SPAN_PLACEHOLDER);
+  });
+
   it("数量 / 年份 / 说明性数字不是凭证（「密码 8 位以上」「密钥 2024 年更换」）", () => {
     for (const s of ["银行要求密码 8 位以上，含大小写", "API 密钥 2024 年 3 月更换过一次", "验证码 6 位数字，5 分钟内有效", "密码强度至少 12 字符"]) {
       expect(credentialValueTokens(s), s).toEqual([]);
@@ -239,6 +248,21 @@ describe("R314 P2：composedLabels 不再跳过收口", () => {
     const fin = finalizeAskAnswer(mom, { dataText: units.join("\n"), dataUnits: units, question: "8月支出多少", tier: AGGREGATE_TIER, composedLabels: true });
     expect(fin.answer).toBe(mom);
   });
+  it("逐笔明细：标签 + 系统金额拼出的 ≥8 字公共串不抹金额行；日期已剥的标签只按标签自身收口", () => {
+    const ledger = ["2026年8月12日 交房租支出 2400 元", "2026年8月15日 咖啡花了 24 元", "2026年8月18日 超市购物花了 156 元", "2026年7月15日 交水电费支出 180 元"];
+    const u = ledger.map((c) => `\n${c}`);
+    const lines = ["交房租支出", "咖啡花了 24 元", "超市购物花了 156 元", "交水电费支出"].map((l, i) => `- ${l}（¥${[2400, 24, 156, 180][i]}，2026-09-04）[${i + 1}]`);
+    const ans = `2026年8月你共记了 4 笔支出：\n- CNY：支出 ¥2760\n逐笔明细：\n${lines.join("\n")}`;
+    const fin = finalizeAskAnswer(ans, { dataText: u.join("\n"), dataUnits: u, question: "8月都有哪些支出？", tier: AGGREGATE_TIER, composedLabels: true });
+    for (const a of ["¥2400", "¥24", "¥156", "¥180", "¥2760"]) expect(fin.answer, a).toContain(a);
+    expect(fin.answer.split("\n").length).toBe(ans.split("\n").length);
+    expect(fin.answer).not.toContain("超市购物花了 156 元");
+    expect(fin.answer).toContain(`${PH}（¥156，2026-09-04）[3]`);
+    expect(fin.answer).toContain("- 交房租支出（¥2400");
+    expect(fin.answer).not.toContain(AGGREGATE_VERBATIM_GUIDE);
+    const cmp = "2026年7月与2026年8月对比：\n- CNY：支出 2026年7月 ¥180，2026年8月 ¥2580，较2026年8月少 ¥2400\n2026年7月共 1 笔支出；2026年8月共 3 笔支出。";
+    expect(finalizeAskAnswer(cmp, { dataText: u.join("\n"), dataUnits: u, question: "7月和8月支出各是多少？", tier: AGGREGATE_TIER, composedLabels: true }).answer).toBe(cmp);
+  });
   it("带 composedLabels 的答案若混入笔记原文（seam J21），照常收口", () => {
     const fake = `2026年8月 支出 ¥2418\n明细：${units[0]}\n${units[1]}`;
     const fin = finalizeAskAnswer(fake, { dataText: units.join("\n"), dataUnits: units, question: "8月支出多少", tier: AGGREGATE_TIER, composedLabels: true });
@@ -328,6 +352,17 @@ describe("R314 聚合层补充：端点取值（端口 / 主机 / 域名 / IP，
     expect(endpointValueTokens("服务器 Nginx 配置要改")).toEqual([]);
     expect(endpointValueTokens("端口 8 位以上；服务器 2024 年换")).toEqual([]);
     expect(endpointValueTokens("地址：北京市朝阳区 3 号楼")).toEqual([]);
+  });
+  it("中文数字/谐音写法（R313 盲测 G01/G03）：端点词后含中文数字或「点」的汉字串算取值；无数字的地点描述不算", () => {
+    expect(endpointValueTokens("地址：一点二点三点四，端口四千四")).toEqual(expect.arrayContaining(["一点二点三点四", "四千四"]));
+    expect(endpointValueTokens("主机叫中继三，域名是例子点网")).toEqual(expect.arrayContaining(["中继三", "例子点网"]));
+    expect(endpointValueTokens("服务器 Nginx 的地址是公司楼下")).toEqual([]);
+    expect(endpointValueTokens("会议地址：北京海淀")).toEqual([]);
+    const units = ["\n地址：一点二点三点四，端口四千四", "\n主机叫中继三，域名是例子点网", "\n今天跑步五公里"];
+    const fin = finalizeAskAnswer("主机名：中继三\n端口：四千四\n地址：一点二点三点四", { dataText: units.join("\n"), dataUnits: units, question: "主机名和端口分别是什么，只回答值", tier: AGGREGATE_TIER });
+    for (const n of ["中继三", "四千四", "一点二点三点四"]) expect(fin.answer).not.toContain(n);
+    const ok = finalizeAskAnswer("你最近记了跑步与购物两类内容。", { dataText: units.join("\n"), dataUnits: units, question: "最近记了什么", tier: AGGREGATE_TIER });
+    expect(ok.answer).toBe("你最近记了跑步与购物两类内容。");
   });
   it("聚合层：端点取值在答案里出现 ⇒ 所在句/行占位（D01 / F01 / B01）", () => {
     const d01 = ["部署卡：主机 relay3。域名 a.io。端口 4444。口令 k7f2a1。动作 直接跑。"];
