@@ -806,7 +806,7 @@ export function TimelinePage() {
   const handleCreated = useCallback(
     (note: Note) => {
       setNewIds((ids) => new Set(ids).add(note.id))
-      setNotes((ns) => [note, ...ns])
+      setNotes((ns) => (ns.some((n) => n.id === note.id) ? ns : [note, ...ns]))
       if (note.category === null) pollTriage(note.id)
     },
     [pollTriage],
