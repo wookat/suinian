@@ -19,6 +19,8 @@ import {
   VERBATIM_REDIRECT_NOTICE,
   VERBATIM_SPAN_PLACEHOLDER,
 } from "../src/prompt-armor";
+import { aggregateGuideItem, ledgerAmountText } from "../src/index";
+import type { NoteRow } from "../src/types";
 
 const UNITS = [
   "为什么觉得方案A不行\n方案A 依赖单点数据库，写入放大严重，压测时 QPS 到 3000 就开始超时。",
@@ -78,5 +80,25 @@ describe("R318 C2：结构化「概括 + 指引」", () => {
     const guide = aggregateGuideAnswer(items, UNITS);
     expect(guide).toContain("- ［资料］（2026-08-03） [1]");
     expect(guide).not.toContain("QPS");
+  });
+
+  it("记账笔记：结构化行与来源重叠时退回「分类 + 底账金额 + 日期」，金额不丢（finance36 兼职收入同型）", () => {
+    const n = {
+      id: "n1", user_id: "u1", source: "web", raw_type: "text",
+      content: "兼职收入 1200 元", url: null, url_title: null, url_summary: null, url_titles: null,
+      category: "income", tags: "[]", title: "兼职收入 1200 元", thread_id: null, is_sensitive: 0, content_enc: null,
+      todo_due: null, todo_done: 0, done_at: null, amount: 1200, currency: "CNY", meta: null,
+      created_at: "2026-09-04 10:00:00", updated_at: "2026-09-04 10:00:00", deleted_at: null,
+    } as NoteRow;
+    expect(ledgerAmountText(n)).toBe("¥1200");
+    const item = aggregateGuideItem(n, 1);
+    expect(item.line).toBe("［收入］兼职收入 1200 元（2026-09-04）");
+    expect(item.fallbackLine).toBe("［收入］（¥1200）（2026-09-04）");
+    const guide = aggregateGuideAnswer([item], ["兼职收入 1200 元，周末家教两次"]);
+    expect(guide).toContain("- ［收入］（¥1200）（2026-09-04） [1]");
+    expect(guide).not.toContain("家教");
+    expect(ledgerAmountText({ ...n, is_sensitive: 1 })).toBeNull();
+    expect(ledgerAmountText({ ...n, category: "idea" })).toBeNull();
+    expect(aggregateGuideItem({ ...n, category: "idea", title: "周末家教" }, 2).fallbackLine).toBe("［想法］（2026-09-04）");
   });
 });

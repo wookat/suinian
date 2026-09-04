@@ -1606,17 +1606,33 @@ export function enumNoteLineText(n: NoteRow): string {
       `（无标题笔记，${(n.created_at || "").slice(0, 10)}）`;
   }
   // 记账类笔记逐条附金额（底账字段，非正文回显）——列举答案可直接逐笔核对
-  if (
-    !n.is_sensitive &&
-    (n.category === "expense" || n.category === "income" || n.category === "transfer") &&
-    typeof n.amount === "number" &&
-    Number.isFinite(n.amount) &&
-    n.amount > 0
-  ) {
-    const amt = formatAmount(n.amount, n.currency || "CNY");
-    if (!text.includes(String(n.amount))) text += `（${amt}）`;
-  }
+  const amt = ledgerAmountText(n);
+  if (amt && !text.includes(String(n.amount))) text += `（${amt}）`;
   return "［" + label + "］" + text;
+}
+
+/** 记账类笔记的底账金额文本（分类为收支/转账且金额有效），非记账或敏感笔记返回 null。 */
+export function ledgerAmountText(n: NoteRow): string | null {
+  if (n.is_sensitive) return null;
+  if (n.category !== "expense" && n.category !== "income" && n.category !== "transfer") return null;
+  if (typeof n.amount !== "number" || !Number.isFinite(n.amount) || n.amount <= 0) return null;
+  return formatAmount(n.amount, n.currency || "CNY");
+}
+
+/**
+ * 聚合层「概括 + 指引」的单条候选：首选列举出口同口径的结构化行；若它与来源正文
+ * 重叠（fail-closed）则退回「分类标签 + 底账金额 + 日期」——金额是结构化字段而非
+ * 正文回显，短于 LCS8 门限，保留它让记账问题在占位时仍可核对。
+ */
+export function aggregateGuideItem(n: NoteRow, index: number): { index: number; line: string; fallbackLine: string } {
+  const day = (n.created_at || "").slice(0, 10);
+  const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
+  const amt = ledgerAmountText(n);
+  return {
+    index,
+    line: `${enumNoteLineText(n)}（${day}）`,
+    fallbackLine: `［${label}］${amt ? `（${amt}）` : ""}（${day}）`,
+  };
 }
 
 export function enumNoteLines(rows: NoteRow[]): string[] {
@@ -5754,10 +5770,7 @@ app.post("/api/ask", async (c) => {
         : [];
       const items = refs.flatMap((r) => {
         const n = askRowById.get(r.note_id);
-        if (!n) return [];
-        const day = (n.created_at || "").slice(0, 10);
-        const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
-        return [{ index: r.index, line: `${enumNoteLineText(n)}（${day}）`, fallbackLine: `［${label}］（${day}）` }];
+        return n ? [aggregateGuideItem(n, r.index)] : [];
       });
       const guide = items.length > 0 ? aggregateGuideAnswer(items, [...askGuardUnits, ...askGuardFragmentUnits]) : "";
       if (guide) {
