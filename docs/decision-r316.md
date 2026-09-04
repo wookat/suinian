@@ -236,7 +236,7 @@ R315 已 pass / 关闭，本轮未改相关代码，不重测。
 6. **善意代价**：混合账号善意 `ask_agg` `whole_isolated` 6/30、`terse_agg` useful 4/30（聚合层照抄型设计，R315 同量级）；直答层 useful 25/30 未回退。
 7. **移动端长按复制**未验证（真机 / 触摸事件）。
 8. **Push 长时订阅存活**未验证；持久 profile 的 SW 空 precache 根因未定位（不阻塞在线使用，有遥测）。
-9. ask-eval 138/141 的 3 条召回 / 多跳覆盖问题非本轮范围。
+9. ask-eval 终版 140/141（q32；前版 138/141 q32 / q47 / q108）——召回 / 多跳覆盖问题非本轮范围。
 
 ---
 
@@ -264,7 +264,7 @@ Worker 用 `CLOUDFLARE_WORKERS_API_TOKEN`，Pages 用 `CLOUDFLARE_GLOBAL_API_TOK
 | 账号前缀 `[QA-R316]`、密码运行时随机、不入库 | `out/` 整目录 `.gitignore`；`git ls-files` 无 `account.json`；提交内容 `git diff main...HEAD` 仅源码 / 测试 / 脚本 / 文档 |
 | 注销 | `cleanup.mjs`：`[QA-R316]r316l2fv`（86 条）DELETE 200 → 旧 token 401；`[QA-R316]ui-51e5769d`（7 条）DELETE 200 → 401；回归脚本账号（faithful / lifecycle / finance / injection / ask-eval）脚本内自注销「deleted eval account (cascade removed all data)」 |
 | 例外 | `regress/ask-eval.ts` 沿用既有 `[QA-R306]` 前缀（未改常量，脚本自注销，D1 核验 `qa_users=0` 覆盖任何 QA 前缀）——前缀纪律偏差，下轮改 |
-| D1 逐表（`d1-verify.sh` 13:15Z，25 表） | `users` 仅 `u_boss`；所有带 `user_id` 的表 `user_id_orphans=0 non_boss_rows=0`；带 `note_id` 的表 `note_id_orphans=0`；`push_subscriptions` 0；`auth_rate_limits` QA 键 0；`guard_events` 212 / `sw_error_reports` 25 / `cron_heartbeats` 5 为无用户维度聚合日志 |
+| D1 逐表（`d1-verify.sh` 13:15Z，附录 B 回归重跑后 13:39Z 再跑一次同结果，25 表） | `users` 仅 `u_boss`；所有带 `user_id` 的表 `user_id_orphans=0 non_boss_rows=0`；带 `note_id` 的表 `note_id_orphans=0`；`push_subscriptions` 0；`auth_rate_limits` QA 键 0；`guard_events` 212 / `sw_error_reports` 25 / `cron_heartbeats` 5 为无用户维度聚合日志 |
 | R2 权威列举（`r2-verify.mjs` 13:17Z，Cloudflare API 全分页） | `suinian-media` `total=0 non_boss_objects=0` |
 | `u_boss` | 全程无以 `u_boss` 身份的请求；`cleanup.mjs` 硬拒绝；其 `notes` 6 / `threads` 1 / `weekly_reports` 3 / `api_tokens` 1 未变 |
 | GitHub Actions | 未启用、未改 workflow |
@@ -281,5 +281,15 @@ backend/scripts/qa-r316/prod/{d1-verify.sh,r2-verify.mjs}
 backend/scripts/qa-r316/regress/run-regress.sh  # faithful30 lifecycle finance36 injection retrieval askeval
 ```
 
-## 附录 B：终版 Worker `82390eb5` 回归重跑
-（写入时填充，见 PR 描述同步）
+## 附录 B：终版 Worker `82390eb5` 回归重跑【生产实测】
+
+13:19Z–13:38Z，`regress/run-regress.sh faithful30 lifecycle finance36` 与 `askeval` 并行，脚本账号自注销（`deleted eval account (cascade removed all data)` / `注销级联：旧 token 401`）。
+
+| 项 | 终版结果 | 前版（e94f9262 / 0aac5fc7） |
+|---|---|---|
+| 忠实性 30 | **30/30**（财务 4/4，shell 15/15） | 30/30（首跑 shell 14/15 后重跑 15/15） |
+| 敏感生命周期 + 注销级联 | **14/14** | 14/14 |
+| 财务 36 | **36/36** | 36/36 |
+| ask-eval 141 | **140/141**，引用完整性 141/141；唯一失败 q32「星尘为什么从方案A换到方案B」漏一条依据 | 138/141（q32 / q47 / q108），引用完整性 140/141 |
+
+q47 / q108 在终版通过、q32 两次都失败——三者均为召回 / 多跳覆盖类失败，答案无凭证占位 / 警示标记，与本轮收口无因果【推断】；ask-eval 逐题受模型采样影响，138→140 不解读为本轮改进。
