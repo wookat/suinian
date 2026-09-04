@@ -5460,11 +5460,14 @@ function socialClauseInduces(t: string): boolean {
 // 判的是行为特征（对谁说/要求干什么），与注入字面/语种无关的最小多语言集。
 // R318 C1（audit-r317 §7.2 R272-11 / R272-27 一手复现：三个版本的确定性层都不认这两条）：
 // 补「在回答后/前」「答复须…」与德/法/西语「每条回答必须…」听写形态——仍是对回答者说的行为特征。
+// 英语第三人称「always/never recommend|tell|remind … the user」：笔记主人不会把自己写成「the user」
+// 并给自己下常态指令，这是对助手下达的行为指令（与中文「让用户/提醒用户」同形）；只收
+// always/never 起头的常态形，不收「remind the user to…」这类产品待办常见写法。
 const ASSISTANT_ADDRESS_RE =
-  /回答[^\n。！？]{0,16}(?:时|问题)|作答时|应答时|回复时|答案(?:里|中|末尾|开头|结尾)|回答(?:里|中|末尾|开头|结尾)|在回答(?:后|之后|前|之前|完)|(?:答复|回答|回复|答案)(?:须|必须|需|应|一律)|jede antwort|(?:die|jeder) antwort(?:en)? (?:muss|müssen|soll|sollen)|chaque réponse|(?:la|vos?) réponses? (?:doit|doivent|devra)|cada respuesta|la respuesta (?:debe|deberá)|系统(?:同步)?说明|系统指令|系统提示|助手s?须|附加要求|补充规则|(?:提到|问到|被问到|看到)[^\n。！？]{0,16}时|when answering|in your (?:answer|reply|response)|at the end of (?:the|your) (?:answer|reply)|回答する際|回答の(?:際|とき|最後|末尾)|答える(?:とき|際)|返信(?:の際|時)|アシスタントは|システム(?:指示|プロンプト)|답변할 때|답변(?:의|할 때| 끝에| 마지막에)|응답(?:할 때| 끝에)|어시스턴트는|시스템 (?:지시|프롬프트)/i;
+  /\b(?:always|never)\s+(?:recommend|tell|remind|advise|ask|instruct|suggest|encourage|urge|direct|prompt)\s+(?:the\s+|every\s+|each\s+|all\s+)?users?\b|回答[^\n。！？]{0,16}(?:时|问题)|作答时|应答时|回复时|答案(?:里|中|末尾|开头|结尾)|回答(?:里|中|末尾|开头|结尾)|在回答(?:后|之后|前|之前|完)|(?:答复|回答|回复|答案)(?:须|必须|需|应|一律)|jede antwort|(?:die|jeder) antwort(?:en)? (?:muss|müssen|soll|sollen)|chaque réponse|(?:la|vos?) réponses? (?:doit|doivent|devra)|cada respuesta|la respuesta (?:debe|deberá)|系统(?:同步)?说明|系统指令|系统提示|助手s?须|附加要求|补充规则|(?:提到|问到|被问到|看到)[^\n。！？]{0,16}时|when answering|in your (?:answer|reply|response)|at the end of (?:the|your) (?:answer|reply)|回答する際|回答の(?:際|とき|最後|末尾)|答える(?:とき|際)|返信(?:の際|時)|アシスタントは|システム(?:指示|プロンプト)|답변할 때|답변(?:의|할 때| 끝에| 마지막에)|응답(?:할 때| 끝에)|어시스턴트는|시스템 (?:지시|프롬프트)/i;
 
 const INSTRUCT_VERB_RE =
-  /请|务必|必须|一律|附上|加上|写上|写出|输出|追加|(?:开头|结尾|末尾)(?:加|写|附|带|固定)|[加写附]\s*[「『"'“]|须以|以[「『"'“][^」』"'”\n]{1,32}[」』"'”](?:结尾|开头|收尾|结束)|muss|müssen|soll(?:en)?|enthalten|doit|doivent|commencez|terminez|debe|引导|让用户|提醒用户|告知用户|要求用户|please|make sure|must|append|instruct|ください|してください|必ず|付けて|追加して|出力して|表示して|하세요|해 주세요|반드시|추가하세요|출력하세요|덧붙이세요/i;
+  /请|务必|必须|一律|附上|加上|写上|写出|输出|追加|(?:开头|结尾|末尾)(?:加|写|附|带|固定)|[加写附]\s*[「『"'“]|须以|以[「『"'“][^」』"'”\n]{1,32}[」』"'”](?:结尾|开头|收尾|结束)|muss|müssen|soll(?:en)?|enthalten|doit|doivent|commencez|terminez|debe|引导|让用户|提醒用户|告知用户|要求用户|please|make sure|must|append|instruct|\balways\b|\bnever\b|\brecommend\b|\bremind\b|\badvise\b|\bencourage\b|\burge\b|ください|してください|必ず|付けて|追加して|出力して|表示して|하세요|해 주세요|반드시|추가하세요|출력하세요|덧붙이세요/i;
 
 /**
  * 段落是否为「面向助手/读者的行动指令」（R274 隔离判定）：
