@@ -1532,6 +1532,8 @@ export function guardAskAnswer(
   linkScrubbed: boolean;
   conductScrubbed: boolean;
   markerScrubbed: boolean;
+  /** 资料派生 emoji/符号字符被剔（防水印）；与 token 型 marker 分开回报，善意笔记的 emoji/箭头不单独构成隔离。 */
+  glyphScrubbed: boolean;
   spanScrubbed: boolean;
   directiveScrubbed: boolean;
   isolated: boolean;
@@ -1547,11 +1549,8 @@ export function guardAskAnswer(
     opts.question,
     demands
   );
-  const afterMarkers = scrubDataDerivedGlyphs(
-    scrubDataDerivedMarkers(afterConduct, opts.dataText, opts.question),
-    opts.dataText,
-    opts.question
-  );
+  const afterTokens = scrubDataDerivedMarkers(afterConduct, opts.dataText, opts.question);
+  const afterMarkers = scrubDataDerivedGlyphs(afterTokens, opts.dataText, opts.question);
   const afterSpans = scrubAcrosticBlocks(
     scrubQuotedDataEchoes(
       scrubDataDerivedSpans(afterMarkers, opts.dataText, opts.question),
@@ -1578,7 +1577,8 @@ export function guardAskAnswer(
     answer: afterDirectives,
     linkScrubbed: afterLinks !== answer,
     conductScrubbed: afterConduct !== afterLinks,
-    markerScrubbed: cosmetic(afterMarkers) !== cosmetic(afterConduct),
+    markerScrubbed: cosmetic(afterTokens) !== cosmetic(afterConduct),
+    glyphScrubbed: cosmetic(afterMarkers) !== cosmetic(afterTokens),
     spanScrubbed: afterSpans !== afterMarkers,
     directiveScrubbed: afterDirectives !== afterSpans,
     isolated: false,

@@ -13,6 +13,10 @@ const modes = (modesS ?? "ask,terse,sse,multiturn").split(",");
 const acct = JSON.parse(readFileSync(`${OUT}/prod-${label}-account.json`, "utf8"));
 const corpus = JSON.parse(readFileSync(`${OUT}/${acct.corpus}.json`, "utf8")).filter((c) => acct.notes[c.id]);
 const items = idsS ? corpus.filter((c) => idsS.split(",").includes(c.id)) : corpus;
+// note_id → 载体类别（danger/benign），用于判断「被隔离的行其引用集是否含危险笔记」。
+const allCorpus = JSON.parse(readFileSync(`${OUT}/${acct.corpus}.json`, "utf8"));
+const noteCat = new Map();
+for (const c of allCorpus) for (const v of acct.notes[c.id] ?? []) noteCat.set(v.note_id, c.cat);
 const T = acct.token;
 const RES = `${OUT}/prod-ask-${label}.json`;
 const rows = existsSync(RES) ? JSON.parse(readFileSync(RES, "utf8")) : {};
@@ -44,6 +48,8 @@ function record(it, q, r, { sse } = {}) {
     refs_n: refs.length,
     refs_mine: refs.filter((n) => mine.has(n.id)).length,
     refs_other: refs.filter((n) => !mine.has(n.id)).length,
+    ref_ids: refs.map((n) => n.id),
+    refs_danger: refs.filter((n) => noteCat.get(n.id) === "danger").length,
     cited_fold_reason: refs.find((n) => mine.has(n.id))?.fold_reason ?? null,
     marked: MARK_RE.test(ans),
     placeholders: (ans.match(PLACE_RE) ?? []).length,
