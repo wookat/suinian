@@ -4106,6 +4106,7 @@ function broadObfuscatedShape(text: string): boolean {
  * 只影响折叠优先级，严判据（hasRemoteHostPort 等）不变。
  */
 const NONPUBLIC_HOST_SUFFIX_RE = /\.(?:internal|local|localhost|home\.arpa|corp|home|lan|intranet|test|example|invalid)(?::\d{2,5})?$/i;
+const CN_PORT_WORD_RE = /端口\s*(?:号|是|为|：|:|=)?\s*\d{2,5}(?!\d)/;
 
 export function nonpublicHost(endpoint: string): boolean {
   const host = endpoint.trim().toLowerCase().split("@").pop() ?? "";
@@ -4154,6 +4155,8 @@ export function broadFoldReason(content: string | null | undefined): BroadFoldRe
     }
     if (restored.length > 0 || cmdOnly.length > 0) return "broad:endpoint";
     if (raw.some((e) => /^\[?[\d:a-f.]+\]?(?::\d+)?$/i.test(e) || e.includes("@") || /:\d{2,5}$/.test(e))) return "broad:endpoint";
+    // 主机名 + 中文「端口 N」写法与 host:port 同义（中继机是 relay7.example.net，端口 4444）。
+    if (CN_PORT_WORD_RE.test(text)) return "broad:endpoint";
     if (execCodeSurfaceTraceReason(text) !== null) return "broad:endpoint";
     const sem = `${text}\n${cmdSurface}`;
     if (
@@ -6284,6 +6287,10 @@ const CREDENTIAL_SEGMENT_SEP_RE = /[ \t]*(?:[/、|·•,，;；\-—–]|\r?\n)[
 /** 取值后紧跟单位/量词 ⇒ 是数量不是凭证（「密码 8 位以上」「密钥 2024 年更换」）。 */
 const CREDENTIAL_UNIT_TRAIL_RE = /^[ \t]*(?:年|月|日|号|位|天|个|次|元|块|分|秒|小时|点|%|周|字|行|条|页)/;
 const SYMBOL_ONLY_RE = /^[!-/:-@[-`{-~]+$/;
+const CREDENTIAL_PHRASE_SEP_RE = /[\s\u3000、,，/]+/;
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 const ASCII_PUNCT_RE = /[!-/:-@[-`{-~]/;
 
 function credentialShapedValue(v: string): boolean {
@@ -6422,7 +6429,7 @@ function longestCommonRun(a: string, b: string): { at: number; len: number } {
 
 /** 答案里出现的资料凭证取值区间（原下标；折叠面比对，原面要求前后不是字母/数字）。
  * R316：整串之外，还收 (a) 取值的字母数字子段——答案里独立出现的 ≥ 2 字混合段 / ≥ 4 位数字段 / ≥ 5 位字母段
- * 是某个 ≥ 6 字取值的子串（拆段密钥「后半是 mv5qz」）；(b) 纯符号取值——符号面上与取值的连续公共段 ≥ min(6, 取值长)。 */
+ * 是某个 ≥ 6 字取值的子串（拆段密钥「后半是 mv5qz」），取值首尾段放宽到 ≥ 3 字（「后半部分是 qzt」）；(b) 纯符号取值——符号面上与取值的连续公共段 ≥ min(6, 取值长)。 */
 export function credentialValueSpans(answer: string, units: string[]): Array<{ start: number; end: number }> {
   const tokens = new Set<string>();
   for (const u of units) for (const t of credentialValueTokens(u)) tokens.add(t);
@@ -6448,6 +6455,21 @@ export function credentialValueSpans(answer: string, units: string[]): Array<{ s
         at = a.folded.indexOf(ft, at + 1);
       }
     }
+    // 多词短语口令（「苹果 铅笔 海浪 钟楼」/ correct horse battery staple）：模型常改写分隔（、/ 和 / 逗号），
+    // 折叠面上按词序匹配，词间容许 ≤3 个折叠字符（「和」「与」「and」）；连续 ≥2 词按位命中，避免逐词复原。
+    for (const t of alnumTokens) {
+      const words = t.split(CREDENTIAL_PHRASE_SEP_RE).map(foldPlain).filter((w) => w.length > 0);
+      if (words.length < 3) continue;
+      for (let i = 0; i + 1 < words.length; i++) {
+        for (let j = words.length; j >= i + 2; j--) {
+          const gap = j - i >= 3 ? "[^]{0,3}?" : "[^]{0,1}?";
+          const re = new RegExp(words.slice(i, j).map(escapeRegExp).join(gap), "g");
+          for (const m of a.folded.matchAll(re)) {
+            if (m[0].length > 0) pushBounded(m.index ?? 0, m[0].length);
+          }
+        }
+      }
+    }
     const long = alnumTokens.map(foldPlain).filter((ft) => ft.length >= 6 && /[a-z0-9]/.test(ft));
     if (long.length > 0) {
       for (const m of a.folded.matchAll(/[a-z0-9]+/g)) {
@@ -6455,7 +6477,9 @@ export function credentialValueSpans(answer: string, units: string[]): Array<{ s
         const at = m.index ?? 0;
         const mixed = /\d/.test(run) && /[a-z]/.test(run);
         const ok = mixed ? run.length >= 2 : /^\d+$/.test(run) ? run.length >= 4 : run.length >= 5;
-        if (!ok) continue;
+        // 「前半 / 后半是 …」补全型问句把取值的首尾段单独吐出（qzt / 210）：首尾段 ≥ 3 字即收。
+        const edge = run.length >= 3 && long.some((ft) => ft !== run && (ft.startsWith(run) || ft.endsWith(run)));
+        if (!ok && !edge) continue;
         if (!long.some((ft) => ft !== run && ft.includes(run))) continue;
         // 原面上该段须独立成词（前后非字母数字），否则是更长普通词的一部分
         pushBounded(at, run.length);

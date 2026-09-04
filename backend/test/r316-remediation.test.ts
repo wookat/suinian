@@ -86,6 +86,17 @@ describe("R316 P0：R315 直答层泄漏样本逐条归零（P13/P14/P18/P19 凭
     expect(fin(e03.answer, e03.texts, e03.ask)).not.toContain("8kd2mv7q");
   });
 
+  it("E03 生产复现（终版 Worker）：纯字母尾段 qzt / qzm（3 字，非混合）也是取值首尾段，聚合层按位收；正文里的普通 3 字母词不受连坐", () => {
+    const units = ["机器口令 8kd2mv7q，端口 4444", "备用机口令 8kd27qzt，别和主机混", "老机器口令 8kd25qzm，已停用"];
+    const answer = "- 〔原文片段略，见引用笔记卡片〕[1]\n- 备用机口令的后半部分是 qzt [2] \n- 老机器口令的后半部分是 qzm [3]";
+    const agg = closeAggregateVerbatim(answer, units).answer;
+    expect(agg, agg).not.toMatch(/\bqz[tm]\b/);
+    expect(closeCredentialValues(answer, units).answer).not.toMatch(/\bqz[tm]\b/);
+    // 首尾段口径只对取值首尾放宽：不在取值里的短词、2 字纯字母段仍按原阈值不收
+    const keep = closeCredentialValues("和 the 无关，别和主机混 mix，kd 两个字母 [2]", units).answer;
+    for (const w of ["the", "mix", "kd"]) expect(keep, keep).toContain(w);
+  });
+
   it("R315 善意载体（JB/NB）：不判破坏、不加警示、不出凭证占位", () => {
     for (const c of BENIGN) {
       for (const t of c.texts) {
@@ -330,6 +341,25 @@ describe("R316 P1-5：纯符号 / 短中文载荷对聚合层可见（归一化 
     expect(closeAggregateVerbatim("你看了蓝鲸纪录片 [1]。", [plain]).answer).toContain("蓝鲸纪录片");
   });
 
+  it("多词短语口令改写分隔（、/ 和 / 逗号 / and）后聚合层与直答层仍按位收口；连续 ≥2 词的部分复原也收；日常同词短句不受影响（生产 N05 复现）", () => {
+    const cn = "钱包助记词前四个：苹果 铅笔 海浪 钟楼";
+    const prodAgg = "这是一个关于钱包助记词的记录，记载了钱包助记词的前四个词是苹果、铅笔、海浪和钟楼 [1]。原文请点开引用的笔记卡片查看。";
+    for (const shown of [prodAgg, "前四个词：苹果，铅笔，海浪，钟楼 [1]", "前两个是苹果、铅笔 [1]。"]) {
+      const agg = closeAggregateVerbatim(shown, [cn]).answer;
+      expect(agg, shown).not.toMatch(/苹果.{0,3}铅笔/);
+      const direct = closeCredentialValues(shown, [cn]).answer;
+      expect(direct, shown).not.toMatch(/苹果.{0,3}铅笔/);
+      expect(direct).toContain(CREDENTIAL_SPAN_PLACEHOLDER);
+    }
+    expect(closeCredentialValues("我今天买了苹果，还买了铅笔 [1]。", [cn]).answer).toContain("买了苹果，还买了铅笔");
+    const en = "硬盘加密短语：correct horse battery staple";
+    for (const shown of ["加密短语是 correct, horse, battery and staple [1]。", "加密短语是 correct horse battery staple [1]。"]) {
+      expect(closeCredentialValues(shown, [en]).answer, shown).not.toMatch(/correct.{0,3}horse/);
+      expect(closeAggregateVerbatim(shown, [en]).answer, shown).not.toMatch(/correct.{0,3}horse/);
+    }
+    expect(closeCredentialValues("the horse was correct [1]", [en]).answer).toContain("horse was correct");
+  });
+
   it("聚合层善意基线：多笔记概括不因凭证判据被整句占位", () => {
     const units = ["周三 14:00 和产品对齐需求", "周五交差旅报销单给财务小李", "下周一体检，空腹"];
     const answer = "这周有三件事：周三对齐需求、周五交报销单、下周一体检 [1][2][3]。";
@@ -350,6 +380,16 @@ describe("R316 P2：前缀敏感 / 计数误路由 / 善意短记号连坐（aud
     expect(broadFoldReason("[备忘] 清缓存：npm ci && npm run build")).toBe("broad:code");
     // 前缀本身不制造命令形态
     for (const t of ["[工作] 明天开会 10:30", "[1] 参考文献 -- 第三章", "[读书] 今天读了 3 章 - 很好"]) {
+      expect(broadFoldReason(t), t).toBeNull();
+    }
+  });
+
+  it("#7 主机名 + 中文「端口 N」写法与 host:port 同义（不依赖模型侧判定）", () => {
+    for (const t of ["中继机是 relay7.example.net，端口 4444", "跳板 bastion.example.org 端口号 2222", "relay7.example.net:4444"]) {
+      expect(broadFoldReason(t), t).toBe("broad:endpoint");
+    }
+    // 书签 URL / 无主机的「端口」叙述不折
+    for (const t of ["官网 https://example.com/docs 收藏", "本地开发服务端口 5173 记一下", "公司官网 www.example.com，客服电话 4008"]) {
       expect(broadFoldReason(t), t).toBeNull();
     }
   });
