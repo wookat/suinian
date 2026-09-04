@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ClipboardEvent, type ComponentProps, type ReactNode } from "react"
 import { Code2, Eye, EyeOff, KeyRound, TriangleAlert } from "lucide-react"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import { Textarea } from "@/components/ui/textarea"
 import { COPY_CONFIRM, copyNeedsConfirm } from "@/lib/copy-confirm"
 
 /**
@@ -22,9 +23,14 @@ import { COPY_CONFIRM, copyNeedsConfirm } from "@/lib/copy-confirm"
  * 展开后复制都会经过这里）——strict / destructive / credential / broad 先弹确认再写剪贴板；
  * code 放行原生复制、只给一行提醒。卡片外的两条路径（整页 Ctrl+A 全选复制、问答答案区选中复制）由
  * PageCopyGuard 兜底：只在**选区确实覆盖了被标记正文**时才接管，普通文字 / 输入框复制不经过它。
+ * R318 P1×2 补口：敏感笔记「点击查看」展开后的正文同样包在 CopyGuard（level=sensitive）里；编辑态的
+ * textarea 用 CopyGuardTextarea——textarea 内的 copy / cut 事件不冒泡到 PageCopyGuard（输入框放行），
+ * 由它自己拦：被标记 / 敏感笔记的编辑框里选中复制、剪切也先确认。
  * 这是用户自己的笔记：不删除、不改写，只避免「不带警示地把原文推到眼前 / 推进终端」。
  */
 export type FoldLevel = "strict" | "broad" | "code" | "destructive" | "credential"
+/** 复制守卫强度：数据面折叠档 + 敏感笔记（is_sensitive，遮罩展开后 / 编辑态） */
+export type CopyGuardLevel = FoldLevel | "sensitive"
 
 export const CODE_COPY_HINT = "命令备忘：复制或执行前请核对来源与参数"
 export const CODE_COPIED_HINT = "已复制：执行前请核对来源与参数，勿直接粘贴到终端"
@@ -105,20 +111,20 @@ function selectionText(): string {
   return typeof window === "undefined" ? "" : (window.getSelection()?.toString() ?? "")
 }
 
-const CONFIRM_SEVERITY: Record<FoldLevel, number> = { strict: 4, destructive: 3, credential: 2, broad: 1, code: 0 }
+const CONFIRM_SEVERITY: Record<CopyGuardLevel, number> = { strict: 4, destructive: 3, sensitive: 3, credential: 2, broad: 1, code: 0 }
 
-function isFoldLevel(v: string | null | undefined): v is FoldLevel {
-  return v === "strict" || v === "broad" || v === "code" || v === "destructive" || v === "credential"
+function isCopyGuardLevel(v: string | null | undefined): v is CopyGuardLevel {
+  return v === "strict" || v === "broad" || v === "code" || v === "destructive" || v === "credential" || v === "sensitive"
 }
 
 /** 选区覆盖到的、需要确认的被标记正文中最高的一档；未覆盖任何标记正文则 null。 */
-export function guardedLevelInSelection(sel: Selection | null, root: ParentNode): FoldLevel | null {
+export function guardedLevelInSelection(sel: Selection | null, root: ParentNode): CopyGuardLevel | null {
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null
-  let top: FoldLevel | null = null
+  let top: CopyGuardLevel | null = null
   const guarded = root.querySelectorAll<HTMLElement>("[data-copy-guard]")
   for (const el of guarded) {
     const level = el.dataset.copyGuard
-    if (!isFoldLevel(level) || !copyNeedsConfirm(level)) continue
+    if (!isCopyGuardLevel(level) || !copyNeedsConfirm(level)) continue
     for (let i = 0; i < sel.rangeCount; i++) {
       if (!sel.getRangeAt(i).intersectsNode(el)) continue
       if (top === null || CONFIRM_SEVERITY[level] > CONFIRM_SEVERITY[top]) top = level
@@ -140,7 +146,7 @@ function isEditableTarget(t: EventTarget | null): boolean {
  * 未触及标记正文的普通选区都直接放行——不是全局拦截。
  */
 export function PageCopyGuard() {
-  const [pending, setPending] = useState<{ text: string; level: FoldLevel } | null>(null)
+  const [pending, setPending] = useState<{ text: string; level: CopyGuardLevel } | null>(null)
   useEffect(() => {
     function onCopy(e: globalThis.ClipboardEvent) {
       if (e.defaultPrevented || isEditableTarget(e.target)) return
@@ -179,7 +185,7 @@ export function PageCopyGuard() {
  * 需确认的强度：阻止原生复制、记下选中文本、弹确认；确认后再用 clipboard API 写入。
  * code 强度：放行原生复制，显示一行提醒。
  */
-export function CopyGuard({ level, children, className }: { level: FoldLevel; children: ReactNode; className?: string }) {
+export function CopyGuard({ level, children, className }: { level: CopyGuardLevel; children: ReactNode; className?: string }) {
   const [pending, setPending] = useState<string | null>(null)
   const [hint, setHint] = useState(false)
   const timer = useRef<number | null>(null)
@@ -225,6 +231,75 @@ export function CopyGuard({ level, children, className }: { level: FoldLevel; ch
         onCancel={() => setPending(null)}
       />
     </div>
+  )
+}
+
+/** level 为 null 时不包守卫（普通笔记），否则同 CopyGuard。 */
+export function MaybeCopyGuard({ level, children, className }: { level: CopyGuardLevel | null; children: ReactNode; className?: string }) {
+  if (level === null) return <>{children}</>
+  return (
+    <CopyGuard level={level} className={className}>
+      {children}
+    </CopyGuard>
+  )
+}
+
+/**
+ * 编辑态复制守卫（R318 P1）：textarea 里的 copy / cut 事件目标是输入框，PageCopyGuard 与 CopyGuard 都放行——
+ * 被标记 / 敏感笔记进入编辑态后这里自己拦：选中 + Ctrl+C / Ctrl+X / 右键复制都先弹同一套确认；
+ * 确认后复制把选中文本写入剪贴板，剪切再把选区从编辑值里去掉（onCutValue）。level 为 null 时是普通 textarea。
+ */
+export function CopyGuardTextarea({
+  level,
+  onCutValue,
+  ...props
+}: ComponentProps<typeof Textarea> & { level: CopyGuardLevel | null; onCutValue?: (next: string) => void }) {
+  const [pending, setPending] = useState<{ text: string; cut: { start: number; end: number } | null } | null>(null)
+  function intercept(e: ClipboardEvent<HTMLTextAreaElement>, cut: boolean) {
+    if (level === null || !copyNeedsConfirm(level)) return
+    const t = e.currentTarget
+    const start = t.selectionStart
+    const end = t.selectionEnd
+    const text = t.value.slice(start, end)
+    if (!text) return
+    e.preventDefault()
+    setPending({ text, cut: cut ? { start, end } : null })
+  }
+  const copy = COPY_CONFIRM[level ?? "strict"]
+  return (
+    <>
+      <Textarea
+        {...props}
+        data-copy-guard={level !== null && copyNeedsConfirm(level) ? level : undefined}
+        onCopy={(e) => {
+          intercept(e, false)
+          props.onCopy?.(e)
+        }}
+        onCut={(e) => {
+          intercept(e, true)
+          props.onCut?.(e)
+        }}
+      />
+      <ConfirmDialog
+        open={pending !== null}
+        title={copy.title}
+        description={`${copy.description}（编辑态下选中复制 / 剪切同样会先确认。）`}
+        confirmLabel={pending?.cut ? "仍要剪切" : "仍要复制"}
+        onConfirm={() => {
+          const p = pending
+          setPending(null)
+          if (!p) return
+          navigator.clipboard.writeText(p.text).catch(() => {
+            // clipboard unavailable
+          })
+          if (p.cut && onCutValue) {
+            const v = typeof props.value === "string" ? props.value : ""
+            onCutValue(v.slice(0, p.cut.start) + v.slice(p.cut.end))
+          }
+        }}
+        onCancel={() => setPending(null)}
+      />
+    </>
   )
 }
 

@@ -11,6 +11,7 @@ import {
   PackageOpen,
 } from "lucide-react"
 import { loadSettings, saveSettings } from "@/lib/settings"
+import { KNOWN_ISSUES_URL, SAFETY_PROMISE_SHORT } from "@/lib/utils"
 
 const CHOICES = [
   {
@@ -80,7 +81,14 @@ export function Onboarding() {
         {/* R182 P2-3：首屏收敛为一句话主张，移动端不再被长段落撑出可视区 */}
         <p className="mb-1 text-sm font-medium">什么都能丢，AI 帮你想起来。</p>
         <p className="mb-2 text-xs text-muted-foreground">
-          想法、链接、语音、账目随手丢进来，自动分拣打标签、串成思考线索，随时问随时找回。跨笔记聚合、推送、导出与工具接口不逐字转写你的笔记；问某条自己的笔记时，原文只会连同它的笔记卡片一起出现。
+          想法、链接、语音、账目随手丢进来，自动分拣打标签、串成思考线索，随时问随时找回。
+        </p>
+        <p className="mb-2 text-xs text-muted-foreground" data-testid="safety-promise-short">
+          {SAFETY_PROMISE_SHORT}当前为小范围 beta，完整承诺见注册页，已知问题见{" "}
+          <a href={KNOWN_ISSUES_URL} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+            已知问题清单
+          </a>
+          。
         </p>
         {/* R230 P3-5：场景化示例让陌生用户 5 秒内建立「这是什么、对我有什么用」认知 */}
         <div className="mb-4 space-y-1 rounded-lg bg-secondary/50 p-2.5 text-xs">

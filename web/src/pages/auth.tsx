@@ -1,12 +1,12 @@
-import { useState } from "react"
-import { Loader2, CircleAlert, UserPlus, LogIn, Download, Trash2, KeyRound, Copy, Check } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Loader2, CircleAlert, UserPlus, LogIn, Download, Trash2, KeyRound, Copy, Check, Ticket } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { createNote, login, recoverAccount, register } from "@/lib/api"
+import { createNote, fetchRegisterPolicy, login, recoverAccount, register, type RegisterPolicy } from "@/lib/api"
 import { clearDemoNotes, userDemoNotes } from "@/lib/mock"
 import { defaultApiBase, loadSettings, saveSettings } from "@/lib/settings"
-import { cn, SAFETY_PROMISE } from "@/lib/utils"
+import { cn, KNOWN_ISSUES_URL, SAFETY_PROMISE } from "@/lib/utils"
 import type { Note } from "@/lib/types"
 
 type Mode = "register" | "login" | "recover"
@@ -180,9 +180,27 @@ export function AuthPage() {
   const [mismatch, setMismatch] = useState(false)
   const [demoNotes, setDemoNotes] = useState<Note[] | null>(null)
   const [recoveryInput, setRecoveryInput] = useState("")
+  const [inviteCode, setInviteCode] = useState("")
+  // beta 注册策略（R318 D）：null = 尚未取到/取不到，按开放注册渲染，服务端仍会拒绝无码注册
+  const [policy, setPolicy] = useState<RegisterPolicy | null>(null)
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null)
   // 注册/找回成功但服务端恢复码生成失败（降级返回 null）：需明确告知去设置页补生成
   const [recoveryMissing, setRecoveryMissing] = useState(false)
+
+  useEffect(() => {
+    const base = apiBaseUrl.trim()
+    if (!base) return
+    let cancelled = false
+    void fetchRegisterPolicy(base).then((p) => {
+      if (!cancelled) setPolicy(p)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [apiBaseUrl])
+
+  const inviteRequired = policy?.invite_required === true
+  const registerBlocked = policy !== null && (!policy.enabled || policy.quota_full)
 
   function continueAfterAuth() {
     const leftover = userDemoNotes()
@@ -204,6 +222,7 @@ export function AuthPage() {
     if (!base) return setError("请填写 API 地址")
     if (name.trim().length < 2) return setError("用户名至少 2 个字符")
     if (mode === "recover" && recoveryInput.trim().length < 16) return setError("请填写注册时保存的恢复码")
+    if (mode === "register" && inviteRequired && !inviteCode.trim()) return setError("当前为小范围 beta，注册需要邀请码")
     if (password.length < 8) return setError(mode === "recover" ? "新密码至少 8 个字符" : "密码至少 8 个字符")
     if (mode !== "login" && password !== password2) {
       // 只用确认框下的内联提示，不另发全局 error，避免同屏重复与修正后残留旧错误
@@ -216,7 +235,7 @@ export function AuthPage() {
     try {
       const res =
         mode === "register"
-          ? await register(base, name.trim(), password)
+          ? await register(base, name.trim(), password, inviteCode)
           : mode === "recover"
             ? await recoverAccount(base, name.trim(), recoveryInput.trim(), password)
             : await login(base, name.trim(), password)
@@ -373,6 +392,38 @@ export function AuthPage() {
           />
         </div>
 
+        {mode === "register" && registerBlocked && (
+          <p
+            className="flex items-start gap-1.5 rounded-md border border-border bg-secondary/60 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground"
+            data-testid="register-blocked"
+          >
+            <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+            {policy?.enabled === false
+              ? "注册已关闭；已有账号请切到「登录」。"
+              : "小范围 beta 名额已满，暂不接受新注册；已有账号请切到「登录」。"}
+          </p>
+        )}
+
+        {mode === "register" && inviteRequired && !registerBlocked && (
+          <div className="space-y-1.5">
+            <label htmlFor="auth-invite" className="flex items-center gap-1 text-sm font-medium">
+              <Ticket className="size-3.5" /> 邀请码
+            </label>
+            <Input
+              id="auth-invite"
+              type="text"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="小范围 beta：填写获得的邀请码"
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">当前仅对受邀用户开放注册；已有账号直接登录不需要邀请码。</p>
+          </div>
+        )}
+
         {mode === "recover" && (
           <div className="space-y-1.5">
             <label htmlFor="auth-recovery" className="text-sm font-medium">
@@ -468,7 +519,7 @@ export function AuthPage() {
           </p>
         )}
 
-        <Button onClick={() => void submit()} disabled={busy} className="w-full">
+        <Button onClick={() => void submit()} disabled={busy || (mode === "register" && registerBlocked)} className="w-full">
           {busy ? (
             <>
               <Loader2 className="animate-spin" /> 提交中…
@@ -505,6 +556,13 @@ export function AuthPage() {
       </Card>
       <p className="px-1 text-xs leading-relaxed text-muted-foreground" data-testid="safety-promise">
         {SAFETY_PROMISE}
+      </p>
+      <p className="px-1 text-xs leading-relaxed text-muted-foreground">
+        当前为小范围 beta：已知问题与未覆盖的情形见{" "}
+        <a href={KNOWN_ISSUES_URL} target="_blank" rel="noreferrer" className="underline hover:text-foreground" data-testid="known-issues-link">
+          已知问题清单
+        </a>
+        。
       </p>
     </div>
   )

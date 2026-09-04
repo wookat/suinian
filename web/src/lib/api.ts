@@ -1210,8 +1210,34 @@ function authFetchError(e: unknown): NetworkError {
   return new NetworkError("网络连接失败，请检查网络或 API 地址")
 }
 
-export function register(baseUrl: string, name: string, password: string): Promise<AuthResult> {
-  return authPost(baseUrl, "/api/auth/register", { name, password }, { retryOnTimeout: true })
+export function register(baseUrl: string, name: string, password: string, inviteCode?: string): Promise<AuthResult> {
+  const body: Record<string, string> = { name, password }
+  if (inviteCode && inviteCode.trim()) body.invite_code = inviteCode.trim()
+  return authPost(baseUrl, "/api/auth/register", body, { retryOnTimeout: true })
+}
+
+export interface RegisterPolicy {
+  enabled: boolean
+  invite_required: boolean
+  quota_full: boolean
+}
+
+/** beta 注册策略（R318 D）：取不到时返回 null，前端按“开放注册”渲染，由服务端最终拒绝 */
+export async function fetchRegisterPolicy(baseUrl: string): Promise<RegisterPolicy | null> {
+  try {
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/auth/register-policy`, {
+      signal: AbortSignal.timeout(8_000),
+    })
+    if (!res.ok) return null
+    const j = (await res.json()) as Partial<RegisterPolicy>
+    return {
+      enabled: j.enabled !== false,
+      invite_required: j.invite_required === true,
+      quota_full: j.quota_full === true,
+    }
+  } catch {
+    return null
+  }
 }
 
 export function login(baseUrl: string, name: string, password: string): Promise<AuthResult> {

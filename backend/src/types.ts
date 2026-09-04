@@ -13,6 +13,10 @@ export type Env = {
   SUINIAN_ENC_KEY?: string;
   /** "false"/"0"/"off" disables /api/auth/register (default: enabled). */
   REGISTRATION_ENABLED?: string;
+  /** beta 邀请码（secret，逗号分隔多个）；非空时 /api/auth/register 必须带匹配的 invite_code（R318 D）。 */
+  REGISTRATION_INVITE_CODES?: string;
+  /** beta 名额上限（正整数）；users 行数达到后拒绝新注册，幂等重试不受影响（R318 D）。 */
+  REGISTRATION_QUOTA?: string;
   /** Extra CORS origins, comma-separated; "*" allows any origin (self-host). */
   CORS_ALLOWED_ORIGINS?: string;
   /** Secret token guarding /api/admin/* maintenance endpoints; unset = endpoints disabled. */

@@ -59,7 +59,7 @@ import { RecoveryCodeCard } from "@/pages/auth"
 import type { TagCount } from "@/lib/types"
 import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
 import { loadFontSize, loadTheme, setFontSize, setTheme, type FontSize, type ThemeMode } from "@/lib/theme"
-import { cn, SAFETY_PROMISE } from "@/lib/utils"
+import { cn, KNOWN_ISSUES_URL, SAFETY_PROMISE } from "@/lib/utils"
 
 const IMPORT_SOURCES: { value: ImportSource; label: string; hint: string; accept: string }[] = [
   { value: "cubox", label: "Cubox", hint: "支持 Cubox 导出的 CSV / 书签 HTML / txt 文件，或打包为 zip 直接上传（含 md 导出）", accept: ".csv,.html,.htm,.txt,.zip" },
@@ -1698,6 +1698,11 @@ export function SettingsPage() {
         <h3 className="mt-3 text-xs font-medium">安全承诺</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground" data-testid="safety-promise">
           {SAFETY_PROMISE}
+        </p>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          <a href={KNOWN_ISSUES_URL} target="_blank" rel="noreferrer" className="underline hover:text-foreground" data-testid="known-issues-link">
+            已知问题清单（beta）
+          </a>
         </p>
       </Card>
     </div>
