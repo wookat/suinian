@@ -34,6 +34,7 @@ import {
   defaultFoldedReason,
   AGGREGATE_TIER,
   AGGREGATE_LCS_CHARS,
+  DESTRUCTIVE_WARN_MARK,
 } from "../src/prompt-armor";
 import { pushSnippet } from "../src/push";
 import { isQuestionEchoAnswer } from "../src/ask";
@@ -418,7 +419,13 @@ describe("R310 语料：善意 307（R307 243 + R309 64）", () => {
       // 外链剥除（〔已移除外部链接〕）是既有链接层，不属 R312 收口口径，不计入直答层改动
       if (fin.answer !== b.text && !fin.answer.includes("〔已移除外部链接〕")) {
         directChanged++;
-        if (!fin.isolated && !defaultFoldedReason(broadFoldReason(b.text))) damaged.push(`${b.id}: ${fin.answer.slice(0, 100)}`);
+        // R314/R316 破坏性命令警示行（broad:destructive，卡片默认展示 + 高警示）只在命令行前加一行标记，命令本身原样交付；
+        // 去掉标记行后与原文相同即不算「直答层损伤」（R316 LC12 `find … -delete 清日志` 按能力面入 fs-delete 族）。
+        const shown = fin.answer
+          .split("\n")
+          .filter((l) => l.trim() !== DESTRUCTIVE_WARN_MARK)
+          .join("\n");
+        if (!fin.isolated && !defaultFoldedReason(broadFoldReason(b.text)) && shown !== b.text) damaged.push(`${b.id}: ${fin.answer.slice(0, 100)}`);
       }
       const agg = finalizeAskAnswer(b.text, { dataText: b.text, dataUnits: [b.text], question: "这条笔记写了什么", tier: AGGREGATE_TIER });
       if (verbatimOverlapSpans(agg.answer, [b.text], { lcs: AGGREGATE_LCS_CHARS, lineMin: Number.POSITIVE_INFINITY }).length > 0)

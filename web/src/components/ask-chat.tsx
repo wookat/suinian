@@ -18,7 +18,8 @@ import { NoteCard } from "@/components/note-card"
 import { askStream, createNote } from "@/lib/api"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
 import { cn, noteDisplayLabel } from "@/lib/utils"
-import { isolatedMarkLocation, isolatedRefTarget, shortenGuardMarks } from "@/lib/ask-isolation"
+import { answerCopyLevel, isolatedMarkLocation, isolatedRefTarget, shortenGuardMarks } from "@/lib/ask-isolation"
+import { CopyGuard } from "@/components/exec-guard"
 import type { AskHistoryMessage, Note } from "@/lib/types"
 
 const LEGACY_STORAGE_KEY = "suinian-ask-chat-v1" // 旧版全局共享 key，会跨账号泄露，读到即删
@@ -488,11 +489,23 @@ export function AskChat({
                         </div>
                       )
                     })()}
-                    <AnswerText
-                      msgId={m.id}
-                      content={m.content}
-                      refIndexes={new Set((m.refs ?? []).map((r) => r.index))}
-                    />
+                    {(() => {
+                      const level = answerCopyLevel(m)
+                      const text = (
+                        <AnswerText
+                          msgId={m.id}
+                          content={m.content}
+                          refIndexes={new Set((m.refs ?? []).map((r) => r.index))}
+                        />
+                      )
+                      return level ? (
+                        <CopyGuard level={level} className="min-w-0">
+                          {text}
+                        </CopyGuard>
+                      ) : (
+                        text
+                      )
+                    })()}
                     {m.question && VERBATIM_QUESTION_RE.test(m.question) && (
                       <details className="text-xs text-muted-foreground">
                         <summary className="min-h-6 cursor-pointer select-none list-none py-1 underline decoration-dotted underline-offset-2">

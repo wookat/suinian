@@ -5725,8 +5725,8 @@ app.post("/api/ask", async (c) => {
       guard_finalized: true,
       trust_tier: tier.kind,
       verbatim_closed_spans: fin.verbatim_closed_spans ?? 0,
-      ...(isolated ? { instruction_isolated: true } : {}),
-      ...(isolatedRefs.length > 0 ? { isolated_refs: isolatedRefs } : {}),
+      // 隔离态下 isolated_refs 恒在（可为空数组=未归因），字段存在性可被外部验证（audit-r315 §7.5）
+      ...(isolated ? { instruction_isolated: true, isolated_refs: isolatedRefs } : {}),
       // R292 P0-1：降级标记以判别器状态为权威源（不从答案文本反推）。
       ...(fin.degraded || cls.unavailable ? { exec_guard_degraded: true } : {}),
       ...(execGateMark !== null ? { exec_gate: execGateMark } : {}),

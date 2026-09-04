@@ -49,6 +49,31 @@ export function isolatedMarkLocation(content: string): { para: number; refIndex:
   return null
 }
 
+/** 服务端在答案里给破坏性命令行前加的警示标记（前缀即可，全句与 backend DESTRUCTIVE_WARN_MARK 一致） */
+const DESTRUCTIVE_WARN_PREFIX = "〔警示：以下为破坏性命令"
+
+export type AnswerCopyLevel = "destructive" | "code"
+
+/**
+ * 问答答案区的复制守卫强度（R316 P1-2，audit-r315 §5.2）：答案正文会原样呈现单条直答的笔记原文，
+ * 破坏性命令在答案里是「可见 + 警示」而不是隔离。按「答案里的警示标记」+「被引用笔记的数据面折叠原因」取高档：
+ * destructive（答案含警示标记 / 引用了破坏性命令笔记）> code（引用了命令备忘，只提醒不阻断）。
+ * strict / credential / broad 不纳入：判危命令在答案里被隔离，口令只给占位，端点 / 编码串按聚合层收口——答案区没有需要确认的载荷，
+ * 弹确认只会是噪音。
+ */
+export function answerCopyLevel(m: {
+  content: string
+  refs?: { note: { fold?: boolean; fold_reason?: string | null } }[]
+}): AnswerCopyLevel | null {
+  let top: AnswerCopyLevel | null = m.content.includes(DESTRUCTIVE_WARN_PREFIX) ? "destructive" : null
+  for (const r of m.refs ?? []) {
+    const n = r.note
+    if (n.fold === true && n.fold_reason === "broad:destructive") return "destructive"
+    if (n.fold === true && n.fold_reason === "broad:code" && top === null) top = "code"
+  }
+  return top
+}
+
 export interface IsolationAttributionInput {
   content: string
   refs?: { index: number; note: { contains_executable_command?: boolean; fold?: boolean } }[]
