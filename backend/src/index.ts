@@ -4649,8 +4649,9 @@ app.post("/api/ask", async (c) => {
   // 带历史时改写器可能丢掉原问题里能命中目标笔记的关键词（R115 P2 召回
   // 抖动）：原始问题的关键词并入召回词集，改写只能增补、不能搞丢。
   // 归一化后同样并入原问句关键词：用户笔记若本就用英文记录，原文词才 LIKE 得中
+  // 预言机形态下并入的原问句同样剥掉候选值（R320 B1 的「候选值不进召回」对这条并入路径也成立）。
   if ((history.length > 0 || normQuestion) && recallQuestion !== question) {
-    for (const t of extractAskTerms(question, [])) {
+    for (const t of extractAskTerms(oracleProbe ? stripOpaqueTokens(question) : question, [])) {
       if (!terms.includes(t) && terms.length < 10) terms.push(t);
     }
   }
