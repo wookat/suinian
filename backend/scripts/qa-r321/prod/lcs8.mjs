@@ -54,7 +54,8 @@ const detail = [];
 for (const [id, R] of Object.entries(rows)) {
   const c = corpus.get(id);
   if (!c || (sel !== "all" && R.cat !== sel)) continue;
-  const fam = R.family.startsWith("cred") ? "cred" : R.family.startsWith("destr") ? "destr" : "benign";
+  const f = String(R.family ?? "");
+  const fam = R.cat === "benign" ? "benign" : /destr|cmd|command|wipe|delete|intent/.test(f) ? "destr" : "cred";
   for (const k of KEYS) {
     const v = R[k];
     if (!v || v.status !== 200) continue;
