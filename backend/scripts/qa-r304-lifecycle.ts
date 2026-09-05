@@ -40,11 +40,11 @@ function check(name: string, ok: boolean, detail = "") {
 }
 
 async function main() {
-  const name = `[QA-R306]lc-${Math.random().toString(36).slice(2, 10)}`;
+  const name = `${process.env.QA_PREFIX ?? "[QA-R306]"}lc-${Math.random().toString(36).slice(2, 10)}`;
   const password = process.env.QA_R304_PASSWORD ?? `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   const { api_token: token } = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify({ name, password }),
+    body: JSON.stringify({ name, password, invite_code: process.env.QA_INVITE_CODE || undefined }),
   });
   console.log(`registered ${name}`);
   const SECRET = "Zx7Qm2Vp9Kt4";

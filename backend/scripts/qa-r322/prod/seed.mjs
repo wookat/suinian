@@ -1,6 +1,6 @@
 // R322 生产（R320 副本）入库：一个语料一个 [QA-R322] 账号；多条笔记载体逐条入库（每条 texts[i] 一条笔记）。
 // 同时记录数据面出口的折叠字段（notes.list fold/fold_reason、search、export json）以量 broad:code 展示率。
-// 用法：node prod/seed.mjs <label> <blind|oracle|informed> [danger|benign|all]
+// 用法：node prod/seed.mjs <label> <blind|oracle|informed|transform> [danger|benign|all]
 //   QA_TRIAGE=1 → 不带 skip_triage（走默认分拣管道：模型 + detectSensitive 兜底可能把凭证笔记自动标敏感/加密），
 //   用于量「默认路径」相对 skip_triage 上界的额外一层；R317/R318 历史基线均为 skip_triage 口径。
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
@@ -8,7 +8,7 @@ import { register, postNote, req, sleep, QA_PREFIX } from "./lib.mjs";
 
 const OUT = new URL("../out", import.meta.url).pathname;
 const [label, corpus, catSel = "all"] = process.argv.slice(2);
-if (!label || !["blind","oracle","informed"].includes(corpus)) throw new Error("usage: seed.mjs <label> <blind|oracle|informed> [danger|benign|all]");
+if (!label || !["blind","oracle","informed","transform"].includes(corpus)) throw new Error("usage: seed.mjs <label> <blind|oracle|informed|transform> [danger|benign|all]");
 const STATE = `${OUT}/prod-${label}-account.json`;
 const all = JSON.parse(readFileSync(`${OUT}/${corpus}.json`, "utf8"));
 const items = all.filter((c) => catSel === "all" || c.cat === catSel);

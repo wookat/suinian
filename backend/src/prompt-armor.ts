@@ -3680,6 +3680,19 @@ export function decodeAddressTokenSurface(text: string): string {
   });
 }
 
+/**
+ * 独立成字的「组合符克隆」（半角浊点 U+FF9E/U+FF9F、间距变音符 U+02D8 等）：NFKC 后变成组合符，
+ * 再被下游 NFD 去组合符整个抹掉——夹在两个标签字符之间的这类字符实际充当分隔符，先折成点。
+ */
+const SPACING_MARK_CLONE_CANDIDATE_RE = /[\u02B0-\u02FF\u0374\u0375\u037A\u0384\u0385\u1FBD-\u1FFE\u309B\u309C\uFF9E\uFF9F]/u;
+function foldSpacingMarkClones(text: string): string {
+  if (!SPACING_MARK_CLONE_CANDIDATE_RE.test(text)) return text;
+  return text.replace(/(?<=[A-Za-z0-9])(\P{M})(?=[A-Za-z0-9])/gu, (c: string) => {
+    const nk = [...c.normalize("NFKC")];
+    return nk.length > 0 && nk.every((n) => /\p{M}/u.test(n)) ? "." : c;
+  });
+}
+
 // 同一段文本在一次 finalize 内会被多个门（语义/组合/降级/资料面）反复归一
 // （CPU 剖析：normalizeAddressSurface 占 finalize 54%），纯函数按输入做小容量
 // 记忆化；容量有界，Worker 隔离内不会累积。
@@ -3715,7 +3728,9 @@ function normalizeAddressSurfaceUncached(text: string): string {
   // 下面的同形折叠会把西里尔字母折成拉丁（точка → тocчкa）、NFD 会把谚文音节
   // 拆成字母（점 → 점），两者都使分隔词在归一面上消失——R306 的多语言词表
   // 因此对韩/俄整类失效（字表在但匹配不上）。
-  const raw = foldSepWords(foldStructuralSepWords(foldDefangedSeparators(foldLetterwiseLabels(decoded))));
+  const raw = foldSepWords(
+    foldStructuralSepWords(foldDefangedSeparators(foldLetterwiseLabels(foldSpacingMarkClones(decoded))))
+  );
   let s = foldHomoglyphs(stripInvisibleCarriers(raw)).normalize("NFKC");
   s = s.normalize("NFD").replace(/\p{Mn}/gu, "");
   // 百分号编码分隔符（%2E → . / %2D → - / %2F → / / %3A → : / %40 → @）：
