@@ -236,7 +236,7 @@ export async function askUserDataVersion(db: D1Database, userId: string): Promis
 }
 
 /** 答案缓存的收口版本：出口收口规则变更时递增，旧规则下产出的答案不会在新版部署后继续从边缘缓存送出。 */
-export const ASK_ANSWER_CACHE_EPOCH = "r322.1";
+export const ASK_ANSWER_CACHE_EPOCH = "r322.2";
 
 async function askAnswerCacheKey(auth: string, material: string, dataVersion: string): Promise<Request> {
   const digest = await crypto.subtle.digest(
