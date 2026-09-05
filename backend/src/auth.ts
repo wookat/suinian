@@ -180,6 +180,47 @@ export function registrationEnabled(v: string | undefined): boolean {
   return !["false", "0", "off", "no"].includes(v.trim().toLowerCase());
 }
 
+/**
+ * beta 注册策略（R318 D，audit-r317 §0.2）：在 REGISTRATION_ENABLED 之上再加两道可独立开关的门——
+ * - REGISTRATION_INVITE_CODES：逗号分隔的邀请码（secret），非空即要求 /api/auth/register 带匹配的 invite_code；
+ * - REGISTRATION_QUOTA：正整数名额上限，users 行数达到即停止新建（同名同密码幂等重试不受影响）。
+ * 两者都未配置时行为与 R317 完全一致（开放注册）。
+ */
+export function inviteCodes(v: string | undefined): string[] {
+  if (!v) return [];
+  return v
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+export function inviteCodeRequired(v: string | undefined): boolean {
+  return inviteCodes(v).length > 0;
+}
+
+/** 邀请码比对：长度无关的常量时间比较（先 sha256 再逐字节异或），大小写与首尾空白不敏感 */
+export async function inviteCodeAccepted(v: string | undefined, code: unknown): Promise<boolean> {
+  const codes = inviteCodes(v);
+  if (codes.length === 0) return true;
+  if (typeof code !== "string") return false;
+  const given = await sha256Hex(code.trim().toLowerCase());
+  let ok = false;
+  for (const c of codes) {
+    const want = await sha256Hex(c.toLowerCase());
+    let diff = 0;
+    for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ given.charCodeAt(i);
+    if (diff === 0) ok = true;
+  }
+  return ok;
+}
+
+export function registrationQuota(v: string | undefined): number | null {
+  if (v === undefined) return null;
+  const n = Number.parseInt(v.trim(), 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
 export const RATE_LIMIT_MAX = 5;
 
 /**

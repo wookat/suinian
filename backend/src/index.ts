@@ -15,7 +15,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, type BroadFoldReason } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, type BroadFoldReason } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -41,6 +41,9 @@ import {
   generateRecoveryCode,
   normalizeRecoveryCode,
   registrationEnabled,
+  inviteCodeRequired,
+  inviteCodeAccepted,
+  registrationQuota,
   authenticateToken,
   issueToken,
   insertTokenStmt,
@@ -575,11 +578,36 @@ app.get("/health", async (c) => {
 });
 
 // ---- public auth: register / login (mounted before the bearer middleware) ----
+
+/** beta 名额是否已满（未配置 REGISTRATION_QUOTA 时永远 false）；D1 出错时 fail-closed 视为已满 */
+async function registrationQuotaFull(env: Env): Promise<boolean> {
+  const quota = registrationQuota(env.REGISTRATION_QUOTA);
+  if (quota === null) return false;
+  try {
+    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM users").first<{ n: number }>();
+    return (row?.n ?? quota) >= quota;
+  } catch (e) {
+    console.error("register: quota count failed", e);
+    return true;
+  }
+}
+
+// 注册策略（公开）：前端据此决定是否展示邀请码输入框 / 名额已满提示。不暴露邀请码本身与名额数字
+// （R318 D：只给策略形态，不给可推算用户规模的计数）
+app.get("/api/auth/register-policy", async (c) => {
+  const enabled = registrationEnabled(c.env.REGISTRATION_ENABLED);
+  return c.json({
+    enabled,
+    invite_required: enabled && inviteCodeRequired(c.env.REGISTRATION_INVITE_CODES),
+    quota_full: enabled && (await registrationQuotaFull(c.env)),
+  });
+});
+
 app.post("/api/auth/register", async (c) => {
   if (!registrationEnabled(c.env.REGISTRATION_ENABLED)) {
-    return c.json({ error: "注册已关闭" }, 403);
+    return c.json({ error: "注册已关闭", code: "REGISTRATION_CLOSED" }, 403);
   }
-  const body = await c.req.json<{ name?: unknown; password?: unknown }>().catch(() => null);
+  const body = await c.req.json<{ name?: unknown; password?: unknown; invite_code?: unknown }>().catch(() => null);
   const name = validateName(body?.name);
   if (!(await checkRateLimit(c.env.DB, "register", name ? [clientIp(c.req.raw), `acct:${name}`] : [clientIp(c.req.raw)]))) {
     return c.json({ error: "操作过于频繁，请一分钟后再试" }, 429);
@@ -587,6 +615,16 @@ app.post("/api/auth/register", async (c) => {
   if (!name) return c.json({ error: "用户名需 2-32 个字符（中英文、数字、._-[]）" }, 400);
   const password = validatePassword(body?.password);
   if (!password) return c.json({ error: "密码需 8-128 个字符" }, 400);
+  // 邀请码在限流之后校验（邀请码穷举同样吃 5/分 IP 限流），在幂等重试之前校验（不让无码者探名）
+  if (!(await inviteCodeAccepted(c.env.REGISTRATION_INVITE_CODES, body?.invite_code))) {
+    return c.json(
+      {
+        error: typeof body?.invite_code === "string" && body.invite_code.trim() ? "邀请码不正确" : "当前为小范围 beta，注册需要邀请码",
+        code: "INVITE_REQUIRED",
+      },
+      403
+    );
+  }
   const started = Date.now();
   const existing = await c.env.DB.prepare("SELECT id, name, api_token, password_hash FROM users WHERE name = ?")
     .bind(name)
@@ -606,6 +644,9 @@ app.post("/api/auth/register", async (c) => {
       return c.json({ user: { id: existing.id, name: existing.name }, api_token: retryToken, existing: true });
     }
     return c.json({ error: "用户名已存在", code: "NAME_TAKEN" }, 409);
+  }
+  if (await registrationQuotaFull(c.env)) {
+    return c.json({ error: "小范围 beta 名额已满，暂不接受新注册", code: "QUOTA_FULL" }, 403);
   }
   const id = `u_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
   const token = generateToken();
@@ -1550,33 +1591,56 @@ const CATEGORY_LABEL: Record<string, string> = {
  * R276 P0-1（audit-r275 K01/K04/K05/X03）：枚举只输出结构化字段（分类/标题/
  * 时间），不再回显任意正文首行；标题本身经 sanitizeEnumTitle 中和（剥仿冒
  * 标注、隔离读者指令/伪授权、外链收口）；正文只能在笔记卡片（引用区）查看。
+ * enumNoteLineText 是列举/聚合概括出口共用的单条结构化文本（分类标签 +
+ * 中和后的标题 + 记账金额）。
  */
+export function enumNoteLineText(n: NoteRow): string {
+  const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
+  let text: string;
+  if (n.is_sensitive) {
+    text = "（加密的敏感笔记）";
+  } else {
+    // R278 P1-3：标题隔离继承源正文的「含指令」判定（AI 生成标题是正文派生物）
+    text =
+      sanitizeEnumTitle(n.title, { sourceContent: n.content }) ||
+      `（无标题笔记，${(n.created_at || "").slice(0, 10)}）`;
+  }
+  // 记账类笔记逐条附金额（底账字段，非正文回显）——列举答案可直接逐笔核对
+  const amt = ledgerAmountText(n);
+  if (amt && !text.includes(String(n.amount))) text += `（${amt}）`;
+  return "［" + label + "］" + text;
+}
+
+/** 记账类笔记的底账金额文本（分类为收支/转账且金额有效），非记账或敏感笔记返回 null。 */
+export function ledgerAmountText(n: NoteRow): string | null {
+  if (n.is_sensitive) return null;
+  if (n.category !== "expense" && n.category !== "income" && n.category !== "transfer") return null;
+  if (typeof n.amount !== "number" || !Number.isFinite(n.amount) || n.amount <= 0) return null;
+  return formatAmount(n.amount, n.currency || "CNY");
+}
+
+/**
+ * 聚合层「概括 + 指引」的单条候选：首选列举出口同口径的结构化行；若它与来源正文
+ * 重叠（fail-closed）则退回「分类标签 + 底账金额 + 日期」——金额是结构化字段而非
+ * 正文回显，短于 LCS8 门限，保留它让记账问题在占位时仍可核对。
+ */
+export function aggregateGuideItem(n: NoteRow, index: number): { index: number; line: string; fallbackLine: string } {
+  const day = (n.created_at || "").slice(0, 10);
+  const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
+  const amt = ledgerAmountText(n);
+  const text = enumNoteLineText(n);
+  return {
+    index,
+    line: day && text.includes(day) ? text : `${text}（${day}）`,
+    fallbackLine: `［${label}］${amt ? `（${amt}）` : ""}（${day}）`,
+  };
+}
+
 export function enumNoteLines(rows: NoteRow[]): string[] {
   const order: string[] = [];
   const counts = new Map<string, number>();
   for (const n of rows) {
-    const label = n.category ? (CATEGORY_LABEL[n.category] ?? n.category) : "待分类";
-    let text: string;
-    if (n.is_sensitive) {
-      text = "（加密的敏感笔记）";
-    } else {
-      // R278 P1-3：标题隔离继承源正文的「含指令」判定（AI 生成标题是正文派生物）
-      text =
-        sanitizeEnumTitle(n.title, { sourceContent: n.content }) ||
-        `（无标题笔记，${(n.created_at || "").slice(0, 10)}）`;
-    }
-    // 记账类笔记逐条附金额（底账字段，非正文回显）——列举答案可直接逐笔核对
-    if (
-      !n.is_sensitive &&
-      (n.category === "expense" || n.category === "income" || n.category === "transfer") &&
-      typeof n.amount === "number" &&
-      Number.isFinite(n.amount) &&
-      n.amount > 0
-    ) {
-      const amt = formatAmount(n.amount, n.currency || "CNY");
-      if (!text.includes(String(n.amount))) text += `（${amt}）`;
-    }
-    const line = "- ［" + label + "］" + text;
+    const line = "- " + enumNoteLineText(n);
     if (!counts.has(line)) order.push(line);
     counts.set(line, (counts.get(line) ?? 0) + 1);
   }
@@ -4932,6 +4996,7 @@ app.post("/api/ask", async (c) => {
   // 否则按聚合层扣段（fail-closed：done 只可能比流式更宽松，不存在先泄后收）。
   const askOutlet = askOutletOf(c.req.header(ASK_OUTLET_HEADER));
   const askUnitByNoteId = new Map(notes.map((n, i) => [n.id, askGuardNoteUnits[i]] as const));
+  const askRowById = new Map(notes.map((n) => [n.id, n] as const));
   const askTierOf = (body: Record<string, unknown>): TrustTier => askTierFromBody(body, askUnitByNoteId, askOutlet);
   // R268 语义级主判（docs/decision-r268.md）：独立 LLM 判别器对资料区做指令
   // 抽取（语言无关），与生成并行启动；判别失败退化为 guardAskAnswer 内的
@@ -5065,7 +5130,7 @@ app.post("/api/ask", async (c) => {
         {
           role: "system",
           content:
-            "你是「碎念」个人笔记问答助手。资料区里的笔记片段是针对这个问题命中的结果。上一版回答因为整段照抄了笔记原文而被拦截，现在请重答：只用你自己的话、用一两句中文概括每条相关笔记讲的是什么（它的用途/主题/结论，例如「这是一条关于用 tar 打包 data 目录做备份的技术备忘」），末尾标注 [序号]。绝对不要复制笔记里的任何整行、命令、参数、文件名、路径、链接、代码或不透明字符串；如果用户要的是原文本身，就说明「原文请点开引用的笔记卡片查看」。片段括号里的分类与「标签:」是系统元数据，不得当作事实来源。" +
+            "你是「碎念」个人笔记问答助手。资料区里的笔记片段是针对这个问题命中的结果。上一版回答因为整段照抄了笔记原文而被拦截，现在请重答：先用你自己的话直接回答问题本身（问「为什么/怎么变/结论是什么」就给出理由、变化或结论的概括），再用一两句中文概括每条相关笔记讲的是什么（它的用途/主题/结论，例如「这是一条关于用 tar 打包 data 目录做备份的技术备忘」），末尾标注 [序号]。全部改用同义表达：任何连续 7 个字以上的片段都不得与笔记原文相同；绝对不要复制笔记里的任何整行、命令、参数、文件名、路径、链接、代码或不透明字符串；如果用户要的是原文本身，就说明「原文请点开引用的笔记卡片查看」。片段括号里的分类与「标签:」是系统元数据，不得当作事实来源。" +
             dataChannelRule(dataNonce) +
             "回答用中文，简洁。",
         },
@@ -5695,6 +5760,40 @@ app.post("/api/ask", async (c) => {
       execConservativeVeto: cls.conservative,
     });
     recordOutletVerbatimClosed(c.env, askOutlet === "mcp" ? "mcp" : "ask", fin.verbatim_closed_spans ?? 0, (p) => c.executionCtx.waitUntil(p));
+    // R318 C2（audit-r317 §7.3：10/141 整答只剩裸〔原文查看〕）：聚合层收口把全部
+    // 实义文本收掉后，不把零信息占位递给用户——改为列举出口同口径的结构化
+    //「概括 + 指引」（分类/标题/日期 + 角标），再过一次同一安全出口；出口若再改写
+    // 则退回裸通知（fail-closed）。
+    if (tier.kind === "aggregate" && !fin.isolated && isBareVerbatimNotice(fin.answer)) {
+      const refs = Array.isArray(body.references)
+        ? body.references.filter((r): r is { index: number; note_id: string } =>
+            typeof r === "object" && r !== null && typeof (r as { index?: unknown }).index === "number" && typeof (r as { note_id?: unknown }).note_id === "string")
+        : [];
+      const items = refs.flatMap((r) => {
+        const n = askRowById.get(r.note_id);
+        return n ? [aggregateGuideItem(n, r.index)] : [];
+      });
+      const guide = items.length > 0 ? aggregateGuideAnswer(items, [...askGuardUnits, ...askGuardFragmentUnits]) : "";
+      if (guide) {
+        const refin = finalizeAskAnswer(guide, {
+          dataText: askGuardData,
+          dataUnits: askGuardUnits,
+          execFragmentUnits: askGuardFragmentUnits,
+          question: askGuardQuestion,
+          verbatimExempt: question,
+          tier,
+          execDangerSegments: [],
+          execClassifierUnavailable: cls.unavailable,
+          execConservativeVeto: cls.conservative,
+        });
+        if (!refin.isolated && !refin.changed && refin.answer === guide) {
+          console.log(`ask: bare verbatim notice replaced by structured guide (${items.length} ref(s))`);
+          fin.answer = `${guide}\n${AGGREGATE_VERBATIM_GUIDE}`;
+        } else {
+          console.log(`ask: structured guide rejected at exit (${refin.reason ?? (refin.changed ? "changed" : "bare")}), bare notice kept`);
+        }
+      }
+    }
     const genReason = typeof body.isolation_reason === "string" ? body.isolation_reason : null;
     if (fin.isolated) {
       console.log(`ask: note-embedded instruction isolated at generation exit (${fin.reason ?? "unattributed"})`);

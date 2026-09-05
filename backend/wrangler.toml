@@ -40,3 +40,5 @@ crons = ["0 0 * * 1", "0 0 1 * *", "0 20 * * *", "*/10 * * * *"]
 [vars]
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 REGISTRATION_ENABLED = "true"
+# beta 名额（users 行数上限，含既有账号）；邀请码 REGISTRATION_INVITE_CODES 是 secret（wrangler secret put），不入库
+REGISTRATION_QUOTA = "50"

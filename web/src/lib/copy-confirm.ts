@@ -1,6 +1,10 @@
-import type { FoldLevel } from "@/components/exec-guard"
+import type { CopyGuardLevel } from "@/components/exec-guard"
 
-export const COPY_CONFIRM: Record<FoldLevel, { title: string; description: string }> = {
+export const COPY_CONFIRM: Record<CopyGuardLevel, { title: string; description: string }> = {
+  sensitive: {
+    title: "复制敏感笔记内容？",
+    description: "这条笔记已标记敏感（加密保存，不进入问答与搜索）。复制到剪贴板可能被其它应用读取，请确认后再复制。",
+  },
   strict: {
     title: "复制含可执行命令的内容？",
     description: "这条笔记含会下载执行远程代码或建立外连的命令。复制后请勿直接粘贴到终端执行，先核对来源。",
@@ -24,6 +28,6 @@ export const COPY_CONFIRM: Record<FoldLevel, { title: string; description: strin
 }
 
 /** 该强度下复制是否需要先确认（code 只提醒不阻断）。 */
-export function copyNeedsConfirm(level: FoldLevel): boolean {
+export function copyNeedsConfirm(level: CopyGuardLevel): boolean {
   return level !== "code"
 }

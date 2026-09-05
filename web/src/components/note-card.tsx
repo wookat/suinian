@@ -39,12 +39,11 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { downloadNoteFile, refetchLink, retryMedia } from "@/lib/api"
 import { NoteAudio, NoteImage, isAudioAttachment, isImageAttachment } from "@/components/note-media"
-import { ExecGuard } from "@/components/exec-guard"
+import { CopyGuardTextarea, ExecGuard, MaybeCopyGuard, type CopyGuardLevel } from "@/components/exec-guard"
 import { COPY_CONFIRM } from "@/lib/copy-confirm"
 import { cn, formatTime, noteFoldLevel, parseServerTime, parseDue, dueHasTime, titleEchoesContent } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch } from "@/lib/types"
@@ -364,6 +363,8 @@ export function NoteCard({
   // code（日常命令备忘）展示但复制前确认。敏感遮罩优先（遮罩本身已隐藏原文）；编辑态直接编辑原文不折叠。
   const foldLevel = sensitive ? null : noteFoldLevel(note)
   const execFlagged = foldLevel !== null
+  // 复制守卫强度（R318 P1×2）：敏感笔记展开后 / 编辑态 / 菜单复制都先确认；被标记笔记按折叠档
+  const copyLevel: CopyGuardLevel | null = sensitive ? "sensitive" : foldLevel
 
   const [menuOpen, setMenuOpen] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -470,10 +471,10 @@ export function NoteCard({
     }
   }
 
-  /** 折叠/命令备忘类笔记复制前先确认（R312 P0-3：展示不折，但不让命令一键进剪贴板再进终端） */
+  /** 折叠/命令备忘/敏感笔记复制前先确认（R312 P0-3：展示不折，但不让命令一键进剪贴板再进终端） */
   function copyContent() {
     setMenuOpen(false)
-    if (execFlagged) {
+    if (copyLevel !== null) {
       setConfirmCopyOpen(true)
       return
     }
@@ -670,6 +671,7 @@ export function NoteCard({
         </div>
       </div>
 
+      <MaybeCopyGuard level={sensitive && revealed && !editing ? "sensitive" : null}>
       {note.title && !editing && !(sensitive && !revealed) && (
         <p
           className={cn(
@@ -695,7 +697,9 @@ export function NoteCard({
         )}
         {editing ? (
           <div className="min-w-0 flex-1 space-y-3">
-            <Textarea
+            <CopyGuardTextarea
+              level={copyLevel}
+              onCutValue={setEditValue}
               value={editValue}
               onChange={(e) => {
                 setEditValue(e.target.value)
@@ -1137,6 +1141,7 @@ export function NoteCard({
           </div>
         )}
       </div>
+      </MaybeCopyGuard>
       {onAskQuestion && note.meta?.is_question && !sensitive && !editing && (
         <button
           onClick={(e) => {
@@ -1174,8 +1179,8 @@ export function NoteCard({
       />
       <ConfirmDialog
         open={confirmCopyOpen}
-        title={COPY_CONFIRM[foldLevel ?? "broad"].title}
-        description={COPY_CONFIRM[foldLevel ?? "broad"].description}
+        title={COPY_CONFIRM[copyLevel ?? "broad"].title}
+        description={COPY_CONFIRM[copyLevel ?? "broad"].description}
         confirmLabel="仍要复制"
         onConfirm={() => {
           setConfirmCopyOpen(false)
