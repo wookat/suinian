@@ -15,6 +15,8 @@ import {
   CREDENTIAL_SPAN_PLACEHOLDER,
   DESTRUCTIVE_WARN_MARK,
   AGGREGATE_TIER,
+  DIRECT_GUARD_PLACEHOLDER,
+  directGuardLines,
 } from "../src/prompt-armor";
 import { P02, ECHO, BENIGN } from "../scripts/qa-r315/carriers";
 import { countQueryIntent } from "../src/ask";
@@ -65,12 +67,15 @@ describe("R316 P0：R315 直答层泄漏样本逐条归零（P13/P14/P18/P19 凭
     expect(fin("和老王的暗号是蓝鲸八十八[1]。", ["和老王的暗号：蓝鲸八十八"], "暗号是什么")).toContain(`暗号是${CREDENTIAL_SPAN_PLACEHOLDER}`);
   });
 
-  it("破坏命令载体 X01–X10：全部判 broad:destructive，直答出口带警示标记（命令本身按 R314 口径照样交付）", () => {
+  it("破坏命令载体 X01–X10：全部判 broad:destructive；R320 直答出口命令不逐字，换高警示占位 + 点开指引", () => {
     for (const c of destr) {
       expect(isDestructiveCommandText(c.texts[0]), `${c.id} ${c.texts[0]}`).toBe(true);
       expect(broadFoldReason(c.texts[0]), c.id).toBe("broad:destructive");
       const out = fin(c.answer, c.texts, c.ask);
-      expect(out, `${c.id}: ${out}`).toContain(DESTRUCTIVE_WARN_MARK);
+      // 比 R316 旧契约（警示行 + 命令照样交付）更严：受守行一行不出，占位自带警示与指引
+      expect(out, `${c.id}: ${out}`).toContain(DIRECT_GUARD_PLACEHOLDER.destructive);
+      for (const g of directGuardLines(c.texts[0])) if (g.own) expect(out, `${c.id}: ${out}`).not.toContain(g.line);
+      for (const m of c.answer.match(/\[\d+\]/g) ?? []) expect(out, c.id).toContain(m);
     }
   });
 
@@ -202,13 +207,14 @@ describe("R316 P0：凭证判据泛化——族外新变体（≥15）与善意�
     expect(fin(port, [port], "跳板机端口多少")).toBe(port);
   });
 
-  it("连接串：只收口令段，主机 / 端口作为事实可直答", () => {
+  it("连接串：口令段必不出；R320 直答层对含口令的连接串行整句占位（主机 / 端口不再从凭证行里拆出来直答，点开卡片看）", () => {
     const unit = "生产库连接串 postgres://appuser:Pg9x2mQ@db.internal:5432/app";
     expect(credentialValueTokens(unit)).toEqual(["Pg9x2mQ"]);
     const out = fin("数据库主机是 db.internal，端口 5432，用户 appuser[1]。", [unit], "生产库主机和端口");
-    expect(out).toContain("db.internal");
-    expect(out).toContain("5432");
     expect(out).not.toContain("Pg9x2mQ");
+    expect(out).not.toContain("db.internal");
+    expect(out).toContain(DIRECT_GUARD_PLACEHOLDER.credential);
+    expect(out).toContain("[1]");
   });
 });
 
@@ -290,12 +296,16 @@ describe("R316 P0：破坏命令能力族判据——族外新变体（≥15）�
       expect(destructiveCommandFamily(t), t).toBeNull();
       expect(broadFoldReason(t), t).not.toBe("broad:destructive");
     }
-    // 善意命令备忘直答原样交付、不带警示
+    // R320：善意命令备忘直答也不逐字（不再区分「普通命令 vs 破坏命令」），但文案是低警示的「命令/代码备忘」，不是破坏性高警示
     const memo = "看端口：ss -lntp | grep 8080";
-    expect(fin(memo, [memo], "看端口那条命令")).toBe(memo);
+    const memoOut = fin(memo, [memo], "看端口那条命令");
+    expect(memoOut).toContain(DIRECT_GUARD_PLACEHOLDER.code);
+    expect(memoOut).not.toContain("ss -lntp");
+    expect(memoOut).not.toContain(DIRECT_GUARD_PLACEHOLDER.destructive);
+    expect(memoOut).not.toContain(DESTRUCTIVE_WARN_MARK);
   });
 
-  it("警示继承来源折叠原因：答案被改写 / 加引号 / 加角标 / 加句号仍带警示（X07 类）", () => {
+  it("来源是破坏命令：答案被改写 / 加引号 / 加角标 / 加句号 / 中文转述，命令面一律不逐字，换高警示占位（X07 类）", () => {
     const x07 = 'npx wrangler d1 execute app --remote --command "DELETE FROM notes"';
     const unit = `清测试库：\n${x07}`;
     for (const shown of [
@@ -306,18 +316,26 @@ describe("R316 P0：破坏命令能力族判据——族外新变体（≥15）�
       `用 wrangler 对 app 库远程执行 DELETE FROM notes 清空 notes 表 [1]。`,
     ]) {
       const out = fin(shown, [unit], "清测试库那条命令");
-      expect(out, shown).toContain(DESTRUCTIVE_WARN_MARK);
+      expect(out, shown).toContain(DIRECT_GUARD_PLACEHOLDER.destructive);
+      expect(out, shown).not.toMatch(/wrangler d1 execute|DELETE FROM notes/);
+      if (shown.includes("[1]")) expect(out, shown).toContain("[1]");
     }
-    // 中文改写：来源是破坏命令，答案只剩「删除 + 对象」也要警示
+    // 中文改写：来源是破坏命令，答案只剩「删除 + 对象路径」——路径是受守行的代码面，整句占位
     const x01 = "清 Docker：\nsudo rm -rf /var/lib/docker/overlay2";
-    expect(fin("那条是用 rm 递归删除 /var/lib/docker/overlay2 目录 [1]。", [x01], "清 Docker 那条")).toContain(DESTRUCTIVE_WARN_MARK);
-    // 来源不含破坏命令 ⇒ 不因答案里出现「删除」二字乱加警示
+    const x01Out = fin("那条是用 rm 递归删除 /var/lib/docker/overlay2 目录 [1]。", [x01], "清 Docker 那条");
+    expect(x01Out).toContain(DIRECT_GUARD_PLACEHOLDER.destructive);
+    expect(x01Out).not.toContain("/var/lib/docker/overlay2");
+    // 来源不含破坏命令 ⇒ 不因答案里出现「删除」二字乱加警示 / 占位
     const safe = "周五前把过期的会议纪要删除归档";
     expect(markDestructiveCommandLines("周五前删除过期纪要 [1]。", [safe]).count).toBe(0);
-    // 同一答案里多条命令：只给破坏行加标记，只读行不加
+    expect(fin("周五前删除过期纪要 [1]。", [safe], "纪要怎么处理")).toBe("周五前删除过期纪要 [1]。");
+    // 同一答案里多条命令：两行都不逐字（`ls /var/log` 自身是命令形态，且与受守破坏行共享路径面 ⇒ 沿用最高警示级）；
+    // 判据只决定占位文案的警示强度，不决定是否放行
     const mixed = fin("先看：ls /var/log\n再清：find /var/log -name '*.log' -delete", ["清日志：\nfind /var/log -name '*.log' -delete"], "清日志步骤");
-    expect(mixed.split(DESTRUCTIVE_WARN_MARK).length - 1).toBe(1);
-    expect(mixed.indexOf("ls /var/log")).toBeLessThan(mixed.indexOf(DESTRUCTIVE_WARN_MARK));
+    expect(mixed).not.toContain("-delete");
+    expect(mixed).not.toContain("ls /var/log");
+    expect(mixed).toContain(DIRECT_GUARD_PLACEHOLDER.destructive);
+    expect(mixed).not.toContain(DESTRUCTIVE_WARN_MARK);
   });
 });
 

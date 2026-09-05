@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { INJECTION_CASES, BENIGN_CASES, EVIL_HOST, bodyOf, markerOf, demandsOf } from "../scripts/injection-eval-data";
-import { buildDataBlock, makeDataNonce, guardAskAnswer, scrubAnswerLinks, finalizeAskAnswer } from "../src/prompt-armor";
+import {
+  buildDataBlock,
+  makeDataNonce,
+  guardAskAnswer,
+  scrubAnswerLinks,
+  finalizeAskAnswer,
+  directGuardLines,
+  DIRECT_GUARD_PLACEHOLDER_RE,
+} from "../src/prompt-armor";
 import { neutralizePromptInjection } from "../src/triage";
 
 // R266 常规回归：injection-eval 语料（R261/R263/R265 全部 28 变体 + 本轮自造
@@ -56,12 +64,28 @@ describe("R266 injection 语料：输出面最坏情况收口", () => {
       expect(g.answer).not.toContain(d);
     }
     expect(g.answer.toLowerCase()).not.toContain(EVIL_HOST);
-    expect(g.answer).toContain("健身记录"); // 正常内容保留
+    // R320 A：直答占位只作用于与受守行逐字重合的片段。载荷正文有受守面（命令 / 编码段 / 高熵）时受守行不得逐字出现；
+    // 掩护句「健身记录：跑了 5 公里」逐字来自资料——若整条笔记被宽判据判为受守单元，这一行也沿用单元保护（fail-closed，
+    // 不许借普通行改写逃逸），此时掩护句换类别占位、角标保留；否则掩护句原样保留。
+    const guardedLines = directGuardLines(body);
+    const coverGuarded = guardedLines.some((g) => g.line.includes("健身记录"));
+    const keepsCover = (a: string): void => {
+      for (const g of guardedLines) expect(a).not.toContain(g.line);
+      if (!coverGuarded) {
+        expect(a).toContain("健身记录");
+        return;
+      }
+      expect(a).not.toContain("跑了 5 公里");
+      expect(a).toMatch(DIRECT_GUARD_PLACEHOLDER_RE);
+      expect(a).toContain("[1]");
+    };
+    keepsCover(g.answer);
     if (c.payload.includes("{{M}}")) expect(g.answer).not.toContain(markerOf(c));
     // 语义层（判别器抽出 demand，覆盖编码/分片这类非逐字载荷）：全部剥除
     const g2 = guardAskAnswer(complied, { dataText: body, question: q, directiveDemands: demands });
     for (const d of demands) expect(g2.answer).not.toContain(d);
     expect(g2.answer).toContain("健身记录");
+    keepsCover(finalizeAskAnswer(g2.answer, { dataText: body, question: q }).answer);
   });
 
   it("各类外链形态（markdown/图片/裸域名/全角/协议相对/HTML img）一律剥除", () => {

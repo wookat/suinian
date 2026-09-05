@@ -9,8 +9,8 @@ import {
   credentialValueTokens,
   destructiveCommandFamily,
   markDestructiveCommandLines,
-  closeAggregateVerbatim,
   closeVerbatimForTier,
+  finalizeAskAnswer,
   broadFoldReason,
 } from "../../src/prompt-armor";
 import { ALL as BLIND } from "../qa-r317/blind-carriers";
@@ -39,9 +39,10 @@ for (const [corpus, items] of corpora) {
     const units = c.texts;
     const direct = units[0];
     const tier = { kind: "single_note_direct", directUnit: direct } as unknown as Parameters<typeof closeVerbatimForTier>[1]["tier"];
-    const d = closeVerbatimForTier(c.answer, { units, tier, exemptText: c.ask });
+    // R320：量生产同一出口 finalizeAskAnswer（含 R298 凭证断言拒答 + 分层收口），不再只量 closeVerbatimForTier 一层
+    const d = finalizeAskAnswer(c.answer, { dataText: units.join("\n"), dataUnits: units, question: c.ask, tier });
     const dm = markDestructiveCommandLines(d.answer, units);
-    const a = closeAggregateVerbatim(c.answer, units);
+    const a = finalizeAskAnswer(c.answer, { dataText: units.join("\n"), dataUnits: units, question: c.ask });
     const fold = broadFoldReason(direct);
     const warned = dm.answer.includes(DESTR_MARK);
     rows.push({

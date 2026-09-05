@@ -4,6 +4,9 @@ import {
   scrubDangerCodeResidue,
   scrubDataDerivedOpaqueRuns,
   INSTRUCTION_ISOLATED_MARK,
+  DIRECT_GUARD_PLACEHOLDER,
+  ORACLE_NEUTRAL_NOTICE,
+  broadFoldReason,
 } from "../src/prompt-armor";
 
 // R308 生产实测（Worker ff351f6f，T01/X20/R04 normal+verbatim 各 2 次）：地址主体
@@ -71,13 +74,28 @@ describe("R308 danger code-word residue", () => {
     }
   });
 
-  it("benign data keeps question-echoed identifiers and labels intact", () => {
+  it("benign data: opaque-classified identifier is not echoed back even when the question carries it (R320: no question exemption on guarded units); prose-only data stays intact", () => {
     const data = "订单号 ORD20240915AbC 已发货，物流查 example.com/track";
     const q = "订单号 ORD20240915AbC 发了吗？";
     const answer = "[1] 订单号 ORD20240915AbC 已发货，可在 example.com/track 查物流。";
+    // 这条资料本身就被宽判据判为不透明串（卡片默认折叠）；R320 起直答层对受守单元不再因「问句里带了同一串」而回显（回显即预言机通道）。
+    expect(broadFoldReason(data)).toBe("broad:opaque");
     const r = finalizeAskAnswer(answer, { dataText: data, question: q, dataUnits: [data] });
-    expect(r.answer).toContain("ORD20240915AbC");
+    expect(r.answer).not.toContain("ORD20240915AbC");
+    // 问句带候选串 + 是非问形态 → 走预言机中立话（不确认不否认）；不带候选串时走 opaque 占位
+    expect(r.answer).toContain(ORACLE_NEUTRAL_NOTICE);
+    expect(r.answer).toContain("[1]");
     expect(r.isolated).toBe(false);
+    const r2 = finalizeAskAnswer(answer, { dataText: data, question: "那单发货了没有，订单号是多少", dataUnits: [data] });
+    expect(r2.answer).not.toContain("ORD20240915AbC");
+    expect(r2.answer).toContain(DIRECT_GUARD_PLACEHOLDER.opaque);
+    expect(r2.answer).toContain("[1]");
+    // 无 code / 高熵面的纯散文资料：问句回显照旧原样
+    const prose = "订单已发货，预计周三到，签收时记得检查外包装";
+    const rp = finalizeAskAnswer("[1] 订单已发货，预计周三到，签收时记得检查外包装。", { dataText: prose, question: "订单发了吗？", dataUnits: [prose] });
+    expect(broadFoldReason(prose)).toBeNull();
+    expect(rp.answer).toContain("预计周三到");
+    expect(rp.isolated).toBe(false);
   });
 });
 

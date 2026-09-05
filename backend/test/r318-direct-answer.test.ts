@@ -1,8 +1,8 @@
 // R318 A：直答层判据换基元（凭证：标签 + 连接词位置 / 破坏命令：销毁能力 × 目标 / 免确认）。
 // 锁定：R317 盲测 18+18（B01–B36）、R317 读实现（I01–I20）、R318 再族外 27 条（N01–N27）在「模型如实复述」最坏输入下：
 //   · 凭证：直答与聚合出口零原样；
-//   · 破坏命令：直答出口零「原样且无守卫」（无红色警示行且来源不判命令形态）；除 N24 crontab -r（r310 既有断言保持 broad:code）外零「原样无红色警示」；
-//   · 善意对照（B/I/NB）：直答不插占位 / 警示，来源不折为非 code 面。
+//   · 破坏命令（R320 收严）：直答出口零原样——不再接受「原样但带红色警示」，N24 crontab -r 残余一并归零；
+//   · 善意对照（B/I/NB）：无受守行的逐字不动；有命令 / 高熵面的换低警示占位，不得被标成凭证 / 破坏性（错分只许影响体验）。
 // 另锁定 R318 新判据的误报边界（单文件 rm、git branch -d、单行 DELETE WHERE id=5、日/韩语整句说明）。
 import { describe, it, expect } from "vitest";
 import {
@@ -12,6 +12,9 @@ import {
   credentialValueTokens,
   destructiveCommandFamily,
   markDestructiveCommandLines,
+  directGuardLines,
+  DIRECT_GUARD_PLACEHOLDER,
+  DIRECT_GUARD_PLACEHOLDER_RE,
 } from "../src/prompt-armor";
 import { ALL as BLIND } from "../scripts/qa-r317/blind-carriers";
 import { ALL as INFORMED } from "../scripts/qa-r317/informed-carriers";
@@ -22,8 +25,6 @@ const hits = (ans: string, needles: string[]) => needles.filter((n) => (norm(n).
 const DESTR_MARK = "〔警示：以下为破坏性命令";
 const COMMAND_SHAPE = new Set(["strict", "broad:fetch", "broad:code", "broad:destructive"]);
 const PLACEHOLDER_RE = /〔[^〕]*〕/;
-// r310-no-verbatim 既有断言：crontab -r 是 broad:code 日常备忘，不弱化 ⇒ 记入 known-issues 的唯一残余
-const KNOWN_RESIDUAL_NO_WARN = new Set(["N24"]);
 
 type Carrier = { id: string; family: string; cat: string; texts: string[]; answer: string; needles: string[]; ask: string };
 function probe(c: Carrier) {
@@ -61,18 +62,23 @@ for (const [name, corpus] of [["R317 盲测 B01–B36", BLIND], ["R317 读实现
       const leak = cred.map((c) => ({ id: c.id, ...probe(c) })).filter((r) => r.directSurvive.length || r.aggSurvive.length);
       expect(leak.map((r) => `${r.id}[${[...r.directSurvive, ...r.aggSurvive].join("|")}]`)).toEqual([]);
     });
-    it("破坏命令：直答出口零「原样无守卫」；除既有断言残余外零「原样无红色警示」", () => {
+    it("破坏命令：直答出口零原样（R320：不接受「原样 + 警示行」，也无 N24 残余），占位带卡片指引", () => {
       const rows = destr.map((c) => ({ id: c.id, ...probe(c) }));
-      const noGuard = rows.filter((r) => r.directSurvive.length && !r.guarded);
-      expect(noGuard.map((r) => r.id)).toEqual([]);
-      const noWarn = rows.filter((r) => r.directSurvive.length && !r.warned && !KNOWN_RESIDUAL_NO_WARN.has(r.id));
-      expect(noWarn.map((r) => `${r.id}[${r.fold}]`)).toEqual([]);
+      const survive = rows.filter((r) => r.directSurvive.length);
+      expect(survive.map((r) => `${r.id}[${r.fold}] ${r.directSurvive.join("|")}`)).toEqual([]);
+      const noGuide = rows.filter((r) => !DIRECT_GUARD_PLACEHOLDER_RE.test(r.directAnswer) && !/〔原文查看〕/.test(r.directAnswer));
+      expect(noGuide.map((r) => `${r.id}: ${r.directAnswer.slice(0, 80)}`)).toEqual([]);
     });
-    it("善意对照：直答不插占位 / 警示，来源不折为非 code 面", () => {
-      const bad = benign.map((c) => ({ id: c.id, ...probe(c) })).filter(
-        (r) => PLACEHOLDER_RE.test(r.directAnswer) || (r.fold !== null && r.fold !== "broad:code")
+    it("善意对照：无受守行的逐字不动；有命令 / 高熵面的只许低警示占位（不标凭证 / 破坏性），来源不折为非 code 面", () => {
+      const rows = benign.map((c) => ({ id: c.id, c, ...probe(c) }));
+      const damaged = rows.filter((r) => directGuardLines(r.c.texts[0]).length === 0 && PLACEHOLDER_RE.test(r.directAnswer));
+      expect(damaged.map((r) => `${r.id}[${r.fold}] ${r.directAnswer.slice(0, 80)}`)).toEqual([]);
+      const misranked = rows.filter(
+        (r) => r.directAnswer.includes(DIRECT_GUARD_PLACEHOLDER.destructive) || r.directAnswer.includes(DIRECT_GUARD_PLACEHOLDER.credential) || r.warned
       );
-      expect(bad.map((r) => `${r.id}[${r.fold}]`)).toEqual([]);
+      expect(misranked.map((r) => `${r.id}[${r.fold}]`)).toEqual([]);
+      const nonCodeFold = rows.filter((r) => r.fold !== null && r.fold !== "broad:code");
+      expect(nonCodeFold.map((r) => `${r.id}[${r.fold}]`)).toEqual([]);
     });
   });
 }

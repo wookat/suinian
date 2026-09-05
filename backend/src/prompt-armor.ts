@@ -6202,10 +6202,16 @@ export const CREDENTIAL_REFUSAL_ANSWER =
 const CREDENTIAL_SUBJECT_RE =
   /(?:密码|密碼|口令|密钥|密鑰|秘钥|私钥|私鑰|通行码|通行證|验证码|驗證碼|校验码|动态码|恢复码|备用码|一次性密码|授权码|授權碼|token|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|secret|password|passwd|passphrase|credential|verification code|one[- ]?time password|otp|パスワード|暗証番号|認証コード|ワンタイムパスワード|비밀번호|인증번호|암호)/i;
 // 「是 / 为 / ： / is / = / です / 입니다」等断言连接词后紧跟取值。
-const CREDENTIAL_ASSERT_RE = new RegExp(
-  `${CREDENTIAL_SUBJECT_RE.source}[^\\n]{0,24}?(?:是|為|为|＝|=|:|：|叫做|设成|設成|设置为|改成|is|was|equals?|:\\s|は|が|=|는|은|이|가)\\s*[「『"'\`\\[（(]?\\s*([A-Za-z0-9!@#$%^&*()_+\\-=./:;?~\\[\\]{}|]{6,128})`,
-  "i"
-);
+// R320：断言主语面与资料侧取值提取共用 CREDENTIAL_VALUE_SUBJECT_RE（含「解锁码 / 门禁码 / 暗号 / 多语标签」），
+// 不再单独维护一份更窄的词表——两侧口径一致，模块初始化后才拼装（依赖定义在后文的宽词表）。
+let credentialAssertRe: RegExp | null = null;
+const credentialAssertRegExp = (): RegExp => {
+  credentialAssertRe ??= new RegExp(`${CREDENTIAL_VALUE_SUBJECT_RE.source}${CREDENTIAL_ASSERT_TAIL}`, "giu");
+  credentialAssertRe.lastIndex = 0;
+  return credentialAssertRe;
+};
+const CREDENTIAL_ASSERT_TAIL =
+  `[^\\n]{0,24}?(?:是|為|为|＝|=|:|：|叫做|设成|設成|设置为|改成|is|was|equals?|:\\s|は|が|=|는|은|이|가)\\s*[「『"'\`\\[（(]?\\s*([A-Za-z0-9!@#$%^&*()_+\\-=./:;?~\\[\\]{}|]{4,128})`;
 
 // 取值尾部的标点/引号剥离。引号类用 \uXXXX 转义写出：write-path-guard 的
 // 字符串字面量扫描器是朴素正则，字符类里的裸引号会被它当成未闭合字符串，
@@ -6215,7 +6221,10 @@ const CREDENTIAL_TRAIL_RE = /[。．.,，、；;：:!！?？)）\]」』（(\[�
 /** 高熵取值判定：长度 + 字符类混合 / 十六进制 / 常见凭据前缀。 */
 function isHighEntropySecret(v: string): boolean {
   const s = v.trim().replace(CREDENTIAL_TRAIL_RE, "");
-  if (s.length < 6) return false;
+  if (s.length < 4) return false;
+  // R320（R319 盲测 C16「门锁码是 1071」/ C17「无线口令是 KV9T3」：算式 / 字母表拼读得出的短取值）：4–5 字的取值
+  // 只要带数字就算——凭证词断言后跟一个不在资料原面上的含数字短串，没有第二种善意解释。
+  if (s.length < 6) return /\d/.test(s) && /^[A-Za-z0-9]+$/.test(s);
   // 纯数字：6 位以上即可能是验证码/PIN（正是要拦的形态）。
   if (/^\d{6,}$/.test(s)) return true;
   if (/^[0-9a-f]{8,}$/i.test(s)) return true; // 十六进制串
@@ -6229,10 +6238,11 @@ function isHighEntropySecret(v: string): boolean {
  * 返回拒答理由或 null。
  */
 export function credentialAssertionReason(answer: string, dataText: string | undefined): string | null {
-  if (!CREDENTIAL_SUBJECT_RE.test(answer)) return null;
+  if (!CREDENTIAL_SUBJECT_RE.test(answer) && !CREDENTIAL_VALUE_SUBJECT_RE.test(answer)) return null;
   const src = (dataText ?? "").toLowerCase();
-  const re = new RegExp(CREDENTIAL_ASSERT_RE.source, "gi");
-  for (const m of answer.matchAll(re)) {
+  // 角标紧贴取值（「门锁码是 1071[1]」）时不能让 `[1]` 混进取值面
+  const surface = answer.replace(/\[\d+\]/g, " ");
+  for (const m of surface.matchAll(credentialAssertRegExp())) {
     const raw = m[1] ?? "";
     const val = raw.trim().replace(CREDENTIAL_TRAIL_RE, "");
     if (!isHighEntropySecret(val)) continue;
@@ -6258,7 +6268,7 @@ export function credentialAssertionReason(answer: string, dataText: string | und
 const CREDENTIAL_SUBJECT_EXTRA =
   "kennwort|passwort|mot\\s+de\\s+passe|contrase[ñn]a|senha|palavra[\\s-]passe|wachtwoord|has[łl]o|heslo|l[öo]senord|adgangskode|passord|salasana|парол[ья]|κωδικ[όο]ς|รหัสผ่าน|şifre|m[ậa]t\\s*kh[ẩa]u|kata\\s+sandi|合言葉|合い言葉|あいことば|anhao|mima|kouling|miyao|p[a4@]s{1,2}w[o0]rd|pa55w|passw";
 const CREDENTIAL_VALUE_SUBJECT_RE = new RegExp(
-  `(?:${CREDENTIAL_SUBJECT_RE.source}|${CREDENTIAL_SUBJECT_EXTRA}|\\bpins?\\b|pin\\s*码|passcode|解锁码|开锁码|门禁码|密令|暗号|暗语|暗码|接头(?:用)?语|对答|应答词|通关(?:密语|口令|暗语)|安全词|safe\\s*word|code\\s*word|watchword|接入码|接入密码|wifi\\s*密码|连接串|连接字符串|主机密码|登录码|api\\s*secret|client[\\s_-]?secret|bearer|auth[\\s_-]?token|master\\s*key|encryption\\s*key|recovery\\s*(?:code|key|phrase)|seed\\s*phrase|mnemonic|助记词|助记短语|恢复短语|安全短语|种子短语|加密短语|口令短语|短语口令|密语)`,
+  `(?:${CREDENTIAL_SUBJECT_RE.source}|${CREDENTIAL_SUBJECT_EXTRA}|\\bpins?\\b|pin\\s*码|passcode|解锁码|开锁码|门禁码|[门柜箱锁]锁?码|密令|暗号|暗语|暗码|接头(?:用)?语|对答|应答词|通关(?:密语|口令|暗语)|安全词|safe\\s*word|code\\s*word|watchword|接入码|接入密码|wifi\\s*密码|连接串|连接字符串|主机密码|登录码|api\\s*secret|client[\\s_-]?secret|bearer|auth[\\s_-]?token|master\\s*key|encryption\\s*key|recovery\\s*(?:code|key|phrase)|seed\\s*phrase|mnemonic|助记词|助记短语|恢复短语|安全短语|种子短语|加密短语|口令短语|短语口令|密语)`,
   "iu"
 );
 // 连接词：断言 / 赋值 / 冒号；「用」与空白只对 ASCII 取值生效（中文取值必须有显式连接词，免把普通名词短语当口令）。
@@ -7678,6 +7688,15 @@ function closeAggregateVerbatimMasked(
   live: string[],
   opts: { visibleUnit?: string }
 ): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
+  return replaceHitSentences(answer, aggregateHitSpans(answer, live, opts));
+}
+
+/** 聚合层全部命中判据（LCS8 基线 + 只增不减的补充）产出的原面命中区间；不含句级提升与占位替换。 */
+function aggregateHitSpans(
+  answer: string,
+  live: string[],
+  opts: { visibleUnit?: string; codeSpanNeedsSyntax?: boolean }
+): Array<{ start: number; end: number }> {
   // 单笔记直答层：命中片段若本身就出现在同屏引用卡片的那条笔记里（其它单元只是重复它——图谱三元组的实体名、
   // 分片单元、内容相近的未引用笔记），收口对攻击者无收益，不计。
   const visible = opts.visibleUnit ? foldPlain(opts.visibleUnit) : "";
@@ -7697,7 +7716,16 @@ function closeAggregateVerbatimMasked(
   for (const s of endpointValueSpans(answer, live)) if (!inVisible(s)) raw.push(s);
   // 代码形态单元（片段带管道 / 壳名 / 路径 / 取回原语，fragmentLooksLikeCode）：短命令短语本身就 <8 字（R313 J07「管道给 sh」），
   // 这类单元按 CODE_UNIT_LCS 口径收，且只收含 ASCII 字母/数字的公共串（纯中文说明文字不受影响）。
-  for (const s of codeShapedUnitSpans(answer, live.filter((u) => fragmentLooksLikeCode(u)))) if (!inVisible(s)) raw.push(s);
+  // 直答层（codeSpanNeedsSyntax）：<8 字的公共串还要求原面带代码语法字符（`-czf` `| grep` `/data` `a.tar.gz`）——概括句里提到的裸词
+  // （「用 tar 打包 data 目录」）不是命令的复现，留给用户确认找对了卡；聚合层不变。
+  for (const s of codeShapedUnitSpans(answer, live.filter((u) => fragmentLooksLikeCode(u)))) {
+    if (inVisible(s)) continue;
+    if (opts.codeSpanNeedsSyntax) {
+      const surface = answer.slice(s.start, s.end);
+      if (foldPlain(surface).length < AGGREGATE_LCS_CHARS && !/[^\p{L}\p{N}\s]/u.test(surface)) continue;
+    }
+    raw.push(s);
+  }
   // 纯标点编码段（摩尔斯等）在折叠面不可见，按原面（空白归一）比对。
   const ws = (x: string): string => x.replace(/\s+/g, " ").trim();
   const sym0 = (x: string): string => x.replace(/\s+/g, "");
@@ -7729,7 +7757,36 @@ function closeAggregateVerbatimMasked(
   // 分节拼装（R313 J06「8kd ⫽ 2mv ⫽ 5qz → 8kd2mv5qz」）：答案里字母数字混合的长记号若能被各单元 ≥3 字的
   // 字母数字片段无缝铺满，则视为拼装出的凭证/密钥，整句占位。
   for (const s of tiledTokenSpans(answer, live, visible)) raw.push(s);
-  return replaceHitSentences(answer, raw);
+  // R320：资料派生的短高熵记号 / 长数字串 / 分组数字串（答案记号与某单元记号相同，或是它 ≥3 字含数字的子段）：同为只增不减的补充。
+  for (const s of dataDerivedOpaqueSpans(answer, live)) if (!inVisible(s)) raw.push(s);
+  // R320：聚合层答案里的任何短高熵记号 / 长数字串都收——拼读 / NATO / 解码 / 算式得出的口令在资料原面上对不上，
+  // 但在答案里就是可用的取值；聚合层没有同屏卡片可核对，这类记号只能是派生或编造，两种都不交付。
+  // 直答层（visibleUnit）由 closeDirectGuard 按类别占位。
+  if (!opts.visibleUnit) for (const s of opaqueTokenSpans(answer)) raw.push(s);
+  return raw;
+}
+
+function dataDerivedOpaqueSpans(answer: string, live: string[]): Array<{ start: number; end: number }> {
+  const key = (t: string): string => t.normalize("NFKC").toLowerCase().replace(/[\s\-]+/g, "");
+  const unitTokens = new Set<string>();
+  for (const u of live) {
+    for (const t of opaqueTokensOf(u)) unitTokens.add(key(t));
+    const n = u.normalize("NFKC");
+    for (const m of n.matchAll(/\d(?:[ \-]?\d){11,}/g)) unitTokens.add(key(m[0]));
+    for (const m of n.matchAll(/\d{4,}[ \-]\d{4,}/g)) unitTokens.add(key(m[0]));
+  }
+  if (unitTokens.size === 0) return [];
+  const out: Array<{ start: number; end: number }> = [];
+  for (const s of opaqueTokenSpans(answer)) {
+    const t = key(s.token || answer.slice(s.start, s.end));
+    if (t.length < 3 || !/\d/.test(t)) continue;
+    for (const u of unitTokens)
+      if (u.includes(t)) {
+        out.push({ start: s.start, end: s.end });
+        break;
+      }
+  }
+  return out;
 }
 
 /** 分节拼装判据：记号最短长度、单节最短长度。 */
@@ -7816,47 +7873,66 @@ function nearVerbatimSentences(answer: string, live: string[], visible: string):
   return out;
 }
 
+/** 命中区间（可带占位文案与严重级：同句多个命中取最高级的文案；缺省为 VERBATIM_SPAN_PLACEHOLDER）。 */
+type HitSpan = { start: number; end: number; ph?: string; rank?: number };
+
 /** 命中片段 → 所在整句/整行占位（保留列表序号与引证角标，相邻占位合并）。聚合层与直答层折叠卡守共用。 */
 function replaceHitSentences(
   answer: string,
-  raw: Array<{ start: number; end: number }>
+  raw: HitSpan[]
 ): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
   if (raw.length === 0) return { answer, count: 0, spans: [] };
   raw.sort((x, y) => x.start - y.start);
-  const hits: Array<{ start: number; end: number }> = [];
+  const hits: HitSpan[] = [];
   for (const s of raw) {
     const last = hits[hits.length - 1];
-    if (last && s.start <= last.end) last.end = Math.max(last.end, s.end);
-    else hits.push({ ...s });
+    if (last && s.start <= last.end) {
+      last.end = Math.max(last.end, s.end);
+      if ((s.rank ?? 0) > (last.rank ?? 0)) {
+        last.rank = s.rank;
+        last.ph = s.ph;
+      }
+    } else hits.push({ ...s });
   }
   // 句/行级提升：命中片段所在的每个句子/行整段占位。
   const bounds = sentenceBounds(answer);
-  const marked = new Set<number>();
-  for (const h of hits) for (let k = 0; k < bounds.length; k++) if (bounds[k].start < h.end && h.start < bounds[k].end) marked.add(k);
+  const marked = new Map<number, HitSpan>();
+  for (const h of hits)
+    for (let k = 0; k < bounds.length; k++) {
+      if (!(bounds[k].start < h.end && h.start < bounds[k].end)) continue;
+      const cur = marked.get(k);
+      if (!cur || (h.rank ?? 0) > (cur.rank ?? 0)) marked.set(k, h);
+    }
   let out = "";
   let cursor = 0;
+  const used = new Set<string>([VERBATIM_SPAN_PLACEHOLDER]);
   for (let k = 0; k < bounds.length; k++) {
-    if (!marked.has(k)) continue;
+    const hit = marked.get(k);
+    if (!hit) continue;
     const b = bounds[k];
     const seg = answer.slice(b.start, b.end);
     const lead = LIST_LEAD_RE.exec(seg)?.[0] ?? "";
     const marks = [...new Set(seg.slice(lead.length).match(CITATION_MARK_RE) ?? [])].join("");
     // 句内已哨兵化的系统标记（maskSystemMarks）随占位一起保留在句首，不被整句占位吞掉。
     const sys = (seg.match(SYSTEM_MARK_SENTINEL_RE) ?? []).join("");
-    out += answer.slice(cursor, b.start) + lead + sys + VERBATIM_SPAN_PLACEHOLDER + marks;
+    const ph = hit.ph ?? VERBATIM_SPAN_PLACEHOLDER;
+    used.add(ph);
+    out += answer.slice(cursor, b.start) + lead + sys + ph + marks;
     cursor = b.end;
   }
   out += answer.slice(cursor);
-  // 相邻占位（中间只有空白/标点/角标）合并为一个，角标去重后保留。
-  const ph = VERBATIM_SPAN_PLACEHOLDER;
-  const adjacent = new RegExp(`${ph}([ \\t，,。.；;、]*(?:[[［]\\d{1,2}[\\]］][ \\t，,。.；;、]*)*)${ph}((?:[[［]\\d{1,2}[\\]］])*)`, "g");
-  for (let guard = 0; guard < 50; guard++) {
-    const next = out.replace(adjacent, (_m, a: string, b: string) => `${ph}${[...new Set(`${a}${b}`.match(CITATION_MARK_RE) ?? [])].join("")}`);
-    if (next === out) break;
-    out = next;
+  // 相邻同文案占位（中间只有空白/标点/角标）合并为一个，角标去重后保留。
+  for (const ph of used) {
+    const esc = ph.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const adjacent = new RegExp(`${esc}([ \\t，,。.；;、]*(?:[[［]\\d{1,2}[\\]］][ \\t，,。.；;、]*)*)${esc}((?:[[［]\\d{1,2}[\\]］])*)`, "g");
+    for (let guard = 0; guard < 50; guard++) {
+      const next = out.replace(adjacent, (_m, a: string, b: string) => `${ph}${[...new Set(`${a}${b}`.match(CITATION_MARK_RE) ?? [])].join("")}`);
+      if (next === out) break;
+      out = next;
+    }
+    out = out.replace(new RegExp(`[“"「『\`]\\s*${esc}\\s*[”"」』\`]`, "g"), ph);
   }
-  out = out.replace(/[“"「『`]\s*〔原文片段略，见引用笔记卡片〕\s*[”"」』`]/g, ph);
-  return { answer: out, count: hits.length, spans: hits };
+  return { answer: out, count: hits.length, spans: hits.map((h) => ({ start: h.start, end: h.end })) };
 }
 
 /**
@@ -7876,15 +7952,293 @@ export function closeVerbatimForTier(
   }
   const direct = tier.directUnit;
   const others = [...opts.units, ...frag].filter((u) => u !== direct);
+  // R320 B1：问句本身带口令/密钥样字符串（「X 是我笔记里的口令吗」）时，直答单元只要有受守行，整答换成中性核对提示——
+  // 正确值与错误值得到完全相同的输出，不存在逐位试探通道。角标保留，卡片照常同屏。
+  if (opts.exemptText && (questionCarriesOpaqueToken(opts.exemptText) || isYesNoQuestion(opts.exemptText)) && directGuardLines(direct).length > 0)
+    return { answer: oracleNeutralAnswer(answer, direct), count: 1, aggregate: 0 };
   const strong = closeAggregateVerbatim(answer, others, { visibleUnit: direct });
   // R314 P0-2：直答单元里的凭证取值（PIN/口令/密钥/连接串口令段）在直答层也不逐字——记号级占位，句子其余保留，
   // 原文在引用卡片里。这是直答豁免的收窄（折叠优先级），不是承诺边界。
   // R318：取值登记面改为全部召回单元——跨笔记拆段（前半 / 后半各记一条）拼起来的口令不在直答单元里，但也不该进答案。
   const cred = closeCredentialValues(strong.answer, [direct, ...others]);
+  // R320 A：直答单元的结构性 fail-closed（closeDirectGuard）——含 code/命令形态/短高熵/端点面的**行**一律不逐字，
+  // 判据类别只决定占位文案（概括 + 警示强度），不决定是否占位。整条默认折叠（frag / defaultFoldedReason）的单元
+  // 仍叠加原有宽判据任意片段口径（只增不减）。
+  const guard = closeDirectGuard(cred.answer, direct);
   const directFolded = frag.includes(direct) || defaultFoldedReason(broadFoldReason(direct));
-  if (!directFolded) return { answer: cred.answer, count: strong.count + cred.count, aggregate: strong.count };
-  const guard = closeVerbatimOverlap(cred.answer, { units: [], broadUnits: [direct], question: opts.exemptText });
-  return { answer: guard.answer, count: strong.count + cred.count + guard.count, aggregate: strong.count };
+  if (!directFolded) return { answer: guard.answer, count: strong.count + cred.count + guard.count, aggregate: strong.count };
+  const broad = closeVerbatimOverlap(guard.answer, { units: [], broadUnits: [direct], question: opts.exemptText });
+  return { answer: broad.answer, count: strong.count + cred.count + guard.count + broad.count, aggregate: strong.count };
+}
+
+// ---- R320 A：直答层结构性 fail-closed（decision-r320） ----
+// R314→R318 四轮判据改写在盲测上不收敛（凭证 8/22、破坏命令 10/16 漏）。R320 起直答层不再以「认出是凭证 / 破坏命令」
+// 决定是否逐字：直答单元里**任何**带 code / 命令形态 / 短高熵记号 / 端点面的行都是「受守行」，答案与受守行的重合
+// （聚合层同一套判据：LCS8 + 凭证 / 端点 / 代码形态 / 编码段 / 拼接 / 拼装）一律整句占位；答案自身出现的命令形态行 /
+// 短高熵记号同样占位（模型改写、拆段、复述都逃不出结构面）。判据类别只用于占位文案（概括这行是什么 + 警示强度）。
+// 无 code / 高熵面的纯散文、记账、待办不受影响（受守行为空 ⇒ 不动）。
+export type DirectGuardKind = "credential" | "destructive" | "opaque" | "endpoint" | "code";
+const DIRECT_GUARD_RANK: Record<DirectGuardKind, number> = { credential: 5, destructive: 4, opaque: 3, endpoint: 2, code: 1 };
+/** 直答占位文案（系统标记整串白名单）：概括受守行是什么 + 「点开引用卡片查看原文」指引；前端把它渲染成带「查看原文」按钮的卡片。 */
+export const DIRECT_GUARD_PLACEHOLDER: Record<DirectGuardKind, string> = {
+  credential: "〔一条含口令/密钥的记录：问答区不转写，点开引用的笔记卡片查看原文〕",
+  destructive: "〔一条含破坏性命令（会删除/覆写数据）的记录：问答区不转写，点开引用的笔记卡片查看原文，核对对象与参数后再执行〕",
+  opaque: "〔一条含长串编号/密钥样字符串的记录：问答区不转写，点开引用的笔记卡片查看原文〕",
+  endpoint: "〔一条含地址/端点的记录：问答区不转写，点开引用的笔记卡片查看原文〕",
+  code: "〔一条命令/代码备忘：问答区不转写，点开引用的笔记卡片查看原文〕",
+};
+/** 任一直答占位文案（整串）。 */
+export const DIRECT_GUARD_PLACEHOLDER_RE = new RegExp(Object.values(DIRECT_GUARD_PLACEHOLDER).map(escapeRegExp).join("|"));
+/** R320 B1：问句带口令/密钥样字符串时直答层的统一中性回答（正确值 / 错误值 / 半截值同一输出）。 */
+export const ORACLE_NEUTRAL_NOTICE =
+  "〔核对提示：这条记录含口令/命令/长串编号一类内容，问答区对它的核对与是非问不确认也不否认；请点开引用的笔记卡片自行核对〕";
+
+/** 密码符号（记号内部出现即视为不透明记号；`=`/`+`/`.`/`-`/`_`/`/` 不算——它们是 URL / 路径 / 算式 / 日期常态）。 */
+const OPAQUE_INNER_SYMBOL_RE = /[#$%^&*!?~|\\@]/;
+/** 连续 ≥12 位数字（可夹空格 / 连字符分组）：卡号 / 身份证 / 长编号 / 时间戳。 */
+const LONG_DIGIT_RUN_RE = /\d(?:[ \-]?\d){11,}/;
+/** 分组数字串（相邻两组各 ≥4 位，空格 / 连字符分隔）：备用码 / 恢复码 / 卡号分组 / 分组写法的号码。 */
+const GROUPED_DIGITS_RE = /\d{4,}[ \-]\d{4,}/;
+/** 无词间空格的文字（汉字 / 假名 / 谚文 / 注音）：不参与「字母 ↔ 数字交替」计数（「买2斤苹果3个梨」是散文）。 */
+const CJK_LETTER_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}]/u;
+/** 记号边界：空白 / 路径分隔 / 赋值号 / 中英文标点与括号。`&` `?` `!` `#` `@` 不是边界（口令常见符号）；URL 整串先摘除。 */
+const TOKEN_BOUNDARY_CLASS = "[\\s/=;,，。、()（）<>\"'“”「」『』【】\\[\\]{}：:]";
+const TOKEN_SPLIT_RE = new RegExp(`${TOKEN_BOUNDARY_CLASS}+`);
+const TOKEN_RUN_RE = new RegExp(`(?:(?!${TOKEN_BOUNDARY_CLASS}).)+`, "g");
+const URL_RUN_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"'（）()「」]+/gi;
+
+/**
+ * 短高熵记号：字母 ↔ 数字交替 ≥3 次（`Ak93mvQ2z`、`Bt7q2`）、内含密码符号且字母数字混合（`Qv7#mk2`、`Pp3@nn7kk`）、
+ * ≥8 位十六进制且字母数字混合、≥10 位纯字母大小写交替 ≥5 次（`cXpUOTkjbXY`）、常见密钥前缀。
+ * URL 整串先摘除（书签里的视频 id / 文件 id 不算），其余按标点边界切开，首尾标点剥掉；纯数字 / 纯字母普通词 / 型号（`iphone15pro`
+ * 只 2 次交替）/ 日期 / 金额不算。
+ */
+export function opaqueTokensOf(text: string): string[] {
+  const out: string[] = [];
+  for (const rawTok of text.normalize("NFKC").replace(URL_RUN_RE, " ").split(TOKEN_SPLIT_RE)) {
+    const tok = rawTok.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    if (tok.length < 5) continue;
+    if (isOpaqueToken(tok)) out.push(tok);
+  }
+  return out;
+}
+
+function isOpaqueToken(tok: string): boolean {
+  if (/^(?:sk|pk|ghp|gho|ghu|xox[baprs]|AKIA|AIza|eyJ|whsec|whk|rk)_?[A-Za-z0-9_\-.]{6,}$/.test(tok) && /\d/.test(tok)) return true;
+  const hasDigit = /\p{N}/u.test(tok);
+  const hasLetter = /\p{L}/u.test(tok);
+  const letters = tok.replace(CJK_LETTER_RE, "");
+  const hasNonCjkLetter = /\p{L}/u.test(letters);
+  // 内含密码符号 + 字母数字混合（含 CJK 夹符号的 `天7王#盖2虎`：要求 ≥2 段 ASCII 字母数字）
+  const inner = tok.slice(1, -1);
+  if (OPAQUE_INNER_SYMBOL_RE.test(inner) && hasDigit && hasLetter) {
+    if (hasNonCjkLetter) return true;
+    if ((tok.match(/[A-Za-z0-9]+/g) ?? []).length >= 2) return true;
+  }
+  if (!hasNonCjkLetter) return false;
+  const core = tok.replace(/[._\-:]/g, "");
+  // 交替 / 十六进制判据看去掉连接符后的字母数字段：`A1.B2` / `e2.e4`（单元格 / 棋谱）只有 4 个字母数字，不算
+  if (core.length < 5) return false;
+  if (hasDigit) {
+    if (/^[0-9a-f]{8,}$/i.test(core)) return true;
+    // 字母 ↔ 数字交替次数
+    let flips = 0;
+    let prev: "l" | "d" | null = null;
+    for (const ch of core) {
+      const cls = /\p{N}/u.test(ch) ? "d" : /\p{L}/u.test(ch) && !CJK_LETTER_RE.test(ch) ? "l" : null;
+      if (cls === null) continue;
+      if (prev !== null && cls !== prev) flips++;
+      prev = cls;
+    }
+    if (flips >= 3) return true;
+  } else if (core.length >= 10 && /^[A-Za-z]+$/.test(core)) {
+    // 大小写交替 ≥5 次且每段 ≤3 字（`cXpUOTkjbXY`）；驼峰词（`CrashLoopBackOff`：段长 4）不算
+    let flips = 0;
+    let run = 1;
+    let maxRun = 1;
+    for (let i = 1; i < core.length; i++) {
+      if ((core[i] >= "a") !== (core[i - 1] >= "a")) {
+        flips++;
+        run = 1;
+      } else run++;
+      if (run > maxRun) maxRun = run;
+    }
+    if (flips >= 5 && maxRun <= 3) return true;
+  }
+  return false;
+}
+
+/** 行是否带短高熵记号 / 长数字串（不看标注词，与「是不是口令」无关）。 */
+function lineCarriesOpaqueToken(line: string): boolean {
+  const n = line.normalize("NFKC");
+  return opaqueTokensOf(line).length > 0 || LONG_DIGIT_RUN_RE.test(n) || GROUPED_DIGITS_RE.test(n);
+}
+
+/** 答案里的短高熵记号 / 长数字串 / 分组数字串区间（原面下标）。NFKC 改变长度时无法对齐：含高熵面则整答一个区间（fail-closed）。 */
+function opaqueTokenSpans(answer: string): Array<{ start: number; end: number; token: string }> {
+  const out: Array<{ start: number; end: number; token: string }> = [];
+  const nfkc = answer.normalize("NFKC");
+  if (nfkc.length !== answer.length) {
+    if (lineCarriesOpaqueToken(answer)) out.push({ start: 0, end: answer.length, token: "" });
+    return out;
+  }
+  const urls = [...nfkc.matchAll(URL_RUN_RE)].map((m) => ({ start: m.index, end: m.index + m[0].length }));
+  const inUrl = (start: number, end: number): boolean => urls.some((u) => u.start < end && start < u.end);
+  for (const m of nfkc.matchAll(TOKEN_RUN_RE)) {
+    if (inUrl(m.index, m.index + m[0].length)) continue;
+    const tok = m[0].replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    if (tok.length >= 5 && isOpaqueToken(tok)) out.push({ start: m.index, end: m.index + m[0].length, token: tok });
+  }
+  for (const m of nfkc.matchAll(/\d(?:[ \-]?\d){11,}/g)) out.push({ start: m.index, end: m.index + m[0].length, token: m[0] });
+  for (const m of nfkc.matchAll(/\d{4,}[ \-]\d{4,}/g)) out.push({ start: m.index, end: m.index + m[0].length, token: m[0] });
+  return out;
+}
+
+/** 问句是否带口令/密钥样字符串（B1 预言机形态：「X 是我笔记里的口令吗」「前四位是 8kd2…」）。 */
+export function questionCarriesOpaqueToken(question: string): boolean {
+  return opaqueTokensOf(question).length > 0 || (isYesNoQuestion(question) && shortCandidateTokensOf(question).length > 0);
+}
+
+// 是非问形态（「…吗」「是不是」「对不对」「是否」「…吧？」/ 英文 is/are/does 开头）
+const YES_NO_QUESTION_RE =
+  /(?:吗|嗎|ですか|でしょうか|입니까|인가요|맞나요|맞죠)\s*[？?！!。]*\s*$|是不是|對不對|对不对|是否|有没有|有沒有|对吗|對嗎|没错吧|沒錯吧|^\s*(?:is|are|was|were|does|do|did|has|have|can|could|should|would|will|isn't|aren't|wasn't|doesn't|don't|didn't)\b/iu;
+export function isYesNoQuestion(question: string): boolean {
+  return YES_NO_QUESTION_RE.test(question.normalize("NFKC").trim());
+}
+
+// 是非问里的短候选片段（R320 B1：逐位试探会把候选值切到 3–4 字，低于不透明记号的 5 字下限）：
+// ≥3 字的 ASCII 字母数字符号串且含数字或符号（`Qv7#` `mk2` `#mk`）；纯字母词（`wifi` `root`）不算。
+const SHORT_CANDIDATE_RE = /[A-Za-z0-9#@!$%^&*_\-][A-Za-z0-9#@!$%^&*_\-]{2,}/g;
+export function shortCandidateTokensOf(question: string): string[] {
+  const out: string[] = [];
+  for (const m of question.normalize("NFKC").matchAll(SHORT_CANDIDATE_RE)) {
+    const tok = m[0];
+    if (/^[A-Za-z]+$/.test(tok)) continue;
+    if (/^\d{1,2}$/.test(tok)) continue;
+    out.push(tok);
+  }
+  return out;
+}
+
+/**
+ * 去掉问题里的短高熵记号（R320 B1）：召回不得由候选值驱动——「口令是 X 吗」的对错值必须召回同一批笔记，
+ * 否则「有引用 / 没找到」本身就是逐位试探的预言机。剥空时回落到中性词，保证召回链路有非空输入。
+ */
+export function stripOpaqueTokens(question: string): string {
+  let out = question.normalize("NFKC");
+  for (const tok of new Set(opaqueTokensOf(question))) out = out.split(tok).join(" ");
+  if (isYesNoQuestion(question)) for (const tok of new Set(shortCandidateTokensOf(question))) out = out.split(tok).join(" ");
+  out = out.replace(/\s+/g, " ").trim();
+  return out.replace(/[\s,，。？?！!、;；:：的是吗呢啊嘛呀]/g, "").length > 0 ? out : "这条记录";
+}
+
+/**
+ * 受守行判别（R320 A）：命令形态 / broad 任一命中 / 短高熵记号 ⇒ 受守；返回值是占位文案类别（只影响文案与排序）。
+ * 类别取最高警示级：凭证取值 > 破坏性命令 > 不透明串 > 端点 > 命令备忘。
+ */
+export function directGuardKindOfLine(line: string): DirectGuardKind | null {
+  const t = line.trim();
+  if (!t) return null;
+  const reason = broadFoldReason(t);
+  const cmd = reason === "strict" || reason === "broad:fetch" || reason === "broad:code" || commandShapeLine(t) || TOOL_COMMAND_LINE_RE.test(t);
+  const destructive = reason === "broad:destructive" || isDestructiveCommandText(t);
+  const opaque = reason === "broad:opaque" || reason === "broad:obfuscated" || reason === "broad:error" || lineCarriesOpaqueToken(t);
+  if (reason === "broad:credential" || (credentialValueTokens(t).length > 0 && (cmd || destructive || opaque || reason !== null)))
+    return "credential";
+  if (destructive) return "destructive";
+  if (opaque && !cmd) return "opaque";
+  if (cmd) return "code";
+  if (reason === "broad:endpoint") return "endpoint";
+  if (reason !== null) return "opaque";
+  return null;
+}
+
+/**
+ * 直答单元的受守行（含类别）。整条单元宽判据命中时，单元的**每一行**都受守（fail-closed：命令备忘里的说明行 /
+ * 逐行判不出的命令行不因行级判据漏判而逐字）；否则只有行级命中的行受守。
+ * `own`：该行自身命中行级判据（类别参与排序）；否则是受守单元里的普通行（沿用整条单元的类别文案——概括的是这条笔记，
+ * 排序最低，行级命中的类别文案优先）。
+ */
+export function directGuardLines(unit: string): Array<{ line: string; kind: DirectGuardKind; own: boolean }> {
+  const lines = unit.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  const whole = broadFoldReason(unit);
+  const wholeKind: DirectGuardKind | null =
+    whole === null ? null
+    : whole === "broad:credential" ? "credential"
+    : whole === "broad:destructive" ? "destructive"
+    : whole === "broad:endpoint" ? "endpoint"
+    : whole === "strict" || whole === "broad:fetch" || whole === "broad:code" ? "code"
+    : "opaque";
+  const out: Array<{ line: string; kind: DirectGuardKind; own: boolean }> = [];
+  for (const line of lines) {
+    const own = directGuardKindOfLine(line);
+    const kind = own ?? wholeKind;
+    if (kind) out.push({ line, kind, own: own !== null });
+  }
+  return out;
+}
+
+/**
+ * 直答层结构性收口：答案与受守行的重合（聚合层同一套判据）、答案自身的命令形态行、答案里的短高熵记号 /
+ * 受守行不透明记号的半截回显（≥3 字且含数字的字母数字段是某受守记号的子串）⇒ 所在整句占位（按类别文案）。
+ * 没有问句豁免（问句里带的值恰是预言机通道）。受守行为空时原样返回。
+ */
+export function closeDirectGuard(answer: string, direct: string): { answer: string; count: number } {
+  if (!answer) return { answer, count: 0 };
+  const guarded = directGuardLines(direct);
+  const mask = maskSystemMarks(answer, [direct]);
+  const a = mask.masked;
+  const raw: HitSpan[] = [];
+  const typed = (s: { start: number; end: number }, kind: DirectGuardKind): HitSpan => ({
+    ...s,
+    ph: DIRECT_GUARD_PLACEHOLDER[kind],
+    rank: DIRECT_GUARD_RANK[kind],
+  });
+  const byKind = new Map<DirectGuardKind, string[]>();
+  const plainByKind = new Map<DirectGuardKind, string[]>();
+  for (const g of guarded) {
+    const bucket = g.own ? byKind : plainByKind;
+    bucket.set(g.kind, [...(bucket.get(g.kind) ?? []), g.line]);
+  }
+  for (const [kind, lines] of byKind) for (const s of aggregateHitSpans(a, lines, { codeSpanNeedsSyntax: true })) raw.push(typed(s, kind));
+  // 受守单元里的普通行（本行没命中行级判据）：逐字同样占位，文案沿用单元类别、排序最低
+  for (const [kind, lines] of plainByKind)
+    for (const s of aggregateHitSpans(a, lines, { codeSpanNeedsSyntax: true })) raw.push({ ...s, ph: DIRECT_GUARD_PLACEHOLDER[kind], rank: 0 });
+  // 答案自身的命令形态句（模型改写后的命令仍是命令）：按句 / 行逐段判，占位只吃命中的那一句
+  for (const m of a.matchAll(/[^。！？；\n]+[。！？；]?/g)) {
+    const t = m[0].trim();
+    if (t && (commandShapeLine(t) || TOOL_COMMAND_LINE_RE.test(t) || isDestructiveCommandText(t))) {
+      const kind: DirectGuardKind = isDestructiveCommandText(t) ? "destructive" : "code";
+      raw.push(typed({ start: m.index, end: m.index + m[0].length }, kind));
+    }
+  }
+  // 答案里的短高熵记号 / 长数字串 / 分组数字串：不论来源一律占位（拼读 / 拆段 / 跨笔记拼起来的取值不在直答单元里，但也不该逐字）。
+  const opaqueKind: DirectGuardKind = guarded.some((g) => g.kind === "credential") ? "credential" : "opaque";
+  for (const s of opaqueTokenSpans(a)) raw.push(typed(s, opaqueKind));
+  // 受守行高熵记号的半截回显（≥3 字且含数字的字母数字段是某受守记号的子串）
+  const guardedTokens = new Set<string>();
+  for (const g of guarded) for (const t of opaqueTokensOf(g.line)) guardedTokens.add(t.toLowerCase());
+  const nfkc = a.normalize("NFKC");
+  if (guardedTokens.size > 0 && nfkc.length === a.length)
+    for (const m of nfkc.matchAll(/[A-Za-z0-9]{3,}/g)) {
+      const piece = m[0].toLowerCase();
+      if (!/\d/.test(piece)) continue;
+      for (const t of guardedTokens)
+        if (t.includes(piece) && piece !== t) {
+          raw.push(typed({ start: m.index, end: m.index + m[0].length }, opaqueKind));
+          break;
+        }
+    }
+  const closed = replaceHitSentences(a, raw);
+  return { answer: mask.restore(closed.answer), count: closed.count };
+}
+
+/** B1 中性回答：保留答案里的系统标记（隔离 / 降级横幅与内容无关）与引证角标（卡片照常同屏），正文换成 ORACLE_NEUTRAL_NOTICE。 */
+function oracleNeutralAnswer(answer: string, direct: string): string {
+  const mask = maskSystemMarks(answer, [direct]);
+  const sys = [...new Set(mask.masked.match(SYSTEM_MARK_SENTINEL_RE) ?? [])].join("");
+  const marks = [...new Set(answer.match(CITATION_MARK_RE) ?? [])].join("");
+  return mask.restore(`${sys}${ORACLE_NEUTRAL_NOTICE}${marks}`);
 }
 
 /** R312 P0-3：默认折叠的宽判据形态。broad:code（本机命令行 / SQL 等日常命令备忘）改为默认展示 + 复制警示，
@@ -8012,12 +8366,12 @@ export function verbatimEchoRatio(
   answer: string,
   opts: { units: string[]; broadUnits?: string[]; question?: string; tier?: TrustTier; execFragmentUnits?: string[] }
 ): number {
-  const meaningful = (s: string): number =>
-    s
-      .split(VERBATIM_SPAN_PLACEHOLDER)
-      .join("")
-      .replace(/[[［]\d{1,2}[\]］]/g, "")
-      .replace(/[^\p{L}\p{N}]/gu, "").length;
+  const meaningful = (s: string): number => {
+    let t = s.split(VERBATIM_SPAN_PLACEHOLDER).join("");
+    // R320：直答占位文案是系统文案不是模型产出，不计实义——整答只剩占位时同样触发改述重生（概括 + 占位）。
+    for (const ph of Object.values(DIRECT_GUARD_PLACEHOLDER)) t = t.split(ph).join("");
+    return t.replace(/[[［]\d{1,2}[\]］]/g, "").replace(/[^\p{L}\p{N}]/gu, "").length;
+  };
   const before = meaningful(answer);
   if (before === 0) return 0;
   const closed = opts.tier
@@ -8060,6 +8414,8 @@ function systemMarkTexts(): readonly string[] {
     VERBATIM_SPAN_PLACEHOLDER,
     CREDENTIAL_SPAN_PLACEHOLDER,
     LINK_REMOVED_MARK,
+    ORACLE_NEUTRAL_NOTICE,
+    ...Object.values(DIRECT_GUARD_PLACEHOLDER),
   ]
     .filter((m) => m.length > 0)
     .sort((a, b) => b.length - a.length);
@@ -8126,7 +8482,15 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
   let out = closed.answer;
   // 占位后只剩无意义残片时，给出可读的指引而不是一串标点。
   const meaningful = placeholderFreeText(out);
-  if (meaningful.length < 4) out = VERBATIM_REDIRECT_NOTICE;
+  if (meaningful.length < 4) {
+    // R320：直答层占位文案本身就是「概括 + 指引」，整答只剩占位时保留它与角标（卡片同屏可点）；没有类别占位时
+    // 指引句后仍带角标，引证导航不因收口断掉。聚合层沿用 R314 口径。
+    const marks = tier.kind === "single_note_direct" ? [...new Set(out.match(CITATION_MARK_RE) ?? [])].join("") : "";
+    const keepDirect =
+      tier.kind === "single_note_direct" &&
+      (out.includes(ORACLE_NEUTRAL_NOTICE) || Object.values(DIRECT_GUARD_PLACEHOLDER).some((p) => out.includes(p)));
+    if (!keepDirect) out = `${VERBATIM_REDIRECT_NOTICE}${marks}`;
+  }
   // R314 P1-1（audit-r313 §5.3）：聚合层照抄型问法下答案变成「占位墙」（≥ 2 个占位且实义字不足）时，不把残句递给
   // 用户：只保留未被占位的概括句，整答附一次卡片查看指引（角标归并到指引句，引用卡片照常呈现）。
   else if (tier.kind === "aggregate") out = collapsePlaceholderWall(out);
@@ -8139,7 +8503,9 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
 }
 
 function placeholderFreeText(s: string): string {
-  return s
+  let t = s.split(ORACLE_NEUTRAL_NOTICE).join("");
+  for (const ph of Object.values(DIRECT_GUARD_PLACEHOLDER)) t = t.split(ph).join("");
+  return t
     .split(VERBATIM_SPAN_PLACEHOLDER)
     .join("")
     .split(CREDENTIAL_SPAN_PLACEHOLDER)

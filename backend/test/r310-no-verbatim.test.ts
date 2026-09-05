@@ -35,6 +35,8 @@ import {
   AGGREGATE_TIER,
   AGGREGATE_LCS_CHARS,
   DESTRUCTIVE_WARN_MARK,
+  directGuardLines,
+  DIRECT_GUARD_PLACEHOLDER_RE,
 } from "../src/prompt-armor";
 import { pushSnippet } from "../src/push";
 import { isQuestionEchoAnswer } from "../src/ask";
@@ -408,24 +410,36 @@ describe("R310 语料：善意 307（R307 243 + R309 64）", () => {
 
   // R312 P0-1：直答层对善意笔记的代价必须压回（R311 实测整答隔离/占位 16.5%）：卡片默认展示的善意笔记
   // （含 broad:code 命令备忘）原样交付；仅卡片默认折叠的形态换占位。聚合层则一律不逐字交付。
-  it("Ask 回显：整答隔离率 ≤ 4.1%（R308 基线）；直答层默认展示的笔记原样、聚合层一律不逐字", () => {
+  it("Ask 回显：整答隔离率 ≤ 4.1%（R308 基线）；直答层无 code/高熵面的笔记逐字不动、有受守行的笔记一律占位；聚合层一律不逐字", () => {
     let isolated = 0;
     let directChanged = 0;
+    let surfaced = 0;
     const verbatim: string[] = [];
     const damaged: string[] = [];
+    const leaked: string[] = [];
     for (const b of BENIGN) {
       const fin = finalizeAskAnswer(b.text, { dataText: b.text, dataUnits: [b.text], question: "这条笔记写了什么" });
       if (fin.isolated) isolated++;
-      // 外链剥除（〔已移除外部链接〕）是既有链接层，不属 R312 收口口径，不计入直答层改动
-      if (fin.answer !== b.text && !fin.answer.includes("〔已移除外部链接〕")) {
-        directChanged++;
-        // R314/R316 破坏性命令警示行（broad:destructive，卡片默认展示 + 高警示）只在命令行前加一行标记，命令本身原样交付；
-        // 去掉标记行后与原文相同即不算「直答层损伤」（R316 LC12 `find … -delete 清日志` 按能力面入 fs-delete 族）。
-        const shown = fin.answer
-          .split("\n")
-          .filter((l) => l.trim() !== DESTRUCTIVE_WARN_MARK)
-          .join("\n");
-        if (!fin.isolated && !defaultFoldedReason(broadFoldReason(b.text)) && shown !== b.text) damaged.push(`${b.id}: ${fin.answer.slice(0, 100)}`);
+      // 外链剥除（〔已移除外部链接〕）是既有链接层，不属收口口径，不计入直答层改动
+      const linkOnly = fin.answer.includes("〔已移除外部链接〕");
+      if (fin.answer !== b.text && !linkOnly) directChanged++;
+      // R320 A：直答层的边界是结构面不是判据——受守行（宽判据 / 命令形态 / 短高熵记号）为空的善意笔记逐字不动（不再排除默认折叠形态，
+      // 也不再容许警示行）；有受守行的笔记受守行一律不逐字（换类别占位）。两者都是精确断言，误占位率 = surfaced / BENIGN。
+      const guarded = directGuardLines(b.text);
+      if (guarded.length === 0) {
+        if (!fin.isolated && !linkOnly && fin.answer !== b.text) damaged.push(`${b.id}: ${fin.answer.slice(0, 100)}`);
+      } else {
+        surfaced++;
+        if (!fin.isolated) {
+          // 外链行由链接层先剥掉（〔已移除外部链接〕），剥后不再与受守行逐字重合，可以没有类别占位；其余受守单元必须有占位文案
+          if (!linkOnly && !DIRECT_GUARD_PLACEHOLDER_RE.test(fin.answer) && !fin.answer.includes(VERBATIM_SPAN_PLACEHOLDER))
+            damaged.push(`${b.id}: 无类别占位 ${fin.answer.slice(0, 100)}`);
+          // 沿用单元保护的普通行按 LCS8 口径判逐字（表头 / 分隔线这类 <8 归一化字的结构行不计）
+          for (const g of guarded)
+            if ((g.own || g.line.replace(/[^\p{L}\p{N}]/gu, "").length >= 8) && fin.answer.includes(g.line))
+              leaked.push(`${b.id}: 受守行逐字 ${g.line.slice(0, 60)}`);
+          if (fin.answer.includes(DESTRUCTIVE_WARN_MARK)) leaked.push(`${b.id}: 直答层仍带警示行（命令已占位不应再警示）`);
+        }
       }
       const agg = finalizeAskAnswer(b.text, { dataText: b.text, dataUnits: [b.text], question: "这条笔记写了什么", tier: AGGREGATE_TIER });
       if (verbatimOverlapSpans(agg.answer, [b.text], { lcs: AGGREGATE_LCS_CHARS, lineMin: Number.POSITIVE_INFINITY }).length > 0)
@@ -433,8 +447,13 @@ describe("R310 语料：善意 307（R307 243 + R309 64）", () => {
     }
     expect(isolated / BENIGN.length).toBeLessThanOrEqual(0.041);
     expect(damaged).toEqual([]);
-    // 直答层整答改动（隔离 + 默认折叠形态占位）总量有上界：宽判据默认折叠的善意笔记占比目标 ~7%
-    expect(directChanged / BENIGN.length).toBeLessThanOrEqual(0.12);
+    expect(leaked).toEqual([]);
+    // 直答层整答改动 = 隔离 + 有受守行的占位。上界是 decision-r320 量化的体验代价（R310 善意 307 里带命令/高熵面的占比）：
+    // R320 实测 directChanged 76/307 = 24.8%（main 基线 22/307 = 7.2%，增量 54 条全是命令备忘 / 高熵识别符），surfaced 94/307 = 30.6%（含链接层已剥的端点行）。
+    // 不许随判据改写悄悄上浮；往下走需在 decision 文档里重新量化。
+    expect(directChanged).toBeLessThanOrEqual(surfaced + isolated);
+    expect(directChanged / BENIGN.length).toBeLessThanOrEqual(0.26);
+    expect(surfaced / BENIGN.length).toBeLessThanOrEqual(0.32);
     expect(verbatim).toEqual([]);
   });
 });
