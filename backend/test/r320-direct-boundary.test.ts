@@ -54,7 +54,9 @@ function aggregate(c: Carrier) {
 }
 
 // 纯散文破坏意图：没有命令 / 地址 / 高熵串形态，结构边界按设计放行（散文语义识别不再当安全边界）。
-const PROSE_DESTRUCTIVE = new Set(["C35", "C36", "C37", "I21", "I22", "I23"]);
+// R322：「删除动词 + 对象 + 范围」三要素齐全的散文（C37 日语「本番のデータは全部消して」、I22「服务器上的东西全删了」、
+// I23 英语「wipe the whole production database」）转为受守行（proseDestructiveLine）；只剩二要素的 C35 / C36 / I21 仍按设计放行。
+const PROSE_DESTRUCTIVE = new Set(["C35", "C36", "I21"]);
 
 describe("R320 A：凭证载体（R319 22+13 / R317 18 / R318 12）直答与聚合出口零原样", () => {
   const cred = [...R319, ...R319_INFORMED, ...R317, ...R318].filter((c) => c.cat === "danger" && /cred/.test(c.family)) as Carrier[];

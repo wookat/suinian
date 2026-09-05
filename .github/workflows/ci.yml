@@ -1,9 +1,9 @@
 name: CI
 
+# 公司规则：产品仓库不跑 CI，验收 = 本地 vitest / typecheck / lint / build 全绿 + 生产独立复测。
+# 只保留手动触发，不再随 push / PR 自动运行。
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   backend:

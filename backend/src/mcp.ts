@@ -12,7 +12,7 @@ import {
   foldOutletWarnLine,
   OUTLET_GLOBAL_RISK_NOTICE,
   ASK_OUTLET_HEADER,
-  closeAggregateVerbatim,
+  closeAggregateOutlet,
   type BroadFoldReason,
 } from "./prompt-armor";
 import { recordOutletFoldMarks, recordOutletVerbatimClosed, type OutletFoldCounts } from "./guard-events";
@@ -152,14 +152,14 @@ export function closeThreadText<T extends { title?: unknown; summary?: unknown }
   let closed = 0;
   const out = { ...thread };
   if (typeof thread.title === "string") {
-    const c = closeAggregateVerbatim(thread.title, units);
+    const c = closeAggregateOutlet(thread.title, units);
     if (c.count > 0) {
       out.title = UNTITLED_THREAD;
       closed += c.count;
     }
   }
   if (typeof thread.summary === "string") {
-    const c = closeAggregateVerbatim(thread.summary, units);
+    const c = closeAggregateOutlet(thread.summary, units);
     if (c.count > 0) {
       out.summary = c.answer;
       closed += c.count;

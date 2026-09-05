@@ -61,10 +61,32 @@ export type AnswerCopyLevel = "destructive" | "code"
  * strict / credential / broad 不纳入：判危命令在答案里被隔离，口令只给占位，端点 / 编码串按聚合层收口——答案区没有需要确认的载荷，
  * 弹确认只会是噪音。
  */
+// 服务端固定指引句（〔…〕标记之外还带正文的几条；全句与 backend prompt-armor 常量一致）。
+const FIXED_GUIDE_SENTENCES = [
+  "〔原文查看〕问答区不逐字转写笔记原文；点开下方引用的笔记卡片即可查看完整原文。",
+  "〔原文查看〕已找到相关笔记，但跨多条笔记的回答不逐字转写原文；请点开下方引用的笔记卡片查看完整内容。",
+  "相关笔记内容命中安全隔离规则，已隔离未采纳；原文可在引用的笔记卡片中查看。",
+]
+
+/**
+ * 纯占位答案（R322 D1，audit-r321 B5）：去掉全部 〔…〕 标记 / 固定指引句 / [n] 角标 / 标点空白后不剩任何字——
+ * 答案区没有一个字来自笔记，复制它不需要任何确认（known-issues §2「纯占位答案不提醒」）。
+ */
+export function isPurePlaceholderAnswer(content: string): boolean {
+  let rest = shortenGuardMarks(content)
+  for (const s of FIXED_GUIDE_SENTENCES) rest = rest.split(s).join(" ")
+  rest = rest
+    .replace(/〔[^〔〕\n]{1,160}〕/g, " ")
+    .replace(/[[［]\d{1,2}[\]］]/g, " ")
+    .replace(/[\s\p{P}]+/gu, "")
+  return rest.length === 0
+}
+
 export function answerCopyLevel(m: {
   content: string
   refs?: { note: { fold?: boolean; fold_reason?: string | null } }[]
 }): AnswerCopyLevel | null {
+  if (isPurePlaceholderAnswer(m.content)) return null
   let top: AnswerCopyLevel | null = m.content.includes(DESTRUCTIVE_WARN_PREFIX) ? "destructive" : null
   for (const r of m.refs ?? []) {
     const n = r.note

@@ -18,7 +18,7 @@ import {
   broadFoldReason,
   foldSafeTitle,
   foldOutletWarnLine,
-  closeAggregateVerbatim,
+  closeAggregateOutlet,
   OUTLET_GLOBAL_RISK_NOTICE,
   OUTLET_GLOBAL_RISK_HEADER,
   OUTLET_GLOBAL_RISK_HEADER_VALUE,
@@ -140,14 +140,14 @@ export function closeBackupDerived(
     let title = t.title;
     let summary = t.summary;
     if (title) {
-      const c = closeAggregateVerbatim(title, units);
+      const c = closeAggregateOutlet(title, units);
       if (c.count > 0) {
         title = UNTITLED_THREAD;
         spans += c.count;
       }
     }
     if (summary) {
-      const c = closeAggregateVerbatim(summary, units);
+      const c = closeAggregateOutlet(summary, units);
       if (c.count > 0) {
         summary = c.answer;
         spans += c.count;
@@ -162,7 +162,7 @@ export function closeBackupDerived(
       return Number.isFinite(ts) && ts >= w.from && ts <= w.to;
     }).map((n) => n.content);
     if (units.length === 0 || !r.content_md) return r;
-    const c = closeAggregateVerbatim(r.content_md, units);
+    const c = closeAggregateOutlet(r.content_md, units);
     if (c.count === 0) return r;
     spans += c.count;
     return { ...r, content_md: c.answer };

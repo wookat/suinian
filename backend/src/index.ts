@@ -15,7 +15,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, type BroadFoldReason } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, type BroadFoldReason } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -82,7 +82,7 @@ import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES, BACKUP_AI_DERIVED_NOTICE, closeBackupDerived } from "./backup";
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
-import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources } from "./ask";
+import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources, citeIsolationMarks } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -236,7 +236,7 @@ export async function askUserDataVersion(db: D1Database, userId: string): Promis
 }
 
 /** 答案缓存的收口版本：出口收口规则变更时递增，旧规则下产出的答案不会在新版部署后继续从边缘缓存送出。 */
-export const ASK_ANSWER_CACHE_EPOCH = "r320.11";
+export const ASK_ANSWER_CACHE_EPOCH = "r322.1";
 
 async function askAnswerCacheKey(auth: string, material: string, dataVersion: string): Promise<Request> {
   const digest = await crypto.subtle.digest(
@@ -4912,8 +4912,14 @@ app.post("/api/ask", async (c) => {
 
   // R320 B1：预言机形态问题命中含受守行（口令/密钥/高熵串/命令）的笔记 ⇒ 不进生成，答案恒为中性指引 + 角标；
   // 对值 / 错值 / 部分值同一输出（召回已去掉候选值，命中集合与候选值无关）。
+  // R322 A（方案 1）：受守行（口令 / 命令 / 长串编号，含跨笔记指代的裸取值）在进模型前替换为占位——模型没见过就变形不出来。
+  const askModelUnits = notes.map(askGuardNoteUnit);
+  const askCrossGuarded = crossUnitGuardedLines(askModelUnits);
+  const askNoteGuarded = (i: number): boolean =>
+    directGuardLines(askModelUnits[i]).length > 0 ||
+    askModelUnits[i].split("\n").some((l) => askCrossGuarded.has(l.trim()));
   if (oracleProbe) {
-    const guarded = notes.filter((n) => directGuardLines(askGuardNoteUnit(n)).length > 0);
+    const guarded = notes.filter((_n, i) => askNoteGuarded(i));
     if (guarded.length > 0) {
       const shown = guarded.slice(0, 3);
       const references = shown.map((n, i) => ({ index: i + 1, note_id: n.id }));
@@ -4967,6 +4973,7 @@ app.post("/api/ask", async (c) => {
   // R302 P0-2/P0-5：verbatim 不再走答案通道（原文由笔记卡片展示），召回预算
   // 两模式统一——verbatim 问法的 8000 字超长上下文是 R301 首 delta 回归与长文
   // 塔陷的放大器，概述式回答不需要全文级预算。
+  let askModelRedactedLines = 0;
   const CONTEXT_TOTAL_BUDGET = 12000;
   const perNoteBudget = Math.max(500, Math.floor(CONTEXT_TOTAL_BUDGET / Math.max(notes.length, 1)));
   // 预算内整句收尾：截断点回退到最近的句读/换行，不产出半句残片。
@@ -4995,9 +5002,13 @@ app.post("/api/ask", async (c) => {
       // 召回片段是不可信数据（R262 P1-2，audit-r261 §P1-2）：送进生成上下文前
       // 走与分拣同一注入中和管道（R216 定界仿冒 + 祈使注入改写）
       const body = neutralizePromptInjection(n.content).replace(/^\s*(?:[[【][^\]】\n]{1,24}[\]】]\s*)+/, "");
-      return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${n.title ?? ""}\n${clipAtSentence(body, perNoteBudget)}`;
+      // R322 A：受守行不进模型上下文（标题 + 正文都按本单元语境判）；原文只在笔记卡片 / 引用里可见。
+      const redacted = redactGuardedLinesForModel(`${n.title ?? ""}\n${clipAtSentence(body, perNoteBudget)}`, askModelUnits[i], askCrossGuarded);
+      if (redacted.redacted > 0) askModelRedactedLines += redacted.redacted;
+      return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${redacted.text}`;
     })
     .join("\n\n");
+  if (askModelRedactedLines > 0) console.log(`ask: ${askModelRedactedLines} guarded line(s) redacted from model context`);
   // ask SSE（R174，R173 第四节方案）：只有走到这里的 LLM 生成分支才流式
   // （确定性路由 <2.2s 保持整段 JSON）；客户端以 Accept: text/event-stream
   // 协商，不带该头的客户端（Android/MCP/微信桥）行为完全不变。事件序列
@@ -5858,7 +5869,21 @@ app.post("/api/ask", async (c) => {
     // R306 P1-2（audit-r305 §11：4/4 隔离态答案区无字面标记）：结构化 isolated
     // 与答案区字面 〔…〕 标记必须同现——保守答案/审计剥空等在 finalize 之前
     // 成形的隔离文案不携带控制标记（携带会被防仿冒剥除），在唯一出口补齐。
-    const answerOut = isolated && !hasGuardControlMark(fin.answer) ? `${INSTRUCTION_ISOLATED_MARK}\n${fin.answer}` : fin.answer;
+    const answerMarked = isolated && !hasGuardControlMark(fin.answer) ? `${INSTRUCTION_ISOLATED_MARK}\n${fin.answer}` : fin.answer;
+    // R322 D1（audit-r321 B6 / E08）：隔离文案行补角标——优先被隔离来源 isolated_refs，
+    // 其次 references 里数据面判危（含可执行命令）的笔记；隔离文案里的「原文可在引用的
+    // 笔记卡片中查看」由此落到具体卡片。
+    const outRefs = Array.isArray(body.references)
+      ? body.references.filter((r): r is { index: number; note_id: string } =>
+          typeof r === "object" && r !== null && typeof (r as { index?: unknown }).index === "number" && typeof (r as { note_id?: unknown }).note_id === "string")
+      : [];
+    const execRefIdx = outRefs
+      .filter((r) => {
+        const n = askRowById.get(r.note_id);
+        return n !== undefined && noteRowContainsExecutableCommand(n);
+      })
+      .map((r) => r.index);
+    const answerOut = isolated ? citeIsolationMarks(answerMarked, isolatedRefs.length > 0 ? isolatedRefs : execRefIdx) : answerMarked;
     return {
       ...bodyOut,
       answer: answerOut + systemHint,

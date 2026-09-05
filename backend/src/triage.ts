@@ -1,6 +1,6 @@
 import type { Category, Env, TriageResult } from "./types";
 import { chatComplete } from "./ai";
-import { closeAggregateVerbatim } from "./prompt-armor";
+import { closeAggregateOutlet } from "./prompt-armor";
 
 const CATEGORIES: Category[] = ["idea", "todo", "collect", "data", "expense", "income", "transfer"];
 
@@ -1657,9 +1657,9 @@ export function applyTriageFixes(content: string, result: TriageResult, now: Dat
 export function dropForeignEchoTitle(content: string, result: TriageResult, corrections: CategoryCorrection[]): TriageResult {
   const title = result.title ?? "";
   if (!title || corrections.length === 0) return result;
-  const foreign = closeAggregateVerbatim(title, corrections.map((c) => c.content)).count > 0;
+  const foreign = closeAggregateOutlet(title, corrections.map((c) => c.content)).count > 0;
   if (!foreign) return result;
-  const own = closeAggregateVerbatim(title, [content]).count > 0;
+  const own = closeAggregateOutlet(title, [content]).count > 0;
   return own ? result : { ...result, title: "" };
 }
 

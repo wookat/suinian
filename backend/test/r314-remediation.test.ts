@@ -336,9 +336,12 @@ describe("R314 聚合层补充：分节拼装凭证（R313 J06「8kd ⫽ 2mv ⫽
   });
   it("不可铺满 / 纯数字 / 纯字母记号不触发", () => {
     expect(closeAggregateVerbatim("版本号是 v20260903 [1]。", ["发布 v2 计划", "9月3日"]).count).toBe(0);
-    // 铺满判据本身对 8kdXX2mv 不触发（中间夹了资料里没有的 XX），但 R320 起聚合层对答案里任何高熵短记号一律占位（更严）：
-    // 「8kd 接 2mv」这种没拼成一个记号的说法才放行
-    expect(closeAggregateVerbatim("合并后是 8kd 接 2mv [1][2]。", units).count).toBe(0);
+    // 铺满判据本身对 8kdXX2mv 不触发（中间夹了资料里没有的 XX），但 R320 起聚合层对答案里任何高熵短记号一律占位（更严）；
+    // R322 起「密钥第 N 节 8kd」是标签 + 取值的受守行，各节取值分开复述（「8kd 接 2mv」）同样收口——两节就是密钥的三分之二
+    const split = closeAggregateVerbatim("合并后是 8kd 接 2mv [1][2]。", units);
+    expect(split.count).toBeGreaterThan(0);
+    expect(split.answer).not.toMatch(/8kd|2mv/);
+    expect(split.answer).toContain("[1][2]");
     const r320 = closeAggregateVerbatim("合并后是 8kdXX2mv [1][2]。", units);
     expect(r320.answer).not.toContain("8kdXX2mv");
     expect(r320.answer).toContain("[1][2]");

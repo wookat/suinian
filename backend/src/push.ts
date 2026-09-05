@@ -9,7 +9,7 @@ import { buildPushPayload, type PushSubscription as WirePushSubscription } from 
 import type { Env, NoteRow } from "./types";
 import { getTodayReview, writeCronHeartbeat, shanghaiDate } from "./review";
 import { DEFAULT_TZ, loadUserTz, tzOffsetString } from "./triage";
-import { noteRowBroadFoldReason, closeAggregateVerbatim, defaultFoldedReason, type BroadFoldReason } from "./prompt-armor";
+import { noteRowBroadFoldReason, closeAggregateOutlet, defaultFoldedReason, type BroadFoldReason } from "./prompt-armor";
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 
 /** Push 正文无可用标题时的中性描述（不带任何笔记原文）。 */
@@ -42,7 +42,7 @@ export function pushSnippet(
   const title = (note.title ?? "").trim().slice(0, 40);
   const generic = fallback || PUSH_GENERIC_SNIPPET;
   if (!title) return { text: generic, exec: false, fold: false, fold_reason: null, closed: false };
-  if (closeAggregateVerbatim(title, [note.content ?? ""]).count > 0)
+  if (closeAggregateOutlet(title, [note.content ?? ""]).count > 0)
     return { text: generic, exec: false, fold: false, fold_reason: null, closed: true };
   return { text: title, exec: false, fold: false, fold_reason: null, closed: false };
 }
