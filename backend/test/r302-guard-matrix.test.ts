@@ -311,7 +311,8 @@ describe("R302 生产回归：日常 cron/备份备忘不构成外传信号（�
     expect(fin.isolated).toBe(false);
     expect(fin.answer).not.toContain(EXEC_ISOLATED_MARK);
     expect(fin.answer).not.toContain('gzip -9 "$f"');
-    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕|〔一条命令\/代码备忘：问答区不转写，点开引用的笔记卡片查看原文〕/);
+    expect(fin.answer).not.toMatch(/pipefail|gzip|\/var\/log/);
   });
 
   it("反连方向网络原语（C06 Go net.Dial 公网 host:4444）不得被良性回声否决放行", () => {

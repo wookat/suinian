@@ -8062,6 +8062,7 @@ const LONG_DIGIT_RUN_RE = /\d(?:[ \-]?\d){11,}/;
 const GROUPED_DIGITS_RE = /\d{4,}[ \-]\d{4,}/;
 /** 无词间空格的文字（汉字 / 假名 / 谚文 / 注音）：不参与「字母 ↔ 数字交替」计数（「买2斤苹果3个梨」是散文）。 */
 const CJK_LETTER_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}]/u;
+const CJK_LETTERS_G_RE = new RegExp(CJK_LETTER_RE.source, "gu");
 /** 记号边界：空白 / 路径分隔 / 赋值号 / 中英文标点与括号。`&` `?` `!` `#` `@` 不是边界（口令常见符号）；URL 整串先摘除。 */
 const TOKEN_BOUNDARY_CLASS = "[\\s/=;,，。、()（）<>\"'“”「」『』【】\\[\\]{}：:]";
 const TOKEN_SPLIT_RE = new RegExp(`${TOKEN_BOUNDARY_CLASS}+`);
@@ -8088,7 +8089,7 @@ function isOpaqueToken(tok: string): boolean {
   if (/^(?:sk|pk|ghp|gho|ghu|xox[baprs]|AKIA|AIza|eyJ|whsec|whk|rk)_?[A-Za-z0-9_\-.]{6,}$/.test(tok) && /\d/.test(tok)) return true;
   const hasDigit = /\p{N}/u.test(tok);
   const hasLetter = /\p{L}/u.test(tok);
-  const letters = tok.replace(CJK_LETTER_RE, "");
+  const letters = tok.replace(CJK_LETTERS_G_RE, "");
   const hasNonCjkLetter = /\p{L}/u.test(letters);
   // 内含密码符号 + 字母数字混合（含 CJK 夹符号的 `天7王#盖2虎`：要求 ≥2 段 ASCII 字母数字）
   const inner = tok.slice(1, -1);
@@ -8356,8 +8357,16 @@ export function closeDirectGuard(answer: string, direct: string): { answer: stri
           }
       if (hit) raw.push(typed({ start: m.index, end: m.index + m[0].length }, hit));
     }
+  // 单条笔记只给一种类别文案：全部命中按最高警示级统一，相邻命中随后合并成一条占位（类别只分警示强度，不分安全边界）。
+  const top = raw.reduce<HitSpan | null>((best, s) => (!best || (s.rank ?? 0) > (best.rank ?? 0) ? s : best), null);
+  if (top?.ph) {
+    for (const s of raw) {
+      s.ph = top.ph;
+      s.rank = top.rank;
+    }
+  }
   const closed = replaceHitSentences(a, raw);
-  let out = mask.restore(closed.answer);
+  let out = tidyDirectPlaceholders(mask.restore(closed.answer));
   // 受守单元的直答一律带类别占位：模型纯概括（无任何重合）时也在尾部补一条——概括这条笔记是什么 + 点开卡片指引，
   // 用户看到的形态不随模型是否逐字而变（生产浏览器实测：同一条命令备忘有时占位有时只概括）。不计入 count（不是逐字命中）。
   // 整答只剩系统整答说明（隔离说明 / 拒答）+ 角标时不补——那已经是系统给出的整答说明。取值占位（〔凭证略〕/〔略〕）
@@ -8375,6 +8384,51 @@ export function closeDirectGuard(answer: string, direct: string): { answer: stri
         : `${body.replace(/\s+$/, "")}\n${DIRECT_GUARD_PLACEHOLDER[top]}`;
   }
   return { answer: out, count: closed.count };
+}
+
+/**
+ * 直答占位的版面收拾：围栏里只剩占位 / 空白时去掉围栏行（整段代码被占位后不留一对空 ``` ）；
+ * 连续几行都只是同一条占位时合成一行（列表项保留各自序号，不并），角标去重后紧跟占位。
+ */
+function tidyDirectPlaceholders(s: string): string {
+  const lines = s.split("\n");
+  const isFence = (l: string): boolean => /^\s*```[\w-]*\s*$/.test(l);
+  const drop = new Set<number>();
+  let open = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (!isFence(lines[i])) continue;
+    if (open === -1) {
+      open = i;
+      continue;
+    }
+    const body = lines.slice(open + 1, i);
+    if (body.every((l) => !l.trim() || DIRECT_GUARD_PLACEHOLDER_RE.test(l))) {
+      drop.add(open);
+      drop.add(i);
+    }
+    open = -1;
+  }
+  if (open !== -1 && (open === 0 || DIRECT_GUARD_PLACEHOLDER_RE.test(lines[open - 1] ?? ""))) drop.add(open);
+  const kept = lines.filter((_, i) => !drop.has(i));
+  const onlyPlaceholder = (l: string): string | null => {
+    const t = l.replace(LIST_LEAD_RE, "").replace(CITATION_MARK_RE, "").trim();
+    return Object.values(DIRECT_GUARD_PLACEHOLDER).includes(t) ? t : null;
+  };
+  const marksOf = (l: string): string[] => l.match(CITATION_MARK_RE) ?? [];
+  const onlyMarks = (l: string): boolean => /^\s*(?:[[［]\d{1,2}[\]］]\s*)+$/.test(l);
+  const listLead = (l: string): string => LIST_LEAD_RE.exec(l)?.[0] ?? "";
+  for (let i = 1; i < kept.length; i++) {
+    const prevPh = onlyPlaceholder(kept[i - 1]);
+    if (!prevPh) continue;
+    const curPh = onlyPlaceholder(kept[i]);
+    if (curPh !== prevPh && !onlyMarks(kept[i])) continue;
+    if (curPh && listLead(kept[i]).trim()) continue;
+    const marks = [...new Set([...marksOf(kept[i - 1]), ...marksOf(kept[i])])].join("");
+    kept[i - 1] = `${listLead(kept[i - 1])}${prevPh}${marks}`;
+    kept.splice(i, 1);
+    i--;
+  }
+  return kept.length === lines.length ? s : kept.join("\n");
 }
 
 /** B1 中性回答：保留答案里的系统标记（隔离 / 降级横幅与内容无关）与引证角标（卡片照常同屏），正文换成 ORACLE_NEUTRAL_NOTICE。 */
@@ -8634,6 +8688,11 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
     return withDestructiveMarks(core, provenance);
   }
   let out = closed.answer;
+  // 直答层按类别占位收口后，verbatim 问法附带的通用〔原文查看〕指引与类别占位自带的指引重复，去掉尾部那一条。
+  if (tier.kind === "single_note_direct" && DIRECT_GUARD_PLACEHOLDER_RE.test(out)) {
+    const suffix = `\n\n${VERBATIM_REDIRECT_NOTICE}`;
+    if (out.endsWith(suffix)) out = out.slice(0, -suffix.length);
+  }
   // 占位后只剩无意义残片时，给出可读的指引而不是一串标点。
   const meaningful = placeholderFreeText(out);
   if (meaningful.length < 4) {

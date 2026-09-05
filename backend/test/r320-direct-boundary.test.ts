@@ -13,6 +13,7 @@ import {
   credentialAssertionReason,
   directGuardLines,
   stripOpaqueTokens,
+  opaqueTokensOf,
   questionCarriesOpaqueToken,
   isYesNoQuestion,
   DIRECT_GUARD_PLACEHOLDER,
@@ -189,6 +190,11 @@ describe("R320 B1：预言机——对值 / 错值 / 部分值同一输出", () 
     expect(isYesNoQuestion("牙医什么时候")).toBe(false);
     // 非受守内容的是非问不受影响
     expect(questionCarriesOpaqueToken("周三是不是要复诊")).toBe(false);
+    // 汉字串夹问号 + 单个数字不是不透明记号（生产浏览器第 5 轮：「备份分几步？请用1.、2.的编号回答」曾被判为候选值 → 中性话）
+    expect(opaqueTokensOf("备份分几步？请用1.、2.的编号回答")).toEqual([]);
+    expect(questionCarriesOpaqueToken("备份分几步？请用1.、2.的编号回答")).toBe(false);
+    // CJK 夹符号且 ≥2 段 ASCII 字母数字仍是记号
+    expect(opaqueTokensOf("口令 天7王#盖2虎")).toEqual(["天7王#盖2虎"]);
   });
   it("是非问 + 无受守行的直答 ⇒ 正常回答（中性化只对受守内容）", () => {
     const plain = "周三下午三点和牙医约了复诊";
@@ -373,6 +379,38 @@ describe("R320 A：生产盲测复跑暴露的两处直答逐字（R319 C14 转�
     expect(ensureDirectGuideCitation(fin.answer, [{ index: 1 }, { index: 2 }])).toBe(fin.answer);
     expect(ensureDirectGuideCitation("周三去买菜。", refs)).toBe("周三去买菜。");
     expect(ensureDirectGuideCitation(fin.answer, [{ note_id: "n1" }])).toBe(fin.answer);
+  });
+  it("verbatim 问法下模型真逐字（生产 faithful30 shell「备份脚本完整给我」）：命中行换类别占位后，通用〔原文查看〕不再叠在尾部；聚合层口径不变", () => {
+    const unit = "备份脚本：\n#!/bin/bash\nset -euo pipefail\ntar czf /backup/data-$(date +%F).tar.gz /var/data\nfind /backup -mtime +14 -delete";
+    const tier = { kind: "single_note_direct" as const, directUnit: unit };
+    const q = "备份脚本完整给我";
+    const summary = "备份脚本会压缩数据并删除过期备份。";
+    const one = finalizeAskAnswer(`${summary}\nfind /backup -mtime +14 -delete [1]`, { dataText: unit, dataUnits: [unit], question: q, verbatimExempt: q, tier });
+    expect(one.answer, one.answer).not.toContain("-mtime");
+    expect(one.answer, one.answer).toBe(`${summary}\n${DIRECT_GUARD_PLACEHOLDER.destructive}[1]`);
+    const fenced = finalizeAskAnswer(`${summary}\n\`\`\`bash\n#!/bin/bash\nset -euo pipefail\ntar czf /backup/data-$(date +%F).tar.gz /var/data\nfind /backup -mtime +14 -delete\n\`\`\`\n[1]`, {
+      dataText: unit, dataUnits: [unit], question: q, verbatimExempt: q, tier,
+    });
+    expect(fenced.answer, fenced.answer).not.toMatch(/pipefail|tar czf|-mtime/);
+    expect(fenced.answer).not.toContain(VERBATIM_REDIRECT_NOTICE);
+    expect(fenced.answer).toContain(DIRECT_GUARD_PLACEHOLDER.destructive);
+    expect(fenced.answer).toContain("[1]");
+    // 单条笔记只给一种类别文案（取最高警示级），整段代码占位后不留空围栏，角标紧跟占位
+    expect(fenced.answer, fenced.answer).toBe(`${summary}\n${DIRECT_GUARD_PLACEHOLDER.destructive}[1]`);
+    expect(fenced.answer.match(/〔/g)?.length).toBe(1);
+    const mixed = finalizeAskAnswer(`两步：\n1. tar czf /backup/data-$(date +%F).tar.gz /var/data\n2. find /backup -mtime +14 -delete\n[1]`, {
+      dataText: unit, dataUnits: [unit], question: "备份分几步", tier,
+    });
+    expect(mixed.answer, mixed.answer).not.toMatch(/tar czf|-mtime/);
+    expect(mixed.answer).not.toContain(DIRECT_GUARD_PLACEHOLDER.code);
+    // 列表项各自保留序号（R298 编号连续），但两条都是同一（最高警示级）文案
+    expect(mixed.answer).toContain(`1. ${DIRECT_GUARD_PLACEHOLDER.destructive}`);
+    expect(mixed.answer).toContain(`2. ${DIRECT_GUARD_PLACEHOLDER.destructive}`);
+    // 聚合层 verbatim 问法仍附通用指引（R302 口径不动）
+    const plain = "周五和老王吃饭";
+    const agg = finalizeAskAnswer(`两条：find /backup -mtime +14 -delete 和吃饭 [1][2]`, { dataText: `${unit}\n---\n${plain}`, dataUnits: [unit, plain], question: q, verbatimExempt: q, tier: AGGREGATE_TIER });
+    expect(agg.answer, agg.answer).not.toContain("-mtime");
+    expect(agg.answer).toContain(VERBATIM_REDIRECT_NOTICE);
   });
   it("C38：倒写命令「atad/vrs/ fr- mr」——路径形态记号是代码面，整行受守；答案里的倒写与半还原都不逐字", () => {
     const note = "倒着记的命令：atad/vrs/ fr- mr";
