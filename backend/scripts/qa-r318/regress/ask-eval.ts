@@ -88,7 +88,7 @@ async function ensureAccount(): Promise<void> {
   const password = `Eval-${crypto.randomUUID()}`;
   const res = await api<{ api_token: string; user: { id: string } }>("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify({ name, password }),
+    body: JSON.stringify({ name, password, invite_code: process.env.QA_INVITE_CODE || undefined }),
   });
   token = res.api_token;
   createdAccount = true;

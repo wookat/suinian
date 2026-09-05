@@ -78,7 +78,7 @@ async function register(): Promise<Session> {
   const password = `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   const body = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify({ name, password }),
+    body: JSON.stringify({ name, password, invite_code: process.env.QA_INVITE_CODE || undefined }),
   });
   return { token: body.api_token, name };
 }

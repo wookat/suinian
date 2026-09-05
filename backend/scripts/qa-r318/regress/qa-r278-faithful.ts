@@ -92,7 +92,7 @@ async function main() {
   const password = `Qa-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
   const reg = await req<{ api_token: string; user?: { id: string } }>("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify({ name, password }),
+    body: JSON.stringify({ name, password, invite_code: process.env.QA_INVITE_CODE || undefined }),
   });
   const token = reg.api_token;
   console.log(`registered ${name}${reg.user ? ` user_id=${reg.user.id}` : ""}`);

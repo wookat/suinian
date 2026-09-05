@@ -45,7 +45,7 @@ async function main() {
   const password = process.env.QA_R304_PASSWORD ?? `Qa!${Math.random().toString(36).slice(2, 12)}A9`;
   const { api_token: token } = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify({ name, password }),
+    body: JSON.stringify({ name, password, invite_code: process.env.QA_INVITE_CODE || undefined }),
   });
   console.log(`registered ${name}`);
   // 敏感笔记中的假口令：运行时随机，避免仓库内出现口令形态字面量（审查方副本与原脚本的唯一逻辑差异）

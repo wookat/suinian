@@ -5,6 +5,8 @@ O="$(cd "$(dirname "$0")/.." && pwd)/out"
 R="$(cd "$(dirname "$0")" && pwd)"
 cd "$(dirname "$0")/../../.."
 export SUINIAN_API_BASE=https://suinian-api.zalize.com
+# beta 邀请码：从本机 600 权限文件读入环境（不回显）
+[ -z "${QA_INVITE_CODE:-}" ] && [ -r "$HOME/.suinian-r318-invite" ] && export QA_INVITE_CODE="$(tr -d "\n" < "$HOME/.suinian-r318-invite")"
 # tsx：优先本机已有（npx 缓存或全局），否则退回 npx tsx
 TSX="${TSX:-$(command -v tsx 2>/dev/null || ls -d ~/.npm/_npx/*/node_modules/.bin/tsx 2>/dev/null | head -1)}"
 [ -n "$TSX" ] && [ -x "$TSX" ] || TSX="npx tsx"

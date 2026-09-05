@@ -135,7 +135,7 @@ async function ensureAccount(): Promise<void> {
   accountName = `[QA-R318]retr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const res = await api<{ api_token: string; user: { id: string } }>("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify({ name: accountName, password: `Qa!${Math.random().toString(36).slice(2, 12)}A9` }),
+    body: JSON.stringify({ name: accountName, password: `Qa!${Math.random().toString(36).slice(2, 12)}A9`, invite_code: process.env.QA_INVITE_CODE || undefined }),
   });
   token = res.api_token;
   createdAccount = true;

@@ -28,7 +28,7 @@ async function main() {
   const reg = await req<{ api_token: string }>("/api/auth/register", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name, password }),
+    body: JSON.stringify({ name, password, invite_code: process.env.QA_INVITE_CODE || undefined }),
   });
   const token = reg.api_token;
   console.log(`QA 账号：${name}`);
