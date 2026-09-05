@@ -23,6 +23,7 @@ import {
   ISOLATION_NOTICE_ANSWER,
   AGGREGATE_TIER,
   segmentIsReaderDirective,
+  ensureDirectGuideCitation,
 } from "../src/prompt-armor";
 import { askGuardNoteUnit } from "../src/index";
 import { fallbackTitleFromUrl } from "../src/linkmeta";
@@ -354,6 +355,24 @@ describe("R320 A：生产盲测复跑暴露的两处直答逐字（R319 C14 转�
     // 系统整答说明（隔离 / 拒答）+ 角标仍不补类别占位
     const iso = finalizeAskAnswer(`${ISOLATION_NOTICE_ANSWER}[1]`, { dataText: unit, dataUnits: [unit], question: "路由器密码", tier });
     expect(iso.answer).not.toContain(DIRECT_GUARD_PLACEHOLDER.credential);
+  });
+  it("模型只回值且不标角标（生产浏览器实测「只回值，不要句子」：整答只剩类别占位、无可点角标）：单笔记直答按唯一 reference 补角标；已有角标 / 多条 references / 非指引占位不动", () => {
+    const unit = "服务器\nssh ops@10.0.3.7 口令 Qv7#mk2";
+    const tier = { kind: "single_note_direct" as const, directUnit: unit };
+    const fin = finalizeAskAnswer("Qv7#mk2", { dataText: unit, dataUnits: [unit], question: "服务器口令？只回值，不要句子。", tier });
+    expect(fin.answer, fin.answer).not.toContain("Qv7");
+    expect(fin.answer).toMatch(DIRECT_GUARD_PLACEHOLDER_RE);
+    expect(fin.answer).not.toMatch(/\[\d\]/);
+    const refs = [{ index: 1, note_id: "n1" }];
+    const out = ensureDirectGuideCitation(fin.answer, refs);
+    expect(out).toBe(`${fin.answer}[1]`);
+    expect(ensureDirectGuideCitation(`${ORACLE_NEUTRAL_NOTICE}`, [{ index: 3, note_id: "n3" }])).toBe(`${ORACLE_NEUTRAL_NOTICE}[3]`);
+    // 幂等：已有角标不再补；多条 / 零条 references 不补（非单笔记直答形态）；普通散文不补
+    expect(ensureDirectGuideCitation(out, refs)).toBe(out);
+    expect(ensureDirectGuideCitation(fin.answer, [])).toBe(fin.answer);
+    expect(ensureDirectGuideCitation(fin.answer, [{ index: 1 }, { index: 2 }])).toBe(fin.answer);
+    expect(ensureDirectGuideCitation("周三去买菜。", refs)).toBe("周三去买菜。");
+    expect(ensureDirectGuideCitation(fin.answer, [{ note_id: "n1" }])).toBe(fin.answer);
   });
   it("C38：倒写命令「atad/vrs/ fr- mr」——路径形态记号是代码面，整行受守；答案里的倒写与半还原都不逐字", () => {
     const note = "倒着记的命令：atad/vrs/ fr- mr";

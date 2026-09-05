@@ -15,7 +15,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, type BroadFoldReason } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, type BroadFoldReason } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -236,7 +236,7 @@ export async function askUserDataVersion(db: D1Database, userId: string): Promis
 }
 
 /** 答案缓存的收口版本：出口收口规则变更时递增，旧规则下产出的答案不会在新版部署后继续从边缘缓存送出。 */
-export const ASK_ANSWER_CACHE_EPOCH = "r320.8";
+export const ASK_ANSWER_CACHE_EPOCH = "r320.9";
 
 async function askAnswerCacheKey(auth: string, material: string, dataVersion: string): Promise<Request> {
   const digest = await crypto.subtle.digest(
@@ -5833,6 +5833,8 @@ app.post("/api/ask", async (c) => {
         }
       }
     }
+    // R320：单笔记直答只剩类别占位 / 预言机中性回答而模型没标角标时，按唯一 reference 补同屏角标（ensureDirectGuideCitation 注）。
+    if (tier.kind === "single_note_direct" && !fin.isolated) fin.answer = ensureDirectGuideCitation(fin.answer, body.references);
     const genReason = typeof body.isolation_reason === "string" ? body.isolation_reason : null;
     if (fin.isolated) {
       console.log(`ask: note-embedded instruction isolated at generation exit (${fin.reason ?? "unattributed"})`);

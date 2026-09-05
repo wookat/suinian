@@ -8038,6 +8038,22 @@ export const DIRECT_GUARD_PLACEHOLDER_RE = new RegExp(Object.values(DIRECT_GUARD
 export const ORACLE_NEUTRAL_NOTICE =
   "〔核对提示：这条记录含口令/命令/长串编号一类内容，问答区对它的核对与是非问不确认也不否认；请点开引用的笔记卡片自行核对〕";
 
+/**
+ * R320：单笔记直答的类别占位 / 预言机中性回答自带「点开引用的笔记卡片」指引；模型只回取值、不标角标时
+ * （生产浏览器实测「只回值，不要句子」），整答只剩占位而没有可点的同屏角标。单笔记直答的 references 恰好 1 条，
+ * 角标由服务端按 references[0].index 补——不是模型输出、不含笔记内容，找回路径不随模型是否标角标而断。
+ * 非单条 references / 答案已有角标 / 答案不含指引占位时原样返回。
+ */
+export function ensureDirectGuideCitation(answer: string, references: unknown): string {
+  if (/[[［]\d{1,2}[\]］]/.test(answer)) return answer;
+  if (!DIRECT_GUARD_PLACEHOLDER_RE.test(answer) && !answer.includes(ORACLE_NEUTRAL_NOTICE)) return answer;
+  if (!Array.isArray(references) || references.length !== 1) return answer;
+  const only = references[0];
+  const index = typeof only === "object" && only !== null ? (only as { index?: unknown }).index : undefined;
+  if (typeof index !== "number" || !Number.isInteger(index) || index < 1 || index > 99) return answer;
+  return `${answer.replace(/\s+$/, "")}[${index}]`;
+}
+
 /** 密码符号（记号内部出现即视为不透明记号；`=`/`+`/`.`/`-`/`_`/`/` 不算——它们是 URL / 路径 / 算式 / 日期常态）。 */
 const OPAQUE_INNER_SYMBOL_RE = /[#$%^&*!?~|\\@]/;
 /** 连续 ≥12 位数字（可夹空格 / 连字符分组）：卡号 / 身份证 / 长编号 / 时间戳。 */
