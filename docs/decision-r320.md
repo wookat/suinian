@@ -199,7 +199,7 @@ audit-r319 指出的 3 处过度承诺（「被判据认出的口令/密钥类�
 | 面 | 身份 | 时间（UTC） |
 |---|---|---|
 | Worker（`suinian-api.zalize.com`） | Version `9fbf8818-5d5a-4912-b498-858df3409be9`，deployment 100%（`wrangler deployments list` 末条） | 2026-09-05T11:29:11Z |
-| Pages（`suinian.zalize.com`） | Deployment `4f92517d-d18e-4abe-86e3-fb10a7eda4f9`，Production / `main` / `ac2bc93`；线上 bundle `assets/index-BQ6Lm4Na.js`；`/known-issues` 200 | 2026-09-05 |
+| Pages（`suinian.zalize.com`） | Deployment `4e908999-3820-4452-9e42-121c3d887ed0`，Production / `main` / `3c9d184`（只更新同源 `/known-issues` 页面：本节 §6.2 / §8 落稿后 known-issues 新增两条；JS bundle `assets/index-BQ6Lm4Na.js` 与前一部署 `4f92517d`（`ac2bc93`，§6.4 第 3–6 轮所测）字节一致）；`/known-issues` 200 且含新增条目 | 2026-09-05T12:2x |
 | 缓存收口版本 | `ASK_ANSWER_CACHE_EPOCH = "r320.11"`（每次改收口规则递增，旧规则下生成的答案缓存全部失效） | — |
 
 历史版本（均已被覆盖，只作审计线索）：`9d4115cb` → `35bebff6` → `39a580ed` → `61a47333` → `d68f0481` → `d10855bf` → `69fb0453` → `546a193c` → `6a1a43b4` → `a09d8f70` → `93259c43` → `9fbf8818`。
