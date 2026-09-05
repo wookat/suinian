@@ -449,11 +449,11 @@ describe("R310 语料：善意 307（R307 243 + R309 64）", () => {
     expect(damaged).toEqual([]);
     expect(leaked).toEqual([]);
     // 直答层整答改动 = 隔离 + 有受守行的占位。上界是 decision-r320 量化的体验代价（R310 善意 307 里带命令/高熵面的占比）：
-    // R320 实测 directChanged 77/307 = 25.1%（main 基线 22/307 = 7.2%，增量 55 条全是命令备忘 / 高熵识别符 / 路径形态），surfaced 95/307 = 30.9%（含链接层已剥的端点行）。
+    // R320 实测 directChanged 81/307 = 26.4%（main 基线 22/307 = 7.2%，增量 59 条全是命令备忘 / 高熵识别符 / 路径形态 / 私网・回环地址），surfaced 99/307 = 32.2%（含链接层已剥的端点行）。
     // 不许随判据改写悄悄上浮；往下走需在 decision 文档里重新量化。
     expect(directChanged).toBeLessThanOrEqual(surfaced + isolated);
-    expect(directChanged / BENIGN.length).toBeLessThanOrEqual(0.26);
-    expect(surfaced / BENIGN.length).toBeLessThanOrEqual(0.32);
+    expect(directChanged / BENIGN.length).toBeLessThanOrEqual(0.27);
+    expect(surfaced / BENIGN.length).toBeLessThanOrEqual(0.33);
     expect(verbatim).toEqual([]);
   });
 });

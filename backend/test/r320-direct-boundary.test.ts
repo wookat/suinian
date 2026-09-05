@@ -295,3 +295,57 @@ describe("R320 A：生产盲测复跑暴露的两处直答逐字（R319 C14 转�
     expect(directGuardLines("公司博客 https://blog.example.com/posts/hello")).toEqual([]);
   });
 });
+
+describe("R320 A：地址形态不分公网/私网——直答层按结构面，不沿用宽判据「私网 IP / 回环 / 保留后缀不计远端」的折叠口径", () => {
+  const guardedLines = [
+    "内网 Grafana 地址 http://10.0.3.7:3000/d/abc",
+    "路由器后台 http://192.168.1.1",
+    "本机调试 http://localhost:5173/app",
+    "NAS 地址 192.168.50.10",
+    "内网 wiki http://wiki.corp.local/page/1",
+    "缓存 redis-prod.internal:6379",
+    "打印机 172.16.4.20",
+    "本地服务 127.0.0.1:8000",
+    "IPv6 回环 [::1]:3000",
+    "监控后台 http://grafana.example.com:3000/d/abc",
+  ];
+  it.each(guardedLines)("受守（endpoint）且直答不逐字：%s", (note) => {
+    expect(directGuardLines(note).map((g) => g.kind)).toEqual(["endpoint"]);
+    const addr = note.replace(/^.*?\s(?=\S+$)/, "");
+    const r = finalizeAskAnswer(`地址是 ${addr} [1]`, {
+      dataText: note,
+      dataUnits: [note],
+      question: "地址是什么",
+      tier: { kind: "single_note_direct", directUnit: note },
+    });
+    expect(r.answer, r.answer).not.toContain(addr);
+    expect(r.answer, r.answer).not.toMatch(/\d{1,3}\.\d{1,3}\.\d{1,3}|localhost|corp\.local|\.internal|:\d{4}/);
+    expect(r.answer).toContain(DIRECT_GUARD_PLACEHOLDER.endpoint);
+    expect(r.answer).toContain("[1]");
+  });
+
+  it("不受守：版本号 / 日期 / 书签 URL / 公网域名下的 example 子域", () => {
+    for (const line of [
+      "升级到 v1.2.3.4 之后再试",
+      "固件版本 2.0.1.7",
+      "2024.09.05 交房",
+      "公司博客 https://blog.example.com/posts/hello",
+      "文档 https://docs.example.org/guide",
+      "本地超市周末打折",
+    ])
+      expect(directGuardLines(line), line).toEqual([]);
+  });
+
+  it("跳板机 user@私网IP：不透明记号优先（类别只影响文案），同样不逐字", () => {
+    const note = "跳板机 ops@10.0.0.9";
+    expect(directGuardLines(note)).toHaveLength(1);
+    const r = finalizeAskAnswer("跳板机是 ops@10.0.0.9 [1]", {
+      dataText: note,
+      dataUnits: [note],
+      question: "跳板机是什么",
+      tier: { kind: "single_note_direct", directUnit: note },
+    });
+    expect(r.answer).not.toMatch(/ops@|10\.0\.0\.9/);
+    expect(DIRECT_GUARD_PLACEHOLDER_RE.test(r.answer)).toBe(true);
+  });
+});

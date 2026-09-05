@@ -8153,7 +8153,28 @@ function pathishTokenLine(line: string): boolean {
 }
 
 /**
- * 受守行判别（R320 A）：命令形态 / broad 任一命中 / 短高熵记号 / 路径形态 ⇒ 受守；返回值是占位文案类别（只影响文案与排序）。
+ * 本机 / 私网 / 保留后缀地址形态（R320 A）：宽判据的地址面按 R312 P0-3 把私网 IP、localhost、`.local/.internal/.corp/…`
+ * 保留后缀主机排除在「远端端点」之外（那是折叠优先级的口径），但直答层的边界是结构面——`http://10.0.3.7:3000/d/abc`、
+ * `192.168.50.10`、`localhost:5173`、`wiki.corp.local` 与公网 host:port 同形，一样不逐字。版本号语境（`v1.2.3.4` / `版本 1.2.3.4`）不计。
+ */
+const LOCAL_IP_LITERAL_RE = /(?<![\w.])(?:(?:\d{1,3}\.){3}\d{1,3}|localhost|\[?::1\]?)(?::\d{2,5})?(?![\w.])/gi;
+const NONPUBLIC_HOST_LINE_RE =
+  /(?<![\w@.-])[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:internal|local|localhost|home\.arpa|corp|home|lan|intranet|test|example|invalid)(?::\d{2,5})?(?!\.?[\w-])/i;
+function localAddressLine(line: string): boolean {
+  const s = line.normalize("NFKC");
+  for (const m of s.matchAll(LOCAL_IP_LITERAL_RE)) {
+    if (/^\d/.test(m[0]) && !m[0].includes(":")) {
+      const pre = s.slice(Math.max(0, m.index - 8), m.index);
+      const post = s.slice(m.index + m[0].length, m.index + m[0].length + 4);
+      if (/(?:\bv|version|版本|升级到|更新到)\s*$/i.test(pre) || /^\s*(?:版本|版\b)/.test(post)) continue;
+    }
+    return true;
+  }
+  return NONPUBLIC_HOST_LINE_RE.test(s);
+}
+
+/**
+ * 受守行判别（R320 A）：命令形态 / broad 任一命中 / 短高熵记号 / 路径形态 / 地址形态 ⇒ 受守；返回值是占位文案类别（只影响文案与排序）。
  * 类别取最高警示级：凭证取值 > 破坏性命令 > 不透明串 > 端点 > 命令备忘。
  */
 export function directGuardKindOfLine(line: string): DirectGuardKind | null {
@@ -8169,7 +8190,7 @@ export function directGuardKindOfLine(line: string): DirectGuardKind | null {
   if (destructive) return "destructive";
   if (opaque && !cmd) return "opaque";
   if (cmd) return "code";
-  if (reason === "broad:endpoint") return "endpoint";
+  if (reason === "broad:endpoint" || localAddressLine(t)) return "endpoint";
   if (reason !== null) return "opaque";
   return null;
 }

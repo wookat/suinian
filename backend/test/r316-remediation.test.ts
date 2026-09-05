@@ -203,8 +203,14 @@ describe("R316 P0：凭证判据泛化——族外新变体（≥15）与善意�
     // 事实句直答不被凭证占位打断（善意基线）
     const fact = "驾照到期日 2028-11-03，需提前 90 天换证。";
     expect(fin(fact, [fact], "驾照什么时候到期")).toBe(fact);
+    // R320 A：`主机 jump.internal` + `端口 2222` 是地址结构面（保留后缀主机 + 端口），直答换 endpoint 占位、主机 / 端口不逐字；
+    // 仍不是凭证（类别只影响文案）。main 上此句原样直答——这是 decision-r320 §2.4 量化的体验代价，不是凭证误伤。
     const port = "跳板机端口 2222，主机 jump.internal";
-    expect(fin(port, [port], "跳板机端口多少")).toBe(port);
+    expect(credentialValueTokens(port)).toEqual([]);
+    expect(directGuardLines(port).map((g) => g.kind)).toEqual(["endpoint"]);
+    const portAns = fin(port, [port], "跳板机端口多少");
+    expect(portAns).toContain(DIRECT_GUARD_PLACEHOLDER.endpoint);
+    expect(portAns).not.toMatch(/2222|jump\.internal/);
   });
 
   it("连接串：口令段必不出；R320 直答层对含口令的连接串行整句占位（主机 / 端口不再从凭证行里拆出来直答，点开卡片看）", () => {
