@@ -8459,8 +8459,12 @@ export function maskSystemMarks(answer: string, units: readonly string[] = []): 
  * 返回路径（不可用态 / 保守否决态 / 在线态）上都生效，与危险判定无关。
  */
 export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): FinalizeAskAnswerResult {
-  const core = finalizeAskAnswerCore(answer, opts);
   const units = opts.dataUnits && opts.dataUnits.length > 0 ? opts.dataUnits : opts.dataText ? [opts.dataText] : [];
+  // R320 B1：系统自产的裸中性回答（中性指引 + 角标，无其他正文）原样放行——它的「请点开…」是系统指引不是笔记内指令，
+  // 走隔离层会被当读者指令剥掉角标。资料单元里若含同形整串则不享此路（fail-closed，与 maskSystemMarks 同口径）。
+  if (isBareOracleNeutralAnswer(answer) && !units.some((u) => u.includes(ORACLE_NEUTRAL_NOTICE)))
+    return { answer, changed: false, isolated: false, verbatim_spans: 0, verbatim_closed_spans: 0 };
+  const core = finalizeAskAnswerCore(answer, opts);
   if (units.length === 0) return withDestructiveMarks(core);
   const provenance = [...units, ...(opts.execFragmentUnits ?? [])];
   // R312 P0-1：按信任域收口。未显式给 tier 时按确定性事实推定（与 index.ts echoTierOf 同口径）：答案恰好点到 1 个
@@ -8510,6 +8514,12 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
     { ...core, answer: out, changed: true, reason, verbatim_spans: closed.count, verbatim_closed_spans: closed.aggregate },
     provenance
   );
+}
+
+export function isBareOracleNeutralAnswer(answer: string): boolean {
+  const t = answer.trim();
+  if (!t.startsWith(ORACLE_NEUTRAL_NOTICE)) return false;
+  return t.slice(ORACLE_NEUTRAL_NOTICE.length).replace(CITATION_MARK_RE, "").trim().length === 0;
 }
 
 function placeholderFreeText(s: string): string {

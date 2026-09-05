@@ -4911,6 +4911,9 @@ app.post("/api/ask", async (c) => {
         references,
         notes: refNotes,
         oracle_neutral: true,
+        trust_tier: references.length === 1 ? "single_note_direct" : "aggregate",
+        verbatim_closed_spans: 0,
+        guard_finalized: true,
       });
     }
   }
