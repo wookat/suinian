@@ -9517,6 +9517,7 @@ function finalizeAskAnswerCore(
       const afterOpaque = scrubDataDerivedOpaqueRuns(out, opts.dataText, opts.question, {
         questionExempt: true,
         dangerText: dangerousData ? dangerProvenanceLines(opts.dataText, opts.dataUnits).join("\n") : undefined,
+        dataUnits: opts.dataUnits,
       });
       if (afterOpaque !== out) {
         out = afterOpaque;
@@ -10390,6 +10391,25 @@ function opaqueRunsOf(text: string): string[] {
   return [...text.matchAll(OPAQUE_RUN_RE)].map((m) => m[0].trim()).filter((r) => r.length >= 5 && opaqueRunShape(r));
 }
 
+const OPAQUE_POOL_URL_RE = /https?:\/\/[^\s<>"'）)」』]+/gi;
+
+/**
+ * 资料侧编码串池：整体良性的笔记单元里，网址的路径/查询段不入池——书签链接
+ * 的路径段（`video/BV1xx411c7mD`）形态上像编码串，但答案里的链接本身已由外链
+ * 白名单收口；只有危险邻笔记在场才会走到这里，不能因此株连善意书签。
+ * 无笔记边界时沿用整面（fail-closed）。
+ */
+function opaqueRunPool(dataText: string, units?: string[]): string[] {
+  if (!units || units.length === 0) return opaqueRunsOf(dataText);
+  const pool = new Set<string>();
+  for (const u of units) {
+    if (u.trim().length === 0) continue;
+    const src = /https?:\/\//i.test(u) && dataSurfaceFullyBenign(u, [u]) ? u.replace(OPAQUE_POOL_URL_RE, " ") : u;
+    for (const r of opaqueRunsOf(src)) pool.add(r);
+  }
+  return [...pool];
+}
+
 /**
  * `dangerText`：判为危险的语句行（及其引用的赋值行）。来自这些行的编码串不受
  * 提问点名豁免；资料其余行（善意邻行/邻笔记里的路径段、标识符）仍按提问豁免。
@@ -10398,10 +10418,10 @@ export function scrubDataDerivedOpaqueRuns(
   answer: string,
   dataText: string,
   question: string,
-  opts?: { questionExempt?: boolean; dangerText?: string }
+  opts?: { questionExempt?: boolean; dangerText?: string; dataUnits?: string[] }
 ): string {
   if (!dataText) return answer;
-  const runs = opaqueRunsOf(dataText);
+  const runs = opaqueRunPool(dataText, opts?.dataUnits);
   if (runs.length === 0) return answer;
   const dangerRuns = opts?.dangerText ? opaqueRunsOf(opts.dangerText) : [];
   const qFold = question.normalize("NFKC").toLowerCase();
