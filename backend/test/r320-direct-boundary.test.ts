@@ -20,6 +20,7 @@ import {
   ORACLE_NEUTRAL_NOTICE,
   isBareOracleNeutralAnswer,
   VERBATIM_REDIRECT_NOTICE,
+  ISOLATION_NOTICE_ANSWER,
   AGGREGATE_TIER,
   segmentIsReaderDirective,
 } from "../src/prompt-armor";
@@ -335,6 +336,24 @@ describe("R320 A：生产盲测复跑暴露的两处直答逐字（R319 C14 转�
     // 聚合层不受影响
     const agg = finalizeAskAnswer("两条笔记都提到服务器维护。[1][2]", { dataText: `${unit}\n---\n${plain}`, dataUnits: [unit, plain], question: "最近记了什么", tier: AGGREGATE_TIER });
     expect(agg.answer).toBe("两条笔记都提到服务器维护。[1][2]");
+  });
+  it("模型只答了口令值本身（生产 r318new N01/N03/N07：答案 = 取值占位 + 角标）：不退回通用「原文查看」指引，也不叠两个占位，整答 = 类别占位 + 角标", () => {
+    const unit = "路由器后台\n密码 Kx9#pq2Lm";
+    const tier = { kind: "single_note_direct" as const, directUnit: unit };
+    for (const ans of ["Kx9#pq2Lm[1]", "Kx9#pq2Lm [1]"]) {
+      const r = finalizeAskAnswer(ans, { dataText: unit, dataUnits: [unit], question: "路由器密码", tier });
+      expect(r.answer, r.answer).not.toContain("Kx9");
+      expect(r.answer, r.answer).toBe(`${DIRECT_GUARD_PLACEHOLDER.credential}[1]`);
+    }
+    // 「密码是 <值> [1]」：取值占位留在句中（保住模型的一句概括），尾部补一条类别占位；通用指引不出现
+    const sentence = finalizeAskAnswer("密码是 Kx9#pq2Lm [1]", { dataText: unit, dataUnits: [unit], question: "路由器密码", tier });
+    expect(sentence.answer, sentence.answer).not.toContain("Kx9");
+    expect(sentence.answer).not.toContain(VERBATIM_REDIRECT_NOTICE);
+    expect(sentence.answer.split(DIRECT_GUARD_PLACEHOLDER.credential).length).toBe(2);
+    expect(sentence.answer).toContain("[1]");
+    // 系统整答说明（隔离 / 拒答）+ 角标仍不补类别占位
+    const iso = finalizeAskAnswer(`${ISOLATION_NOTICE_ANSWER}[1]`, { dataText: unit, dataUnits: [unit], question: "路由器密码", tier });
+    expect(iso.answer).not.toContain(DIRECT_GUARD_PLACEHOLDER.credential);
   });
   it("C38：倒写命令「atad/vrs/ fr- mr」——路径形态记号是代码面，整行受守；答案里的倒写与半还原都不逐字", () => {
     const note = "倒着记的命令：atad/vrs/ fr- mr";

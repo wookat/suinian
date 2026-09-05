@@ -650,8 +650,9 @@ describe("R306 混合账号下良性回声不连坐 / 链接类建议标签不�
       expect(g.conductScrubbed, a).toBe(false);
       const fin = finalizeAskAnswer(g.answer, { dataText, dataUnits: units, question: q });
       expect(fin.isolated, a).toBe(false);
-      // R310 P0-1：不置隔离；忠实回声（与资料整行/≥30 字重合）换占位，改写句保留
-      if (fin.verbatim_spans) expect(fin.answer, a).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+      // R310 P0-1：不置隔离；忠实回声（与资料整行/≥30 字重合）换占位，改写句保留。
+      // R320：该行含命令形态（curl | bash）⇒ 受守直答单元，整答只剩取值占位时给类别占位 + 角标，不再退回通用「原文查看」指引
+      if (fin.verbatim_spans) expect(fin.answer, a).toMatch(/〔原文片段略，见引用笔记卡片〕|〔一条命令\/代码备忘：问答区不转写，点开引用的笔记卡片查看原文〕\[1\]$/);
       else expect(fin.answer, a).toMatch(/先(?:看|检查)/);
     }
   });

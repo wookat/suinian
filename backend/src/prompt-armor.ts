@@ -8344,13 +8344,19 @@ export function closeDirectGuard(answer: string, direct: string): { answer: stri
   let out = mask.restore(closed.answer);
   // 受守单元的直答一律带类别占位：模型纯概括（无任何重合）时也在尾部补一条——概括这条笔记是什么 + 点开卡片指引，
   // 用户看到的形态不随模型是否逐字而变（生产浏览器实测：同一条命令备忘有时占位有时只概括）。不计入 count（不是逐字命中）。
-  // 整答只剩系统标记（隔离说明 / 拒答）+ 角标时不补——那已经是系统给出的整答说明。
-  const bareSystem = a.replace(SYSTEM_MARK_SENTINEL_RE, "").replace(CITATION_MARK_RE, "").trim().length === 0;
+  // 整答只剩系统整答说明（隔离说明 / 拒答）+ 角标时不补——那已经是系统给出的整答说明。取值占位（〔凭证略〕/〔略〕）
+  // 不算整答说明：整答只剩取值占位 + 角标时，取值占位并入类别占位（类别占位自带概括与指引，用户能知道这条是什么）。
+  const stripSpans = (s: string): string =>
+    s.split(CREDENTIAL_SPAN_PLACEHOLDER).join("").split(VERBATIM_SPAN_PLACEHOLDER).join("").replace(CITATION_MARK_RE, "").trim();
+  const bareSystem = a.replace(SYSTEM_MARK_SENTINEL_RE, "").replace(CITATION_MARK_RE, "").trim().length === 0 && stripSpans(out).length > 0;
   if (guarded.length > 0 && !bareSystem && !DIRECT_GUARD_PLACEHOLDER_RE.test(out) && !out.includes(ORACLE_NEUTRAL_NOTICE)) {
     const top = guarded.reduce((best, g) => (DIRECT_GUARD_RANK[g.kind] > DIRECT_GUARD_RANK[best] ? g.kind : best), guarded[0].kind);
     const suffix = `\n\n${VERBATIM_REDIRECT_NOTICE}`;
     const body = out.endsWith(suffix) ? out.slice(0, -suffix.length) : out;
-    out = `${body.replace(/\s+$/, "")}\n${DIRECT_GUARD_PLACEHOLDER[top]}`;
+    out =
+      stripSpans(body).length === 0
+        ? `${DIRECT_GUARD_PLACEHOLDER[top]}${[...new Set(body.match(CITATION_MARK_RE) ?? [])].join("")}`
+        : `${body.replace(/\s+$/, "")}\n${DIRECT_GUARD_PLACEHOLDER[top]}`;
   }
   return { answer: out, count: closed.count };
 }
