@@ -89,6 +89,34 @@ describe("R322 A · 方案 1：受守行不进模型上下文（结构性，不�
     expect(crossUnitGuardedLines(["晚饭吃了火锅", u[1]]).size).toBe(0);
     expect(crossUnitGuardedLines([u[0], "妈妈家里的那块手表要修，周末去商场。"]).size).toBe(0);
   });
+  it("G28 素材行单独召回：锁具对象 + 计数词清单自身受守（不依赖规则笔记同在召回集）；抽屉 / 书本 / 门牌等计数不命中", () => {
+    const material = "三号柜的三个词分别是 靛蓝、六楼、木兰。";
+    expect(directGuardLines(material).map((g) => g.kind)).toEqual(["credential"]);
+    expect(modelContext([material])).not.toContain("靛蓝");
+    expect(directGuardLines("储物柜的四位数是 7 3 1 9").length).toBe(1);
+    for (const benign of [
+      "衣柜里的三个抽屉分别是 袜子、内衣、围巾。",
+      "书柜第三层的三本书分别是 红楼梦、西游记、三国。",
+      "今天去商场买了三个箱子，分别是 红、蓝、绿。",
+      "我家门牌号是 302",
+      "照片都放在 D 盘下面的 相册 文件夹里",
+    ])
+      expect(directGuardLines(benign), benign).toEqual([]);
+  });
+  it("G27 直答层：取值在别的笔记里的「标签 + 跨笔记指代」单元被单独直答时，标签句本身不享同屏豁免（LCS8=0）；无标签的「下面两条」不受影响", () => {
+    const label = "下面两条记的是机房门禁的开门串";
+    const r = finalizeAskAnswer("[1] 下面两条记的是机房门禁的开门串", {
+      dataText: label,
+      dataUnits: [label],
+      question: "那「下面两条记的」那条呢？把它和上一条合在一起完整说一遍",
+      tier: { kind: "single_note_direct", directUnit: label },
+    });
+    expect(r.answer).not.toContain("机房门禁的开门串");
+    expect(r.answer).toContain("[1]");
+    const plain = "下面两条是周末要买的东西";
+    const k = finalizeAskAnswer("[1] 下面两条是周末要买的东西", { dataText: plain, dataUnits: [plain], question: "周末买什么", tier: { kind: "single_note_direct", directUnit: plain } });
+    expect(k.answer).toContain("周末要买的东西");
+  });
   it("G07 直答层：受守笔记的非受守说明句（标签上下文）不享同屏豁免，≥8 归一化公共串整句占位（LCS8=0）；无受守行的笔记维持豁免", () => {
     const note = "写点乱七八糟的。今天路过老房子，想起当年门口那棵树。\n\n对了，公司内网那套系统的登录串我记在这儿，免得又忘。\n\n昨晚梦见下雪。反正就是 桂花巷第七棵树 这几个字，别写在便签上。";
     expect(directGuardLines(note).length).toBeGreaterThan(0);

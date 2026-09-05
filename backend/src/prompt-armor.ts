@@ -7818,10 +7818,11 @@ function aggregateHitSpans(
  * R322 C：直答单元含受守行时，它的**带凭证标签的非受守说明行**（「公司内网那套系统的登录串我记在这儿」）是取值的
  * 身份上下文，不再享受卡片同屏豁免——与聚合层同一条 LCS8 规则整句占位；受守行本身仍由 closeDirectGuard /
  * closeCredentialValues 按类别 / 记号级占位，无标签的普通行（「健身记录：跑了 5 公里」）维持同屏豁免（不改既有口径）。
+ * 取值记在别的笔记里的「标签 + 跨笔记指代」单元（「下面两条记的是机房门禁的开门串」）自身没有受守行，但它就是取值的身份上下文，同样收口。
  */
 function closeGuardedUnitContext(answer: string, direct: string): { answer: string; count: number } {
   const guarded = directGuardLines(direct);
-  if (guarded.length === 0) return { answer, count: 0 };
+  if (guarded.length === 0 && !labelPointerUnit(direct)) return { answer, count: 0 };
   const guardedSet = new Set(guarded.map((g) => g.line));
   const plain = direct
     .split("\n")
@@ -8547,6 +8548,7 @@ export function secretLabelValueLine(line: string, unitLabeled = false): boolean
   if (!t) return false;
   const labeled = SECRET_LABEL_RE.test(t);
   if (CODE_LABEL_RE.test(t) && /(?<!\d)\d{4,11}(?!\d)/.test(t)) return true;
+  if (lockMaterialListLine(t)) return true;
   if (!labeled && !unitLabeled) return false;
   if (labeled && !CJK_LETTER_RE.test(t)) {
     if (/(?<!\d)\d{3,11}(?!\d)/.test(t.replace(UNIT_NUMBER_RE, " "))) return true;
@@ -8558,6 +8560,19 @@ export function secretLabelValueLine(line: string, unitLabeled = false): boolean
   }
   // 单元带标签、本行无标签：只认强取值面（数字串 / 含数字记号 / 汉字数字 / 引号 / 强取值引导），不认普通散文
   return secretValueFace(t, true);
+}
+
+/**
+ * 锁具对象的计数素材清单（R321 G28「三号柜的三个词分别是 靓蓝、六楼、木兰」）：柜 / 锁 / 门 / 箱 一类对象 + 「N 个词 / 字 / 码 / 位」
+ * + 2–6 个短项。拼接规则常记在另一条笔记，素材行单独被召回时也要能认出来；「衣柜的三个抽屉」「书柜的三本书」不是词 / 字 / 码 计数，不命中。
+ */
+const LOCK_MATERIAL_LIST_RE =
+  /(?:柜|锁|门|箱|抽屉|门禁|机房|仓库|车库|保险|locker|cabinet|safe|vault|gate|door)[^，。！？；\n]{0,10}?[零一二两三四五六七八九十\d]+\s*(?:个|位|组)?\s*(?:词|字|数字|数|码|位|段|words?|digits?|numbers?|codes?)\s*(?:分别是|分别为|依次是|依次为|是|为|are|is|[：:])\s*([^。！？\n]{2,48})/iu;
+function lockMaterialListLine(nfkc: string): boolean {
+  const m = LOCK_MATERIAL_LIST_RE.exec(nfkc);
+  if (!m) return false;
+  const items = m[1].replace(/[，,、\s]+$/, "").split(/[、，,\s/+·]+/).filter((s) => s.length > 0);
+  return items.length >= 2 && items.length <= 6 && items.every((s) => s.length <= 8);
 }
 
 /** 破坏动词 + 对象 + 范围 / 强制词（跨语言散文）：不含任何 shell 记号的删库 / 删目录指令。 */
@@ -8691,6 +8706,13 @@ export function redactGuardedLinesForModel(text: string, unit?: string, extraGua
 /** 跨笔记指代：标签 + 「下面那条 / 另一条 / 前半 / 后半 / 第 N 节」——取值记在别的笔记里。 */
 const XNOTE_POINTER_RE =
   /下面|下一条|下条|另一条|另外一条|那条|后面那|前半|后半|前段|后段|第[一二三四五\d]\s*(?:节|段|条)|分.{0,4}(?:条|行|段)|接着|连起来|拼起来|合起来|next note|following note|other note|second half|first half|in two notes/i;
+/** 单元里有「凭证标签 + 跨笔记指代」行（取值在别的笔记）。 */
+function labelPointerUnit(unit: string): boolean {
+  return unit.split("\n").some((l) => {
+    const n = l.normalize("NFKC");
+    return SECRET_LABEL_RE.test(n) && XNOTE_POINTER_RE.test(n);
+  });
+}
 /** 破坏动作句里的对象指代（对象本体在别的笔记）。 */
 const DESTR_OBJECT_POINTER_RE = /那个|那些|那一|那下|这个|上面说的|前面说的|下面那|另一条|另外一条|那条|that (?:dir|directory|folder|table|database|bucket|disk|volume|path)/i;
 /** 对象名词：目录 / 表 / 库 / 盘 / 桶 …（与 CN_DESTROY_OBJECT 同族）。 */
