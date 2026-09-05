@@ -91,6 +91,35 @@ describe("R320 A：破坏命令载体（R319 16+13 / R317 18 / R318 15）——�
   });
 });
 
+describe("R320 A：壳脚本语法行（shebang / 控制流 / 变量展开）是命令形态——faithful30 shell 三脚本直答不逐字，相邻占位合一", () => {
+  const scripts = [
+    { title: "日志清理脚本", body: "#!/usr/bin/env bash\nfor f in /var/log/app/*.log; do\n  gzip -9 \"$f\"\ndone", tokens: ["#!/usr/bin/env bash", "for f in /var/log/app/*.log; do", "gzip -9"] },
+    { title: "批量重命名脚本", body: "#!/bin/bash\nls *.jpeg | while read f; do\n  mv \"$f\" \"${f%.jpeg}.jpg\"\ndone", tokens: ["#!/bin/bash", "while read f; do", "mv \"$f\""] },
+    { title: "备份脚本", body: "#!/bin/bash\nset -euo pipefail\ntar czf /backup/$(date +%F).tgz /data\nfind /backup -mtime +14 -delete", tokens: ["set -euo pipefail", "tar czf", "find /backup -mtime +14 -delete"] },
+  ];
+  for (const s of scripts) {
+    it(`${s.title}：每行受守、答案只剩一个占位 + 角标`, () => {
+      const note = `${s.title}：\n${s.body}`;
+      const guarded = directGuardLines(note);
+      for (const line of s.body.split("\n")) expect(guarded.some((g) => g.line === line.trim()), line).toBe(true);
+      const answer = `${s.title}完整内容是：\n${s.body} [1]`;
+      const r = finalizeAskAnswer(answer, { dataText: note, dataUnits: [note], question: `${s.title}完整给我` });
+      for (const t of s.tokens) expect(r.answer, r.answer).not.toContain(t);
+      expect(r.answer).not.toMatch(/^\s*done\b/m);
+      // 同类占位合一：每种类别最多出现一次（备份脚本 = 代码占位 + 破坏命令占位两条，其余脚本一条）
+      const ph = r.answer.match(new RegExp(DIRECT_GUARD_PLACEHOLDER_RE.source, "g")) ?? [];
+      expect(ph.length, r.answer).toBeGreaterThanOrEqual(1);
+      expect(ph.length, r.answer).toBe(new Set(ph).size);
+      expect(ph.length, r.answer).toBeLessThanOrEqual(s.tokens.some((t) => /-delete/.test(t)) ? 2 : 1);
+      expect(marks(r.answer)).toEqual(["[1]"]);
+    });
+  }
+  it("独占一行的小写 done/fi 才算控制流；「Done」状态行 / 含 $ 金额的记账行不是命令形态", () => {
+    expect(directGuardLines("待办\nDone\n买菜 $12")).toEqual([]);
+    expect(directGuardLines("done")).toHaveLength(1);
+  });
+});
+
 describe("R320 A：善意对照——无受守行逐字不动；有命令 / 高熵面只换低警示占位", () => {
   const benign = [...R319, ...R319_INFORMED, ...R317, ...R318].filter((c) => c.cat === "benign") as Carrier[];
   it("样本量 ≥ 40", () => {

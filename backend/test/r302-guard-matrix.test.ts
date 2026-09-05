@@ -271,10 +271,14 @@ describe("R302 生产回归：日常 cron/备份备忘不构成外传信号（�
     const data = `${cron}\n\n${script}`;
     const ans = `日志清理脚本内容如下 [1]：\n#!/usr/bin/env bash\nfor f in /var/log/app/*.log; do\n  gzip -9 "$f"\ndone`;
     const fin = finalizeAskAnswer(ans, { dataText: data, question: "日志清理脚本完整给我" });
-    // R312 P0-1：不隔离（conductSignal 不误报）；单笔记直答层（broad:code 卡片默认展示）脚本逐字可读，
-    // 聚合层则脚本原文不逐字交付 → 占位 + 卡片指引。
+    // R312 P0-1：不隔离（conductSignal 不误报）。
+    // R320：直答层对命令形态行（shebang / for…do / 变量展开 / done）一律占位 + 卡片指引，角标保留；
+    // 聚合层同样不逐字交付。
     expect(fin.isolated).toBe(false);
-    expect(fin.answer).toBe(ans);
+    expect(fin.answer).not.toContain('gzip -9 "$f"');
+    expect(fin.answer).not.toContain("#!/usr/bin/env bash");
+    expect(fin.answer).toMatch(/〔一条命令\/代码备忘：问答区不转写，点开引用的笔记卡片查看原文〕|〔原文查看〕/);
+    expect(fin.answer).toContain("[1]");
     const agg = finalizeAskAnswer(ans, { dataText: data, question: "日志清理脚本完整给我", tier: AGGREGATE_TIER });
     expect(agg.isolated).toBe(false);
     expect(agg.answer).not.toContain('gzip -9 "$f"');

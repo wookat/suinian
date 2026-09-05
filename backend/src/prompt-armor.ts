@@ -7261,8 +7261,18 @@ const NON_CODE_BRACKET_RE = /\[(?:\d{1,3}|[ xX])\]/g;
  * （`npm run build`、`gradle assembleDebug`、`gh pr checks 342`）：没有选项/管道也属命令形态，不是纯文字事实。 */
 const TOOL_COMMAND_LINE_RE =
   /^\s*(?:(?:[^\n\x21-\x7e]{0,24}|[\w.-]{1,24})[：:「『]\s*)?(?:[$#>]\s*)?(?:sudo\s+)?(?:npm|npx|yarn|pnpm|bun|deno|pip3?|python3?|node|tsx?|tsc|vitest|jest|eslint|prettier|cargo|go|make|gradlew?|mvn|gem|bundle|composer|php|ruby|java|javac|dotnet|flutter|swift|pod|xcodebuild|adb|ffmpeg|git|gh|glab|docker|podman|kubectl|helm|terraform|ansible|wrangler|aws|gcloud|az|brew|apt|apt-get|yum|dnf|pacman|snap|systemctl|service|journalctl|ip|ssh|scp|rsync|tar|zip|unzip|redis-cli|psql|mysql|sqlite3|k6|wrk|ab)\s+[a-z][\w.:/-]*/im;
+/** 壳脚本语法行：shebang、控制流（`for … in …; do` / `if [ … ]` / 独占一行的 `done` `fi` `esac`）、
+ * 函数头、以 ASCII 命令词起首且带变量展开（`gzip -9 "$f"` / `${f%.jpeg}`）——没有选项 / 管道也是命令形态。 */
+const SHELL_SYNTAX_LINE_RE =
+  /^\s*#!\s*\/|^\s*(?:for|while|until)\s+\S.*(?:;\s*do\b|\bdo\s*$)|^\s*(?:if|elif)\s+(?:\[|test\s|\(\()|^\s*(?:then|do|done|fi|esac|else)\s*$|^\s*case\s+\S+\s+in\s*$|^\s*(?:function\s+)?[A-Za-z_]\w*\s*\(\)\s*\{?\s*$|^\s*(?:[$#>]\s*)?(?:sudo\s+)?[a-z][a-z0-9.+_-]*(?:\s+\S+)*\s+["']?\$(?:\{[A-Za-z_]|[A-Za-z_@#*?!]|\()/;
 function commandShapeLine(line: string): boolean {
-  return BROAD_COMMAND_SHAPE_RE.test(line) || BROAD_SHELL_LINE_RE.test(line) || BROAD_SHELL_FUNC_RE.test(line) || BROAD_SQL_LINE_RE.test(line);
+  return (
+    BROAD_COMMAND_SHAPE_RE.test(line) ||
+    BROAD_SHELL_LINE_RE.test(line) ||
+    BROAD_SHELL_FUNC_RE.test(line) ||
+    BROAD_SQL_LINE_RE.test(line) ||
+    SHELL_SYNTAX_LINE_RE.test(line)
+  );
 }
 /** 整段文本都是短于 VERBATIM_PLAIN_LINE_CHARS 的纯文字单事实行（答案可原样引用的唯一形态）。 */
 export function shortPlainFactText(text: string): boolean {
@@ -7924,7 +7934,7 @@ function replaceHitSentences(
   // 相邻同文案占位（中间只有空白/标点/角标）合并为一个，角标去重后保留。
   for (const ph of used) {
     const esc = ph.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const adjacent = new RegExp(`${esc}([ \\t，,。.；;、]*(?:[[［]\\d{1,2}[\\]］][ \\t，,。.；;、]*)*)${esc}((?:[[［]\\d{1,2}[\\]］])*)`, "g");
+    const adjacent = new RegExp(`${esc}([ \\t\\n，,。.；;、]*(?:[[［]\\d{1,2}[\\]］][ \\t\\n，,。.；;、]*)*)${esc}((?:[[［]\\d{1,2}[\\]］])*)`, "g");
     for (let guard = 0; guard < 50; guard++) {
       const next = out.replace(adjacent, (_m, a: string, b: string) => `${ph}${[...new Set(`${a}${b}`.match(CITATION_MARK_RE) ?? [])].join("")}`);
       if (next === out) break;
@@ -8206,7 +8216,7 @@ export function closeDirectGuard(answer: string, direct: string): { answer: stri
     for (const s of aggregateHitSpans(a, lines, { codeSpanNeedsSyntax: true })) raw.push({ ...s, ph: DIRECT_GUARD_PLACEHOLDER[kind], rank: 0 });
   // 答案自身的命令形态句（模型改写后的命令仍是命令）：按句 / 行逐段判，占位只吃命中的那一句
   for (const m of a.matchAll(/[^。！？；\n]+[。！？；]?/g)) {
-    const t = m[0].trim();
+    const t = m[0].replace(CITATION_MARK_RE, "").trim();
     if (t && (commandShapeLine(t) || TOOL_COMMAND_LINE_RE.test(t) || isDestructiveCommandText(t))) {
       const kind: DirectGuardKind = isDestructiveCommandText(t) ? "destructive" : "code";
       raw.push(typed({ start: m.index, end: m.index + m[0].length }, kind));
