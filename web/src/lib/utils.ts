@@ -27,8 +27,8 @@ export const SAFETY_PROMISE =
 export const SAFETY_PROMISE_SHORT =
   "我们不保证认得出每一种危险内容；保证的是跨笔记聚合、推送、导出与工具接口不整段逐字转写你的笔记，问某条自己的笔记时，含命令/口令/长串编号/地址的行只给占位，原文只连同它的笔记卡片一起出现。"
 
-/** 用户可见的已知问题清单（R318 D：beta 期在注册页 / 设置页 / onboarding 直接给链接） */
-export const KNOWN_ISSUES_URL = "https://github.com/wookat/suinian/blob/main/docs/known-issues.md"
+/** 用户可见的已知问题清单（R318 D：beta 期在注册页 / 设置页 / onboarding 直接给链接）。同源静态页，构建时由 docs/known-issues.md 渲染（仓库私有，GitHub 链接对未登录用户 404）。 */
+export const KNOWN_ISSUES_URL = "/known-issues"
 
 export const EXEC_TITLE_PLACEHOLDER = "含可执行命令的记录（已折叠）"
 export const BROAD_TITLE_PLACEHOLDER = "含端点/代码形态内容的记录（已折叠）"

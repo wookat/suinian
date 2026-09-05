@@ -19,7 +19,11 @@ import {
   DIRECT_GUARD_PLACEHOLDER_RE,
   ORACLE_NEUTRAL_NOTICE,
   isBareOracleNeutralAnswer,
+  VERBATIM_REDIRECT_NOTICE,
+  AGGREGATE_TIER,
 } from "../src/prompt-armor";
+import { askGuardNoteUnit } from "../src/index";
+import { fallbackTitleFromUrl } from "../src/linkmeta";
 import { ALL as R319 } from "../scripts/qa-r319/blind-carriers";
 import { ALL as R319_INFORMED } from "../scripts/qa-r319/informed-carriers";
 import { ALL as R317 } from "../scripts/qa-r317/blind-carriers";
@@ -273,6 +277,64 @@ describe("R320 A：生产盲测复跑暴露的两处直答逐字（R319 C14 转�
       expect(DIRECT_GUARD_PLACEHOLDER_RE.test(r.answer), r.answer).toBe(true);
     }
   });
+  it("C14 聚合层：按条列出「门禁：3391」时每条自成一句、句内无高熵记号——受守行取值在聚合层同样占位（第六次部署前生产 ask_agg 漏出）", () => {
+    const note = "交接表\n| 门禁 | 保险柜 | 后台 |\n|---|---|---|\n| 3391 | 7724 | Bb2#ee5 |";
+    const other = "周末去超市买菜 128 元";
+    const ans = "交接表里三个分别是：\n- 门禁：3391 [1]\n- 保险柜：7724 [1]\n- 〔原文片段略，见引用笔记卡片〕[1]";
+    for (const units of [[note], [note, other]]) {
+      const r = finalizeAskAnswer(ans, { dataText: units.join("\n"), dataUnits: units, question: "交接表里三个分别是什么" });
+      expect(r.answer, r.answer).not.toMatch(/3391|7724/);
+      expect(r.answer).toContain("[1]");
+    }
+    // 无受守行的单元：取值照常（不是「聚合层所有数字都占位」）
+    const plain = finalizeAskAnswer("买菜花了 128 元 [1]", { dataText: other, dataUnits: [other], question: "买菜多少钱" });
+    expect(plain.answer).toContain("128");
+  });
+  it("受守行 ASCII 词回显：只报命令名不报参数（生产浏览器实测「ss 命令的备忘内容是…」）同样占位；纯汉语概括与英文虚词不占位", () => {
+    const note = "看端口占用：ss -lntp";
+    const tier = { kind: "single_note_direct" as const, directUnit: note };
+    const echoed = finalizeAskAnswer("ss 命令的备忘内容是关于查看端口占用的。\n原文请点开引用的笔记卡片查看 [1]", {
+      dataText: note,
+      dataUnits: [note],
+      question: "ss 那条命令备忘原文是什么",
+      tier,
+    });
+    expect(echoed.answer, echoed.answer).not.toMatch(/\bss\b/);
+    expect(echoed.answer).toContain(DIRECT_GUARD_PLACEHOLDER.code);
+    expect(echoed.answer).toContain("[1]");
+    // 模型自己的汉语概括（没有受守行上的词）正文不动，只在尾部补类别占位（受守单元的直答形态一致）
+    const prose = finalizeAskAnswer("这条笔记讲的是如何用命令查看端口占用情况。[1]", { dataText: note, dataUnits: [note], question: "看端口占用的命令是什么", tier });
+    expect(prose.answer).toBe(`这条笔记讲的是如何用命令查看端口占用情况。[1]\n${DIRECT_GUARD_PLACEHOLDER.code}`);
+    expect(prose.changed).toBe(false);
+    // 受守行上的英文虚词（the / is）与账号名（admin）：虚词不计，账号名计
+    const cred = "登录：user is admin, the password is Qv7#mk2";
+    const t2 = { kind: "single_note_direct" as const, directUnit: cred };
+    const r2 = finalizeAskAnswer("登录用的账号是 admin [1]", { dataText: cred, dataUnits: [cred], question: "登录账号是哪个", tier: t2 });
+    expect(r2.answer, r2.answer).not.toContain("admin");
+    expect(r2.answer).toContain(DIRECT_GUARD_PLACEHOLDER.credential);
+    const r3 = finalizeAskAnswer("The card is about a login [1]", { dataText: cred, dataUnits: [cred], question: "那条是什么", tier: t2 });
+    expect(r3.answer).toBe(`The card is about a login [1]\n${DIRECT_GUARD_PLACEHOLDER.credential}`);
+  });
+  it("受守单元的直答一律带类别占位：纯概括答案尾部补占位（取最高警示类别），verbatim 问法的通用指引不再叠加；已有占位 / 中性回答 / 无受守行的单元不补", () => {
+    const unit = "服务器登录：ssh ops@10.0.3.7\n口令 Qv7#mk2\n备注：周五前换掉";
+    const tier = { kind: "single_note_direct" as const, directUnit: unit };
+    const summary = "这是一条服务器登录信息，附有更换提醒。[1]";
+    const r = finalizeAskAnswer(`${summary}\n\n${VERBATIM_REDIRECT_NOTICE}`, { dataText: unit, dataUnits: [unit], question: "服务器那条笔记原文", verbatimExempt: "服务器那条笔记原文", tier });
+    expect(r.answer).toBe(`${summary}\n${DIRECT_GUARD_PLACEHOLDER.credential}`);
+    expect(r.answer).not.toContain(VERBATIM_REDIRECT_NOTICE);
+    expect(r.answer.split(DIRECT_GUARD_PLACEHOLDER.credential).length).toBe(2);
+    // 已经因逐字命中带了占位的答案不再追加第二条
+    const hit = finalizeAskAnswer("登录方式是 ssh ops@10.0.3.7 [1]", { dataText: unit, dataUnits: [unit], question: "服务器那条", tier });
+    expect(hit.answer, hit.answer).not.toContain("10.0.3.7");
+    expect(hit.answer.match(/〔/g)?.length).toBe(1);
+    // 无受守行的散文单元不补
+    const plain = "周五和老王吃饭，记得带书";
+    const p = finalizeAskAnswer("周五要和老王吃饭并带书。[1]", { dataText: plain, dataUnits: [plain], question: "周五干什么", tier: { kind: "single_note_direct", directUnit: plain } });
+    expect(p.answer).toBe("周五要和老王吃饭并带书。[1]");
+    // 聚合层不受影响
+    const agg = finalizeAskAnswer("两条笔记都提到服务器维护。[1][2]", { dataText: `${unit}\n---\n${plain}`, dataUnits: [unit, plain], question: "最近记了什么", tier: AGGREGATE_TIER });
+    expect(agg.answer).toBe("两条笔记都提到服务器维护。[1][2]");
+  });
   it("C38：倒写命令「atad/vrs/ fr- mr」——路径形态记号是代码面，整行受守；答案里的倒写与半还原都不逐字", () => {
     const note = "倒着记的命令：atad/vrs/ fr- mr";
     expect(directGuardLines(note).map((g) => g.kind)).toEqual(["code"]);
@@ -334,6 +396,25 @@ describe("R320 A：地址形态不分公网/私网——直答层按结构面，
       "本地超市周末打折",
     ])
       expect(directGuardLines(line), line).toEqual([]);
+  });
+
+  it("书签抓取失败的兜底标题（host › path/tail）不计入护栏单元：由书签 URL 派生、无新增结构面（生产 B04 复测发现）", () => {
+    const url = "https://blog.example.com/posts/hello";
+    const derived = fallbackTitleFromUrl(url)!;
+    expect(derived).toBe("blog.example.com › posts/hello");
+    // 兜底标题本身以裸主机形态命中端点判据——若计入单元，普通书签会被占位
+    expect(directGuardLines(derived).map((g) => g.kind)).toEqual(["endpoint"]);
+    const base = { title: null, content: `公司博客 ${url}`, url, url_summary: null };
+    expect(directGuardLines(askGuardNoteUnit({ ...base, url_title: derived }))).toEqual([]);
+    // 真实抓取到的标题照旧计入：标题里带私网地址仍受守（同单元的书签行随之继承受守，fail-closed）
+    const real = directGuardLines(askGuardNoteUnit({ ...base, url_title: "内网镜像 10.0.3.7:3000" }));
+    expect(real.map((g) => g.kind)).toEqual(["endpoint", "endpoint"]);
+    expect(real.filter((g) => g.own).map((g) => g.line)).toEqual(["内网镜像 10.0.3.7:3000"]);
+    // 正文自身是非书签地址时，兜底标题的剔除不影响受守
+    const hp = "http://grafana.example.com:3000/d/abc";
+    expect(
+      directGuardLines(askGuardNoteUnit({ title: null, content: `监控 ${hp}`, url: hp, url_title: fallbackTitleFromUrl(hp), url_summary: null })).length
+    ).toBeGreaterThan(0);
   });
 
   it("跳板机 user@私网IP：不透明记号优先（类别只影响文案），同样不逐字", () => {

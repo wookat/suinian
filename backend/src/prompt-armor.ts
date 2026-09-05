@@ -7769,11 +7769,42 @@ function aggregateHitSpans(
   for (const s of tiledTokenSpans(answer, live, visible)) raw.push(s);
   // R320：资料派生的短高熵记号 / 长数字串 / 分组数字串（答案记号与某单元记号相同，或是它 ≥3 字含数字的子段）：同为只增不减的补充。
   for (const s of dataDerivedOpaqueSpans(answer, live)) if (!inVisible(s)) raw.push(s);
+  // R320：受守行（有结构面的行）上任何 ≥3 字含数字的取值（`| 3391 | 7724 | Bb2#ee5 |` 的 4 位门禁码）在答案里出现即命中——
+  // 与直答层 closeDirectGuard 同一口径；聚合答案按条列出「门禁：3391」时每条自成一句，句内没有高熵记号，LCS8 也够不着。
+  for (const s of guardedRowValueSpans(answer, live)) if (!inVisible(s)) raw.push(s);
   // R320：聚合层答案里的任何短高熵记号 / 长数字串都收——拼读 / NATO / 解码 / 算式得出的口令在资料原面上对不上，
   // 但在答案里就是可用的取值；聚合层没有同屏卡片可核对，这类记号只能是派生或编造，两种都不交付。
   // 直答层（visibleUnit）由 closeDirectGuard 按类别占位。
   if (!opts.visibleUnit) for (const s of opaqueTokenSpans(answer)) raw.push(s);
   return raw;
+}
+
+/** 受守行上 ≥3 字含数字的取值（小写 NFKC）。 */
+function guardedRowValues(lines: string[]): Set<string> {
+  const out = new Set<string>();
+  for (const line of lines)
+    for (const m of line.normalize("NFKC").matchAll(/[A-Za-z0-9][A-Za-z0-9#@!$%^&*_.+=:/-]*[A-Za-z0-9]/g))
+      if (m[0].length >= 3 && /\d/.test(m[0])) out.add(m[0].toLowerCase());
+  return out;
+}
+
+/** 答案里 ≥3 字含数字的字母数字段，若等于或是某受守行取值的子串 ⇒ 命中区间。 */
+function guardedRowValueSpans(answer: string, live: string[]): Array<{ start: number; end: number }> {
+  const values = guardedRowValues(live.flatMap((u) => directGuardLines(u).filter((g) => g.own).map((g) => g.line)));
+  if (values.size === 0) return [];
+  const nfkc = answer.normalize("NFKC");
+  if (nfkc.length !== answer.length) return [];
+  const out: Array<{ start: number; end: number }> = [];
+  for (const m of nfkc.matchAll(/[A-Za-z0-9]{3,}/g)) {
+    const piece = m[0].toLowerCase();
+    if (!/\d/.test(piece)) continue;
+    for (const v of values)
+      if (v === piece || v.includes(piece)) {
+        out.push({ start: m.index, end: m.index + m[0].length });
+        break;
+      }
+  }
+  return out;
 }
 
 function dataDerivedOpaqueSpans(answer: string, live: string[]): Array<{ start: number; end: number }> {
@@ -7989,6 +8020,10 @@ export function closeVerbatimForTier(
 // 无 code / 高熵面的纯散文、记账、待办不受影响（受守行为空 ⇒ 不动）。
 export type DirectGuardKind = "credential" | "destructive" | "opaque" | "endpoint" | "code";
 const DIRECT_GUARD_RANK: Record<DirectGuardKind, number> = { credential: 5, destructive: 4, opaque: 3, endpoint: 2, code: 1 };
+/** 受守行 ASCII 词回显判定里不计的英文虚词 / 泛用词（不是命令名也不是取值）。 */
+const DIRECT_GUARD_STOP_WORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "be", "to", "of", "in", "on", "at", "by", "or", "and", "for", "if", "it", "its", "my", "me", "we", "you", "your", "our", "no", "not", "yes", "ok", "do", "as", "so", "up", "with", "from", "this", "that", "then", "than", "use", "see", "new", "old", "all", "any", "one", "two", "via", "per", "vs", "etc", "todo", "note", "http", "https", "www", "com", "cn", "org", "net", "io", "ip", "url", "api", "app", "web", "id", "ui", "ai", "qa",
+]);
 /** 直答占位文案（系统标记整串白名单）：概括受守行是什么 + 「点开引用卡片查看原文」指引；前端把它渲染成带「查看原文」按钮的卡片。 */
 export const DIRECT_GUARD_PLACEHOLDER: Record<DirectGuardKind, string> = {
   credential: "〔一条含口令/密钥的记录：问答区不转写，点开引用的笔记卡片查看原文〕",
@@ -8262,6 +8297,9 @@ export function closeDirectGuard(answer: string, direct: string): { answer: stri
   const guardedTokens = new Set<string>();
   // 取值 → 所在受守行的类别（同一取值出现在多行取警示级最高者）：文案沿用该行类别，`ss -lntp | grep 8080` 的 8080 仍是「命令备忘」
   const guardedValues = new Map<string, DirectGuardKind>();
+  // 行级命中的受守行上的 ASCII 词（命令名 / 程序名 / 参数名 / 账号名：`ss` `dd` `admin`）：答案里作为独立词出现一样占位——
+  // 「命令形态行不转写」包括只报命令名不报参数（生产浏览器实测「ss 命令的备忘内容是…」）。英文虚词不计，受守单元里的普通行（own=false）不计。
+  const guardedWords = new Map<string, DirectGuardKind>();
   for (const g of guarded) {
     for (const t of opaqueTokensOf(g.line)) guardedTokens.add(t.toLowerCase());
     for (const m of g.line.normalize("NFKC").matchAll(/[A-Za-z0-9][A-Za-z0-9#@!$%^&*_.+=:/-]*[A-Za-z0-9]/g)) {
@@ -8270,8 +8308,20 @@ export function closeDirectGuard(answer: string, direct: string): { answer: stri
       const prev = guardedValues.get(v);
       if (!prev || DIRECT_GUARD_RANK[g.kind] > DIRECT_GUARD_RANK[prev]) guardedValues.set(v, g.kind);
     }
+    if (!g.own) continue;
+    for (const m of g.line.normalize("NFKC").matchAll(/(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_-]*(?![A-Za-z0-9_])/g)) {
+      const w = m[0].toLowerCase();
+      if (w.length < 2 || DIRECT_GUARD_STOP_WORDS.has(w)) continue;
+      const prev = guardedWords.get(w);
+      if (!prev || DIRECT_GUARD_RANK[g.kind] > DIRECT_GUARD_RANK[prev]) guardedWords.set(w, g.kind);
+    }
   }
   const nfkc = a.normalize("NFKC");
+  if (guardedWords.size > 0 && nfkc.length === a.length)
+    for (const m of nfkc.matchAll(/(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_-]*(?![A-Za-z0-9_])/g)) {
+      const kind = guardedWords.get(m[0].toLowerCase());
+      if (kind) raw.push(typed({ start: m.index, end: m.index + m[0].length }, kind));
+    }
   if ((guardedTokens.size > 0 || guardedValues.size > 0) && nfkc.length === a.length)
     for (const m of nfkc.matchAll(/[A-Za-z0-9]{3,}/g)) {
       const piece = m[0].toLowerCase();
@@ -8291,7 +8341,18 @@ export function closeDirectGuard(answer: string, direct: string): { answer: stri
       if (hit) raw.push(typed({ start: m.index, end: m.index + m[0].length }, hit));
     }
   const closed = replaceHitSentences(a, raw);
-  return { answer: mask.restore(closed.answer), count: closed.count };
+  let out = mask.restore(closed.answer);
+  // 受守单元的直答一律带类别占位：模型纯概括（无任何重合）时也在尾部补一条——概括这条笔记是什么 + 点开卡片指引，
+  // 用户看到的形态不随模型是否逐字而变（生产浏览器实测：同一条命令备忘有时占位有时只概括）。不计入 count（不是逐字命中）。
+  // 整答只剩系统标记（隔离说明 / 拒答）+ 角标时不补——那已经是系统给出的整答说明。
+  const bareSystem = a.replace(SYSTEM_MARK_SENTINEL_RE, "").replace(CITATION_MARK_RE, "").trim().length === 0;
+  if (guarded.length > 0 && !bareSystem && !DIRECT_GUARD_PLACEHOLDER_RE.test(out) && !out.includes(ORACLE_NEUTRAL_NOTICE)) {
+    const top = guarded.reduce((best, g) => (DIRECT_GUARD_RANK[g.kind] > DIRECT_GUARD_RANK[best] ? g.kind : best), guarded[0].kind);
+    const suffix = `\n\n${VERBATIM_REDIRECT_NOTICE}`;
+    const body = out.endsWith(suffix) ? out.slice(0, -suffix.length) : out;
+    out = `${body.replace(/\s+$/, "")}\n${DIRECT_GUARD_PLACEHOLDER[top]}`;
+  }
+  return { answer: out, count: closed.count };
 }
 
 /** B1 中性回答：保留答案里的系统标记（隔离 / 降级横幅与内容无关）与引证角标（卡片照常同屏），正文换成 ORACLE_NEUTRAL_NOTICE。 */
@@ -8538,8 +8599,14 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
         exemptText: opts.verbatimExempt ?? opts.question,
       });
   if (closed.count === 0) {
-    // 直答层什么都没收时，verbatim 问法附带的「问答区不逐字转写」指引与实际交付自相矛盾，去掉。
     const suffix = `\n\n${VERBATIM_REDIRECT_NOTICE}`;
+    // 受守直答单元的纯概括答案：正文未动，只在尾部补了类别占位（自带「点开卡片看原文」指引，通用指引随之多余）。
+    const appended = Object.values(DIRECT_GUARD_PLACEHOLDER).find((p) => closed.answer.endsWith(`\n${p}`) && !core.answer.endsWith(`\n${p}`));
+    if (tier.kind === "single_note_direct" && appended) {
+      const body = core.answer.endsWith(suffix) ? core.answer.slice(0, -suffix.length) : core.answer;
+      return withDestructiveMarks({ ...core, answer: `${body.replace(/\s+$/, "")}\n${appended}` }, provenance);
+    }
+    // 直答层什么都没收时，verbatim 问法附带的「问答区不逐字转写」指引与实际交付自相矛盾，去掉。
     if (tier.kind === "single_note_direct" && core.answer.endsWith(suffix))
       return withDestructiveMarks({ ...core, answer: core.answer.slice(0, -suffix.length) }, provenance);
     return withDestructiveMarks(core, provenance);
