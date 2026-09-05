@@ -15,7 +15,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, type BroadFoldReason } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, conversationAnchorsGuarded, type BroadFoldReason } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -3631,7 +3631,15 @@ app.post("/api/ask", async (c) => {
   // R320 B1（audit-r319 §3.3 预言机）：问题带口令/密钥样字符串时，候选值本身不进召回——对错值召回同一批笔记，
   // 「有引用 / 没找到」不再构成逐位试探通道；召回命中受守笔记时在生成前确定性短路为不确认不否认的中性指引。
   // R320 B1：带候选值的核对问 / 对受守内容的是非问 ⇒ 预言机形态（候选值不进召回；命中受守笔记时不进生成）
-  const oracleProbe = !metaQuestion && (questionCarriesOpaqueToken(question) || isYesNoQuestion(question));
+  // R322 B：属性 / 首末字 / 几位 / 范围 / 二分 / 转写形态（带指向锚）同属预言机；多轮里锚可能只在上一轮
+  //（「第 2 个字符是 u 吗」承接「核对那串口令」）——历史非空时锚从整段对话里找。
+  const historyText = history.map((m) => m.content).join("\n");
+  const oracleProbe =
+    !metaQuestion &&
+    (questionCarriesOpaqueToken(question) ||
+      isYesNoQuestion(question) ||
+      isOracleProbeQuestion(question, { anchored: true }) ||
+      (history.length > 0 && isOracleProbeQuestion(question) && conversationAnchorsGuarded(historyText)));
   const recallBase = oracleProbe ? stripOpaqueTokens(intentBase) : intentBase;
   // query rewrite: resolve pronouns/ordinals against history, then keyword recall
   const tRewrite = Date.now();
@@ -4918,6 +4926,12 @@ app.post("/api/ask", async (c) => {
   const askNoteGuarded = (i: number): boolean =>
     directGuardLines(askModelUnits[i]).length > 0 ||
     askModelUnits[i].split("\n").some((l) => askCrossGuarded.has(l.trim()));
+  // 图谱三元组是正文抽取物：带受守取值的三元组会绕过行级隔离，进模型前一并剔除。
+  {
+    const gt = redactGraphTriplesForModel(graphTriples, askModelUnits);
+    if (gt.redacted > 0) console.log(`ask: ${gt.redacted} graph triple(s) carrying guarded values dropped from model context`);
+    graphTriples = gt.triples;
+  }
   if (oracleProbe) {
     const guarded = notes.filter((_n, i) => askNoteGuarded(i));
     if (guarded.length > 0) {
@@ -5034,8 +5048,9 @@ app.post("/api/ask", async (c) => {
   // 输出护栏的资料面/问题面文本（marker 判定用）：正文+标题+剪藏元数据+实体关系
   const askGuardNoteUnits = notes.map(askGuardNoteUnit);
   const askGuardData = `${context}\n${askGuardNoteUnits.join("\n")}\n${graphTriples.join("\n")}`;
-  // 跨笔记语义窗口的地址归因单元：每条笔记一项，每条图谱三元组一项。
-  const askGuardUnits = [...askGuardNoteUnits, ...graphTriples];
+  // 跨笔记语义窗口的地址归因单元：每条笔记一项。剩余图谱三元组全部源自非受守行，不单独成单元
+  //（脱离句境的「订单号 —属于→ 京东」会把善意长数字判成不透明串）。
+  const askGuardUnits = [...askGuardNoteUnits];
   // 跨笔记分片（meta.exec_fragment）：单片无痕，出口按危险单元收口其片段回声。
   const askGuardFragmentUnits = notes
     .filter((n) => !n.is_sensitive && noteMetaExecFragment(n.meta ?? null))

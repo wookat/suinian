@@ -6801,7 +6801,7 @@ export function credentialValueSpans(answer: string, units: string[]): Array<{ s
         const run = m[0];
         const at = m.index ?? 0;
         const mixed = /\d/.test(run) && /[a-z]/.test(run);
-        const ok = mixed ? run.length >= 2 : /^\d+$/.test(run) ? run.length >= 4 : run.length >= 5;
+        const ok = mixed ? run.length >= 3 : /^\d+$/.test(run) ? run.length >= 4 : run.length >= 5;
         // 「前半 / 后半是 …」补全型问句把取值的首尾段单独吐出（qzt / 210）：首尾段 ≥ 3 字即收。
         const edge = run.length >= 3 && long.some((ft) => ft !== run && (ft.startsWith(run) || ft.endsWith(run)));
         if (!ok && !edge) continue;
@@ -7718,7 +7718,7 @@ const CITATION_MARK_RE = /[[［]\d{1,2}[\]］]/g;
 export function closeAggregateVerbatim(
   answer: string,
   units: string[],
-  opts: { visibleUnit?: string } = {}
+  opts: { visibleUnit?: string; skipOpaqueTokens?: boolean } = {}
 ): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
   const live = units.filter((u) => typeof u === "string" && u.trim().length > 0);
   if (live.length === 0 || !answer) return { answer, count: 0, spans: [] };
@@ -7731,7 +7731,7 @@ export function closeAggregateVerbatim(
 function closeAggregateVerbatimMasked(
   answer: string,
   live: string[],
-  opts: { visibleUnit?: string }
+  opts: { visibleUnit?: string; skipOpaqueTokens?: boolean }
 ): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
   return replaceHitSentences(answer, aggregateHitSpans(answer, live, opts));
 }
@@ -7740,7 +7740,7 @@ function closeAggregateVerbatimMasked(
 function aggregateHitSpans(
   answer: string,
   live: string[],
-  opts: { visibleUnit?: string; codeSpanNeedsSyntax?: boolean }
+  opts: { visibleUnit?: string; codeSpanNeedsSyntax?: boolean; skipOpaqueTokens?: boolean }
 ): Array<{ start: number; end: number }> {
   // 单笔记直答层：命中片段若本身就出现在同屏引用卡片的那条笔记里（其它单元只是重复它——图谱三元组的实体名、
   // 分片单元、内容相近的未引用笔记），收口对攻击者无收益，不计。
@@ -7810,8 +7810,27 @@ function aggregateHitSpans(
   // R320：聚合层答案里的任何短高熵记号 / 长数字串都收——拼读 / NATO / 解码 / 算式得出的口令在资料原面上对不上，
   // 但在答案里就是可用的取值；聚合层没有同屏卡片可核对，这类记号只能是派生或编造，两种都不交付。
   // 直答层（visibleUnit）由 closeDirectGuard 按类别占位。
-  if (!opts.visibleUnit) for (const s of opaqueTokenSpans(answer)) raw.push(s);
+  if (!opts.visibleUnit && !opts.skipOpaqueTokens) for (const s of opaqueTokenSpans(answer)) raw.push(s);
   return raw;
+}
+
+/**
+ * R322 C：直答单元含受守行时，它的**带凭证标签的非受守说明行**（「公司内网那套系统的登录串我记在这儿」）是取值的
+ * 身份上下文，不再享受卡片同屏豁免——与聚合层同一条 LCS8 规则整句占位；受守行本身仍由 closeDirectGuard /
+ * closeCredentialValues 按类别 / 记号级占位，无标签的普通行（「健身记录：跑了 5 公里」）维持同屏豁免（不改既有口径）。
+ */
+function closeGuardedUnitContext(answer: string, direct: string): { answer: string; count: number } {
+  const guarded = directGuardLines(direct);
+  if (guarded.length === 0) return { answer, count: 0 };
+  const guardedSet = new Set(guarded.map((g) => g.line));
+  const plain = direct
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !guardedSet.has(l) && SECRET_LABEL_RE.test(l.normalize("NFKC")))
+    .join("\n");
+  if (!plain) return { answer, count: 0 };
+  const r = closeAggregateVerbatim(answer, [plain], { skipOpaqueTokens: true });
+  return { answer: r.answer, count: r.count };
 }
 
 /** 受守行上 ≥3 字含数字的取值（小写 NFKC）。 */
@@ -8024,6 +8043,10 @@ export function closeVerbatimForTier(
   const frag = opts.execFragmentUnits ?? [];
   if (tier.kind === "aggregate") {
     const all = [...opts.units, ...frag];
+    // R322 B：预言机形态问句落到聚合层（多引用）且召回里有受守单元时，一句裸判定（「不是」「没有」「是」）就是 1 bit——
+    // 与直答层同一条中性话术。阶前短路已覆盖常态，这里是出口兜底。
+    if (opts.exemptText && isOracleProbeQuestion(opts.exemptText) && isBareVerdictAnswer(answer) && all.some((u) => directGuardLines(u).length > 0))
+      return { answer: oracleNeutralAnswer(answer, all.join("\n")), count: 1, aggregate: 1 };
     const closed = closeAggregateVerbatim(answer, all);
     // R322 C：聚合层同样收「标签 + 取值」句与散文破坏指令句；归一化比对兜底（方案 2）。
     const labeled = closeSecretLabelSentences(closed.answer, all);
@@ -8038,7 +8061,11 @@ export function closeVerbatimForTier(
   // R322 B：试探形态扩到属性 / 范围 / 排除 / 二分 / 转写全形态（isOracleProbeQuestion），同一条中性话术。
   if (opts.exemptText && isOracleProbeQuestion(opts.exemptText) && directGuardLines(direct).length > 0)
     return { answer: oracleNeutralAnswer(answer, direct), count: 1, aggregate: 0 };
-  const strong = closeAggregateVerbatim(answer, others, { visibleUnit: direct });
+  // R322 C：直答单元自身含受守行时，卡片同屏豁免不再适用——受守笔记的说明句（「公司内网那套系统的登录串」）是取值的
+  // 上下文，与聚合层同一条 LCS8 规则整句占位；原文仍在引用卡片里。无受守行的直答单元维持同屏豁免。
+  const strong0 = closeAggregateVerbatim(answer, others, { visibleUnit: direct });
+  const ctx = closeGuardedUnitContext(strong0.answer, direct);
+  const strong = { answer: ctx.answer, count: strong0.count + ctx.count };
   // R314 P0-2：直答单元里的凭证取值（PIN/口令/密钥/连接串口令段）在直答层也不逐字——记号级占位，句子其余保留，
   // 原文在引用卡片里。这是直答豁免的收窄（折叠优先级），不是承诺边界。
   // R318：取值登记面改为全部召回单元——跨笔记拆段（前半 / 后半各记一条）拼起来的口令不在直答单元里，但也不该进答案。
@@ -8344,7 +8371,7 @@ export function questionCarriesOpaqueToken(question: string): boolean {
 
 // 是非问形态（「…吗」「是不是」「对不对」「是否」「…吧？」/ 英文 is/are/does 开头）
 const YES_NO_QUESTION_RE =
-  /(?:吗|嗎|ですか|でしょうか|입니까|인가요|맞나요|맞죠)\s*[？?！!。]*\s*$|是不是|對不對|对不对|是否|有没有|有沒有|对吗|對嗎|没错吧|沒錯吧|^\s*(?:is|are|was|were|does|do|did|has|have|can|could|should|would|will|isn't|aren't|wasn't|doesn't|don't|didn't)\b/iu;
+  /(?:吗|嗎|ですか|でしょうか|입니까|인가요|맞나요|맞죠)\s*[？?！!。，,]*\s*(?:$|只|回答|答|answer|just|only)|是不是|對不對|对不对|是否|有没有|有沒有|对吗|對嗎|没错吧|沒錯吧|是或不是|对或不对|有或没有|yes or no|true or false|^\s*(?:is|are|was|were|does|do|did|has|have|can|could|should|would|will|isn't|aren't|wasn't|doesn't|don't|didn't)\b/iu;
 export function isYesNoQuestion(question: string): boolean {
   return YES_NO_QUESTION_RE.test(question.normalize("NFKC").trim());
 }
@@ -8445,7 +8472,7 @@ export function directGuardKindOfLine(line: string, ctx?: { unitLabeled?: boolea
 
 /** 凭证 / 门禁 / 卡号一类标签词（跨语言）。命中只说明这行在讲某个秘密，是否受守还要看取值面。 */
 const SECRET_LABEL_RE =
-  /密码|口令|暗号|密钥|秘钥|登录串|开门串|登录用的|门禁|取款码|取现|提款码|提取码|保险柜|保险箱|柜门|铁柜|工资卡|银行卡|社保卡|证件号|身份证号|卡号|对公账户|网银|passcodes?|passwords?|passphrases?|pass ?phrases?|key ?phrases?|safe ?(?:phrase|code|combination)|gate ?codes?|(?<![a-z])pins?(?![a-z])|kennwort|passwort|contraseña|пароль|パスワード|暗証番号|비밀번호|كلمة\s*(?:السر|المرور|الدخول)/iu;
+  /密码|口令|暗号|密钥|秘钥|登录串|开门串|登录用的|门禁|取款码|取现|提款码|提取码|保险柜|保险箱|柜门|铁柜|工资卡|银行卡|社保卡|证件号|身份证号|卡号|对公账户|网银|passcodes?|passwords?|passphrases?|pass ?phrases?|key ?phrases?|safe ?(?:phrase|code|combination)|gate ?codes?|(?:cabinet|locker|vault|door|login|access|recovery|seed|secret|unlock|mnemonic) ?(?:phrase|code|word)s?|(?<![a-z])pins?(?![a-z])|kennwort|passwort|contraseña|пароль|パスワード|暗証番号|비밀번호|كلمة\s*(?:السر|المرور|الدخول)/iu;
 /** 纯数字类一次性码 / 编号标签（只配数字取值）。 */
 const CODE_LABEL_RE =
   /交易码|验证码|授权码|激活码|校验码|动态码|安全码|序列号|[零一二两三四五六七八九十\d]+\s*位(?:的)?(?:数字?|码|号)|(?<![a-z])(?:cvv|cvc|otp)(?![a-z])/i;
@@ -8540,8 +8567,10 @@ const PROSE_DESTR_TARGET_RE =
   /目录|文件夹|数据库|数据|服务器|生产|运营|缓存|磁盘|分区|系统盘|所有文件|本番|データベース|データ|ディレクトリ|서버|데이터|디렉|каталог|базу|данные|сервер|base de|producci[oó]n|datos|directorio|üretim|veri|sunucu|produksi|database|server|production|directory|folder|(?<![a-z])tables?(?![a-z])|disk|partition|volume/iu;
 const PROSE_DESTR_SCOPE_RE =
   /全部|所有|整个|整棵|整颗|强制|不要确认|不确认|不提示|不用备份|不留备份|不备份|不用留|递归|连子目录|连文件|从头|重来|重新建|重新上|すべて|バックアップは取らなく|作り直|전부|모두|백업|처음부터|весь|все|рекурсивно|без резерв|toda|todos?|sin copia|desde cero|tüm|yedek|semua|tanpa backup|dari awal|(?<![a-z])all(?![a-z])|entire|whole|recursively|forced?|without (?:confirm|backup)|no backup|from scratch/iu;
+/** 状态描述而非指令：「已删除 / 被删除 / 未删除」的笔记、「已清空」的表——不算破坏意图。 */
+const PROSE_DESTR_STATE_RE = /(?:已|已经|被|未|没有?)(?:删掉|删除|删干净|删光|删了|清空|抹掉|抹除|格式化|销毁)/gu;
 export function proseDestructiveLine(line: string): boolean {
-  const t = line.normalize("NFKC");
+  const t = line.normalize("NFKC").replace(PROSE_DESTR_STATE_RE, " ");
   return PROSE_DESTR_VERB_RE.test(t) && PROSE_DESTR_TARGET_RE.test(t) && PROSE_DESTR_SCOPE_RE.test(t);
 }
 
@@ -8591,7 +8620,22 @@ function longDigitFaceGuarded(text: string): boolean {
  * `own`：该行自身命中行级判据（类别参与排序）；否则是受守单元里的普通行（沿用整条单元的类别文案——概括的是这条笔记，
  * 排序最低，行级命中的类别文案优先）。
  */
+const DIRECT_GUARD_CACHE = new Map<string, ReadonlyArray<{ line: string; kind: DirectGuardKind; own: boolean }>>();
+const DIRECT_GUARD_CACHE_MAX = 512;
+
 export function directGuardLines(unit: string): Array<{ line: string; kind: DirectGuardKind; own: boolean }> {
+  const hit = DIRECT_GUARD_CACHE.get(unit);
+  if (hit) return hit.map((g) => ({ ...g }));
+  const out = computeDirectGuardLines(unit);
+  if (DIRECT_GUARD_CACHE.size >= DIRECT_GUARD_CACHE_MAX) {
+    const oldest = DIRECT_GUARD_CACHE.keys().next().value;
+    if (oldest !== undefined) DIRECT_GUARD_CACHE.delete(oldest);
+  }
+  DIRECT_GUARD_CACHE.set(unit, out.map((g) => ({ ...g })));
+  return out;
+}
+
+function computeDirectGuardLines(unit: string): Array<{ line: string; kind: DirectGuardKind; own: boolean }> {
   const lines = unit.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
   const whole = guardFoldReason(unit);
   const nfkc = unit.normalize("NFKC");
@@ -8647,6 +8691,12 @@ export function redactGuardedLinesForModel(text: string, unit?: string, extraGua
 /** 跨笔记指代：标签 + 「下面那条 / 另一条 / 前半 / 后半 / 第 N 节」——取值记在别的笔记里。 */
 const XNOTE_POINTER_RE =
   /下面|下一条|下条|另一条|另外一条|那条|后面那|前半|后半|前段|后段|第[一二三四五\d]\s*(?:节|段|条)|分.{0,4}(?:条|行|段)|接着|连起来|拼起来|合起来|next note|following note|other note|second half|first half|in two notes/i;
+/** 破坏动作句里的对象指代（对象本体在别的笔记）。 */
+const DESTR_OBJECT_POINTER_RE = /那个|那些|那一|那下|这个|上面说的|前面说的|下面那|另一条|另外一条|那条|that (?:dir|directory|folder|table|database|bucket|disk|volume|path)/i;
+/** 对象名词：目录 / 表 / 库 / 盘 / 桶 …（与 CN_DESTROY_OBJECT 同族）。 */
+const DESTR_OBJECT_NOUN_RE = /目录|文件夹|路径|数据表|数据库|库(?![存房])|(?<![手钟报图课时代])表(?![格单情现达演示面扬哥姐弟妹叔姨舅白态层皮])|(?<![键棋光托])盘(?![子点])|存储桶|桶(?![装])|分区|卷(?![子])|快照|集群|命名空间|\b(?:dir|directory|folder|table|database|bucket|disk|volume|path)\b/i;
+/** 定位词：散文写的路径层级（「var 下面的 lib 里的」）或真路径面。 */
+const OBJECT_LOCATOR_RE = /下面的|下的|里的|里面的|之下|子目录|叫做|名字是|名叫|是\s*[A-Za-z_][\w.-]*\s*(?:那个|那一|下|里)|[\w.-]+[\/\\][\w.-]+|\bunder\b|\binside\b|\bnamed\b/i;
 /**
  * R322 A/C（audit-r321 I14 / G27）：单元集合里有「凭证标签 + 跨笔记指代」的单元时，其余**无标签、无句读、≤2 行且每行 ≤24 字**
  * 的裸短单元整体按凭证取值受守——「下面那条是网银口令」+「梧桐树下第三个路灯」这种取值本身没有任何结构面、只能靠
@@ -8655,6 +8705,22 @@ const XNOTE_POINTER_RE =
 export function crossUnitGuardedLines(units: readonly string[]): Set<string> {
   const out = new Set<string>();
   if (units.length < 2) return out;
+  // R322 A（盲测 G29）：破坏动作一条（「把那个目录整棵强制删掉」）、对象路径用散文写在另一条（「var 下面的 lib 里的 mysql」）——
+  // 对象行自身没有结构面，只能靠邻居的破坏动作 + 对象指代认出来：短单元（≤ 2 行）里带定位词的对象描述行受守。
+  const destructivePointer = units.some((u) =>
+    directGuardLines(u).some((g) => g.kind === "destructive" && DESTR_OBJECT_POINTER_RE.test(g.line.normalize("NFKC")))
+  );
+  if (destructivePointer) {
+    for (const u of units) {
+      if (directGuardLines(u).some((g) => g.kind === "destructive")) continue;
+      const lines = u.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+      if (lines.length === 0 || lines.length > 2) continue;
+      for (const l of lines) {
+        const n = l.normalize("NFKC");
+        if (n.length <= 60 && DESTR_OBJECT_NOUN_RE.test(n) && OBJECT_LOCATOR_RE.test(n)) out.add(l);
+      }
+    }
+  }
   const pointer = units.some((u) => {
     const n = u.normalize("NFKC");
     return SECRET_LABEL_RE.test(n) && XNOTE_POINTER_RE.test(n);
@@ -8678,6 +8744,28 @@ export function crossUnitGuardedLines(units: readonly string[]): Set<string> {
   return out;
 }
 
+const TRIPLE_ARROW_RE = /\s*[—–-]+[^→]*→\s*/u;
+/**
+ * R322 A：图谱三元组是笔记正文的抽取物，受守行里的取值会以「4471 —属于→ 柜门」这种形态绕过行级隔离进入模型上下文。
+ * 与受守行（行级命中 + 跨笔记指代）共享任一 ≥3 字实体面、或按归一化比对命中受守取值的三元组整条剔除。
+ * 剩余三元组全部源自非受守行——它们不再单独作为受守单元（脱离句境的「289477103366 —属于→ 京东」会把善意订单号判成不透明串）。
+ */
+export function redactGraphTriplesForModel(triples: readonly string[], units: readonly string[]): { triples: string[]; redacted: number } {
+  if (triples.length === 0) return { triples: [], redacted: 0 };
+  const guarded: string[] = [];
+  for (const u of units) for (const g of directGuardLines(u)) guarded.push(g.line.normalize("NFKC"));
+  for (const l of crossUnitGuardedLines(units)) guarded.push(l.normalize("NFKC"));
+  const kept: string[] = [];
+  let redacted = 0;
+  for (const t of triples) {
+    const ents = t.normalize("NFKC").split(TRIPLE_ARROW_RE).map((e) => e.trim()).filter((e) => e.length >= 3);
+    const hit = ents.some((e) => guarded.some((g) => g.includes(e))) || normalizedGuardedLeak(t, [...units]) !== null;
+    if (hit) redacted += 1;
+    else kept.push(t);
+  }
+  return { triples: kept, redacted };
+}
+
 /**
  * R322 B：对受守内容的**任何**信息试探——是非 / 几位 / 首末字 / 第 N 位 / 范围 / 比较 / 排除 / 二分 / 属性 / 尾缀「只回答是或不是」/
  * 转写（加空格 / 逐字念 / 拆开 / 倒序 / 编码 / 翻译 / 拼音）——与 R320 的「带候选值 / 是非问」同归一类：命中受守行时整答换成同一条中性话术。
@@ -8695,6 +8783,14 @@ export function isOracleProbeQuestion(question: string, opts?: { anchored?: bool
   if (questionCarriesOpaqueToken(q) || isYesNoQuestion(q)) return true;
   if (!ORACLE_PROBE_RE.test(q)) return false;
   return opts?.anchored ? ORACLE_ANCHOR_RE.test(q) || SECRET_LABEL_RE.test(q) || CODE_LABEL_RE.test(q) : true;
+}
+/**
+ * 多轮二分（R321 预言机变体）：本轮「第 2 个字符是 u 吗」无锚，锚在上文——只认强信号：凭证 / 编号标签，或上一轮已经是中性提示 / 占位。
+ * 不用普通指代词做锚（「笔记 / 记录」几乎出现在每段对话里，会把「500 以上的支出」一类追问误判成试探）。
+ */
+export function conversationAnchorsGuarded(historyText: string): boolean {
+  const h = historyText.normalize("NFKC");
+  return SECRET_LABEL_RE.test(h) || CODE_LABEL_RE.test(h) || /核对提示|问答区不转写|已从问答上下文隔离/.test(h);
 }
 
 /**
@@ -8857,6 +8953,13 @@ function tidyDirectPlaceholders(s: string): string {
     i--;
   }
   return kept.length === lines.length ? s : kept.join("\n");
+}
+
+/** 裸判定句：去掉角标 / 标点后只剩是非词（是 / 不是 / 对 / 不对 / 有 / 没有 / yes / no）或 ≤ 6 字的判定。 */
+const BARE_VERDICT_RE = /^(?:是的?|不是|对的?|不对|有|没有|没|否|正确|错误|不对|yes|no|true|false|correct|incorrect)$/i;
+export function isBareVerdictAnswer(answer: string): boolean {
+  const t = answer.replace(CITATION_MARK_RE, "").replace(/[\s，,。.！!？?、;；:：]/g, "").normalize("NFKC");
+  return t.length > 0 && t.length <= 6 && BARE_VERDICT_RE.test(t);
 }
 
 /** B1 中性回答：保留答案里的系统标记（隔离 / 降级横幅与内容无关）与引证角标（卡片照常同屏），正文换成 ORACLE_NEUTRAL_NOTICE。 */
