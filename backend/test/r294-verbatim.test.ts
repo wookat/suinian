@@ -48,7 +48,10 @@ describe("R294 P1-2 verbatim 逐字（R293 失真形态全覆盖）", () => {
     const answer = "笔记原文：客户端调用 client.run 后返回 0";
     const fin = finalizeAskAnswer(answer, { dataText: data, question: VERBATIM_Q });
     expect(fin.answer).not.toContain("client.run()");
-    expect(fin.answer).toContain(VERBATIM_REDIRECT_NOTICE);
+    expect(fin.answer).not.toContain("client.run");
+    // R320：单笔记直答命中行换成类别占位（自带「点开引用的笔记卡片查看原文」指引），通用指引不再叠加
+    const guided = fin.answer.includes(VERBATIM_REDIRECT_NOTICE) || fin.answer.includes("〔一条命令/代码备忘：问答区不转写，点开引用的笔记卡片查看原文〕");
+    expect(guided, fin.answer).toBe(true);
   });
 
   it("危险原文不经 verbatim 还原路径复活", () => {

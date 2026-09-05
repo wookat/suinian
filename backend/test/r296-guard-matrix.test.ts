@@ -29,6 +29,7 @@ import {
   judgeSurfaceText,
   execClassifierGateReason,
   VERBATIM_SPAN_PLACEHOLDER,
+  DIRECT_GUARD_PLACEHOLDER,
 } from "../src/prompt-armor";
 import { R295_EVIL } from "../scripts/r295-carriers";
 import { R296_EVIL } from "../scripts/r296-carriers";
@@ -195,7 +196,8 @@ describe("R296 P0-2：一段多条笔记，只隔离危险的那一条", () => {
     expect(fin.answer.split(EXEC_ISOLATED_MARK).length - 1).toBe(1);
     expect(fin.answer).not.toContain("季度复盘整理成 PPT");
     expect(fin.answer).not.toContain("周报做成语音播报");
-    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+    // R320 A：单行资料带 curl|sh（命令形态）——直答层整行受守，逐字句换类别占位（概括 + 点开指引）
+    expect(fin.answer).toContain(DIRECT_GUARD_PLACEHOLDER.code);
     expect(fin.answer).not.toContain("init.sh");
     expect(fin.answer).toContain(EXEC_ISOLATED_MARK);
   });
@@ -204,7 +206,7 @@ describe("R296 P0-2：一段多条笔记，只隔离危险的那一条", () => {
     const fin = finalizeAskAnswer(answer, { dataText: answer, question: "回顾一下我最近的笔记" });
     expect(fin.answer.split(EXEC_ISOLATED_MARK).length - 1).toBe(1);
     expect(fin.answer).not.toContain("季度复盘整理成 PPT");
-    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+    expect(fin.answer).toContain(DIRECT_GUARD_PLACEHOLDER.code);
     expect(fin.answer).not.toContain("init.sh");
   });
 

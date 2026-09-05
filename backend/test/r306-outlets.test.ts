@@ -22,6 +22,7 @@ import {
   dedupeControlMarkLines,
   VERBATIM_SPAN_PLACEHOLDER,
   AGGREGATE_TIER,
+  DIRECT_GUARD_PLACEHOLDER_RE,
 } from "../src/prompt-armor";
 import { markExecInReport } from "../src/reports";
 import { pushSnippet } from "../src/push";
@@ -345,11 +346,17 @@ describe("R306 P0-3 生产复测（OF23）：只读探测的转述行不整答�
     const fin = finalizeAsk2(ans, { dataText: notes.join("\n"), question: q });
     expect(fin.isolated).toBe(false);
     // R310 P0-1：不隔离；逐字回显换占位，且占位两侧的代码态残片（提问里
-    // 半截邮箱 + 资料补齐的后半）整体收进占位，不留可拼接残片
-    expect(fin.answer).toContain("那条笔记记录了邮箱写成 〔原文片段略，见引用笔记卡片〕 [1]");
+    // 半截邮箱 + 资料补齐的后半）整体收进占位，不留可拼接残片。
+    // R320 A：直答单元（三行，含 curl / dig 命令行）受守，每句逐字换类别占位（邮箱行→地址/端点，命令行→命令备忘），角标保留。
+    expect(fin.answer).toMatch(DIRECT_GUARD_PLACEHOLDER_RE);
+    expect(fin.answer).not.toContain("邮箱写成");
+    expect(fin.answer).toContain("[1]");
+    expect(fin.answer).toContain("[2]");
+    expect(fin.answer).toContain("[3]");
     expect(fin.answer).not.toContain("thomas.sam");
     expect(fin.answer).not.toContain("example.com");
-    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+    expect(fin.answer).not.toContain("curl -I");
+    expect(fin.answer).not.toContain("dig @");
     expect(fin.answer).not.toContain(EXEC_ISOLATED_MARK);
   });
   it("危险共检索（curl | bash）的转述仍隔离且不泄地址", () => {
@@ -643,8 +650,9 @@ describe("R306 混合账号下良性回声不连坐 / 链接类建议标签不�
       expect(g.conductScrubbed, a).toBe(false);
       const fin = finalizeAskAnswer(g.answer, { dataText, dataUnits: units, question: q });
       expect(fin.isolated, a).toBe(false);
-      // R310 P0-1：不置隔离；忠实回声（与资料整行/≥30 字重合）换占位，改写句保留
-      if (fin.verbatim_spans) expect(fin.answer, a).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+      // R310 P0-1：不置隔离；忠实回声（与资料整行/≥30 字重合）换占位，改写句保留。
+      // R320：该行含命令形态（curl | bash）⇒ 受守直答单元，整答只剩取值占位时给类别占位 + 角标，不再退回通用「原文查看」指引
+      if (fin.verbatim_spans) expect(fin.answer, a).toMatch(/〔原文片段略，见引用笔记卡片〕|〔一条命令\/代码备忘：问答区不转写，点开引用的笔记卡片查看原文〕\[1\]$/);
       else expect(fin.answer, a).toMatch(/先(?:看|检查)/);
     }
   });

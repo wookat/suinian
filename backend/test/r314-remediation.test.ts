@@ -34,6 +34,7 @@ import {
   DESTRUCTIVE_OUTLET_TAG,
   CREDENTIAL_OUTLET_FOLD_TAG,
   BROAD_OUTLET_FOLD_TAG,
+  DIRECT_GUARD_PLACEHOLDER,
 } from "../src/prompt-armor";
 import { pushSnippet } from "../src/push";
 import { ledgerLabel, buildFinanceMomAnswer } from "../src/ask";
@@ -152,7 +153,7 @@ describe("R314 P0-2：直答层凭证短串记号级占位；破坏性命令高�
     }
   });
 
-  it(`破坏性命令 ${R314_DESTRUCTIVE_CARRIERS.length} 条：broad:destructive、默认展示、出口高警示标；答案内前置警示行`, () => {
+  it(`破坏性命令 ${R314_DESTRUCTIVE_CARRIERS.length} 条：broad:destructive、默认展示、出口高警示标；R320 直答命令不逐字，换高警示占位 + 点开指引`, () => {
     for (const c of R314_DESTRUCTIVE_CARRIERS) {
       expect(isDestructiveCommandText(c.note), c.id).toBe(true);
       const reason = broadFoldReason(c.note);
@@ -166,10 +167,12 @@ describe("R314 P0-2：直答层凭证短串记号级占位；破坏性命令高�
         question: c.question,
         tier: { kind: "single_note_direct", directUnit: c.note },
       });
-      expect(fin.answer, c.id).toContain(DESTRUCTIVE_WARN_MARK);
-      // 警示行在命令行之前
-      expect(fin.answer.indexOf(DESTRUCTIVE_WARN_MARK), c.id).toBeLessThan(fin.answer.indexOf(c.command));
-      expect(fin.answer.split(DESTRUCTIVE_WARN_MARK).length - 1, c.id).toBeLessThanOrEqual(c.answer.split("\n").length);
+      // R320 A：直答层不再「警示行 + 命令原样交付」——命令本身不进问答区，整句换破坏性高警示占位（自带「核对对象与参数」警示），
+      // 角标保留供点开卡片；旧警示行不再出现（没有逐字命令可警示）。比 R314 旧契约更严：命令一字不出。
+      expect(fin.answer, c.id).not.toContain(c.command);
+      expect(fin.answer, c.id).toContain(DIRECT_GUARD_PLACEHOLDER.destructive);
+      expect(fin.answer, c.id).not.toContain(DESTRUCTIVE_WARN_MARK);
+      for (const m of c.answer.match(/\[\d+\]/g) ?? []) expect(fin.answer, c.id).toContain(m);
     }
   });
 
@@ -333,7 +336,12 @@ describe("R314 聚合层补充：分节拼装凭证（R313 J06「8kd ⫽ 2mv ⫽
   });
   it("不可铺满 / 纯数字 / 纯字母记号不触发", () => {
     expect(closeAggregateVerbatim("版本号是 v20260903 [1]。", ["发布 v2 计划", "9月3日"]).count).toBe(0);
-    expect(closeAggregateVerbatim("合并后是 8kdXX2mv [1][2]。", units).count).toBe(0);
+    // 铺满判据本身对 8kdXX2mv 不触发（中间夹了资料里没有的 XX），但 R320 起聚合层对答案里任何高熵短记号一律占位（更严）：
+    // 「8kd 接 2mv」这种没拼成一个记号的说法才放行
+    expect(closeAggregateVerbatim("合并后是 8kd 接 2mv [1][2]。", units).count).toBe(0);
+    const r320 = closeAggregateVerbatim("合并后是 8kdXX2mv [1][2]。", units);
+    expect(r320.answer).not.toContain("8kdXX2mv");
+    expect(r320.answer).toContain("[1][2]");
     expect(closeAggregateVerbatim("总计 202609 件 [1][2]。", ["2026", "09 件"]).count).toBe(0);
   });
   it("直答层：整段记号本就在同屏卡片里 ⇒ 不计", () => {

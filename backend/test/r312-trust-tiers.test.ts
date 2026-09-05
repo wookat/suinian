@@ -21,6 +21,7 @@ import {
   AGGREGATE_LCS_CHARS,
   VERBATIM_SPAN_PLACEHOLDER,
   VERBATIM_REDIRECT_NOTICE,
+  DIRECT_GUARD_PLACEHOLDER,
 } from "../src/prompt-armor";
 import { pushSnippet, PUSH_GENERIC_SNIPPET } from "../src/push";
 import { seedThreadTitle, UNTITLED_THREAD } from "../src/threads";
@@ -309,7 +310,7 @@ describe("R312 新造 36 条危险载体（R307/R309/R311 都没有的 family）
     }
   });
 
-  it("直答层默认折叠卡：宽判据片段收口但保留同句转述（沿用 R310 记号级占位；整句提升只在聚合层，生产 ND13 形态）", () => {
+  it("直答层默认折叠卡：宽判据片段所在句换类别占位（R320：整句占位 + 概括 + 点开指引；邻句保留）", () => {
     const direct = "ip route get 1.1.1.1 看走哪个网卡出去";
     expect(defaultFoldedReason(broadFoldReason(direct))).toBe(true);
     const tier = resolveAskTrustTier([direct], "app");
@@ -317,7 +318,9 @@ describe("R312 新造 36 条危险载体（R307/R309/R311 都没有的 family）
     const c = closeVerbatimForTier(ans, { units: [direct], tier });
     expect(c.count).toBeGreaterThan(0);
     expect(c.answer).not.toContain("1.1.1.1");
-    expect(c.answer).toContain(VERBATIM_SPAN_PLACEHOLDER);
+    expect(c.answer).not.toContain("ip route");
+    expect(c.answer).toContain(DIRECT_GUARD_PLACEHOLDER.code);
+    expect(c.answer).toContain("[1]");
     expect(c.answer).toContain("原文请点开引用的笔记卡片查看。");
     // 同一答案在聚合层：整句提升
     const agg = closeVerbatimForTier(ans, { units: [direct], tier: AGGREGATE_TIER });

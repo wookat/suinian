@@ -3,7 +3,7 @@ import type { Context } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
 import { triageNote, triageNoteDetailed, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE, neutralizePromptInjection, scrubModelOutputInjectionArtifacts } from "./triage";
-import { extractUrl, extractUrls, fetchLinkMeta } from "./linkmeta";
+import { extractUrl, extractUrls, fetchLinkMeta, fallbackTitleFromUrl } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import {
   parseNoteMeta,
@@ -15,7 +15,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, type BroadFoldReason } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, type BroadFoldReason } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -235,10 +235,13 @@ export async function askUserDataVersion(db: D1Database, userId: string): Promis
   }
 }
 
+/** 答案缓存的收口版本：出口收口规则变更时递增，旧规则下产出的答案不会在新版部署后继续从边缘缓存送出。 */
+export const ASK_ANSWER_CACHE_EPOCH = "r320.11";
+
 async function askAnswerCacheKey(auth: string, material: string, dataVersion: string): Promise<Request> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(`${auth}\n${dataVersion}\n${material}`)
+    new TextEncoder().encode(`${ASK_ANSWER_CACHE_EPOCH}\n${auth}\n${dataVersion}\n${material}`)
   );
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return new Request(`https://ask-answer-cache.internal/${hex}`);
@@ -1495,6 +1498,18 @@ export function normalizeStoredTodoDue(v: string | null): string | null {
   if (!v) return v;
   const m = v.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2})?$/);
   return m ? `${m[1]}T${m[2]}:00+08:00` : v;
+}
+
+/**
+ * 问答出口护栏的单笔记资料单元：正文 + 标题 + 剪藏元数据。抓取失败时系统生成的兜底标题
+ * （`host › path/tail`，见 fallbackTitleFromUrl）完全由书签 URL 派生、不携带正文之外的结构面，
+ * 不计入单元——否则普通书签会因为自己的兜底标题以裸主机形态命中端点判据而被占位。
+ * 真实抓取到的标题 / 摘要照旧计入。
+ */
+export function askGuardNoteUnit(n: Pick<NoteRow, "title" | "content" | "url" | "url_title" | "url_summary">): string {
+  const derivedTitle = n.url ? fallbackTitleFromUrl(n.url) : null;
+  const urlTitle = n.url_title && n.url_title !== derivedTitle ? n.url_title : "";
+  return `${n.title ?? ""}\n${n.content}\n${urlTitle}\n${n.url_summary ?? ""}`;
 }
 
 function noteToJson(n: NoteRow) {
@@ -3613,9 +3628,14 @@ app.post("/api/ask", async (c) => {
     askMarks.push(["norm", Date.now() - tNorm]);
   }
   const intentBase = normQuestion ?? question;
+  // R320 B1（audit-r319 §3.3 预言机）：问题带口令/密钥样字符串时，候选值本身不进召回——对错值召回同一批笔记，
+  // 「有引用 / 没找到」不再构成逐位试探通道；召回命中受守笔记时在生成前确定性短路为不确认不否认的中性指引。
+  // R320 B1：带候选值的核对问 / 对受守内容的是非问 ⇒ 预言机形态（候选值不进召回；命中受守笔记时不进生成）
+  const oracleProbe = !metaQuestion && (questionCarriesOpaqueToken(question) || isYesNoQuestion(question));
+  const recallBase = oracleProbe ? stripOpaqueTokens(intentBase) : intentBase;
   // query rewrite: resolve pronouns/ordinals against history, then keyword recall
   const tRewrite = Date.now();
-  const recallQuestion = metaQuestion ? question : await rewriteAskQuestion(c.env, intentBase, history);
+  const recallQuestion = metaQuestion ? question : await rewriteAskQuestion(c.env, recallBase, history);
   askMarks.push(["rewrite", Date.now() - tRewrite]);
   // explicit time scope ("上个月/最近一周/去年…") narrows recall to that window
   const timeRange = parseTimeRange(recallQuestion);
@@ -4890,6 +4910,27 @@ app.post("/api/ask", async (c) => {
 
   notes = dedupeNotesByContent(notes);
 
+  // R320 B1：预言机形态问题命中含受守行（口令/密钥/高熵串/命令）的笔记 ⇒ 不进生成，答案恒为中性指引 + 角标；
+  // 对值 / 错值 / 部分值同一输出（召回已去掉候选值，命中集合与候选值无关）。
+  if (oracleProbe) {
+    const guarded = notes.filter((n) => directGuardLines(askGuardNoteUnit(n)).length > 0);
+    if (guarded.length > 0) {
+      const shown = guarded.slice(0, 3);
+      const references = shown.map((n, i) => ({ index: i + 1, note_id: n.id }));
+      const refNotes = await Promise.all(shown.map((n) => noteToJsonDecrypted(c.env, n)));
+      console.log(`ask: oracle-shaped question neutralized before generation (${guarded.length} guarded note(s))`);
+      return c.json({
+        answer: `${ORACLE_NEUTRAL_NOTICE}${references.map((r) => `[${r.index}]`).join("")}`,
+        references,
+        notes: refNotes,
+        oracle_neutral: true,
+        trust_tier: references.length === 1 ? "single_note_direct" : "aggregate",
+        verbatim_closed_spans: 0,
+        guard_finalized: true,
+      });
+    }
+  }
+
   // 关系限定词忠实性护栏（R256 P1-1，audit-r255）：问题里的人物关系限定词
   // （女朋友/妈妈/同事…含同义变体）在全部召回文本中零出现时，片段不可能
   // 支撑该关系事实，LLM 只会把相邻实体硬凑成关系（R255 实测带引用编造
@@ -4980,9 +5021,7 @@ app.post("/api/ask", async (c) => {
   // 伪造资料边界——不依赖识别注入变体形态。
   const dataNonce = makeDataNonce();
   // 输出护栏的资料面/问题面文本（marker 判定用）：正文+标题+剪藏元数据+实体关系
-  const askGuardNoteUnits = notes.map(
-    (n) => `${n.title ?? ""}\n${n.content}\n${n.url_title ?? ""}\n${n.url_summary ?? ""}`
-  );
+  const askGuardNoteUnits = notes.map(askGuardNoteUnit);
   const askGuardData = `${context}\n${askGuardNoteUnits.join("\n")}\n${graphTriples.join("\n")}`;
   // 跨笔记语义窗口的地址归因单元：每条笔记一项，每条图谱三元组一项。
   const askGuardUnits = [...askGuardNoteUnits, ...graphTriples];
@@ -5794,6 +5833,8 @@ app.post("/api/ask", async (c) => {
         }
       }
     }
+    // R320：单笔记直答只剩类别占位 / 预言机中性回答而模型没标角标时，按唯一 reference 补同屏角标（ensureDirectGuideCitation 注）。
+    if (tier.kind === "single_note_direct" && !fin.isolated) fin.answer = ensureDirectGuideCitation(fin.answer, body.references);
     const genReason = typeof body.isolation_reason === "string" ? body.isolation_reason : null;
     if (fin.isolated) {
       console.log(`ask: note-embedded instruction isolated at generation exit (${fin.reason ?? "unattributed"})`);
@@ -5923,12 +5964,11 @@ app.post("/api/ask", async (c) => {
       });
       // 原文问法下 finalize 只在末尾附固定指引（VERBATIM_REDIRECT_NOTICE，done
       // 整答附一次）而正文逐字未动 ⇒ 句段可外发；任何正文改写/隔离仍整段扣下。
-      if (
-        fin.isolated ||
-        fin.changed ||
-        (fin.answer !== s && fin.answer !== `${s}\n\n${VERBATIM_REDIRECT_NOTICE}`)
-      )
-        return hold("finalize_rewrite");
+      // 受守直答单元的纯概括句段只在末尾补类别占位（closeDirectGuard，done 整答附一次）同理。
+      const onlyTrailingNotice =
+        fin.answer === `${s}\n\n${VERBATIM_REDIRECT_NOTICE}` ||
+        Object.values(DIRECT_GUARD_PLACEHOLDER).some((ph) => fin.answer === `${s.replace(/\s+$/, "")}\n${ph}`);
+      if (fin.isolated || fin.changed || (fin.answer !== s && !onlyTrailingNotice)) return hold("finalize_rewrite");
       // R310 P0-1 / R309 P1-2：逐字复述收口按**累计已外发文本 + 本段**判，与 done 对整答的
       // 判定同口径——跨句段边界拼出的 ≥阈值公共串同样扣下，不存在「先泄后撤」窗口。
       if (

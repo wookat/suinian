@@ -9,6 +9,7 @@ import {
   INSTRUCTION_ISOLATED_MARK,
   EXEC_DEGRADED_ISOLATED_MARK,
   VERBATIM_SPAN_PLACEHOLDER, VERBATIM_REDIRECT_NOTICE,
+  DIRECT_GUARD_PLACEHOLDER,
   AGGREGATE_TIER,
 } from "../src/prompt-armor";
 
@@ -80,9 +81,11 @@ describe("R298 P1-5 隔离后编号连续", () => {
     // 危险行确实被隔离（3/4 行替换为降级标记）
     expect(f.answer).toContain(`3. ${EXEC_DEGRADED_ISOLATED_MARK}`);
     expect(f.answer).toContain(`4. ${EXEC_DEGRADED_ISOLATED_MARK}`);
-    // R310 P0-1：无害行不隔离，但作为资料完整行换占位（序号保留、编号连续由上面断言保证）
-    expect(f.answer).toContain(`2. ${VERBATIM_SPAN_PLACEHOLDER}`);
-    expect(f.answer).toContain(`5. ${VERBATIM_SPAN_PLACEHOLDER}`);
+    // R310 P0-1：无害行不隔离，但作为资料完整行换占位（序号保留、编号连续由上面断言保证）；
+    // R320 A：命令备忘单元里的每一行都受守，占位文案是「命令/代码备忘 + 点开指引」（安装依赖行自身是命令，监控行沿用单元类别）
+    expect(f.answer).toContain(`2. ${DIRECT_GUARD_PLACEHOLDER.code}`);
+    expect(f.answer).toContain(`5. ${DIRECT_GUARD_PLACEHOLDER.code}`);
+    expect(f.answer).not.toContain(VERBATIM_SPAN_PLACEHOLDER);
     expect(f.answer).not.toContain("npm ci && npm run build");
     expect(f.answer).not.toContain("打开监控页确认无报错");
   });

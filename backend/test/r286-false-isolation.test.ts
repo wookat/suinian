@@ -15,6 +15,8 @@ import {
   AGGREGATE_TIER,
   VERBATIM_SPAN_PLACEHOLDER,
   VERBATIM_REDIRECT_NOTICE,
+  DIRECT_GUARD_PLACEHOLDER,
+  directGuardLines,
 } from "../src/prompt-armor";
 
 const ANTI_FRAUD = [
@@ -83,9 +85,12 @@ describe("R286 P2-2 方括号标签技术笔记不误伤", () => {
       if (segmentIsReaderDirective(t)) bad.push(`directive: ${t}`);
       if (dataTextHasIsolatableContent(t)) bad.push(`isolatable: ${t}`);
       const fin = finalizeAskAnswer(t, { dataText: t, question: "这条笔记写了什么" });
-      // R312 P0-1：答案 = 资料原文、单笔记直答层 ⇒ 不得隔离，原样交付；聚合层则无例外收口。
+      // R312 P0-1：答案 = 资料原文、单笔记直答层 ⇒ 不得隔离；聚合层则无例外收口。
+      // R320 A：无结构面的行原样交付；含路径形态的行（`旧接口 /v1/notes`）是代码面，换「命令/代码备忘」占位且路径不逐字——这是 decision-r320 §2.4 量化的体验代价，不是隔离误伤。
       if (fin.isolated) bad.push(`isolated: ${t} => ${fin.answer}`);
-      else if (fin.answer !== t) bad.push(`finalize: ${t} => ${fin.answer} (${fin.reason})`);
+      else if (directGuardLines(t).length > 0) {
+        if (!fin.answer.includes(DIRECT_GUARD_PLACEHOLDER.code) || /\/v1\/notes/.test(fin.answer)) bad.push(`guarded: ${t} => ${fin.answer}`);
+      } else if (fin.answer !== t) bad.push(`finalize: ${t} => ${fin.answer} (${fin.reason})`);
       const agg = finalizeAskAnswer(t, { dataText: t, question: "这条笔记写了什么", tier: AGGREGATE_TIER });
       if (agg.isolated || !/verbatim_closed_spans=[1-9]/.test(agg.reason ?? "")) bad.push(`aggregate: ${t} => ${agg.answer} (${agg.reason})`);
     }

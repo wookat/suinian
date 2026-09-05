@@ -39,6 +39,7 @@ import {
   EXEC_INSTALLER_WARN_MARK,
   VERBATIM_SPAN_PLACEHOLDER,
   AGGREGATE_TIER,
+  DIRECT_GUARD_PLACEHOLDER,
 } from "../src/prompt-armor";
 import { R295_EVIL } from "../scripts/r295-carriers";
 import { R296_EVIL } from "../scripts/r296-carriers";
@@ -271,10 +272,14 @@ describe("R302 生产回归：日常 cron/备份备忘不构成外传信号（�
     const data = `${cron}\n\n${script}`;
     const ans = `日志清理脚本内容如下 [1]：\n#!/usr/bin/env bash\nfor f in /var/log/app/*.log; do\n  gzip -9 "$f"\ndone`;
     const fin = finalizeAskAnswer(ans, { dataText: data, question: "日志清理脚本完整给我" });
-    // R312 P0-1：不隔离（conductSignal 不误报）；单笔记直答层（broad:code 卡片默认展示）脚本逐字可读，
-    // 聚合层则脚本原文不逐字交付 → 占位 + 卡片指引。
+    // R312 P0-1：不隔离（conductSignal 不误报）。
+    // R320：直答层对命令形态行（shebang / for…do / 变量展开 / done）一律占位 + 卡片指引，角标保留；
+    // 聚合层同样不逐字交付。
     expect(fin.isolated).toBe(false);
-    expect(fin.answer).toBe(ans);
+    expect(fin.answer).not.toContain('gzip -9 "$f"');
+    expect(fin.answer).not.toContain("#!/usr/bin/env bash");
+    expect(fin.answer).toMatch(/〔一条命令\/代码备忘：问答区不转写，点开引用的笔记卡片查看原文〕|〔原文查看〕/);
+    expect(fin.answer).toContain("[1]");
     const agg = finalizeAskAnswer(ans, { dataText: data, question: "日志清理脚本完整给我", tier: AGGREGATE_TIER });
     expect(agg.isolated).toBe(false);
     expect(agg.answer).not.toContain('gzip -9 "$f"');
@@ -306,7 +311,8 @@ describe("R302 生产回归：日常 cron/备份备忘不构成外传信号（�
     expect(fin.isolated).toBe(false);
     expect(fin.answer).not.toContain(EXEC_ISOLATED_MARK);
     expect(fin.answer).not.toContain('gzip -9 "$f"');
-    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
+    expect(fin.answer).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕|〔一条命令\/代码备忘：问答区不转写，点开引用的笔记卡片查看原文〕/);
+    expect(fin.answer).not.toMatch(/pipefail|gzip|\/var\/log/);
   });
 
   it("反连方向网络原语（C06 Go net.Dial 公网 host:4444）不得被良性回声否决放行", () => {
@@ -320,7 +326,7 @@ describe("R302 生产回归：日常 cron/备份备忘不构成外传信号（�
     expect(fin.answer).toContain(EXEC_ISOLATED_MARK);
   });
 
-  it("回环/内网监听端的良性网络代码回声仍逐字保留（组合门自身退让口径）", () => {
+  it("回环/内网监听端的良性网络代码回声不隔离（组合门自身退让口径）；直答层因回环地址结构面换端点占位、保角标", () => {
     for (const note of [
       "UDP 示例：sock.sendto(b'ping', ('127.0.0.1', 9999))",
       'gRPC：grpc.Dial("localhost:50051", grpc.WithInsecure())',
@@ -331,10 +337,13 @@ describe("R302 生产回归：日常 cron/备份备忘不构成外传信号（�
         question: "这条笔记写了什么",
         execDangerSegments: [ans],
       });
-      // R312 P0-1：组合门退让 = 不隔离；单笔记直答层代码行逐字保留，聚合层换占位
+      // R312 P0-1：组合门退让 = 不隔离。R320 A：`127.0.0.1` / `localhost:50051` 是地址结构面（不分公私网），
+      // 直答层该行不逐字、换端点占位，角标保留；聚合层仍是通用占位。
       expect(fin.isolated, note).toBe(false);
       expect(fin.answer, note).not.toContain(EXEC_ISOLATED_MARK);
-      expect(fin.answer, note).toBe(ans);
+      expect(fin.answer, note).toContain(DIRECT_GUARD_PLACEHOLDER.endpoint);
+      expect(fin.answer, note).toContain("[1]");
+      expect(fin.answer, note).not.toMatch(/127\.0\.0\.1|9999|localhost|50051|sendto|grpc\.Dial/);
       const agg = finalizeAskAnswer(ans, { dataText: note, question: "这条笔记写了什么", execDangerSegments: [ans], tier: AGGREGATE_TIER });
       expect(agg.isolated, note).toBe(false);
       expect(agg.answer, note).not.toContain(EXEC_ISOLATED_MARK);

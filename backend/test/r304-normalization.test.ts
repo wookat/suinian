@@ -21,6 +21,7 @@ import {
   broadFoldReason,
   defaultFoldedReason,
   AGGREGATE_TIER,
+  DIRECT_GUARD_PLACEHOLDER,
 } from "../src/prompt-armor";
 
 const MARK_RE = /〔警示|〔已隔离|〔代码安全判别暂不可用|〔安全提示|〔原文查看|〔标题含指令|命中安全隔离规则/;
@@ -33,7 +34,8 @@ const isKept = (c: string) => KEPT.has(c) || /[\p{L}\p{N}\s]/u.test(c);
 const arbSepChar = fc
   .integer({ min: 0x21, max: 0xffef })
   .map((cp) => String.fromCodePoint(cp))
-  .filter((c) => !isKept(c) && !isLabelChar(c) && !/[\p{M}\p{C}]/u.test(c));
+  // 实现先做 NFKC：兼容字符（`㍘`→`0点`、`㏌`→`in`）归一后就是标签字符，不属于分隔符域
+  .filter((c) => [...c.normalize("NFKC")].every((n) => !isKept(n) && !isLabelChar(n)) && !/[\p{M}\p{C}]/u.test(c));
 
 /** 任意长度（1–6 字符）的非标签分隔片段——R304 的量化域，不再是单字符。 */
 const arbSepFragment = fc
@@ -170,18 +172,14 @@ describe("R304 属性：良性面（放宽折叠不得把误伤打上去）", ()
           question: "这条笔记写了什么",
           execClassifierUnavailable: unavailable,
         });
-        // R312 P0-1/P0-3：不整答案隔离。单笔记直答层：broad:code（本机命令备忘，卡片默认展示）逐字可读；
-        // 卡片默认折叠的形态（fetch/endpoint）照旧换占位/指引。聚合层一律换占位。
+        // R312 P0-1/P0-3：不整答案隔离。R320 A：单笔记直答层对命令形态行不再按 broad:code（本机备忘）/ fetch / endpoint
+        // 区分是否逐字——一律换类别占位（命令/代码备忘 + 点开指引）；判据只决定卡片默认展开/折叠。聚合层一律换占位。
         const tag = `${cmd} unavailable=${unavailable}`;
         expect(fin.isolated, tag).toBe(false);
         expect(shortPlainFactText(cmd), cmd).toBe(false);
-        if (defaultFoldedReason(broadFoldReason(cmd))) {
-          expect(fin.answer, tag).not.toContain(cmd);
-          expect(fin.answer, tag).toMatch(/〔原文片段略，见引用笔记卡片〕|〔原文查看〕/);
-        } else {
-          expect(broadFoldReason(cmd), cmd).toBe("broad:code");
-          expect(fin.answer.startsWith(cmd), tag).toBe(true);
-        }
+        expect(fin.answer, tag).not.toContain(cmd);
+        expect(fin.answer, tag).toContain(DIRECT_GUARD_PLACEHOLDER.code);
+        if (!defaultFoldedReason(broadFoldReason(cmd))) expect(broadFoldReason(cmd), cmd).toBe("broad:code");
         const agg = finalizeAskAnswer(cmd, { dataText: cmd, question: "这条笔记写了什么", execClassifierUnavailable: unavailable, tier: AGGREGATE_TIER });
         expect(agg.isolated, tag).toBe(false);
         expect(agg.answer, tag).not.toContain(cmd);
