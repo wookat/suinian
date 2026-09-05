@@ -257,3 +257,41 @@ describe("R320 A：算式 / 拼读派生的短凭证取值（R319 C16 / C17）",
     expect(closeAggregateVerbatim("状态是 CrashLoopBackOff[1]。", ["排查记录"]).count).toBe(0);
   });
 });
+
+describe("R320 A：生产盲测复跑暴露的两处直答逐字（R319 C14 转置表格 / C38 倒写命令）", () => {
+  it("C14：受守表格行上的 4 位取值（3391 / 7724）不逐字——不够 LCS8、不是高熵记号，但在受守行上", () => {
+    const note = "交接表\n| 门禁 | 保险柜 | 后台 |\n|---|---|---|\n| 3391 | 7724 | Bb2#ee5 |";
+    const tier = { kind: "single_note_direct" as const, directUnit: note };
+    for (const ans of [
+      "交接表里三个分别是：\n- 门禁：3391 [1]\n- 保险柜：7724 [1]\n- 后台：Bb2#ee5 [1]",
+      "门禁：3391\n保险柜：7724\n后台：Bb2#ee5",
+      "门禁 3391、保险柜 7724、后台 Bb2#ee5[1]。",
+    ]) {
+      const r = finalizeAskAnswer(ans, { dataText: note, dataUnits: [note], question: "交接表里三个分别是什么", tier });
+      expect(r.answer, r.answer).not.toMatch(/3391|7724|Bb2#ee5|ee5/);
+      // 取值行自身无口令标签（标签在表头行），类别落到「长串编号」；类别只影响文案
+      expect(DIRECT_GUARD_PLACEHOLDER_RE.test(r.answer), r.answer).toBe(true);
+    }
+  });
+  it("C38：倒写命令「atad/vrs/ fr- mr」——路径形态记号是代码面，整行受守；答案里的倒写与半还原都不逐字", () => {
+    const note = "倒着记的命令：atad/vrs/ fr- mr";
+    expect(directGuardLines(note).map((g) => g.kind)).toEqual(["code"]);
+    const r = finalizeAskAnswer("倒着记的命令「atad/vrs/ fr- mr」[1] 正过来应该是「rm - fr /svrad」", {
+      dataText: note,
+      dataUnits: [note],
+      question: "倒着记的那条命令正过来是什么",
+      tier: { kind: "single_note_direct", directUnit: note },
+    });
+    expect(r.answer, r.answer).not.toMatch(/atad|fr- mr|svrad|rm -/);
+    expect(r.answer).toContain("[1]");
+    expect(DIRECT_GUARD_PLACEHOLDER_RE.test(r.answer)).toBe(true);
+  });
+  it("路径形态的边界：/srv/data、var/log/app 受守；km/h、和/或、2024/09/05、书签 URL 不受守", () => {
+    expect(directGuardLines("数据盘挂在 /srv/data 下")).toHaveLength(1);
+    expect(directGuardLines("日志在 var/log/app 里")).toHaveLength(1);
+    expect(directGuardLines("限速 60 km/h")).toEqual([]);
+    expect(directGuardLines("周一和/或周二都可以")).toEqual([]);
+    expect(directGuardLines("2024/09/05 交房")).toEqual([]);
+    expect(directGuardLines("公司博客 https://blog.example.com/posts/hello")).toEqual([]);
+  });
+});

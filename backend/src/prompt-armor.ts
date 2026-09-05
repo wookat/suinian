@@ -8143,14 +8143,25 @@ export function stripOpaqueTokens(question: string): string {
 }
 
 /**
- * 受守行判别（R320 A）：命令形态 / broad 任一命中 / 短高熵记号 ⇒ 受守；返回值是占位文案类别（只影响文案与排序）。
+ * 路径形态记号（R320，R319 盲测 C38「倒着记的命令：atad/vrs/ fr- mr」生产直答逐字）：小写 ASCII 段以 `/` 连成的
+ * 文件系统路径形态（`/srv/data`、`atad/vrs/`、`var/log/app`）是代码面——倒写 / 拆写的命令仍带路径形态，行级判据不必认出命令本身。
+ * URL 先剥掉（书签常态）；日期 `2024/09/05` 纯数字不算；单个 `/`（km/h、和/或）不算。
+ */
+const PATHISH_TOKEN_RE = /(?<![\w/.:])(?:\/[a-z][a-z0-9_.-]*\/[a-z][a-z0-9_.-]*|[a-z][a-z0-9_.-]*\/[a-z][a-z0-9_.-]*\/[a-z0-9_.-]*)(?![\w/])/;
+function pathishTokenLine(line: string): boolean {
+  return PATHISH_TOKEN_RE.test(line.replace(/\bhttps?:\/\/[^\s<>"']+/gi, " "));
+}
+
+/**
+ * 受守行判别（R320 A）：命令形态 / broad 任一命中 / 短高熵记号 / 路径形态 ⇒ 受守；返回值是占位文案类别（只影响文案与排序）。
  * 类别取最高警示级：凭证取值 > 破坏性命令 > 不透明串 > 端点 > 命令备忘。
  */
 export function directGuardKindOfLine(line: string): DirectGuardKind | null {
   const t = line.trim();
   if (!t) return null;
   const reason = broadFoldReason(t);
-  const cmd = reason === "strict" || reason === "broad:fetch" || reason === "broad:code" || commandShapeLine(t) || TOOL_COMMAND_LINE_RE.test(t);
+  const cmd =
+    reason === "strict" || reason === "broad:fetch" || reason === "broad:code" || commandShapeLine(t) || TOOL_COMMAND_LINE_RE.test(t) || pathishTokenLine(t);
   const destructive = reason === "broad:destructive" || isDestructiveCommandText(t);
   const opaque = reason === "broad:opaque" || reason === "broad:obfuscated" || reason === "broad:error" || lineCarriesOpaqueToken(t);
   if (reason === "broad:credential" || (credentialValueTokens(t).length > 0 && (cmd || destructive || opaque || reason !== null)))
@@ -8225,19 +8236,38 @@ export function closeDirectGuard(answer: string, direct: string): { answer: stri
   // 答案里的短高熵记号 / 长数字串 / 分组数字串：不论来源一律占位（拼读 / 拆段 / 跨笔记拼起来的取值不在直答单元里，但也不该逐字）。
   const opaqueKind: DirectGuardKind = guarded.some((g) => g.kind === "credential") ? "credential" : "opaque";
   for (const s of opaqueTokenSpans(a)) raw.push(typed(s, opaqueKind));
-  // 受守行高熵记号的半截回显（≥3 字且含数字的字母数字段是某受守记号的子串）
+  // 受守行高熵记号的半截回显（≥3 字且含数字的字母数字段是某受守记号的子串），以及受守行里任何含数字的短取值
+  // （`| 3391 | 7724 | Bb2#ee5 |` 表格行的 4 位门禁码：不够 LCS8 也不是高熵记号，但它在受守行上，整行的取值都不逐字）。
   const guardedTokens = new Set<string>();
-  for (const g of guarded) for (const t of opaqueTokensOf(g.line)) guardedTokens.add(t.toLowerCase());
+  // 取值 → 所在受守行的类别（同一取值出现在多行取警示级最高者）：文案沿用该行类别，`ss -lntp | grep 8080` 的 8080 仍是「命令备忘」
+  const guardedValues = new Map<string, DirectGuardKind>();
+  for (const g of guarded) {
+    for (const t of opaqueTokensOf(g.line)) guardedTokens.add(t.toLowerCase());
+    for (const m of g.line.normalize("NFKC").matchAll(/[A-Za-z0-9][A-Za-z0-9#@!$%^&*_.+=:/-]*[A-Za-z0-9]/g)) {
+      if (m[0].length < 3 || !/\d/.test(m[0])) continue;
+      const v = m[0].toLowerCase();
+      const prev = guardedValues.get(v);
+      if (!prev || DIRECT_GUARD_RANK[g.kind] > DIRECT_GUARD_RANK[prev]) guardedValues.set(v, g.kind);
+    }
+  }
   const nfkc = a.normalize("NFKC");
-  if (guardedTokens.size > 0 && nfkc.length === a.length)
+  if ((guardedTokens.size > 0 || guardedValues.size > 0) && nfkc.length === a.length)
     for (const m of nfkc.matchAll(/[A-Za-z0-9]{3,}/g)) {
       const piece = m[0].toLowerCase();
       if (!/\d/.test(piece)) continue;
+      let hit: DirectGuardKind | null = null;
       for (const t of guardedTokens)
         if (t.includes(piece) && piece !== t) {
-          raw.push(typed({ start: m.index, end: m.index + m[0].length }, opaqueKind));
+          hit = opaqueKind;
           break;
         }
+      if (!hit)
+        for (const [v, kind] of guardedValues)
+          if (v === piece || v.includes(piece)) {
+            hit = kind;
+            break;
+          }
+      if (hit) raw.push(typed({ start: m.index, end: m.index + m[0].length }, hit));
     }
   const closed = replaceHitSentences(a, raw);
   return { answer: mask.restore(closed.answer), count: closed.count };
