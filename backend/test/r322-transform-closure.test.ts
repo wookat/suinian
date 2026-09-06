@@ -21,6 +21,7 @@ import {
   isBareVerdictAnswer,
   closeCredentialValues,
   MODEL_REDACTED_LINE,
+  PHANTOM_REDACTION_CLAIM_RE,
   ORACLE_NEUTRAL_NOTICE,
   DIRECT_GUARD_PLACEHOLDER_RE,
   stripOpaqueTokens,
@@ -590,5 +591,20 @@ describe("R322 B 生产复测补漏：预言机尾缀 / 多轮锚 / 英文散文
     const units = ["跳板机口令：Kq7#vb2x", "车停在商场 B2"];
     expect(closeCredentialValues("车停在商场 B2 [2]", units).answer).toBe("车停在商场 B2 [2]");
     expect(closeCredentialValues("口令后半是 vb2x [1]", units).count).toBe(1);
+  });
+
+  it("幻觉占位话术识别：上下文没有占位行时模型套用「记了它，问答区不展示」是幻觉（生产 ask-eval q127：Wi-Fi 信道笔记被指成记了路由器暗号）；正常答案与「没提到」不误判", () => {
+    for (const a of [
+      "这条笔记记了它，问答区不展示，请点开引用的笔记卡片查看原文 [1]",
+      "笔记记了它，请点开卡片 [1]",
+      "这条笔记记了它 [1]，问答区不展示",
+      MODEL_REDACTED_LINE,
+    ]) expect(PHANTOM_REDACTION_CLAIM_RE.test(a), a).toBe(true);
+    for (const a of [
+      "笔记里没提到路由器管理后台的暗号 [1]",
+      "把 5GHz 信道从自动改到 149 后穿墙速度稳定了 [1]",
+      "我记了它的价格：35 元 [1]",
+      "找到了相关的笔记，但里面没有提到你问的这个信息",
+    ]) expect(PHANTOM_REDACTION_CLAIM_RE.test(a), a).toBe(false);
   });
 });
