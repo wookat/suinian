@@ -84,11 +84,11 @@ async function listAllNotes(): Promise<NoteJson[]> {
 
 async function ensureAccount(): Promise<void> {
   if (token) return;
-  const name = `[QA-R306]ask-eval-${Math.random().toString(36).slice(2, 8)}`;
+  const name = `${process.env.QA_PREFIX ?? "[QA-R306]"}ask-eval-${Math.random().toString(36).slice(2, 8)}`;
   const password = `Eval-${crypto.randomUUID()}`;
   const res = await api<{ api_token: string; user: { id: string } }>("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify({ name, password }),
+    body: JSON.stringify({ name, password, invite_code: process.env.QA_INVITE_CODE || undefined }),
   });
   token = res.api_token;
   createdAccount = true;

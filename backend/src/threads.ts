@@ -6,7 +6,8 @@ import {
   foldOutletTag,
   noteContainsExecutableCommand,
   noteRowBroadFoldReason,
-  closeAggregateVerbatim,
+  closeAggregateOutlet,
+  redactGuardedLinesForModel,
   broadFoldReason,
   EXEC_OUTLET_WARN_TAG,
   BROAD_OUTLET_FOLD_TAG,
@@ -92,7 +93,7 @@ export function threadTitleVerbatim(
 ): boolean {
   if (broadFoldReason(title) !== null) return true;
   const units = rows.map((n) => `${n.title ?? ""}\n${n.content}`);
-  return closeAggregateVerbatim(title, units).count > 0;
+  return closeAggregateOutlet(title, units).count > 0;
 }
 
 async function newThread(env: Env, userId: string, seeds: ThreadSeed[]): Promise<string> {
@@ -132,7 +133,7 @@ export function closeThreadSummary(
 ): { summary: string; verbatimSpans: number } {
   if (opts.title) return { summary, verbatimSpans: threadTitleVerbatim(summary, rows) ? 1 : 0 };
   const units = rows.map((n) => `${n.title ?? ""}\n${n.content}`);
-  const closed = closeAggregateVerbatim(summary, units);
+  const closed = closeAggregateOutlet(summary, units);
   return { summary: closed.answer, verbatimSpans: closed.count };
 }
 
@@ -161,7 +162,9 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
     const digest = rows
       .map((n, i) => {
         const tag = foldOutletTag(reasons[i]);
-        return `${i + 1}. (${n.created_at.slice(0, 10)}) ${tag ? `${tag} ` : ""}${(n.title || n.content).slice(0, 200)}`;
+        // R322 A：受守行不进摘要模型上下文（与 /api/ask 同一套 redactGuardedLinesForModel）
+        const shown = redactGuardedLinesForModel(n.title || n.content, `${n.title ?? ""}\n${n.content}`).text;
+        return `${i + 1}. (${n.created_at.slice(0, 10)}) ${tag ? `${tag} ` : ""}${shown.slice(0, 200)}`;
       })
       .join("\n");
     const text = await chatComplete(env, {

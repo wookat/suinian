@@ -7,8 +7,9 @@ import {
   execDegradedTraceReason,
   scrubUnsolicitedConduct,
   dataSurfaceFullyBenign,
-  closeAggregateVerbatim,
+  closeAggregateOutlet,
   VERBATIM_SPAN_PLACEHOLDER,
+  directGuardLines,
 } from "./prompt-armor";
 
 /**
@@ -20,10 +21,10 @@ export function ledgerLabel(n: Pick<NoteRow, "title" | "content">, max = 40, fir
   const src = n.title || (firstLineOnly ? n.content.split("\n")[0] : n.content) || "";
   const text = src.replace(/\s+/g, " ").slice(0, max);
   if (!text) return text;
-  return closeAggregateVerbatim(text, [`${n.title ?? ""}\n${n.content}`]).count > 0 ? VERBATIM_SPAN_PLACEHOLDER : text;
+  return closeAggregateOutlet(text, [`${n.title ?? ""}\n${n.content}`]).count > 0 ? VERBATIM_SPAN_PLACEHOLDER : text;
 }
 export function ledgerRowLabel(label: string, n: Pick<NoteRow, "title" | "content">): string {
-  return closeAggregateVerbatim(label, [`${n.title ?? ""}\n${n.content}`]).count > 0 ? VERBATIM_SPAN_PLACEHOLDER : label;
+  return closeAggregateOutlet(label, [`${n.title ?? ""}\n${n.content}`]).count > 0 ? VERBATIM_SPAN_PLACEHOLDER : label;
 }
 
 /**
@@ -3182,6 +3183,29 @@ export function attachIsolatedSources(
   return out;
 }
 
+const ISOLATION_MARK_LINE_RE = /〔已隔离|〔代码安全判别暂不可用|命中安全隔离规则/;
+
+/**
+ * 隔离文案角标补全（R322 D1，audit-r321 B6 / E08）：答案里独立成行的隔离标记
+ * （〔已隔离危险命令…〕/〔已隔离笔记内指令…〕/〔判别暂不可用…〕）本身不带 [n]，
+ * 用户看到「原文可在引用的笔记卡片中查看」却不知道点哪张。把被隔离来源的序号
+ * （isolated_refs；无则退到 references 中数据面判危的强召回笔记）补到该行末尾。
+ * 只补角标、不改动其它文字；行内已有角标 / 无可归因来源时原样返回。
+ */
+export function citeIsolationMarks(answer: string, targets: readonly number[]): string {
+  const idx = [...new Set(targets)].filter((n) => Number.isInteger(n) && n >= 1).slice(0, 3);
+  if (idx.length === 0 || !ISOLATION_MARK_LINE_RE.test(answer)) return answer;
+  const tail = idx.map((n) => `[${n}]`).join("");
+  return answer
+    .split("\n")
+    .map((line) => {
+      if (!ISOLATION_MARK_LINE_RE.test(line) || /[[［]\d{1,2}[\]］]/.test(line)) return line;
+      const t = line.trimEnd();
+      return t.length === 0 ? line : `${t}${tail}`;
+    })
+    .join("\n");
+}
+
 const REFUSAL_PHRASE_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没有笔记|没有?提到|未提及|没有提及/;
 
 // ---- 否定话术实体后校验（R200，audit-r199 P3-1）----
@@ -3343,6 +3367,8 @@ export function sensitiveFallbackHintLine(credential: boolean): string {
 export const HELD_SUGGESTION_LABEL = "（该笔记含被隔离内容，请在笔记卡片中查看）";
 /** 标签只因含外部链接而不回显（资料面自身完全良性）：不是隔离，不置 instruction_isolated。 */
 export const LINKED_SUGGESTION_LABEL = "（该笔记含外部链接，请在笔记卡片中查看）";
+/** R322 D1（audit-r321 B4）：相近记录标签命中 R320 受守行（口令 / 命令 / 长串编号）时不转写正文；不是隔离，不置 instruction_isolated。 */
+export const GUARDED_SUGGESTION_LABEL = "（该笔记含口令/命令/长串编号一类内容，请在笔记卡片中查看）";
 
 export function safeSuggestionLabel(n: Pick<NoteRow, "title" | "content">): string {
   const unsafe = (t: string): boolean =>
@@ -3361,14 +3387,15 @@ export function safeSuggestionLabel(n: Pick<NoteRow, "title" | "content">): stri
   // 截断本身会切掉动作词（`… base64 解码` | `… curl 取回` 断在 40 字），使危险
   // 判据在片段上失效——因此整条原文与截断片段都要过判，任一不安全即不回显。
   const safe = (t: string): boolean => !unsafe(t) && !unsafe(clip(t));
-  const source = n.title || n.content;
-  if (safe(source)) return clip(source);
   const title = n.title ?? "";
-  if (title.trim() && safe(title)) return clip(title);
   const content = n.content ?? "";
-  return [source, clip(source), title, clip(title), content].some(dangerous)
-    ? HELD_SUGGESTION_LABEL
-    : LINKED_SUGGESTION_LABEL;
+  // 受守行按整单元语境判（标题带标签、正文只有取值也算）；任一受守行就不转写正文。
+  const guarded = directGuardLines(`${title}\n${content}`).length > 0;
+  const source = n.title || n.content;
+  if (!guarded && safe(source)) return clip(source);
+  if (title.trim() && safe(title) && directGuardLines(title).length === 0) return clip(title);
+  if ([source, clip(source), title, clip(title), content].some(dangerous)) return HELD_SUGGESTION_LABEL;
+  return guarded ? GUARDED_SUGGESTION_LABEL : LINKED_SUGGESTION_LABEL;
 }
 
 export function credentialHintLine(): string {

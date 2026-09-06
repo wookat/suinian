@@ -9,7 +9,8 @@ import {
   noteContainsExecutableCommand,
   noteRowContainsExecutableCommand,
   noteRowBroadFoldReason,
-  closeAggregateVerbatim,
+  closeAggregateOutlet,
+  redactGuardedLinesForModel,
   EXEC_OUTLET_WARN_TAG,
   BROAD_OUTLET_FOLD_TAG,
 } from "./prompt-armor";
@@ -19,6 +20,13 @@ import { bumpGuardEvents, outletFoldEventRows, outletVerbatimClosedRows } from "
 function rowTitle(n: Pick<NoteRow, "title" | "content" | "meta">, max: number): string {
   const reason = noteRowBroadFoldReason(n);
   return (reason !== null ? foldDisplayTitle(n, reason) : n.title || n.content).slice(0, max);
+}
+
+/** R322 A：喂给叙述模型的行标题：受守行先换成占位（与 /api/ask 同一套 redactGuardedLinesForModel）再截长。 */
+function modelRowTitle(n: Pick<NoteRow, "title" | "content" | "meta">, max: number): string {
+  const reason = noteRowBroadFoldReason(n);
+  const shown = reason !== null ? foldDisplayTitle(n, reason) : n.title || n.content;
+  return redactGuardedLinesForModel(shown, `${n.title ?? ""}\n${n.content}`).text.slice(0, max);
 }
 
 /** R306 P0-1：周报/月报行级危险标注（audit-r305 §3：周报原样带出 curl|bash 无警示）；R310 宽判据行带折叠短标。 */
@@ -37,7 +45,7 @@ export function closeReportNarrative(
 ): { text: string; verbatimSpans: number } {
   const visible = notes.filter((n) => !n.is_sensitive);
   const units = visible.map((n) => `${n.title ?? ""}\n${n.content}`);
-  const closed = closeAggregateVerbatim(narrative, units);
+  const closed = closeAggregateOutlet(narrative, units);
   return { text: closed.answer, verbatimSpans: closed.count };
 }
 
@@ -461,7 +469,7 @@ export async function generatePeriodReport(
           // 日期按用户时区展示，与报告期段边界同口径（R107 P2-2：原始 UTC 日期错位）
           const ms = parseCreatedAt(n.created_at);
           const day = Number.isNaN(ms) ? n.created_at.slice(0, 10) : localDateOf(ms, offsetMin);
-          return `${i + 1}. [${cat}]${amt} (${day}) ${execLinePrefix(n)}${rowTitle(n, 200)}`;
+          return `${i + 1}. [${cat}]${amt} (${day}) ${execLinePrefix(n)}${modelRowTitle(n, 200)}`;
         })
         .join("\n");
       const label = label0;
