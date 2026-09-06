@@ -325,6 +325,10 @@ const WEAK_LABEL_ASSIGN_LATIN_RE = new RegExp(
 );
 const WEAK_LABEL_ASSIGN_CJK_RE =
   /(?:柜子?|储物柜|保险柜|快递柜|衣柜|路由器|门禁|大门|仓库|信箱|车库|门|锁)[^\n]{0,6}?(?:那个词|那个数字?|那串数?|那几个数|那组数|那个码|那几位|的词|的数字?)[^\S\n]{0,3}(?:[:：是为=]|叫|就是|换成了|改成了)[^\S\n]*([^\s，。；,;]{2,})/u;
+// Wi-Fi 接入串（无「密码」二字的常见写法）：「家里 wifi 现在连的是 chunfeng2019jia」「wifi 改了，现在用的是 X 这一串」。
+// 值必须同时含字母与数字且 ≥8 位（口令形态）；「wifi 路由器在电视柜后面」「wifi 信号不好」不命中。
+const WIFI_STRING_RE =
+  /(?:wi-?fi|wlan|无线网?络?|路由器)[^\n]{0,12}?(?:连的是|用的是|连上的是|换成了|改成了|改为|[:：是=])[^\S\n]*((?=[^\s，。；,;]*[A-Za-z])(?=[^\s，。；,;]*\d)[^\s，。；,;]{8,})/iu;
 
 // 无主题词的凭证对（R194 P2-2）：「admin / Sx-R193-mx-77」这类斜杠/竖线分隔的
 // 账号-口令对没有「密码/token」等主题词，被剪藏外壳包裹时模型常判成 collect
@@ -368,6 +372,8 @@ export function detectSensitive(content: string): boolean {
   if (weakLatin && !PLACEHOLDER_VALUE_RE.test(weakLatin[1])) return true;
   const weakCjk = content.match(WEAK_LABEL_ASSIGN_CJK_RE);
   if (weakCjk && !PLACEHOLDER_VALUE_RE.test(weakCjk[1])) return true;
+  const wifi = content.match(WIFI_STRING_RE);
+  if (wifi && !PLACEHOLDER_VALUE_RE.test(wifi[1])) return true;
   if (SENSITIVE_KEY_LITERAL_RE.test(content)) return true;
   // 数字类规则同时跑原文与归一化文本：空格/连字符/全角/分段变体不再绕过
   const normalized = normalizeDigitRuns(content);

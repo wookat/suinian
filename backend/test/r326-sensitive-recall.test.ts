@@ -412,6 +412,23 @@ describe("R326 §4 自动标注校准：宽判据补多语言 / 比喻式称谓�
     ];
     for (const t of no) expect(detectSensitive(t), t).toBe(false);
   });
+  it("Wi-Fi 接入串（无「密码」二字）：wifi/路由器 + 连的是/用的是/是 + 字母数字混合 ≥8 位 → fail-closed；型号/位置/信号描述不命中", () => {
+    const yes = [
+      "家里 wifi 现在连的是 chunfeng2019jia，路由器在电视柜后面",
+      "上周把家里 wifi 改了，现在用的是 chunfeng2019jia 这一串，路由器放在电视柜后面。",
+      "办公室 WiFi：Office2024Guest",
+      "路由器改成了 hxq7wm2n99",
+    ];
+    for (const t of yes) expect(detectSensitive(t), t).toBe(true);
+    const no = [
+      "家里 wifi 路由器在电视柜后面，信号不太好",
+      "wifi 是 5G 频段",
+      "路由器型号是 AX3000",
+      "咖啡店 wifi 名字是 CoffeeGuest",
+      "wifi 用的是 20 元套餐",
+    ];
+    for (const t of no) expect(detectSensitive(t), t).toBe(false);
+  });
   it("标识符类不进定论规则：车牌 / 订单号 / 门禁卡编号 / 会议号（无密码）", () => {
     const no = ["新车牌 沪AD82917，停车登记要填。", "京东订单号 289471553201，退货要用。", "小区门禁卡编号 A2213，丢了去物业补办要报这个。", "周四例会 Zoom 会议号 8821 5570 33"];
     for (const t of no) expect(detectSensitive(t), t).toBe(false);
