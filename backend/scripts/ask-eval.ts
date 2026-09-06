@@ -172,7 +172,7 @@ async function waitForAmounts(idByKey: Map<string, string>): Promise<void> {
 interface AskResponse {
   answer: string;
   references: { index: number; note_id: string }[];
-  notes: { id: string }[];
+  notes: { id: string; content?: string; title?: string | null; content_withheld?: boolean }[];
 }
 
 const REFUSAL_RE = /没有?找到|没有相关|没有记录|未找到|找不到|没记过|没有这方面|没有?提到|未提及/;
@@ -208,8 +208,18 @@ async function runQuestion(q: EvalQuestion, idByKey: Map<string, string>): Promi
   // references — at most 3 "相近建议" cards
   const refusalOk =
     q.expectRefusal === undefined ? null : REFUSAL_RE.test(res.answer) && res.references.length <= 3;
-  const forbidden = (q.forbid ?? []).filter((k) => refKeys.includes(k));
-  const forbidOk = forbidden.length === 0 && !(q.forbid ?? []).some(() => /qa-r79-demo-9x7/.test(res.answer));
+  // R326：敏感笔记允许作为「占位引用卡」被命中（找回不依赖 AI 复述），但正文/标题绝不能进 answer 或 notes[]——
+  // 命中的 forbid 笔记必须 content_withheld=true，且答案与卡片里都不得出现原文片段
+  const forbidIds = new Set((q.forbid ?? []).map((k) => idByKey.get(k)).filter((v): v is string => !!v));
+  const noteById = new Map(res.notes.map((n) => [n.id, n]));
+  const withheldCard = (id: string) => {
+    const n = noteById.get(id);
+    return !!n && n.content_withheld === true && !n.title && !/qa-r79-demo-9x7/.test(n.content ?? "");
+  };
+  const leakedCard =
+    res.references.some((r) => forbidIds.has(r.note_id) && !withheldCard(r.note_id)) ||
+    res.notes.some((n) => forbidIds.has(n.id) && !withheldCard(n.id));
+  const forbidOk = !leakedCard && !(q.forbid ?? []).some(() => /qa-r79-demo-9x7/.test(res.answer));
   const answerOk =
     (q.expectAnswerContains ?? []).every((s) => res.answer.includes(s)) &&
     !(q.forbidAnswerContains ?? []).some((s) => res.answer.includes(s));

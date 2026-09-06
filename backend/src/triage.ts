@@ -1,6 +1,6 @@
 import type { Category, Env, TriageResult } from "./types";
 import { chatComplete } from "./ai";
-import { closeAggregateOutlet, normalizedGuardedLeak, secretLabelValueLine, directGuardLines } from "./prompt-armor";
+import { closeAggregateOutlet, normalizedGuardedLeak, secretLabelValueLine, directGuardLines, opaqueTokensOf } from "./prompt-armor";
 
 const CATEGORIES: Category[] = ["idea", "todo", "collect", "data", "expense", "income", "transfer"];
 
@@ -254,9 +254,14 @@ export function buildTriagePrompt(
   - 「零食 8(小卖部)」→ expense，amount=8（括号备注不影响正常支出记账）
 - tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）。标签必须是内容的主题词，用能概括这条内容的具体场景词（如打车→「交通」、午饭→「餐饮」、买咖啡→「咖啡」），不要一律套「购物」这类宽泛词。内容开头的方括号前缀标记（如「[QA-123]」「[P0]」「【草稿】」）和序号（「1.」）是元数据记号，不是主题：既不能整个照抄进标签，也不能把括号里的词抽出来当标签${tagHint}
 - title: 一句话短标题（<=20字），同样要忽略开头的方括号前缀/序号，不要抄进标题。判例：「[P0] 修复登录超时」→ title="修复登录超时"，tags 不含 "P0"；「[QA-TEST] 周五交报告」→ title="周五交报告"，tags 不含 "QA-TEST"、"QA"、"TEST"
-- is_sensitive: 是否含真实机密 (boolean)。仅当内容中出现真实可用的机密「具体值」时才为 true：密码/口令/密钥/API key/token 的具体值、完整身份证号、银行卡号、手机号+姓名组合、账号+密码组合、完整车牌号（车牌是可定位到个人的标识，按敏感处理，如「车牌号沪A12345」→ true）。以下情况必须为 false：技术文档/教程/笔记只是讨论密码、token、密钥等概念而未出现具体秘密值；代码片段中的变量名/占位符（如 <token>、your-api-key、xxx）；普通长文、文件内容中的 ID/哈希/版本号等非机密长字符串。判例：
+- is_sensitive: 是否记录了一个「知道即可进入 / 登录 / 支付 / 开锁 / 通过验证」的真实取值 (boolean)。判断只看「这个值能不能当钥匙用」，与用什么称谓、有没有称谓、哪种语言、是散文还是口述、数字是阿拉伯还是中文无关：密码/口令/暗号/咒语/门码/门禁码/取件码/柜子的数/Wi-Fi 串/PIN/密钥/API key/token/私钥的具体值（含「按 X 才能进」「贴的纸上写的是 X」「现在用的是 X 这一串」「木石田」这类无称谓 / 比喻 / 口述写法）、完整身份证号、完整银行卡号、账号+密码组合、本人手机号+姓名组合。以下是「指代事物的标识符」而不是钥匙，必须为 false：车牌号、订单号/快递单号、会议号（无入会密码）、门禁卡/会员卡/工牌的编号、证件后四位、商家/师傅等公开联系电话、地址、价格、日期；技术文档/教程/笔记只是讨论密码、token、密钥等概念而未出现具体秘密值；代码片段中的变量名/占位符（如 <token>、your-api-key、xxx）；普通长文、文件内容中的 ID/哈希/版本号等非机密长字符串。判例：
   - 「服务器 root 密码是 P@ssw0rd123」→ true（出现密码具体值）
   - 「OpenAI key: sk-abc123def456…」→ true（出现密钥具体值）
+  - 「楼下快递柜那串数换成了九六二五」→ true（口述数字的开锁码，没有「密码」二字也是钥匙）
+  - 「la clave del wifi de casa es rosa-luna-88」→ true（外语口令）
+  - 「客户的车牌沪A12345，周五来提车」→ false（车牌是标识符，不是钥匙）
+  - 「门禁卡编号 0083216，补卡报给物业」→ false（卡的编号，不是门码）
+  - 「开锁师傅电话 138xxxx0000」→ false（他人的公开联系方式）
   - 「JWT token 的刷新机制：access token 短效期，refresh token 长效期」→ false（只讨论概念，无具体值）
   - 「配置 API key 的步骤：在控制台生成 key 后写入环境变量」→ false（教程，无具体值）
   - 「curl -H "Authorization: Bearer <token>" 调用接口」→ false（占位符不是真实机密）
@@ -308,6 +313,55 @@ export function normalizeDigitRuns(content: string): string {
 // values that are placeholders/templates, not real secrets
 const PLACEHOLDER_VALUE_RE = /^(<|\{|\[|\*{2,}|x{3,}|你的|your[-_]?|占位)/i;
 
+// R326（decision-r326 §4.2）弱称谓凭证赋值：「可上锁对象 + 弱称谓（word / 那个词 / 那串 / 那个数）+ 取值」。
+// 「the word for the gym locker is bluefalcon」「Das Wort für den Schrank ist jetzt Herbstlaterne」
+// 「柜子那个词：桃🌸花🌸源🌸记」「柜子那个数是三七二一」没有任何凭证主题词，模型降级时会漏标；
+// 这里只认「对象 + 弱称谓 + 赋值连接词 + 值」的完整结构，「柜子换成开放式」「柜子的数量是 3 个」不命中。
+const KEYABLE_OBJECT_LATIN =
+  "(?:locker|safe|vault|door|gate|garage|wifi|wi-fi|router|lock|padlock|alarm|mailbox|cabinet|closet|storage|Schrank|Tresor|T\u00fcr|Spind|Schlie\u00dffach|WLAN|armoire|casier|coffre|porte|armario|taquilla|caja|puerta)";
+const WEAK_LABEL_ASSIGN_LATIN_RE = new RegExp(
+  `\\b(?:word|phrase|combo|combination|code|Wort|Kombination|Losung|mot|combinaison|palabra|combinaci\u00f3n|clave|parola|codice)\\s+(?:for|f\u00fcr|pour|para|per|of|to)\\s+(?:[\\p{L}-]{1,20}\\s+){0,3}?${KEYABLE_OBJECT_LATIN}\\s+(?:is|ist|est|es|\u00e9|=|:)\\s+(?:now\\s+|jetzt\\s+|maintenant\\s+|ahora\\s+)?([^\\s,.;!?]{4,})`,
+  "iu"
+);
+const WEAK_LABEL_ASSIGN_CJK_RE =
+  /(?:柜子?|储物柜|保险柜|快递柜|衣柜|路由器|门禁|大门|仓库|信箱|车库|门|锁)[^\n]{0,6}?(?:那个词|那个数字?|那串数?|那几个数|那组数|那个码|那几位|的词|的数字?)[^\S\n]{0,3}(?:[:：是为=]|叫|就是|换成了|改成了)[^\S\n]*([^\s，。；,;]{2,})/u;
+// Wi-Fi 接入串（无「密码」二字的常见写法）：「家里 wifi 现在连的是 chunfeng2019jia」「wifi 改了，现在用的是 X 这一串」。
+// 值必须同时含字母与数字且 ≥8 位（口令形态）；「wifi 路由器在电视柜后面」「wifi 信号不好」不命中。
+const WIFI_STRING_RE =
+  /(?:wi-?fi|wlan|无线网?络?|路由器)[^\n]{0,12}?(?:连的是|用的是|连上的是|换成了|改成了|改为|[:：是=])[^\S\n]*((?=[^\s，。；,;]*[A-Za-z])(?=[^\s，。；,;]*\d)[^\s，。；,;]{8,})/iu;
+
+// R326（decision-r326 §4.2）无称谓接入码，三种散文写法：
+//   进门动作 +「字母数字混合码」+ 结果连词：「门禁改成了输入 tiema2048 才能进」「门上要按 gk8823 才开」；
+//   码要求 ≥2 字母 + ≥2 数字（「输入 python3 就能跑」「按 F12 打开」不命中）；
+//   「写的是 / 写着 / 贴的是」+ 高熵记号（opaqueTokensOf 口径）：「柜子上贴的纸写的是 hxq7wm2n」（「写的是周三取件」不命中）；
+//   口述拼接规则：两个以上数字段 +「中间不加符号 / 连起来 / 拼在一起」：「门牌 47 加上妈妈生日 0913，中间不加符号」。
+const ENTRY_CODE_RE =
+  /(?:输入|键入|敲|按|拨)[^\S\n]*((?=[A-Za-z0-9]*[A-Za-z][A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d[A-Za-z0-9]*\d)[A-Za-z0-9]{5,32})[^\S\n]*(?:才|就|即可|方|能|可|开|进|解锁)/u;
+const WRITTEN_VALUE_RE = /(?:写的是|写着|写了|记的是|抄的是|贴的是)[^\S\n]*([^\s，。；,;]{5,})/u;
+const DIGIT_CONCAT_RULE_RE = /中间不加(?:符号|空格|任何)|不加符号|连起来(?:就是|写|记)|拼(?:起来|在一起|到一起)|接在后面|后面接上/u;
+const DIGIT_GROUP_RE = /(?<!\d)\d{2,}(?!\d)/g;
+// 「裸短语笔记」：整条笔记只是「定下来了 / 想到的词 / 就用这个：<2–12 字短语>」，短语无任何上下文；
+// 约定口令常这样记（「定下来了：白鹭飞过水面」「想到的词：铜锁春雨」）。日期 / 时间 / 纯数字短语不命中；
+// 带任何后缀句子的笔记不命中。误报只多一次点开。
+const BARE_PHRASE_NOTE_RE =
+  /^(?:昨天|今天|刚刚?|早上|晚上|最终|最后)?(?:那个|新的?)?(?:定下来了|定了|定下来的|决定了|选定了|就用这个|就用这句|换成了?|改成了?|想到的词|想好了|那个词|新词|那句)[：:][^\S\n]*([^\s，。；,;：:！!？?]{2,12})[。.]?$/u;
+const TIME_OR_NUMBER_PHRASE_RE =
+  /^(?:[\d.．年月日号点半分一二三四五六七八九十两零〇百千万块元]|周[一-六日天]|星期[一-六日天]|上午|下午|晚上|中午|早上|今天|明天|后天|下周|本周|下月|本月|年后|节后|周末|月底|月初)+$/u;
+
+function isBarePhraseNote(content: string): boolean {
+  const m = content.trim().match(BARE_PHRASE_NOTE_RE);
+  return !!m && !TIME_OR_NUMBER_PHRASE_RE.test(m[1]);
+}
+
+function hasEntryCode(content: string): boolean {
+  const entry = content.match(ENTRY_CODE_RE);
+  if (entry && !PLACEHOLDER_VALUE_RE.test(entry[1])) return true;
+  const written = content.match(WRITTEN_VALUE_RE);
+  if (written && opaqueTokensOf(written[1]).length > 0) return true;
+  if (DIGIT_CONCAT_RULE_RE.test(content) && (content.match(DIGIT_GROUP_RE) ?? []).length >= 2) return true;
+  return isBarePhraseNote(content);
+}
+
 // 无主题词的凭证对（R194 P2-2）：「admin / Sx-R193-mx-77」这类斜杠/竖线分隔的
 // 账号-口令对没有「密码/token」等主题词，被剪藏外壳包裹时模型常判成 collect
 // 而明文回流。确定性收口：左侧是典型账号词（admin/root 等）或紧跟在「账号/
@@ -321,8 +375,15 @@ const SENSITIVE_CRED_PAIR_RE =
 // as sensitive until the model has classified", never a final verdict. The
 // model remains the primary judge; applyTriage restores plaintext when it
 // confidently says non-sensitive.
+// R326（decision-r326 §4.2）：宽判据补多语言 / 比喻式口令称谓——它不是识别边界，只让模型复判前的窗口也 fail-closed；
+// 误标的代价已降为「多点一次卡片」（敏感笔记仍可召回）。
 const SENSITIVE_TOPIC_RE =
-  /密码|口令|密钥|秘钥|私钥|passw(?:or)?d|passphrase|(?<![$\w])pwd\b|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|\bsecret\b|\btoken\b|验证码|pin\s?码|身份证|银行卡|信用卡|储蓄卡|卡号|账号/i;
+  /密码|口令|暗号|咒语|门码|门禁码|开锁码|取件码|登录串|密钥|秘钥|私钥|passw(?:or)?d|passphrase|passcode|(?<![$\w])pwd\b|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|\bsecret\b|\btoken\b|验证码|pin\s?码|身份证|银行卡|信用卡|储蓄卡|卡号|账号|暗証|パスワード|밀번|비밀번호|Passwort|Kennwort|mot de passe|contraseña|\bclave\b|\bsenha\b|wachtwoord|пароль/i;
+
+/** 凭证称谓词（多语种）是否出现：与 maybeSensitive 的宽口径同源，供拆条传播等数据层规则复用。 */
+export function hasSensitiveTopic(content: string): boolean {
+  return SENSITIVE_TOPIC_RE.test(content);
+}
 
 /**
  * Write-time pre-check for notes awaiting AI triage (fail-closed): true when
@@ -344,6 +405,13 @@ export function detectSensitive(content: string): boolean {
   if (assign && !PLACEHOLDER_VALUE_RE.test(assign[3])) return true;
   const pair = content.match(SENSITIVE_CRED_PAIR_RE);
   if (pair && !PLACEHOLDER_VALUE_RE.test(pair[1])) return true;
+  const weakLatin = content.match(WEAK_LABEL_ASSIGN_LATIN_RE);
+  if (weakLatin && !PLACEHOLDER_VALUE_RE.test(weakLatin[1])) return true;
+  const weakCjk = content.match(WEAK_LABEL_ASSIGN_CJK_RE);
+  if (weakCjk && !PLACEHOLDER_VALUE_RE.test(weakCjk[1])) return true;
+  const wifi = content.match(WIFI_STRING_RE);
+  if (wifi && !PLACEHOLDER_VALUE_RE.test(wifi[1])) return true;
+  if (hasEntryCode(content)) return true;
   if (SENSITIVE_KEY_LITERAL_RE.test(content)) return true;
   // 数字类规则同时跑原文与归一化文本：空格/连字符/全角/分段变体不再绕过
   const normalized = normalizeDigitRuns(content);

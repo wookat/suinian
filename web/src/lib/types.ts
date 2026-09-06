@@ -75,6 +75,8 @@ export interface Note {
   tags: string[]
   thread_id: string | null
   is_sensitive: number
+  /** R326：问答/MCP 引用卡片里的敏感笔记只带占位体，原文需按 id 经登录态 GET /api/notes/:id 点开取回 */
+  content_withheld?: boolean
   /** 含可执行命令/危险指令（R304 P0-A；严判据）：只决定警示强度 */
   contains_executable_command?: boolean
   /** 宽判据折叠（R310 P0-2）：端点/命令形态/编码/不透明内容命中即默认折叠，与危险判定解耦 */
