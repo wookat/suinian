@@ -8339,10 +8339,18 @@ function opaqueTokenSpans(answer: string, source?: string): Array<{ start: numbe
   }
   const urls = [...nfkc.matchAll(URL_RUN_RE)].map((m) => ({ start: m.index, end: m.index + m[0].length }));
   const inUrl = (start: number, end: number): boolean => urls.some((u) => u.start < end && start < u.end);
+  // 无受守行的直答单元里的书签 URL：其路径段（`BV1xx411c7mD`）是公开地址的一部分，答案单提这一段（「视频编号是 …」）
+  // 不是高熵取值回显（与 opaqueRunPool 的「善意单元 URL 不入池」同口径）；单元有任何受守行时不豁免（fail-closed）。
+  const benignUrlTokens = new Set<string>();
+  if (source && directGuardLines(source).length === 0) {
+    for (const u of source.normalize("NFKC").match(URL_RUN_RE) ?? [])
+      for (const seg of u.split(/[/?#&=.:]+/)) if (seg.length >= 5) benignUrlTokens.add(seg.toLowerCase());
+  }
   for (const m of nfkc.matchAll(TOKEN_RUN_RE)) {
     if (inUrl(m.index, m.index + m[0].length)) continue;
     const tok = m[0].replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
-    if (tok.length >= 5 && isOpaqueToken(tok)) out.push({ start: m.index, end: m.index + m[0].length, token: tok });
+    if (tok.length >= 5 && isOpaqueToken(tok) && !benignUrlTokens.has(tok.toLowerCase()))
+      out.push({ start: m.index, end: m.index + m[0].length, token: tok });
   }
   // R322 D1：数字串按所在句判——手机号 3-4-4 / 订单号一类日常识别符（longDigitFaceGuarded）不占位，凭证标签旁的仍占位。
   const delims = ["\n", "。", "！", "？", "；"];
@@ -8400,15 +8408,32 @@ export function stripOpaqueTokens(question: string): string {
   for (const tok of new Set(opaqueTokensOf(question))) out = out.split(tok).join(" ");
   if (isYesNoQuestion(question) || isOracleProbeQuestion(question)) {
     for (const tok of new Set(shortCandidateTokensOf(question))) out = out.split(tok).join(" ");
+    out = stripAnswerFormatDirectives(out);
     // R322 B：属性 / 二分 / 排除形态的候选值——任意数字串、引号短语、汉字数字连读、单字母——同样不得驱动召回。
     out = out
       .replace(/[「『“"][^」』”"\n]{1,40}[」』”"]/g, " ")
       .replace(/(?<![\p{L}\p{N}])\d+(?![\p{L}\p{N}])/gu, " ")
       .replace(/[零〇一二两三四五六七八九]{2,}/g, " ")
-      .replace(/(?<![A-Za-z])[A-Za-z](?![A-Za-z])/g, " ");
+      .replace(/[零〇一二两三四五六七八九十百千]+(?=\s*(?:位|个字|字符|码|以上|以下|以内|多))/g, " ")
+      .replace(/(?<![A-Za-z])[A-Za-z](?![A-Za-z])/g, " ")
+      // 英文属性形态的短候选（start with Kq / ends with 7w）：紧跟在属性动词后的 ≤ 4 字字母数字串
+      .replace(/\b((?:starts?|begins?|ends?)\s+(?:with\s+)?|with\s+|equals?\s+)[A-Za-z0-9]{1,4}(?![\p{L}\p{N}])/giu, "$1 ");
   }
   out = out.replace(/\s+/g, " ").trim();
   return out.replace(/[\s,，。？?！!、;；:：的是吗呢啊嘛呀]/g, "").length > 0 ? out : "这条记录";
+}
+
+/**
+ * 答案格式指令子句（「只回答是或不是」「只答数字」「yes or no」「请判断：」）不带主题：它们进入关键词抽取器 / 改写器会被当成
+ * 对模型的指令而不是待抽关键词的问句（R322 生产实测：带尾缀的核对问召回不到受守笔记，去掉尾缀同一问召回正常）。
+ * 只剔带指令词的子句（只 / 仅 / 直接 / 务必 + 回答 …，或回答是或不是类固定搭配），「面试时该怎么回答」这类话题里的「回答」不动。
+ */
+const ANSWER_FORMAT_TAIL_RE =
+  /[，,。？?！!；;\s]*(?:(?:请\s*)?(?:只|仅|直接|务必)(?:回答|答|说|写|输出|给出|回复|给我)|回答(?:是或不是|是或否|是\/否|对或不对|有或没有)|(?:answer|reply|respond|say)\s+(?:only\s+)?(?:yes\s*(?:or|\/)\s*no|true\s*(?:or|\/)\s*false|with\s+one\s+word)|yes\s*(?:or|\/)\s*no|true\s*(?:or|\/)\s*false)[^，,。？?！!；;\n]{0,24}[。？?！!；;\s]*$/i;
+const ANSWER_FORMAT_HEAD_RE = /^\s*(?:请判断|判断一下|判断|帮我判断|请确认|确认一下)[：:，,\s]+/;
+export function stripAnswerFormatDirectives(question: string): string {
+  const out = question.replace(ANSWER_FORMAT_TAIL_RE, "").replace(ANSWER_FORMAT_HEAD_RE, "").trim();
+  return out.length >= 2 ? out : question;
 }
 
 /**
@@ -8796,6 +8821,15 @@ const ORACLE_PROBE_RE =
   /几位|多少位|几个字|多少个字|多少字|多长|长度|位数|第\s*[一二三四五六七八九十\d]+\s*(?:位|个字|个字符|字|个)|首字|末字|尾字|首位|末位|开头|结尾|结束|最后一|第一个|前\s*[一二两三四五六七八九\d]+\s*(?:位|个|字)|后\s*[一二两三四五六七八九\d]+\s*(?:位|个|字)|大于|小于|介于|范围|区间|之间|以内|以上|以下|排在|包含|含有|带不带|有没有|是不是|对不对|只回答|只答|只说|回答是或|是或不是|对或不对|有或没有|排除|不是.{1,12}就是|二选一|哪一个|哪个是|大写|小写|字母|数字|奇数|偶数|之和|加起来|加空格|空格|逐字|逐个|一个字一个字|念出|念一遍|念给|读出|读一遍|拼读|拆开|拆分|分开|倒着|倒序|反过来|反转|颠倒|逆序|编码|base64|十六进制|hex|二进制|unicode|摩斯|摩尔斯|nato|翻译|译成|拼音|谐音|移位|凯撒|rot13|每个字符|每一位|每位|中间加|隔开|转写|变形|缩写|首字母|whether|is it|does it|how many|how long|length|first (?:char|letter|digit|word)|last (?:char|letter|digit|word)|starts? with|ends? with|begins? with|contain|spell|letter by letter|character by character|with spaces|spaced|reverse|encode|decode|translate|separated|yes or no|true or false|greater|less than|between|odd|even/iu;
 /** 属性 / 转写试探要有「指向被守内容」的锚：凭证标签、编号标签，或「那串 / 那条 / 这条 / 记的 / 笔记里」一类指代。 */
 const ORACLE_ANCHOR_RE = /那串|那条|这条|那个|那组|那段|那句|记的|记着|记录|笔记|口令|密码|暗号|密钥|门禁|卡号|保险|柜|命令|编号|串|码/u;
+// 预言机锚用的凭证标签：SECRET_LABEL_RE / CODE_LABEL_RE（受守行判据，只认「标签 + 取值面」）之外，裸标签词（「对象存储 secret」
+// 「GitHub token」「API key」「私钥 / 凭证」）在问句 / 上文里同样指向受守内容——生产实测多轮二分 O02：「对象存储 secret」不在
+// SECRET_LABEL_RE 里，追问「第 2 个字符是「X」吗」找不到锚，退回常规召回，属性词（字母 / 数字）决定召回集，T/F 路径分叉。
+// 只用于锚判定（进而走确定性召回 / 中性短路），不改受守行判据本身。
+const ORACLE_LABEL_RE =
+  /(?<![a-z])(?:secrets?|tokens?|api[ -]?keys?|access[ -]?keys?|secret[ -]?keys?|private[ -]?keys?|credentials?|passwd)(?![a-z])|私钥|公钥|凭证|凭据|令牌|口令|密码|密钥/iu;
+function guardedLabelAnchor(text: string): boolean {
+  return SECRET_LABEL_RE.test(text) || CODE_LABEL_RE.test(text) || ORACLE_LABEL_RE.test(text);
+}
 /**
  * `anchored`（召回前的整体短路用）：纯属性 / 转写形态还须带指向锚，避免「8000 以上的支出」这类普通问法只因召回里
  * 碰巧有一条受守笔记就被中和；出口层（直答单元已确定是受守单元）不需要锚。
@@ -8804,15 +8838,48 @@ export function isOracleProbeQuestion(question: string, opts?: { anchored?: bool
   const q = question.normalize("NFKC").trim();
   if (questionCarriesOpaqueToken(q) || isYesNoQuestion(q)) return true;
   if (!ORACLE_PROBE_RE.test(q)) return false;
-  return opts?.anchored ? ORACLE_ANCHOR_RE.test(q) || SECRET_LABEL_RE.test(q) || CODE_LABEL_RE.test(q) : true;
+  return opts?.anchored ? ORACLE_ANCHOR_RE.test(q) || guardedLabelAnchor(q) : true;
 }
+// 「是 8 位吗 / 十四位 / 6 个字符」——长度候选值本身（ORACLE_PROBE_RE 只认「几位 / 长度」一类问法）
+const LENGTH_CANDIDATE_RE = /[\d零〇一二两三四五六七八九十百]+\s*(?:位|个字|字符|个字符)/u;
+/**
+ * 召回链路只走确定性环节（朴素分词 + 语义向量，不经关键词抽取 / 枚举路由 LLM）的预言机问：带候选值；属性 / 转写形态且带指向锚；
+ * 或是非问里直接点名凭证 / 编号标签（「那个口令是大写开头吗」）。没有这些信号的普通是非问（「我记过开咖啡馆的想法吗」
+ * 「能列一下吗」）仍走常规召回：它们的答案不是固定中性指引，召回质量直接影响答案。
+ */
+export function isDeterministicRecallProbe(question: string, historyText = ""): boolean {
+  const q = question.normalize("NFKC").trim();
+  if (questionCarriesOpaqueToken(q)) return true;
+  if (SECRET_LABEL_RE.test(q) || CODE_LABEL_RE.test(q)) return true;
+  const probeShape = ORACLE_PROBE_RE.test(q) || LENGTH_CANDIDATE_RE.test(q);
+  if (probeShape && (ORACLE_ANCHOR_RE.test(q) || ORACLE_LABEL_RE.test(q))) return true;
+  return historyText.length > 0 && probeShape && conversationAnchorsGuarded(historyText);
+}
+// 预言机问句的语法词（指向 / 核对 / 属性 / 转写 / 是非 / 答案格式）与通用虚词：剥掉后剩下的就是话题词（「跳板机口令」「对象存储 secret」）。
+const PROBE_GRAMMAR_RE =
+  /我想核对|帮我核对|核对一下|核对|我笔记里|笔记里|我记的|记的|那个|那串|那条|这条|那组|那段|那句|一共|几位|多少位|位数|长度|多长|几个字|多少个字|多少字|个字符|字符|个字|字母|数字|大写|小写|井号|符号|空格|顿号|前面|后面|开头|结尾|结束|最后|首字|末字|尾字|首位|末位|倒过来念|倒过来|念出来|念法|逐个|逐字|用中文|写出来|分成前后两半|中间用|隔开|每个|之间|加一个|按字母表|排在|之前|之后|大于|小于|超过|介于|范围|区间|以内|以上|以下|就是别的|就是|别的|也不是|不是|是不是|是否|对不对|有没有|是或不是|对或不对|有或没有|只回答|只答|只写|回答|包含|里面|里有|里|大概|那种|是什么|是几|是|的|那|这|吗|吧|呢|啊|把我|把|我|你|第[一二两三四五六七八九十\d]*|一位|一个|yes or no|true or false|\b(?:only|just|answer|reply|is|are|was|does|do|did|it|its|the|a|an|in|on|of|my|your|that|this|those|what|which|how|many|much|long|length|characters?|digits?|letters?|first|last|start|starts|end|ends|with|begin|begins|contain|contains|or|not|than|more|less|and|to)\b/giu;
+/**
+ * 预言机问的确定性召回词：对已剥掉候选值的问句再剥掉探问语法词，剩下的连续片段（≥ 2 字）就是话题词。
+ * 不走 LLM 关键词抽取：同一串剥后问句永远得到同一组词，对/错候选召回同一批引用。
+ */
+export function probeRecallTerms(strippedQuestion: string): string[] {
+  const out: string[] = [];
+  for (const raw of strippedQuestion.normalize("NFKC").replace(PROBE_GRAMMAR_RE, " ").split(/[\s,，。？?！!、;；:：「」『』“”"'（）()…]+/)) {
+    const t = raw.trim();
+    if (t.length < 2 || !/[\p{L}\p{N}]/u.test(t) || out.includes(t)) continue;
+    out.push(t);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
 /**
  * 多轮二分（R321 预言机变体）：本轮「第 2 个字符是 u 吗」无锚，锚在上文——只认强信号：凭证 / 编号标签，或上一轮已经是中性提示 / 占位。
  * 不用普通指代词做锚（「笔记 / 记录」几乎出现在每段对话里，会把「500 以上的支出」一类追问误判成试探）。
  */
 export function conversationAnchorsGuarded(historyText: string): boolean {
   const h = historyText.normalize("NFKC");
-  return SECRET_LABEL_RE.test(h) || CODE_LABEL_RE.test(h) || /核对提示|问答区不转写|已从问答上下文隔离/.test(h);
+  return guardedLabelAnchor(h) || /核对提示|问答区不转写|已从问答上下文隔离/.test(h);
 }
 
 /**

@@ -149,6 +149,10 @@ description: How to run browser UI / accessibility / cache-identity tests agains
 - 375px dialog check: the confirm dialog renders at ~16–359px with buttons at ~212–342px; assert via `getBoundingClientRect()` on `[aria-modal=true]` and its buttons, then click 仍要复制 for real to prove it is tappable. `cdp.py restore` (setDeviceMetricsOverride 0/0/0/false + clear) brought innerWidth back to 1600 this run; if you `pkill -f "cdp.py mobile"` in the same exec as `restore`, the pkill kills your own shell first — run them in separate exec calls or use a bracketed pattern.
 - The 注销 confirm input accepted Ctrl+V of 「注销」 from the clipboard directly (no native-setter needed) and 永久注销 completed on the first click this run; the app returned to the onboarding/demo welcome screen, and the saved token gave `GET /api/auth/me` 401 within seconds.
 
+## Responsive copy and independent Ask retries
+- Responsive copy tests: in DevTools device-toolbar ⋮ → Add device type → Mobile (no touch), keep the requested width/height and use real mouse selection + Ctrl+C. Default Mobile mode may turn drag into scrolling, so verify both visible selection and clipboard contents. This does not prove native touch long-press copy.
+- Ask acceptance: test consecutive questions first when multi-turn behavior matters, then use 清空对话 before independent retries of unexpected retrieval/oracle answers. Preserve both outcomes and reference IDs; history can affect retrieval, citation shape, and inherited time constraints.
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_GLOBAL_API_TOKEN` (D1 HTTP query API for read-only residual/orphan checks)
 - QA accounts themselves are self-registered (no secret needed)

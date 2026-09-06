@@ -15,7 +15,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, type BroadFoldReason } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, type BroadFoldReason } from "./prompt-armor";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -82,7 +82,7 @@ import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES, BACKUP_AI_DERIVED_NOTICE, closeBackupDerived } from "./backup";
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
-import { parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources, citeIsolationMarks } from "./ask";
+import { type AskEnumRoute, parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources, citeIsolationMarks } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -236,7 +236,7 @@ export async function askUserDataVersion(db: D1Database, userId: string): Promis
 }
 
 /** 答案缓存的收口版本：出口收口规则变更时递增，旧规则下产出的答案不会在新版部署后继续从边缘缓存送出。 */
-export const ASK_ANSWER_CACHE_EPOCH = "r322.3";
+export const ASK_ANSWER_CACHE_EPOCH = "r322.11";
 
 async function askAnswerCacheKey(auth: string, material: string, dataVersion: string): Promise<Request> {
   const digest = await crypto.subtle.digest(
@@ -3552,6 +3552,20 @@ export function sanitizeRewrittenQuestion(raw: string | null | undefined, questi
 }
 
 /**
+ * 预言机形态多轮的确定性召回问句（不经 LLM 改写）：最近两个用户轮各自剥掉候选值 / 答案格式尾缀后的话题 + 本轮剥掉后的问句，
+ * 去重拼接。上文轮剥空（只剩中性词）时不并入。同一段对话里换任何候选值，得到的召回问句逐字相同。
+ */
+export function oracleRecallQuestion(current: string, history: AskHistoryMessage[]): string {
+  const parts: string[] = [];
+  for (const m of history.filter((m) => m.role === "user").slice(-2)) {
+    const t = stripOpaqueTokens(m.content);
+    if (t !== "这条记录" && t.length >= 2 && !parts.includes(t) && t !== current) parts.push(t);
+  }
+  parts.push(current);
+  return parts.join(" ");
+}
+
+/**
  * Rewrite a follow-up question into a standalone one (query rewrite) so keyword
  * recall works for pronoun/ordinal follow-ups ("第二个什么时候截止"). Falls back
  * to the original question when there is no history or the AI is unavailable.
@@ -3661,40 +3675,52 @@ app.post("/api/ask", async (c) => {
   const metaQuestion = ASK_META_QUESTION_RE.test(question);
   // 语言归一（R238 P2）：英文/混合问句先归一成等义中文问句作为意图/召回的
   // 基准（LLM 主判），失败回落原问句（规则兜底）；纯中文问句零额外调用。
+  // 候选值（`Rt5&yy8q`）/ 答案格式尾缀（yes or no）不是外语内容：剥掉后再判是否需要归一——否则归一器
+  // 拿着候选值改写问句，对/错候选、带/不带尾缀会走出不同的召回路径（R322 生产实测 B6）。
+  // 普通是非问里含外语词时归一器仍要跑，但喂给它的是剥掉候选值的问句（归一器拿着 14/10 会写出「十四位/十位」两种产物）。
+  // 预言机形态（带候选值 / 凭证标签 / 带锚属性问）的召回链路上不允许有任何 LLM 环节（R322 生产实测 OQ11 / bisect / O02）：
+  // 归一器 / 关键词抽取器 / 枚举路由器 temperature 0 仍会抽动，剥后逐字相同的对/错候选问句会走出不同召回路径（有引用 / 没找到 /
+  // 误入计数路由），路径差异本身就是可区分信号。只保留确定性环节：剥候选 → 剥探问语法词得话题词 + 语义向量。
+  const historyText = history.map((m) => m.content).join("\n");
+  const deterministicRecall = !metaQuestion && isDeterministicRecallProbe(question, historyText);
   let normQuestion: string | null = null;
-  if (!metaQuestion && needsLangNormalization(question)) {
+  const probeShaped = !metaQuestion && (questionCarriesOpaqueToken(question) || isYesNoQuestion(question) || isOracleProbeQuestion(question));
+  const normSource = probeShaped ? stripOpaqueTokens(question) : question;
+  if (!metaQuestion && !deterministicRecall && needsLangNormalization(normSource)) {
     const tNorm = Date.now();
-    normQuestion = await normalizeAskQuestion(c.env, question);
+    normQuestion = await normalizeAskQuestion(c.env, normSource);
     askMarks.push(["norm", Date.now() - tNorm]);
   }
-  const intentBase = normQuestion ?? question;
   // R320 B1（audit-r319 §3.3 预言机）：问题带口令/密钥样字符串时，候选值本身不进召回——对错值召回同一批笔记，
   // 「有引用 / 没找到」不再构成逐位试探通道；召回命中受守笔记时在生成前确定性短路为不确认不否认的中性指引。
   // R320 B1：带候选值的核对问 / 对受守内容的是非问 ⇒ 预言机形态（候选值不进召回；命中受守笔记时不进生成）
   // R322 B：属性 / 首末字 / 几位 / 范围 / 二分 / 转写形态（带指向锚）同属预言机；多轮里锚可能只在上一轮
   //（「第 2 个字符是 u 吗」承接「核对那串口令」）——历史非空时锚从整段对话里找。
-  const historyText = history.map((m) => m.content).join("\n");
   const oracleProbe =
     !metaQuestion &&
     (questionCarriesOpaqueToken(question) ||
       isYesNoQuestion(question) ||
       isOracleProbeQuestion(question, { anchored: true }) ||
       (history.length > 0 && isOracleProbeQuestion(question) && conversationAnchorsGuarded(historyText)));
-  const recallBase = oracleProbe ? stripOpaqueTokens(intentBase) : intentBase;
+  // 预言机形态下意图 / 时间窗 / 关系护栏统一看剥掉候选值的问句：候选值里的子串会被确定性解析器当成用户限定
+  //（生产实测 O02：真值 `aX9tQ2mL7pR4wZ` 含「Q2」被 parseTimeRange 解析为第二季度时间窗，召回被挡成「没找到」，
+  // 错值不含 Q2 则正常召回——对/错候选走出两条路径本身就是 1 bit）。
+  const askQuestion = oracleProbe ? stripOpaqueTokens(question) : question;
+  const intentBase = normQuestion ?? askQuestion;
+  const recallBase = intentBase;
   // query rewrite: resolve pronouns/ordinals against history, then keyword recall
   const tRewrite = Date.now();
-  // 预言机形态下改写器仍可能从上文把候选值带回改写结果（R322 生产实测多轮 B4/B5）：改写产物再剥一次，剥空回落。
+  // 预言机形态的多轮（R322 生产实测多轮 B4/B5）：不走 LLM 改写器——它的产物随候选值 / 温度抖动，同一段对话里对/错候选
+  // 会走出不同召回路径（有引用 / 没找到）。改为确定性拼接：上文用户轮剥掉候选值与格式尾缀后的话题 + 本轮剥掉后的问句。
   const recallQuestion = metaQuestion
     ? question
-    : await rewriteAskQuestion(c.env, recallBase, history, { stripCandidates: oracleProbe }).then((q) => {
-        if (!oracleProbe) return q;
-        const stripped = stripOpaqueTokens(q).trim();
-        return stripped.length >= 2 ? stripped : recallBase;
-      });
+    : oracleProbe && history.length > 0
+      ? oracleRecallQuestion(recallBase, history)
+      : await rewriteAskQuestion(c.env, recallBase, history);
   askMarks.push(["rewrite", Date.now() - tRewrite]);
   // explicit time scope ("上个月/最近一周/去年…") narrows recall to that window
   // 预言机形态只认用户原话里的时间限定：改写器补出的时间窗会把受守笔记挡在召回外（「没找到」本身就是可区分信号）。
-  const timeRange = parseTimeRange(oracleProbe ? intentBase : recallQuestion);
+  const timeRange = parseTimeRange(oracleProbe ? recallBase : recallQuestion);
   // 指代追问（R186 P1）：原问题含代词/指示词（「它/那条/这笔…」）时不自足，
   // R113「意图以原始问题为准」的前提不成立——意图判定与召回统一改用改写产物。
   // 无历史时改写器原样返回，intentQuestion 等于原问题，不影响单轮行为。
@@ -3703,7 +3729,7 @@ app.post("/api/ask", async (c) => {
   // 关系护栏问题源（R274 retrieval q22）：语言归一 normQuestion 也是 LLM 产物，
   // 可能把技术缩写（LCP）翻出「客户」等关系词——关系拒答只认用户原话（英文
   // 关系词由词典 q 侧英文同义直接覆盖原话）；代词追问仍用改写产物（R186）。
-  const relationQuestion = pronounFollowUp ? recallQuestion : question;
+  const relationQuestion = pronounFollowUp ? recallQuestion : askQuestion;
   // 财务/统计合计类问题走精确聚合（与周报/月报同一 financeStats 口径），
   // 绝不让 LLM 对被 LIMIT 截断的召回结果心算合计（R107 P1-2）。
   // 财务口径澄清追问（R130 P2-1）：上一轮是精确合计时，「包括报销的差旅费
@@ -3712,7 +3738,7 @@ app.post("/api/ask", async (c) => {
   // R290 P2（audit-r289 §8）：「退款算收入还是支出的冲减」是本产品自己的记账
   // 口径，由代码确定性作答（LLM 曾答「退款算收入」，与实际入账口径相反）。
   if (!metaQuestion) {
-    const caliber = financeCaliberAnswer(question);
+    const caliber = financeCaliberAnswer(askQuestion);
     if (caliber) return c.json({ answer: caliber, references: [], notes: [], finance_caliber: true });
   }
   const clarifyTerms = financeClarifyTerms(intentBase, lastAssistant);
@@ -4527,6 +4553,13 @@ app.post("/api/ask", async (c) => {
   // 三者互不依赖（都只吃 recallQuestion），此处并行启动；枚举路由命中时多花
   // 一次小模型调用，换 LLM 生成主路径的串行等待时间。
   let terms = extractAskTerms(recallQuestion, history);
+  // 确定性预言机召回（R322 B）：候选值已剥掉，但属性词（字母/数字/开头/结尾…）仍会进入关键词与语义查询，
+  // 「第 2 位是字母吗」与「第 2 位是数字吗」会召到不同笔记（生产实测 bisect T1/F1）。同一话题的所有变体统一只用
+  // 稳定话题词召回，召回集就与候选值、属性词无关。
+  const probeTerms = deterministicRecall ? probeRecallTerms(recallQuestion) : [];
+  if (probeTerms.length > 0) terms = probeTerms.slice(0, 6);
+  else if (deterministicRecall) terms = terms.slice(0, 6);
+  const semQuery = probeTerms.length > 0 ? probeTerms.join(" ") : recallQuestion;
   // R270 单字长尾（audit-r269 P1-1 q11：裸问「潮」0 召回）：整问剥掉标点/语气词
   // 后只剩 1-2 个 CJK 字时，该短词直接作为 LIKE 关键词——单字主题是语义向量
   // 的固有弱区，子串精确匹配才召得回
@@ -4539,7 +4572,7 @@ app.post("/api/ask", async (c) => {
   // call and keyword SQL (R172/R294 归因：sem 串行贡献 150-400ms)
   const semTiming: SemanticRecallTiming = { embed: 0, scan: 0 };
   const tSem = Date.now();
-  const semHitsPromise = semanticRecall(c.env, userId, recallQuestion, 10, undefined, semTiming, false).then((h) => {
+  const semHitsPromise = semanticRecall(c.env, userId, semQuery, 10, undefined, semTiming, false).then((h) => {
     askMarks.push(["sem", Date.now() - tSem], ["embed", semTiming.embed], ["scan", semTiming.scan]);
     return h;
   });
@@ -4549,14 +4582,16 @@ app.post("/api/ask", async (c) => {
   // 提取失败对待，沿用朴素分词
   const tKwExtStart = Date.now();
   const kwExtPromise: Promise<string[]> | null =
-    needsCjkKeywordExtraction(terms) || needsBilingualKeywordExtraction(recallQuestion)
+    !deterministicRecall && (needsCjkKeywordExtraction(terms) || needsBilingualKeywordExtraction(recallQuestion))
       ? Promise.race([
           extractAskKeywords(c.env, recallQuestion),
           new Promise<string[]>((resolve) => setTimeout(() => resolve([]), ASK_KWEXT_BUDGET_MS)),
         ]).catch(() => [] as string[])
       : null;
   const tRoute = Date.now();
-  const enumRoute = await resolveAskEnumIntent(c.env, intentQuestion, metaQuestion ? question : recallQuestion);
+  const enumRoute: AskEnumRoute = deterministicRecall
+    ? { topic: null, list: false, extreme: null }
+    : await resolveAskEnumIntent(c.env, intentQuestion, metaQuestion ? question : recallQuestion);
   askMarks.push(["route", Date.now() - tRoute]);
   if (enumRoute.extreme) return answerExtreme(enumRoute.extreme);
   const enumTopic = enumRoute.topic;
@@ -4698,8 +4733,8 @@ app.post("/api/ask", async (c) => {
   // 抖动）：原始问题的关键词并入召回词集，改写只能增补、不能搞丢。
   // 归一化后同样并入原问句关键词：用户笔记若本就用英文记录，原文词才 LIKE 得中
   // 预言机形态下并入的原问句同样剥掉候选值（R320 B1 的「候选值不进召回」对这条并入路径也成立）。
-  if ((history.length > 0 || normQuestion) && recallQuestion !== question) {
-    for (const t of extractAskTerms(oracleProbe ? stripOpaqueTokens(question) : question, [])) {
+  if ((history.length > 0 || normQuestion) && recallQuestion !== question && probeTerms.length === 0) {
+    for (const t of extractAskTerms(askQuestion, [])) {
       if (!terms.includes(t) && terms.length < 10) terms.push(t);
     }
   }
@@ -4801,7 +4836,7 @@ app.post("/api/ask", async (c) => {
   //（其本身有独立的最近笔记回落设计）。
   if (notes.length === 0 && outOfRange.length > 0 && timeRange && !metaQuestion) {
     const { answer, references } = buildTimeWindowNoAnswerResponse(timeRange, outOfRange);
-    const twHint = await sensitiveNoRecallHint(c.env, userId, terms, question);
+    const twHint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
     const oorById = new Map(outOfRange.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, oorById.get(r.note_id)!))
@@ -4950,7 +4985,7 @@ app.post("/api/ask", async (c) => {
       suggestions = topicHits.length > 0 ? topicHits : [];
     }
     const { answer, references, held } = buildNoAnswerResponse(suggestions);
-    const zeroHint = await sensitiveNoRecallHint(c.env, userId, terms, question);
+    const zeroHint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
@@ -5012,7 +5047,7 @@ app.post("/api/ask", async (c) => {
     if (missingRel) {
       const relSuggestions = notes.filter((n) => !n.is_sensitive).slice(0, 3);
       const { answer, references, held } = buildNoAnswerResponse(relSuggestions, "not_in_notes", missingRel);
-      const relHint = await sensitiveNoRecallHint(c.env, userId, terms, question);
+      const relHint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
       const relById = new Map(relSuggestions.map((n) => [n.id, n]));
       const refNotes = await Promise.all(references.map((r) => noteToJsonDecrypted(c.env, relById.get(r.note_id)!)));
       return c.json({
@@ -5212,7 +5247,7 @@ app.post("/api/ask", async (c) => {
         { role: "user", content: `问题：${question}` },
       ],
     });
-    if (retry && !isRefusalAnswer(retry)) {
+    if (retry && !isRefusalAnswer(retry) && !isDegenerateAnswer(retry) && !isQuestionEchoAnswer(retry, question)) {
       console.log("ask: refusal retry recovered an answer");
       answer2 = retry;
     }
@@ -5578,7 +5613,7 @@ app.post("/api/ask", async (c) => {
         ? "not_in_notes"
         : "no_recall";
     const { answer: noAnswer, references, held } = buildNoAnswerResponse(suggestions, mode);
-    const hint = await sensitiveNoRecallHint(c.env, userId, terms, question);
+    const hint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
     const refNotes = await Promise.all(
       references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
