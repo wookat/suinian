@@ -153,6 +153,13 @@ description: How to run browser UI / accessibility / cache-identity tests agains
 - Responsive copy tests: in DevTools device-toolbar ⋮ → Add device type → Mobile (no touch), keep the requested width/height and use real mouse selection + Ctrl+C. Default Mobile mode may turn drag into scrolling, so verify both visible selection and clipboard contents. This does not prove native touch long-press copy.
 - Ask acceptance: test consecutive questions first when multi-turn behavior matters, then use 清空对话 before independent retries of unexpected retrieval/oracle answers. Preserve both outcomes and reference IDs; history can affect retrieval, citation shape, and inherited time constraints.
 
+## Credential-answer guard setup and recall diagnostics
+- The quick-input `!` prefix skips normal triage but does not bypass credential regex pre-flagging. For an authorized QA note only, use 更多操作 → 取消敏感标记 to exercise Ask's answer guard instead of sensitive-note exclusion.
+- A pending asynchronous sensitive re-judgment can re-mark a manually unflagged note sensitive. If a previously cited note suddenly yields zero recall, refresh the timeline and inspect its mask before diagnosing an answer-guard regression. Keep the no-recall evidence; after the pending judgment finishes, unflag again only with authorization and record the time. Do not repeatedly override an unexplained recurring flag.
+- Seed wording matters for lexical recall: a vague question about 那句话 may not match a note titled 读书摘抄. Retain the original failed expectation and use a specific note keyword as a separate diagnostic question; a passing rephrase is not a retroactive pass.
+- A benign answer with one citation does not prove a secret note was included in that request's model-context recall set. Distinguish normal benign-output coverage from mixed-recall withholding coverage.
+- For transient disclosure tests, install a read-only MutationObserver before Enter, capture distinct assistant-container text states (for example `.flex.justify-start`), and pair them with immediate/final screenshots. Keep citation cards folded during observation so deliberate original-card expansion is not misclassified as answer disclosure.
+
 ## Devin Secrets Needed
 - `CLOUDFLARE_GLOBAL_API_TOKEN` (D1 HTTP query API for read-only residual/orphan checks)
 - QA accounts themselves are self-registered (no secret needed)
