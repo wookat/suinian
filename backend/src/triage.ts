@@ -1,6 +1,6 @@
 import type { Category, Env, TriageResult } from "./types";
 import { chatComplete } from "./ai";
-import { closeAggregateOutlet, normalizedGuardedLeak, secretLabelValueLine, directGuardLines, opaqueTokensOf } from "./prompt-armor";
+import { closeAggregateOutlet, normalizedGuardedLeak, secretLabelValueLine, directGuardLines, opaqueTokensOf, sourceValueCandidates } from "./prompt-armor";
 
 const CATEGORIES: Category[] = ["idea", "todo", "collect", "data", "expense", "income", "transfer"];
 
@@ -413,6 +413,10 @@ export function detectSensitive(content: string): boolean {
   if (wifi && !PLACEHOLDER_VALUE_RE.test(wifi[1])) return true;
   if (hasEntryCode(content)) return true;
   if (SENSITIVE_KEY_LITERAL_RE.test(content)) return true;
+  // R328 B（decision-r328 §3）：R327 漏标 5 族的已见形态——URL query 钥匙形参数取值 / 口述汉字数字 + 记忆线索 /
+  // 暗语引号短语 + 暗语线索 / 藏头藏尾 + 明示提取。与出口层取值候选的强形态（credential）同源，弱形态（opaque）不进标注：
+  // 这是已见语料回归，不宣称族级封闭；漏标时由出口层兜底。
+  if (sourceValueCandidates([content]).some((c) => c.kind === "credential")) return true;
   // 数字类规则同时跑原文与归一化文本：空格/连字符/全角/分段变体不再绕过
   const normalized = normalizeDigitRuns(content);
   return [ID_CARD_RE, BANK_CARD_RE, PHONE_RE].some(

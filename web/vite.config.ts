@@ -47,10 +47,20 @@ ${body}
   }
 }
 
+/** 构建身份：`BUILD_SHA`（scripts/deploy-sync.sh 注入 git SHA）写进首页 `<meta name="build">`，与 Worker `/health` 的 `build` 同源核验。 */
+function buildIdentity(): Plugin {
+  const sha = process.env.BUILD_SHA ?? 'dev'
+  return {
+    name: 'suinian-build-identity',
+    transformIndexHtml: () => [{ tag: 'meta', attrs: { name: 'build', content: sha }, injectTo: 'head' }],
+  }
+}
+
 export default defineConfig({
   plugins: [
     react(),
     knownIssuesPage(),
+    buildIdentity(),
     tailwindcss(),
     VitePWA({
       registerType: 'prompt',

@@ -11,11 +11,12 @@ import {
   applyNotePatch,
   replaceNoteContent,
   applyTriage,
+  markNeedsRetriage,
   prepareTagsUpdate,
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, scopeGuardedByTopic, normalizedGuardedLeak, type BroadFoldReason } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, isSecretValueQuestion, unitTalksAboutSecret, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
 import { modelContextNoteText, reconcileDoneAnswer } from "./ask-context";
 import { recallSensitiveNotes, sensitiveOnlyAnswer, sensitiveUncitedLine, sensitiveAnswerLeak, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
@@ -591,7 +592,9 @@ app.get("/health", async (c) => {
   // ADMIN_TOKEN 持有者暴露；公开拨测只需 ok（R166 P2-5 同一口径）
   const auth = c.req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
   const isAdmin = !!c.env.ADMIN_TOKEN && auth === c.env.ADMIN_TOKEN;
-  return c.json(isAdmin ? { ok: true, enc_key: !!c.env.SUINIAN_ENC_KEY } : { ok: true });
+  // build：部署时注入的 git SHA（scripts/deploy-sync.sh），与 Pages 首页 `<meta name="build">` 同源核验 Worker / Pages 是否同一提交；仓库公开，SHA 不是内部信息。
+  const build = c.env.BUILD_SHA ? { build: c.env.BUILD_SHA } : {};
+  return c.json(isAdmin ? { ok: true, ...build, enc_key: !!c.env.SUINIAN_ENC_KEY } : { ok: true, ...build });
 });
 
 // ---- public auth: register / login (mounted before the bearer middleware) ----
@@ -1771,7 +1774,8 @@ async function createNote(
   // skipTriage (`!` inline command): store as-is under 想法 and mark the fields
   // manual so neither the sync triage nor the cron sweep re-sorts it. 敏感复判
   // 不在豁免之列（R126 P1-2）：skip 只跳过分类/打标，全部字段标 manual 后，
-  // 疑似含密的内容仍走 fail-closed 预检 + 模型复判，只裁决敏感与否。
+  // 内容仍走 fail-closed 预检 + 模型复判，只裁决敏感与否。R328 B（audit-r327 §5.2）：模型复判不再以
+  // 预检疑似命中为前提——预检没认出的口令（「解锁短语：橘子 台灯 秋天」）永不被裁决，就是这个旁路。
   const meta: NoteMeta | null =
     opts.skipTriage || manualTags.length > 0
       ? {
@@ -1841,6 +1845,8 @@ async function createNote(
     // （R234 P3-5 可观测性：异步重试耗尽落 NULL 时留下归因日志——超时/提供方
     // 失败与解析失败在 wrangler tail 里可直接区分，不再"归因未验证"）
     if (!triage) console.error(`triage incomplete note=${id} failure=${failure ?? "unknown"} retried=${retry}; awaiting cron/kick resweep`);
+    // `!` 笔记分类已落「想法」（非 NULL），cron 不会因 category IS NULL 复扫：模型不可用时显式标 needs_retriage 让敏感裁决必达。
+    if (!triage && opts.skipTriage) await markNeedsRetriage(c.env.DB, id);
     if (triage) await applyTriage(c.env, id, triage, content);
     return triage;
   };
@@ -1876,7 +1882,8 @@ async function createNote(
 
   let triage: TriageResult | null = null;
   if (opts.skipTriage) {
-    waitUntil(capped(runPipeline(false), PIPELINE_TIMEOUT_MS, `pipeline note=${id}`));
+    // `!` 路径与普通速记同一条分拣管线：applyTriage 按 manual_override 保留分类 / 标签 / 标题 / 截止，只落敏感位。
+    waitUntil(capped(runPipeline(true), PIPELINE_TIMEOUT_MS, `pipeline note=${id}`));
   } else if (opts.syncTriage) {
     // sync path (wechat reply) stays single-attempt: the reply must be fast
     triage = await runTriage(false);
@@ -5128,9 +5135,36 @@ app.post("/api/ask", async (c) => {
       });
     }
   }
-  // R326 A（decision-r326 §1）：R324 的「取值型问句才占位」分支已删除——安全边界不再看问句 / 内容形态，只看数据层
-  // 标注（is_sensitive）：标注为敏感的笔记在上面以占位行进候选，模型从未见过它的原文；未标注的笔记是普通笔记，
-  // 仅由 R322 行级替换与出口层归一化闭合做纵深防御。
+  // R328 A（decision-r328 §2）：恢复 R324 A 的取值型问句闸门，作为数据层标注之上的第二道（R326 删掉它后，漏标笔记只剩出口层
+  // 归一化比对，而编码 / 拼音首字母一类「出口层算不出真值」的载体无从比对——audit-r327 §3.1）。只看未标注笔记：标注为敏感的
+  // 已在上面以占位行进候选。在讲秘密（受守行 / 凭证标签 / 跨笔记指代 / R328 强形态取值候选）的笔记碰上取值型问句 ⇒ 不进生成，
+  // 直答恒为类别占位 + 角标；问题主题另有所指时这些笔记整条不进上下文，其余照常作答。
+  const valueProbe = !metaQuestion && !oracleProbe && isSecretValueQuestion(question, history.length > 0 ? historyText : "");
+  const valueWithheld = new Set<string>();
+  if (valueProbe) {
+    const guarded = notes.filter((n, i) => !n.is_sensitive && unitTalksAboutSecret(askModelUnits[i], askCrossGuarded));
+    const topicHits = guardedTopicHits(guarded, gateTopics, gateNoteText);
+    if (guarded.length > 0 && topicHits.length === 0 && guarded.length < notes.length) {
+      for (const n of guarded) valueWithheld.add(n.id);
+      console.log(`ask: credential value question — ${guarded.length} secret-talking note(s) withheld whole from model context (topic points elsewhere)`);
+    } else if (guarded.length > 0) {
+      const shown = [...(topicHits.length > 0 ? topicHits : guarded).slice(0, 3), ...sensRecall.rows];
+      const references = shown.map((n, i) => ({ index: i + 1, note_id: n.id }));
+      const refNotes = shown.map(askRefNoteJson);
+      const kinds = shown.filter((n) => !n.is_sensitive).flatMap((n) => directGuardLines(askGuardNoteUnit(n)).filter((g) => g.own).map((g) => g.kind));
+      const kind: DirectGuardKind = kinds.includes("credential") || kinds.length === 0 ? "credential" : kinds[0];
+      console.log(`ask: credential value question withheld before generation (${guarded.length} unmarked note(s) talk about a secret)`);
+      return c.json({
+        answer: `${DIRECT_GUARD_PLACEHOLDER[kind]}${references.map((r) => `[${r.index}]`).join("")}`,
+        references,
+        notes: refNotes,
+        value_withheld: true,
+        trust_tier: references.length === 1 ? "single_note_direct" : "aggregate",
+        verbatim_closed_spans: 0,
+        guard_finalized: true,
+      });
+    }
+  }
 
   // 关系限定词忠实性护栏（R256 P1-1，audit-r255）：问题里的人物关系限定词
   // （女朋友/妈妈/同事…含同义变体）在全部召回文本中零出现时，片段不可能
@@ -5195,7 +5229,7 @@ app.post("/api/ask", async (c) => {
         askModelWithheld += 1;
         return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${tags ? `, 标签:${tags}` : ""}) ${SENSITIVE_MODEL_LINE}`;
       }
-      const redacted = modelContextNoteText({ title: n.title, content: n.content, unit: askModelUnits[i], crossGuarded: askCrossGuarded, budget: perNoteBudget, withholdWhole: false });
+      const redacted = modelContextNoteText({ title: n.title, content: n.content, unit: askModelUnits[i], crossGuarded: askCrossGuarded, budget: perNoteBudget, withholdWhole: valueWithheld.has(n.id) });
       if (redacted.redacted > 0) askModelRedactedLines += redacted.redacted;
       if (redacted.withheld) askModelWithheld += 1;
       return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${redacted.text}`;
