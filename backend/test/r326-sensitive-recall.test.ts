@@ -677,6 +677,24 @@ describe("R326 §4 自动标注校准：宽判据补多语言 / 比喻式称谓�
     ];
     for (const t of no) expect(detectSensitive(t), t).toBe(false);
   });
+  it("无称谓接入码（R325 盲测 L01 / L04 / L08 / L09 族）：进门动作 + 混合码 / 写的是 + 高熵记号 / 口述拼接规则 → fail-closed", () => {
+    const yes = [
+      "周末计划：上午修车，下午去仓库（门上要按 gk8823 才开），晚上吃火锅。",
+      "今天下午去看了新房子，客厅朝南采光不错，物业说门禁改成了输入 tiema2048 才能进，中介让我们下周再去一次。",
+      "柜子上贴的那张纸上写的是 hxq7wm2n，别撕掉。",
+      "就用我小时候住的门牌 47 加上妈妈生日 0913，中间不加符号，这样两个都不会忘。",
+    ];
+    for (const t of yes) expect(detectSensitive(t), t).toBe(true);
+    const no = [
+      "终端里输入 python3 就能跑起来",
+      "按 F12 打开开发者工具，再按 Ctrl+Shift+I 也行",
+      "纸上写的是周三取件，别忘了",
+      "便签上写着 iphone15pro 的序列号要去查",
+      "把两段代码拼在一起就是完整脚本",
+      "买了 2 斤苹果 3 斤梨，一共 25 元",
+    ];
+    for (const t of no) expect(detectSensitive(t), t).toBe(false);
+  });
   it("标识符类不进定论规则：车牌 / 订单号 / 门禁卡编号 / 会议号（无密码）", () => {
     const no = ["新车牌 沪AD82917，停车登记要填。", "京东订单号 289471553201，退货要用。", "小区门禁卡编号 A2213，丢了去物业补办要报这个。", "周四例会 Zoom 会议号 8821 5570 33"];
     for (const t of no) expect(detectSensitive(t), t).toBe(false);

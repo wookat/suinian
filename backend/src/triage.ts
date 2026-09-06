@@ -1,6 +1,6 @@
 import type { Category, Env, TriageResult } from "./types";
 import { chatComplete } from "./ai";
-import { closeAggregateOutlet, normalizedGuardedLeak, secretLabelValueLine, directGuardLines } from "./prompt-armor";
+import { closeAggregateOutlet, normalizedGuardedLeak, secretLabelValueLine, directGuardLines, opaqueTokensOf } from "./prompt-armor";
 
 const CATEGORIES: Category[] = ["idea", "todo", "collect", "data", "expense", "income", "transfer"];
 
@@ -330,6 +330,25 @@ const WEAK_LABEL_ASSIGN_CJK_RE =
 const WIFI_STRING_RE =
   /(?:wi-?fi|wlan|无线网?络?|路由器)[^\n]{0,12}?(?:连的是|用的是|连上的是|换成了|改成了|改为|[:：是=])[^\S\n]*((?=[^\s，。；,;]*[A-Za-z])(?=[^\s，。；,;]*\d)[^\s，。；,;]{8,})/iu;
 
+// R326（decision-r326 §4.2）无称谓接入码，三种散文写法：
+//   进门动作 +「字母数字混合码」+ 结果连词：「门禁改成了输入 tiema2048 才能进」「门上要按 gk8823 才开」；
+//   码要求 ≥2 字母 + ≥2 数字（「输入 python3 就能跑」「按 F12 打开」不命中）；
+//   「写的是 / 写着 / 贴的是」+ 高熵记号（opaqueTokensOf 口径）：「柜子上贴的纸写的是 hxq7wm2n」（「写的是周三取件」不命中）；
+//   口述拼接规则：两个以上数字段 +「中间不加符号 / 连起来 / 拼在一起」：「门牌 47 加上妈妈生日 0913，中间不加符号」。
+const ENTRY_CODE_RE =
+  /(?:输入|键入|敲|按|拨)[^\S\n]*((?=[A-Za-z0-9]*[A-Za-z][A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d[A-Za-z0-9]*\d)[A-Za-z0-9]{5,32})[^\S\n]*(?:才|就|即可|方|能|可|开|进|解锁)/u;
+const WRITTEN_VALUE_RE = /(?:写的是|写着|写了|记的是|抄的是|贴的是)[^\S\n]*([^\s，。；,;]{5,})/u;
+const DIGIT_CONCAT_RULE_RE = /中间不加(?:符号|空格|任何)|不加符号|连起来(?:就是|写|记)|拼(?:起来|在一起|到一起)|接在后面|后面接上/u;
+const DIGIT_GROUP_RE = /(?<!\d)\d{2,}(?!\d)/g;
+
+function hasEntryCode(content: string): boolean {
+  const entry = content.match(ENTRY_CODE_RE);
+  if (entry && !PLACEHOLDER_VALUE_RE.test(entry[1])) return true;
+  const written = content.match(WRITTEN_VALUE_RE);
+  if (written && opaqueTokensOf(written[1]).length > 0) return true;
+  return DIGIT_CONCAT_RULE_RE.test(content) && (content.match(DIGIT_GROUP_RE) ?? []).length >= 2;
+}
+
 // 无主题词的凭证对（R194 P2-2）：「admin / Sx-R193-mx-77」这类斜杠/竖线分隔的
 // 账号-口令对没有「密码/token」等主题词，被剪藏外壳包裹时模型常判成 collect
 // 而明文回流。确定性收口：左侧是典型账号词（admin/root 等）或紧跟在「账号/
@@ -379,6 +398,7 @@ export function detectSensitive(content: string): boolean {
   if (weakCjk && !PLACEHOLDER_VALUE_RE.test(weakCjk[1])) return true;
   const wifi = content.match(WIFI_STRING_RE);
   if (wifi && !PLACEHOLDER_VALUE_RE.test(wifi[1])) return true;
+  if (hasEntryCode(content)) return true;
   if (SENSITIVE_KEY_LITERAL_RE.test(content)) return true;
   // 数字类规则同时跑原文与归一化文本：空格/连字符/全角/分段变体不再绕过
   const normalized = normalizeDigitRuns(content);

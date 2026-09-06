@@ -5112,11 +5112,11 @@ app.post("/api/ask", async (c) => {
     // 敏感标注的笔记本身就是受守条目（候选里只有占位行，形态判定看不见它），归因已由 sensitiveTermScore 按话题词完成，
     // 直接作为引用卡保留；普通候选仍按受守行 + 主题词归因收窄。
     const guarded = notes.filter((n, i) => !n.is_sensitive && askNoteGuarded(i));
-    if (guarded.length > 0) {
+    if (guarded.length > 0 || sensRecall.rows.length > 0) {
       const shown = oracleGateCards(guarded, sensRecall.rows, gateTopics, gateNoteText);
       const references = shown.map((n, i) => ({ index: i + 1, note_id: n.id }));
       const refNotes = shown.map(askRefNoteJson);
-      console.log(`ask: oracle-shaped question neutralized before generation (${guarded.length} guarded note(s))`);
+      console.log(`ask: oracle-shaped question neutralized before generation (${guarded.length} guarded, ${sensRecall.rows.length} sensitive note(s))`);
       return c.json({
         answer: `${ORACLE_NEUTRAL_NOTICE}${references.map((r) => `[${r.index}]`).join("")}`,
         references,
