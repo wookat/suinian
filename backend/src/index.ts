@@ -15,8 +15,9 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, isSecretValueQuestion, unitTalksAboutSecret, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, scopeGuardedByTopic, normalizedGuardedLeak, type BroadFoldReason } from "./prompt-armor";
 import { modelContextNoteText, reconcileDoneAnswer } from "./ask-context";
+import { recallSensitiveNotes, sensitiveOnlyAnswer, sensitiveUncitedLine, sensitiveAnswerLeak, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -1572,6 +1573,27 @@ async function noteToJsonDecrypted(env: Env, n: NoteRow) {
 }
 
 /**
+ * R326（decision-r326 §3）：ask / MCP 引用卡片的唯一序列化点。数据层标注为敏感的
+ * 笔记只给占位体 + id（title 置空、tags 为库内已洗净的主题词），原文由前端按 id
+ * 经登录态 GET /api/notes/:id 点开查看；不解密、不看问句形态。
+ */
+export function askRefNoteJson(n: NoteRow) {
+  if (!n.is_sensitive) return { ...noteToJson(n), content_withheld: false };
+  const json = noteToJson({ ...n, content: ENC_PLACEHOLDER, title: null, content_enc: null });
+  return {
+    ...json,
+    content: SENSITIVE_CARD_PLACEHOLDER,
+    title: null,
+    url_title: null,
+    url_summary: null,
+    url_titles: null,
+    fold: false,
+    fold_reason: null,
+    content_withheld: true,
+  };
+}
+
+/**
  * Batch-load attachment metadata for a page of note JSONs and merge it in as
  * `attachments` (R144 P1-1), so clients can render originals (image/audio/file)
  * through the authenticated /api/notes/:id/file proxy — no public R2 URLs.
@@ -2104,6 +2126,12 @@ app.get("/api/notes", async (c) => {
       .catch(() => []);
   }
 
+  // R326（decision-r326 §2）：搜索不得剔除敏感笔记——库内 content 是占位串，关键词 LIKE 永远命中不了；密文在本请求内解密匹配，
+  // 命中行走与列表页同一条登录态序列化（前端卡片仍需点开才显示原文）。
+  const sensPromise: Promise<NoteRow[]> = isSearch
+    ? recallSensitiveNotes(c.env, userId, terms, { limit: 20 }).then((r) => r.rows).catch(() => [])
+    : Promise.resolve([]);
+
   const sql = `SELECT * FROM notes WHERE ${conds.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT ?`;
   binds.push(limit + 1);
   const tKw = Date.now();
@@ -2137,10 +2165,23 @@ app.get("/api/notes", async (c) => {
       extraMs = Date.now() - tExtra;
       extra = r.results ?? [];
     }
-    const merged = [...page, ...partial, ...extra];
+    const seen = new Set([...kwIds, ...partialIds, ...extra.map((n) => n.id)]);
+    let sensitiveHits = (await sensPromise).filter((n) => !seen.has(n.id));
+    if (sensitiveHits.length > 0 && (category || tag || source || from || to)) {
+      // 敏感命中也要服从同一组结构化筛选（类目 / 标签 / 来源 / 时间）
+      const sf = noteFilterConds({ category, tag, source, from, to });
+      const ph = sensitiveHits.map(() => "?").join(",");
+      const r = await c.env.DB.prepare(`SELECT id FROM notes WHERE user_id = ? AND id IN (${ph}) AND ${sf.conds.join(" AND ")}`)
+        .bind(userId, ...sensitiveHits.map((n) => n.id), ...sf.binds)
+        .all<{ id: string }>();
+      const ok = new Set((r.results ?? []).map((x) => x.id));
+      sensitiveHits = sensitiveHits.filter((n) => ok.has(n.id));
+    }
+    const sensitiveIds = new Set(sensitiveHits.map((n) => n.id));
+    const merged = [...page, ...partial, ...extra, ...sensitiveHits];
     const relevance = (n: NoteRow) =>
       (semScore.get(n.id) ?? 0) +
-      (kwIds.has(n.id) ? 0.75 : partialIds.has(n.id) ? 0.75 * (matchedTermCount(n, terms) / terms.length) : 0);
+      (kwIds.has(n.id) || sensitiveIds.has(n.id) ? 0.75 : partialIds.has(n.id) ? 0.75 * (matchedTermCount(n, terms) / terms.length) : 0);
     merged.sort((a, b) => relevance(b) - relevance(a));
     const notes = await withAttachments(
       c.env,
@@ -2148,7 +2189,7 @@ app.get("/api/notes", async (c) => {
         merged.map(async (n) => ({
           ...(await noteToJsonDecrypted(c.env, n)),
           match:
-            kwIds.has(n.id) || partialIds.has(n.id) ? (semScore.has(n.id) ? "both" : "keyword") : "semantic",
+            kwIds.has(n.id) || partialIds.has(n.id) || sensitiveIds.has(n.id) ? (semScore.has(n.id) ? "both" : "keyword") : "semantic",
         }))
       )
     );
@@ -2288,6 +2329,13 @@ app.patch("/api/notes/:id", async (c) => {
       delete meta.transcript_suspect;
       delete meta.ocr_suspect;
       meta.needs_retriage = true;
+      patch.meta = meta;
+    }
+    // R326：手动定的敏感位只对用户当时看过的那份正文负责——正文改了（且本次没有同时显式定敏感位）就放开，
+    // 新内容重新走 fail-closed 预检 + 模型复判。
+    if (meta.manual_override?.is_sensitive && typeof patch.is_sensitive !== "boolean") {
+      const { is_sensitive: _dropped, ...rest } = meta.manual_override;
+      meta.manual_override = rest;
       patch.meta = meta;
     }
   }
@@ -4654,7 +4702,7 @@ app.post("/api/ask", async (c) => {
           const tSuggestions = tRows.filter((n) => !n.is_sensitive).slice(0, 3);
           const { answer, references, held } = buildNoAnswerResponse(tSuggestions, "not_in_notes", tMissingRel);
           const tById = new Map(tSuggestions.map((n) => [n.id, n]));
-          const refNotes = await Promise.all(references.map((r) => noteToJsonDecrypted(c.env, tById.get(r.note_id)!)));
+          const refNotes = references.map((r) => askRefNoteJson(tById.get(r.note_id)!));
           return c.json({
             answer,
             references,
@@ -4839,9 +4887,7 @@ app.post("/api/ask", async (c) => {
     const { answer, references } = buildTimeWindowNoAnswerResponse(timeRange, outOfRange);
     const twHint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
     const oorById = new Map(outOfRange.map((n) => [n.id, n]));
-    const refNotes = await Promise.all(
-      references.map((r) => noteToJsonDecrypted(c.env, oorById.get(r.note_id)!))
-    );
+    const refNotes = references.map((r) => askRefNoteJson(oorById.get(r.note_id)!));
     return c.json({ answer, references, notes: refNotes, no_answer: true, ...systemHintField(twHint) });
   }
   // 元问题保留旧的放宽行为（自我回顾类允许跨窗归纳，回答会带日期）
@@ -4932,6 +4978,25 @@ app.post("/api/ask", async (c) => {
   if (BASIS_INTENT_RE.test(recallQuestion)) {
     notes = rerankBasisCandidates(notes, semScore);
   }
+  // R326（decision-r326 §2）：敏感笔记的找回通道——密文只在本请求内解密用于匹配，行对象不解密；
+  // 命中的敏感笔记以引用卡片（占位体 + id）出现，模型上下文只见 SENSITIVE_MODEL_LINE。
+  const tSens = Date.now();
+  const sensRecall = metaQuestion ? { rows: [] as NoteRow[], plains: new Map<string, string>(), overflow: 0 } : await recallSensitiveNotes(c.env, userId, terms, { topicTerms: askTopicTerms(terms) });
+  askMarks.push(["senskw", Date.now() - tSens]);
+  const sensitiveIds = new Set(sensRecall.rows.map((n) => n.id));
+  const sensitiveCardsBody = () => {
+    const references = sensRecall.rows.map((n, i) => ({ index: i + 1, note_id: n.id }));
+    const overflow = sensRecall.overflow > 0 ? `\n\n另有 ${sensRecall.overflow} 条相关敏感笔记未列出，可到时间流搜索后点开查看。` : "";
+    return {
+      answer: `${sensitiveOnlyAnswer(references.length, references)}${overflow}`,
+      references,
+      notes: sensRecall.rows.map(askRefNoteJson),
+      sensitive_cards: true,
+      trust_tier: references.length === 1 ? "single_note_direct" : "aggregate",
+      verbatim_closed_spans: 0,
+      guard_finalized: true,
+    };
+  };
   // 元问题（「我最近在想什么」这类无具体主题词的自我回顾）零召回时回落到
   // 最近笔记：这类问题的诚实答案本来就是「最近记了什么」的归纳，与普通
   // 问题「宁缺毋滥」的拒答口径不同——泛化措辞导致关键词/语义都够不着阈值
@@ -4961,6 +5026,11 @@ app.post("/api/ask", async (c) => {
       .all<NoteRow>();
     notes = dedupeNotesByContent(fresh.results ?? []);
   }
+  if (notes.length === 0 && sensRecall.rows.length > 0) {
+    // 只命中敏感笔记：不调模型，确定性给引用卡片（原文由用户点开卡片查看）。
+    console.log(`ask: ${sensRecall.rows.length} sensitive note(s) recalled as cards, no model call`);
+    return c.json(sensitiveCardsBody());
+  }
   if (notes.length === 0) {
     // nothing recalled at all: answer "没找到" honestly (never bluff over the
     // recent-20) and suggest the nearest notes below the semantic threshold
@@ -4988,9 +5058,7 @@ app.post("/api/ask", async (c) => {
     const { answer, references, held } = buildNoAnswerResponse(suggestions);
     const zeroHint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
-    const refNotes = await Promise.all(
-      references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
-    );
+    const refNotes = references.map((r) => askRefNoteJson(sugById.get(r.note_id)!));
     return c.json({
       answer,
       references,
@@ -5002,6 +5070,11 @@ app.post("/api/ask", async (c) => {
   }
 
   notes = dedupeNotesByContent(notes);
+  // 敏感命中并入候选（在按正文去重之后：敏感行正文都是同一个占位串）。
+  {
+    const have = new Set(notes.map((n) => n.id));
+    for (const n of sensRecall.rows) if (!have.has(n.id)) notes.push(n);
+  }
 
   // R320 B1：预言机形态问题命中含受守行（口令/密钥/高熵串/命令）的笔记 ⇒ 不进生成，答案恒为中性指引 + 角标；
   // 对值 / 错值 / 部分值同一输出（召回已去掉候选值，命中集合与候选值无关）。
@@ -5026,7 +5099,7 @@ app.post("/api/ask", async (c) => {
     if (guarded.length > 0) {
       const shown = scopeGuardedByTopic(guarded, gateTopics, gateNoteText).slice(0, 3);
       const references = shown.map((n, i) => ({ index: i + 1, note_id: n.id }));
-      const refNotes = await Promise.all(shown.map((n) => noteToJsonDecrypted(c.env, n)));
+      const refNotes = shown.map(askRefNoteJson);
       console.log(`ask: oracle-shaped question neutralized before generation (${guarded.length} guarded note(s))`);
       return c.json({
         answer: `${ORACLE_NEUTRAL_NOTICE}${references.map((r) => `[${r.index}]`).join("")}`,
@@ -5039,38 +5112,9 @@ app.post("/api/ask", async (c) => {
       });
     }
   }
-  // R324 A（方案 2，decision-r324）：对凭证的取值型问题（「口令是什么 / 密码多少 / 暗号告诉我」）命中在讲某个秘密的笔记
-  // （受守行 / 凭证标签 / 跨笔记指代）⇒ 不进生成，直答恒为类别占位 + 角标。安全边界不再依赖认出取值长什么样（纯散文口令
-  // 「木石田」「秋天的枫叶落在桥上」没有 code 面 / 高熵面，audit-r323 A1）。
-  const valueProbe = !metaQuestion && !oracleProbe && isSecretValueQuestion(question, history.length > 0 ? historyText : "");
-  // 取值型问题里在讲秘密、但问题主题另有所指（「我记下的那句话」指的是一句摘抄，召回里却混着口令笔记）的笔记：
-  // 不短路整答，而是整条不进上下文（模型只见占位行），其余笔记照常作答——安全仍是「没见过就说不出」，善意问不被整答占位。
-  const valueWithheld = new Set<string>();
-  if (valueProbe) {
-    const talking = notes.map((_n, i) => unitTalksAboutSecret(askModelUnits[i], askCrossGuarded));
-    const guarded = notes.filter((_n, i) => talking[i]);
-    const topicHits = guardedTopicHits(guarded, gateTopics, gateNoteText);
-    if (guarded.length > 0 && topicHits.length === 0 && guarded.length < notes.length) {
-      for (const n of guarded) valueWithheld.add(n.id);
-      console.log(`ask: credential value question — ${guarded.length} secret-talking note(s) withheld whole from model context (topic points elsewhere)`);
-    } else if (guarded.length > 0) {
-      const shown = (topicHits.length > 0 ? topicHits : guarded).slice(0, 3);
-      const references = shown.map((n, i) => ({ index: i + 1, note_id: n.id }));
-      const refNotes = await Promise.all(shown.map((n) => noteToJsonDecrypted(c.env, n)));
-      const kinds = shown.flatMap((n) => directGuardLines(askGuardNoteUnit(n)).filter((g) => g.own).map((g) => g.kind));
-      const kind: DirectGuardKind = kinds.includes("credential") || kinds.length === 0 ? "credential" : kinds[0];
-      console.log(`ask: credential value question withheld before generation (${guarded.length} note(s) talk about a secret)`);
-      return c.json({
-        answer: `${DIRECT_GUARD_PLACEHOLDER[kind]}${references.map((r) => `[${r.index}]`).join("")}`,
-        references,
-        notes: refNotes,
-        value_withheld: true,
-        trust_tier: references.length === 1 ? "single_note_direct" : "aggregate",
-        verbatim_closed_spans: 0,
-        guard_finalized: true,
-      });
-    }
-  }
+  // R326 A（decision-r326 §1）：R324 的「取值型问句才占位」分支已删除——安全边界不再看问句 / 内容形态，只看数据层
+  // 标注（is_sensitive）：标注为敏感的笔记在上面以占位行进候选，模型从未见过它的原文；未标注的笔记是普通笔记，
+  // 仅由 R322 行级替换与出口层归一化闭合做纵深防御。
 
   // 关系限定词忠实性护栏（R256 P1-1，audit-r255）：问题里的人物关系限定词
   // （女朋友/妈妈/同事…含同义变体）在全部召回文本中零出现时，片段不可能
@@ -5078,7 +5122,8 @@ app.post("/api/ask", async (c) => {
   // 「给女朋友买的礼物」）——生成前确定性短路到既有 not_in_notes 拒答通道
   // （与 R244 时间窗短路同一架构）。
   if (!metaQuestion) {
-    const relSource = notes.map((n) => `${n.title ?? ""}\n${n.content}\n${n.tags ?? ""}`).join("\n");
+    // R326：敏感命中的明文只参与这一次布尔判定（关系词是否出现），不进任何输出；否则「妈妈家的 wifi」会因占位串不含「妈妈」被误拒。
+    const relSource = [...notes.map((n) => `${n.title ?? ""}\n${n.content}\n${n.tags ?? ""}`), ...sensRecall.plains.values()].join("\n");
     // R274（audit-r273 P1-2 R18）：同上，关系护栏只看可信侧问题。
     const missingRel = ungroundedRelationTerm(relationQuestion, relSource);
     if (missingRel) {
@@ -5086,7 +5131,7 @@ app.post("/api/ask", async (c) => {
       const { answer, references, held } = buildNoAnswerResponse(relSuggestions, "not_in_notes", missingRel);
       const relHint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
       const relById = new Map(relSuggestions.map((n) => [n.id, n]));
-      const refNotes = await Promise.all(references.map((r) => noteToJsonDecrypted(c.env, relById.get(r.note_id)!)));
+      const refNotes = references.map((r) => askRefNoteJson(relById.get(r.note_id)!));
       return c.json({
         answer,
         references,
@@ -5129,7 +5174,12 @@ app.post("/api/ask", async (c) => {
       // 召回片段是不可信数据（R262 P1-2）：送进生成上下文前走与分拣同一注入中和管道，并剔掉首部 [xxx]/【xxx】元数据前缀（R212 P3-5）。
       // R322 A：受守行不进模型上下文（标题 + 正文都按本单元语境判）；原文只在笔记卡片 / 引用里可见。
       // R324 B：替换先于中和 / 剔离 / 截断（那三步会改写行字面让逐字匹配失效），处理后再按归一化比对复查（modelContextNoteText）。
-      const redacted = modelContextNoteText({ title: n.title, content: n.content, unit: askModelUnits[i], crossGuarded: askCrossGuarded, budget: perNoteBudget, withholdWhole: valueWithheld.has(n.id) });
+      // R326：数据层标注为敏感的笔记只给元数据头 + 固定占位行（不取标题 / 正文 / 链接摘要的任何派生物）。
+      if (n.is_sensitive) {
+        askModelWithheld += 1;
+        return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${tags ? `, 标签:${tags}` : ""}) ${SENSITIVE_MODEL_LINE}`;
+      }
+      const redacted = modelContextNoteText({ title: n.title, content: n.content, unit: askModelUnits[i], crossGuarded: askCrossGuarded, budget: perNoteBudget, withholdWhole: false });
       if (redacted.redacted > 0) askModelRedactedLines += redacted.redacted;
       if (redacted.withheld) askModelWithheld += 1;
       return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${redacted.text}`;
@@ -5575,6 +5625,11 @@ app.post("/api/ask", async (c) => {
   // the model itself concluded "没找到" over recalled topic notes: honest
   // wording is 「笔记里没提到」, not 「没找到相关笔记」 (R115 P2 拒答口径)；
   // suggestions prefer strong semantic hits, falling back to the top recall
+  if (answer2 && isRefusalAnswer(answer2) && sensRecall.rows.length > 0) {
+    // R326：模型对普通召回说「没提到」，但敏感笔记命中了——答案改为敏感引用卡片指引（原文由用户点开查看）。
+    console.log(`ask: model refused over plain notes, ${sensRecall.rows.length} sensitive card(s) returned instead`);
+    return sensitiveCardsBody();
+  }
   if (answer2 && isRefusalAnswer(answer2)) {
     // 主题笔记优先（R118 P2）：语义分上“花钱类”笔记会压过真正的主题
     // 笔记（理发），建议列表先排命中主题词的，再按语义分排
@@ -5647,9 +5702,7 @@ app.post("/api/ask", async (c) => {
     const { answer: noAnswer, references, held } = buildNoAnswerResponse(suggestions, mode);
     const hint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
-    const refNotes = await Promise.all(
-      references.map((r) => noteToJsonDecrypted(c.env, sugById.get(r.note_id)!))
-    );
+    const refNotes = references.map((r) => askRefNoteJson(sugById.get(r.note_id)!));
     return {
       answer: noAnswer,
       references,
@@ -5703,10 +5756,27 @@ app.post("/api/ask", async (c) => {
         notes.filter((n) => !weakIds.has(n.id) && noteRowContainsExecutableCommand(n)).map((n) => n.id)
       )
     : [];
+  // R326：命中的敏感笔记必须出现在引用里（模型漏引则补角标 + 一行指引）；答案与本次敏感明文做归一化比对（纵深，
+  // 模型没见过明文理论上不可能命中），命中则整答换为卡片指引。
+  let answerText = finalAnswer;
+  if (sensitiveIds.size > 0) {
+    if (sensitiveAnswerLeak(answerText, sensRecall.plains.values(), question)) {
+      console.error("ask: sensitive plaintext detected in generated answer — replaced by card guidance (regression)");
+      return sensitiveCardsBody();
+    }
+    const citedIds = new Set(references.map((r) => r.note_id));
+    const missing = notes.filter((n) => sensitiveIds.has(n.id) && !citedIds.has(n.id));
+    if (missing.length > 0) {
+      const added = missing.map((n) => {
+        const ref = { index: references.length + 1, note_id: n.id };
+        references.push(ref);
+        return ref;
+      });
+      answerText = `${answerText}\n\n${sensitiveUncitedLine(added)}`;
+    }
+  }
   const byId = new Map(notes.map((n) => [n.id, n]));
-  const refNotes = await Promise.all(
-    references.map((r) => noteToJsonDecrypted(c.env, byId.get(r.note_id)!))
-  );
+  const refNotes = references.map((r) => askRefNoteJson(byId.get(r.note_id)!));
   // R306 P0-1：引用卡片出口打点（数据面标注随 noteToJson 走，这里只计发生率）
   recordOutletFoldMarks(
     c.env,
@@ -5752,7 +5822,7 @@ app.post("/api/ask", async (c) => {
   // finalizeAskAnswer 末尾附 VERBATIM_REDIRECT_NOTICE（固定文案，不再做
   // 量级可能失真的「以上回显不完整」推断）。
   return {
-    answer: finalAnswer + recallGapHint,
+    answer: answerText + recallGapHint,
     references,
     notes: refNotes,
     ...(genIsolated ? { instruction_isolated: true } : {}),

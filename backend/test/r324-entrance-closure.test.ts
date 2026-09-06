@@ -34,7 +34,7 @@ import {
 import { modelContextNoteText, reconcileDoneAnswer } from "../src/ask-context";
 import { askGuardNoteUnit } from "../src/index";
 import { closeOwnGuardedTitle } from "../src/triage";
-import { guardAskNotes, closeMcpAskAnswer, MCP_GUARDED_PLACEHOLDER, MCP_SENSITIVE_PLACEHOLDER, MCP_GUARDED_NOTICE, buildMcpServer } from "../src/mcp";
+import { guardAskNotes, closeMcpAskAnswer, MCP_GUARDED_PLACEHOLDER, MCP_SENSITIVE_PLACEHOLDER, MCP_SENSITIVE_ASK_PLACEHOLDER, MCP_GUARDED_NOTICE, buildMcpServer } from "../src/mcp";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ALL as BLIND, Q as ORACLE_Q, type R323Carrier } from "../scripts/qa-r323/blind-carriers";
@@ -305,7 +305,9 @@ describe("R324 C：MCP ask / 分拣 title / SSE done 旁路闭合", () => {
     const body = JSON.parse(text) as { answer: string; notes: Array<{ content: string; guarded: boolean; guard_kind?: string }>; guarded_notice?: string };
     expect(body.guarded_notice).toBe(MCP_GUARDED_NOTICE);
     expect(body.notes[0]).toMatchObject({ content: MCP_GUARDED_PLACEHOLDER, guarded: true, guard_kind: "credential" });
-    expect(body.notes[1]).toMatchObject({ content: MCP_SENSITIVE_PLACEHOLDER, guarded: true, guard_kind: "sensitive" });
+    // R326：敏感条目只给占位体 + id，占位体自带「引导用户在 App 里点开」指引
+    expect(body.notes[1]).toMatchObject({ content: MCP_SENSITIVE_ASK_PLACEHOLDER, guarded: true, guard_kind: "sensitive", title: null, tags: [] });
+    expect(body.notes[1].content).not.toBe(MCP_SENSITIVE_PLACEHOLDER);
     expect(body.notes[2]).toMatchObject({ content: "今天想到一个点子", guarded: false });
   });
 

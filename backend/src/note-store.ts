@@ -366,6 +366,11 @@ export async function applyTriage(
   if (meta?.manual_override?.is_sensitive && row.is_sensitive && !triage.is_sensitive) {
     triage = { ...triage, is_sensitive: true };
   }
+  // R326（decision-r326 §5）：用户显式「取消敏感标记」后，同一份内容的模型复判不得静默重新标敏——标注是唯一安全开关，
+  // 用户对自己已看过的内容做出的判断优于模型；正文被重新编辑时 PATCH 会清掉这个覆盖位，新内容照常 fail-closed。
+  if (meta?.manual_override?.is_sensitive && !row.is_sensitive && triage.is_sensitive) {
+    triage = { ...triage, is_sensitive: false };
+  }
   // 存疑转写禁强副作用（R218 P2-2，audit-r217 §3）：transcript_suspect 的语音
   // 内容本身不可信（噪音幻听可被纠错成看似正常的中文），分拣结果不得凭空产生
   // 待办与账目——todo 降级 idea、todo_due/amount/merchant 置空。用户编辑核对

@@ -41,7 +41,7 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
-import { downloadNoteFile, refetchLink, retryMedia } from "@/lib/api"
+import { downloadNoteFile, getNote, patchNote, refetchLink, retryMedia } from "@/lib/api"
 import { NoteAudio, NoteImage, isAudioAttachment, isImageAttachment } from "@/components/note-media"
 import { CopyGuardTextarea, ExecGuard, MaybeCopyGuard, type CopyGuardLevel } from "@/components/exec-guard"
 import { COPY_CONFIRM } from "@/lib/copy-confirm"
@@ -330,8 +330,8 @@ export function NoteCard({
   onTagClick,
   onEdit,
   onDelete,
-  onToggleSensitive,
-  sensitivePending = false,
+  onToggleSensitive: onToggleSensitiveProp,
+  sensitivePending: sensitivePendingProp = false,
   categoryFilterActive = false,
   selectable = false,
   selected = false,
@@ -419,6 +419,54 @@ export function NoteCard({
       // keep the current failed state; the user can retry again
     } finally {
       setRefetching(false)
+    }
+  }
+
+  // R326：问答/MCP 引用卡里的敏感笔记只带占位体（content_withheld），点开时才按 id 经登录态取回原文；
+  // 时间流/搜索列表的敏感卡本就带解密后的原文，直接揭开遮罩。
+  const [revealing, setRevealing] = useState(false)
+  const [revealError, setRevealError] = useState<string | null>(null)
+  // 取消 / 标记敏感的入口在所有卡片上都在（问答引用卡 / 线索 / 洞察）：宿主没接管时卡片自己 PATCH 并替换本地副本
+  const [selfSensitivePending, setSelfSensitivePending] = useState(false)
+  const sensitivePending = onToggleSensitiveProp ? sensitivePendingProp : selfSensitivePending
+  // 回收站里的笔记不能改标记（PATCH 对已删除行 404）；敏感卡即便宿主没给编辑 / 删除也要有菜单，否则「取消敏感标记」无入口
+  const inTrash = "deleted_at" in note && (note as { deleted_at?: string | null }).deleted_at != null
+  const canToggleSensitive = !inTrash && (onToggleSensitiveProp != null || onEdit != null || onDelete != null || sensitive)
+  const onToggleSensitive =
+    onToggleSensitiveProp ??
+    (async (n: Note) => {
+      if (selfSensitivePending) return
+      setSelfSensitivePending(true)
+      try {
+        const fresh = await patchNote(n.id, { is_sensitive: n.is_sensitive === 1 ? 0 : 1 })
+        setLocalNote({ ...fresh, content_withheld: false })
+        setRevealed(false)
+      } catch {
+        // keep the current copy; the user can retry from the menu
+      } finally {
+        setSelfSensitivePending(false)
+      }
+    })
+  async function revealSensitive() {
+    if (revealing) return
+    if (!note.content_withheld) {
+      setRevealed(true)
+      return
+    }
+    setRevealing(true)
+    setRevealError(null)
+    try {
+      const fresh = await getNote(note.id)
+      if (!fresh) {
+        setRevealError("这条笔记已不存在或已删除")
+        return
+      }
+      setLocalNote({ ...fresh, content_withheld: false })
+      setRevealed(true)
+    } catch (e) {
+      setRevealError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRevealing(false)
     }
   }
 
@@ -607,7 +655,7 @@ export function NoteCard({
             <SourceIcon className="size-3" />
           </span>
           <time>{formatTime(note.created_at)}</time>
-          {(onEdit || onDelete) && (
+          {(onEdit || onDelete || canToggleSensitive) && (
             <div className="relative" ref={menuRef}>
               <button
                 onClick={() => setMenuOpen((o) => !o)}
@@ -637,24 +685,24 @@ export function NoteCard({
                     {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
                     {copied ? "已复制" : "复制内容"}
                   </button>
-                  {onToggleSensitive && (
-                    <button
-                      onClick={() => {
-                        setMenuOpen(false)
-                        onToggleSensitive(note)
-                      }}
-                      disabled={sensitivePending}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent disabled:opacity-60"
-                    >
-                      {sensitivePending ? (
-                        <Loader2 className="size-3.5 animate-spin" />
-                      ) : sensitive ? (
-                        <ShieldOff className="size-3.5" />
-                      ) : (
-                        <ShieldAlert className="size-3.5" />
-                      )}
-                      {sensitivePending ? "更新中…" : sensitive ? "取消敏感标记" : "标记为敏感"}
-                    </button>
+                  {canToggleSensitive && (
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false)
+                      void onToggleSensitive(note)
+                    }}
+                    disabled={sensitivePending}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent disabled:opacity-60"
+                  >
+                    {sensitivePending ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : sensitive ? (
+                      <ShieldOff className="size-3.5" />
+                    ) : (
+                      <ShieldAlert className="size-3.5" />
+                    )}
+                    {sensitivePending ? "更新中…" : sensitive ? "取消敏感标记" : "标记为敏感"}
+                  </button>
                   )}
                   {onDelete && (
                     <button
@@ -871,9 +919,11 @@ export function NoteCard({
           <button
             onClick={(e) => {
               e.stopPropagation()
-              setRevealed(true)
+              void revealSensitive()
             }}
-            className="flex min-h-7 min-w-0 flex-1 flex-wrap items-center gap-2 rounded-lg text-left"
+            disabled={revealing}
+            aria-busy={revealing || undefined}
+            className="flex min-h-7 min-w-0 flex-1 flex-wrap items-center gap-2 rounded-lg text-left disabled:opacity-70"
           >
             {/* 遮罩圆点不进可访问名（R262 P3-1，audit-r261：aria-label 与可见文本
                 不一致命中 label-content-name-mismatch）：去掉 aria-label，让可见
@@ -882,12 +932,15 @@ export function NoteCard({
               ••••••••••••
             </span>
             <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border bg-secondary px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
-              <Eye className="size-3" /> 敏感内容，点击查看
+              {revealing ? <Loader2 className="size-3 animate-spin" /> : <Eye className="size-3" />}
+              {revealing ? "取回原文中…" : "敏感内容，点击查看"}
             </span>
             <span className="w-full text-xs leading-relaxed text-muted-foreground">
-              {sensitiveRejudging
-                ? "疑似密码/凭据类信息，已先加密保护，AI 复判中；若复判为普通内容会自动恢复明文展示"
-                : "检测到密码/凭据类信息，已自动加密保护，不进入问答与搜索；若属误判，可在右上角菜单「取消敏感标记」"}
+              {revealError
+                ? `取回原文失败：${revealError}，点击重试`
+                : sensitiveRejudging
+                  ? "疑似密码/凭据类信息，已先加密保护，AI 复判中；若复判为普通内容会自动恢复明文展示"
+                  : "已加密保护：搜索仍能搜到、问答仍会引用这张卡片，但 AI 只拿到占位符，原文只在你点开时显示；若属误判，可在右上角菜单「取消敏感标记」"}
             </span>
           </button>
         ) : execFlagged ? (

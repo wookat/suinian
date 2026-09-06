@@ -174,8 +174,13 @@ export async function getNotes(
 
 export async function getNote(id: string): Promise<Note | null> {
   if (loadSettings().useMock) return mockGetNote(id)
-  const res = await getNotes({ limit: 30 })
-  return res.notes.find((n) => n.id === id) ?? null
+  try {
+    const res = await realFetch<{ note: Record<string, unknown> }>(`/api/notes/${encodeURIComponent(id)}`)
+    return res.note ? normalizeNote(res.note) : null
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null
+    throw e
+  }
 }
 
 export async function createNote(payload: CreateNotePayload): Promise<Note> {

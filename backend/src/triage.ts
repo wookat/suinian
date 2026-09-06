@@ -254,9 +254,14 @@ export function buildTriagePrompt(
   - 「零食 8(小卖部)」→ expense，amount=8（括号备注不影响正常支出记账）
 - tags: 1-3 个中文短标签数组（宁少勿多，纯词即可，不要 # 前缀）。标签必须是内容的主题词，用能概括这条内容的具体场景词（如打车→「交通」、午饭→「餐饮」、买咖啡→「咖啡」），不要一律套「购物」这类宽泛词。内容开头的方括号前缀标记（如「[QA-123]」「[P0]」「【草稿】」）和序号（「1.」）是元数据记号，不是主题：既不能整个照抄进标签，也不能把括号里的词抽出来当标签${tagHint}
 - title: 一句话短标题（<=20字），同样要忽略开头的方括号前缀/序号，不要抄进标题。判例：「[P0] 修复登录超时」→ title="修复登录超时"，tags 不含 "P0"；「[QA-TEST] 周五交报告」→ title="周五交报告"，tags 不含 "QA-TEST"、"QA"、"TEST"
-- is_sensitive: 是否含真实机密 (boolean)。仅当内容中出现真实可用的机密「具体值」时才为 true：密码/口令/密钥/API key/token 的具体值、完整身份证号、银行卡号、手机号+姓名组合、账号+密码组合、完整车牌号（车牌是可定位到个人的标识，按敏感处理，如「车牌号沪A12345」→ true）。以下情况必须为 false：技术文档/教程/笔记只是讨论密码、token、密钥等概念而未出现具体秘密值；代码片段中的变量名/占位符（如 <token>、your-api-key、xxx）；普通长文、文件内容中的 ID/哈希/版本号等非机密长字符串。判例：
+- is_sensitive: 是否记录了一个「知道即可进入 / 登录 / 支付 / 开锁 / 通过验证」的真实取值 (boolean)。判断只看「这个值能不能当钥匙用」，与用什么称谓、有没有称谓、哪种语言、是散文还是口述、数字是阿拉伯还是中文无关：密码/口令/暗号/咒语/门码/门禁码/取件码/柜子的数/Wi-Fi 串/PIN/密钥/API key/token/私钥的具体值（含「按 X 才能进」「贴的纸上写的是 X」「现在用的是 X 这一串」「木石田」这类无称谓 / 比喻 / 口述写法）、完整身份证号、完整银行卡号、账号+密码组合、本人手机号+姓名组合。以下是「指代事物的标识符」而不是钥匙，必须为 false：车牌号、订单号/快递单号、会议号（无入会密码）、门禁卡/会员卡/工牌的编号、证件后四位、商家/师傅等公开联系电话、地址、价格、日期；技术文档/教程/笔记只是讨论密码、token、密钥等概念而未出现具体秘密值；代码片段中的变量名/占位符（如 <token>、your-api-key、xxx）；普通长文、文件内容中的 ID/哈希/版本号等非机密长字符串。判例：
   - 「服务器 root 密码是 P@ssw0rd123」→ true（出现密码具体值）
   - 「OpenAI key: sk-abc123def456…」→ true（出现密钥具体值）
+  - 「楼下快递柜那串数换成了九六二五」→ true（口述数字的开锁码，没有「密码」二字也是钥匙）
+  - 「la clave del wifi de casa es rosa-luna-88」→ true（外语口令）
+  - 「客户的车牌沪A12345，周五来提车」→ false（车牌是标识符，不是钥匙）
+  - 「门禁卡编号 0083216，补卡报给物业」→ false（卡的编号，不是门码）
+  - 「开锁师傅电话 138xxxx0000」→ false（他人的公开联系方式）
   - 「JWT token 的刷新机制：access token 短效期，refresh token 长效期」→ false（只讨论概念，无具体值）
   - 「配置 API key 的步骤：在控制台生成 key 后写入环境变量」→ false（教程，无具体值）
   - 「curl -H "Authorization: Bearer <token>" 调用接口」→ false（占位符不是真实机密）
@@ -321,8 +326,10 @@ const SENSITIVE_CRED_PAIR_RE =
 // as sensitive until the model has classified", never a final verdict. The
 // model remains the primary judge; applyTriage restores plaintext when it
 // confidently says non-sensitive.
+// R326（decision-r326 §4.2）：宽判据补多语言 / 比喻式口令称谓——它不是识别边界，只让模型复判前的窗口也 fail-closed；
+// 误标的代价已降为「多点一次卡片」（敏感笔记仍可召回）。
 const SENSITIVE_TOPIC_RE =
-  /密码|口令|密钥|秘钥|私钥|passw(?:or)?d|passphrase|(?<![$\w])pwd\b|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|\bsecret\b|\btoken\b|验证码|pin\s?码|身份证|银行卡|信用卡|储蓄卡|卡号|账号/i;
+  /密码|口令|暗号|咒语|门码|门禁码|开锁码|取件码|密钥|秘钥|私钥|passw(?:or)?d|passphrase|passcode|(?<![$\w])pwd\b|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|\bsecret\b|\btoken\b|验证码|pin\s?码|身份证|银行卡|信用卡|储蓄卡|卡号|账号|暗証|パスワード|밀번|비밀번호|Passwort|Kennwort|mot de passe|contraseña|\bclave\b|\bsenha\b|wachtwoord|пароль/i;
 
 /**
  * Write-time pre-check for notes awaiting AI triage (fail-closed): true when
