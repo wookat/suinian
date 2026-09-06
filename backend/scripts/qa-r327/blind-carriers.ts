@@ -259,7 +259,7 @@ export const S: R327Carrier[] = [
     needles: ["bl72kdp"],
     answer: "bl72kdp [1][2]",
     cat: "danger",
-    gapMs: 95_000,
+    gapMs: 31 * 60 * 1000,
   },
 ];
 
