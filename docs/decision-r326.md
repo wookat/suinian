@@ -220,6 +220,8 @@ recallSensitiveNotes(env, userId, terms, { topicTerms, limit }) →
 | 预言机双账号（A 真值 / B 错值，各 10 题 × T/F） | 终版：标注状态 A=B（`annotDiv=∅`）；`questions=20 same=20 diff(bits_upper)=0 survive=0`。上一版 `same=17 diff=3`，3 个 DIFF 题在 A 侧重问全部 A1≠A2（采样抖动，`value_dependent_upper=0`） | 工具输出 |
 | **找回矩阵** | 10 条被标敏感的普通笔记（BR01–BR10；其中 4 条为自动标注、6 条手动补标）：`ok=10 zero_recall=0 search_miss=0 raw_leak=0 open_fail=0`——每条 ask `references` 含该卡、`notes[]` 条目 `content_withheld=true` 且无明文、`GET /api/notes?q=` 命中、`GET /api/notes/:id` 见原文、MCP `notes[]` 给占位体 + `guard_kind=sensitive` | 工具输出 |
 | 取消标记 | BR07 `PATCH is_sensitive:false` ⇒ 200，卡片退出占位（`content_withheld=false`、正文原文）；等待异步复判窗口后仍 `is_sensitive=false`（不回升）。**注意**：取消后 ask 直答对「门禁卡编号 A2213」这类口令形态行仍由 R322 行级护栏给「点开卡片看原文」，不转写取值——这是保留的纵深防御（§1.4），卡片与搜索已可见原文 | 工具输出 |
+| 浏览器 E2E（testing agent，生产桌面 + 375×812） | 通过：敏感笔记默认遮罩；`?WiFi 密码是什么` SSE 2 个 delta / done / 6 个 DOM 状态均无秘密值，答案给引用卡 `[1]` → 点击高亮 → 点「敏感内容，点击查看」才见原文；搜索「WiFi」命中遮罩卡且列表无明文；375px 引用卡 / 展开 / 菜单可操作，`scrollWidth=innerWidth`；取消标记后 F5 仍不回升；/known-issues 为 R326 语义。**差异（非漏出）**：取消敏感标记后卡片退出敏感遮罩，但因数据面 `fold_reason=broad:credential`（R314 口令形态折叠，与 `is_sensitive` 独立）仍显示橙色「含口令/密钥类内容，已折叠」一键展开态，不是立即明文；敏感按钮无显式 `aria-label` 属性（R262 起用可见文案作 accessible name）。未测：后台复判竞态、真机、屏幕阅读器 | 录屏 + test-report |
+| D1 / R2 残留 | 22 个状态文件 26 个账号 `DELETE /api/auth/me` 200，旧 token 401；另有 4 个早期 oracle-pair 旧结构丢失 token 的 `[QA-R326]` 账号按 `account.ts` 级联顺序用 D1 直删（先核名前缀，不含 u_boss）；终态 `users` 仅 u_boss，全表 `non_boss_rows=0 orphans=0`，R2 `non_boss_objects=0`；`auth_rate_limits` 剩 1 条 `register:acct:[QA-R306]…` TTL 行为 R306 既有非本轮 | 工具输出 |
 
 ### 7.4 自动标注校准（前后对照）
 
@@ -241,5 +243,6 @@ recallSensitiveNotes(env, userId, terms, { topicTerms, limit }) →
 - 纯中文短语式秘密（无字母数字值形态）仍可被「以值试探」召回（§2.3 已记）；本轮未做该族的生产矩阵。
 - 预言机终版 `bits_upper=0` / 双账号 `diff=0` 各只跑了一轮，未做多次采样统计；上一版的 3 个 DIFF 已由同账号重问归为采样抖动（n=1）。
 - ask-eval 137/141 与 injection 「执行 2」均为 degraded 回退模型下的非确定性结果（复跑互不一致），injection benign 误伤 16/54 是 R325 已记录的既有值；三项都不宣称绿，DeepSeek 恢复后需复测。
+- 取消敏感标记后，R314 的口令形态折叠（`fold_reason=broad:credential`）仍独立生效：卡片退出遮罩但需再点一次「展开」。是否让用户显式取消也覆盖该折叠，待产品定开（本轮未改）。
 - §4.2-5 追加的标注层规则只覆盖 R325 已知形态；外语裸短语、无结构纯短语笔记在 degraded 模型下仍可能漏标（标注召回缺口），漏标则只剩 R322/R324 纵深护栏。
 - 模型主判的校准数字全部在 degraded（fallback 模型）下测得；DeepSeek 恢复后数字会变，需要复测。
