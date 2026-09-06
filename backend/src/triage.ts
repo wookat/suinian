@@ -1,6 +1,6 @@
 import type { Category, Env, TriageResult } from "./types";
 import { chatComplete } from "./ai";
-import { closeAggregateOutlet } from "./prompt-armor";
+import { closeAggregateOutlet, normalizedGuardedLeak, secretLabelValueLine, directGuardLines } from "./prompt-armor";
 
 const CATEGORIES: Category[] = ["idea", "todo", "collect", "data", "expense", "income", "transfer"];
 
@@ -1002,7 +1002,7 @@ function inlineLedgerRows(line: string): { data: string[][]; col: number; totalI
   if (segs.length === 0) return null;
   // 首段的「说明：」前缀拆成独立伪行（「周末出行开销：车费 46」→「周末出行开销」
   // +「车费 46」），交给既有的标题剥离逻辑；纯数字前缀（如时刻 8:30）不拆
-  const m = segs[0].match(/^([^：:]*[^\d：:][^：:]*)[：:]\s*(.+)$/);
+  const m = /[：:]/.test(segs[0]) ? segs[0].match(/^([^：:]*[^\d：:][^：:]*)[：:]\s*(.+)$/) : null;
   if (m) segs = [m[1].trim(), m[2].trim(), ...segs.slice(1)];
   // 短句多笔展开（R210 P2-2，audit-r209）：「午饭 20 咖啡 -5(退款)」这类无分隔符
   // 的多笔短句按「名目 金额」对切成伪行，与台账走同一结构识别口径
@@ -1386,7 +1386,7 @@ const INJECTION_IMPERATIVE_CJK_RES: RegExp[] = [
 // English: "ignore/disregard (all) previous/above instructions ..."（依赖词间空格，
 // 只在原文/折叠影子上匹配，不进去空白影子）
 const INJECTION_IMPERATIVE_EN_RES: RegExp[] = [
-  /[^.\n]*\b(?:ignore|disregard|forget)\s+(?:all\s+)?(?:your\s+)?(?:previous|prior|above|earlier)\s+(?:instructions?|prompts?|rules?)\b[^.\n]*\.?/gi,
+  /(?<![^.\n])[^.\n]*\b(?:ignore|disregard|forget)\s+(?:all\s+)?(?:your\s+)?(?:previous|prior|above|earlier)\s+(?:instructions?|prompts?|rules?)\b[^.\n]*\.?/gi,
 ];
 const INJECTION_IMPERATIVE_RES: RegExp[] = [...INJECTION_IMPERATIVE_CJK_RES, ...INJECTION_IMPERATIVE_EN_RES];
 export const INJECTION_NEUTRALIZED_MARK = "〔笔记中疑似注入指令已中和，仅作数据保存〕";
@@ -1508,7 +1508,7 @@ function injectionImperativeHit(text: string): boolean {
 // 中和（技术笔记「base64 解码后执行以下命令」这类无载荷说明文字不受影响）；
 // 独立 base64 串解码成可读文本后过同一祈使/结构标记检测，命中才移除。
 const DECODE_BAIT_RE =
-  /[^.。\n！!？?]*(?:decode|decrypt|解码|解密)[^.。\n！!？?]{0,40}(?:obey|follow|comply|execute|遵从|遵循|照做|服从|执行)[^.。\n！!？?]{0,80}[A-Za-z0-9+/]{16,}={0,2}[^.。\n！!？?]*[.。！!？?]?/gi;
+  /(?<![^.。\n！!？?])[^.。\n！!？?]*(?:decode|decrypt|解码|解密)[^.。\n！!？?]{0,40}(?:obey|follow|comply|execute|遵从|遵循|照做|服从|执行)[^.。\n！!？?]{0,80}[A-Za-z0-9+/]{16,}={0,2}[^.。\n！!？?]*[.。！!？?]?/gi;
 const BASE64_BLOB_RE = /[A-Za-z0-9+/]{24,}={0,2}/g;
 const ENCODED_PAYLOAD_MARK = "〔已移除疑似编码注入载荷〕";
 
@@ -1663,6 +1663,22 @@ export function dropForeignEchoTitle(content: string, result: TriageResult, corr
   return own ? result : { ...result, title: "" };
 }
 
+/**
+ * R324 C2（audit-r323 A3：分拣 title 抄写本条自身的纯散文凭证）：标题是列表 / 推送 / MCP / 搜索都会展示的概括面，
+ * 不得携带受守行的取值：标题归一后含本笔记受守行的任一取值（口令 / 散文口令 / 高熵串 / 长编号），或标题自身就是「标签 + 取值」句，
+ * 或标题与本笔记受守行逐字重合 ⇒ 弃用标题（空串走既有兑底：存 null，卡片自己展示正文）。
+ */
+export function closeOwnGuardedTitle(content: string, result: TriageResult): TriageResult {
+  const title = result.title ?? "";
+  if (!title) return result;
+  const unit = `\n${content}\n\n`;
+  if (secretLabelValueLine(title)) return { ...result, title: "" };
+  if (normalizedGuardedLeak(title, [unit]) !== null) return { ...result, title: "" };
+  const guarded = directGuardLines(unit).filter((g) => g.own).map((g) => g.line);
+  if (guarded.length > 0 && closeAggregateOutlet(title, guarded).count > 0) return { ...result, title: "" };
+  return result;
+}
+
 export async function triageNoteDetailed(
   content: string,
   env: Parameters<typeof chatComplete>[0],
@@ -1687,6 +1703,7 @@ export async function triageNoteDetailed(
   let result = (text && parseTriageJson(text, tzOffsetString(now, tz))) || null;
   if (result) result = applyTriageFixes(content, result, now, tz);
   if (result) result = dropForeignEchoTitle(content, result, corrections);
+  if (result) result = closeOwnGuardedTitle(content, result);
   // regex fallback: never let an obvious credential slip through as non-sensitive
   if (!result?.is_sensitive && detectSensitive(content)) {
     result = result

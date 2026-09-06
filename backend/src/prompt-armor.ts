@@ -2918,7 +2918,7 @@ const SPELLED_IPV4_RE =
 const PLAIN_IPV4_RE = /(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/;
 /** 远程脚本地址（域名/IP + 脚本路径）——不要求协议头。 */
 const REMOTE_SCRIPT_PATHY_RE =
-  /(?:[a-z0-9-]+\.)+[a-z]{2,24}(?::\d{2,5})?\/\S*\.(?:sh|bash|py|ps1|pl|rb|php|exe|bin|run)\b/i;
+  /(?<![a-z0-9-])(?:[a-z0-9-]+\.)+[a-z]{2,24}(?::\d{2,5})?\/\S*\.(?:sh|bash|py|ps1|pl|rb|php|exe|bin|run)\b/i;
 /** 脚本文件名（可执行载荷的落地形态）。 */
 const SCRIPT_FILE_NAME_RE = /\b[\w-]+\.(?:sh|bash|zsh|py|ps1|pl|rb|php|exe|bin|run|tgz|jar|msi|bat|cmd|vbs|hta)\b/i;
 const PORTY_RE =
@@ -3778,11 +3778,11 @@ const V4_OCTAL_INT_RE = /\b0[0-7]{9,11}\b/g;
 const V4_DEC_CTX_RE = /(?:(?<=:\/\/)|(?<=@))\d{8,10}\b|\b\d{8,10}(?=:\d{2,5}\b)/g;
 const V6_RE = /(?<![\w:.])\[?((?:[0-9a-f]{1,4}:){2,7}(?::|[0-9a-f]{1,4})(?::(?:\d{1,3}\.){3}\d{1,3})?|::(?:ffff:)?(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9a-f]{1,4}:){1,6}:(?:[0-9a-f]{1,4}:?)*)\]?(?![\w])/gi;
 const LOCAL_V6_RE = /^(?:::1?$|fe80:|fc|fd|::ffff:(?:127\.|10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.))/i;
-const DOMAINY_RE = /(?:xn--[a-z0-9-]+\.|[\p{L}\p{N}_-]+\.)+(?:xn--[a-z0-9-]+|[a-z]{2,24})(?::\d{2,5})?/giu;
+const DOMAINY_RE = /(?<![\p{L}\p{N}_-])(?:xn--[a-z0-9-]+\.|[\p{L}\p{N}_-]+\.)+(?:xn--[a-z0-9-]+|[a-z]{2,24})(?::\d{2,5})?/giu;
 /** 无空格书写系统字符与 ASCII 字母数字的粘连边界。 */
 const CJK_ASCII_BOUNDARY_RE =
   /(?<=[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Hangul}\p{sc=Thai}])(?=[A-Za-z0-9])|(?<=[A-Za-z0-9])(?=[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Hangul}\p{sc=Thai}])/gu;
-const USER_AT_HOST_RE = /[\w.+-]+@((?:[\w-]+\.)+[a-z]{2,24}|(?:\d{1,3}\.){3}\d{1,3})(?![\w.])/gi;
+const USER_AT_HOST_RE = /(?<![\w.+-])[\w.+-]+@((?:[\w-]+\.)+[a-z]{2,24}|(?:\d{1,3}\.){3}\d{1,3})(?![\w.])/gi;
 const HOSTPORT_RE = /(?<![\w.:-])((?:[\p{L}\p{N}_-]+\.)+[\p{L}\p{N}_-]{2,24}):(\d{2,5})(?![\w])/giu;
 
 /** 行尾「标签 + 去牙分隔（. 。 + ~ * 点/dot/Punkt/point…）」形态；捕获组 1 为标签。 */
@@ -3989,7 +3989,7 @@ export function isOperandlessFetchCitation(text: string): boolean {
   const n = normalizeCommandText(text);
   if (hasRemoteEndpointForm(n, { includeEmails: true, ignoreAllowlist: true })) return false;
   for (const s of [text, n]) {
-    if (/[$`\\~%]|<\(|<<|\s<\s*\S|\/[\w.-]+\/|(?<![\p{L}])\.{0,2}\/[\w.-]{2,}|(?:\d{1,3}\.){3}\d{1,3}|(?=[A-Za-z0-9+/=_-]*[0-9+/=])[A-Za-z0-9+/=_-]{16,}|\bclipboard\b|pbpaste|xclip|xsel|Get-Clipboard|\.txt\b|\.env\b|\.cfg\b|\.conf\b|\.json\b|\.ya?ml\b/iu.test(s))
+    if (/[$`\\~%]|<\(|<<|\s<\s*\S|\/[\w.-]+\/|(?<![\p{L}])\.{0,2}\/[\w.-]{2,}|(?:\d{1,3}\.){3}\d{1,3}|(?<![A-Za-z0-9+/=_-])(?=[A-Za-z0-9+/=_-]*[0-9+/=])[A-Za-z0-9+/=_-]{16,}|\bclipboard\b|pbpaste|xclip|xsel|Get-Clipboard|\.txt\b|\.env\b|\.cfg\b|\.conf\b|\.json\b|\.ya?ml\b/iu.test(s))
       return false;
     if (SCRIPT_FILE_NAME_RE.test(s) || REMOTE_SCRIPT_PATHY_RE.test(s)) return false;
     // 操作数以散文/编码形态在场（「主机名 relay3 拼上 .example.net」「解码摩尔斯…得到地址」）：
@@ -4109,7 +4109,7 @@ const BROAD_COMMAND_SHAPE_RE =
 const BROAD_SHELL_LINE_RE =
   /^(?:(?:\[[^\]\n]{1,24}\]|【[^】\n]{1,24}】|#[^\s#]{1,24})\s*){0,3}(?:[^\n\x21-\x7e]{0,24}[：:「『]\s*)?(?:[$#>]\s*)?(?:sudo\s+|doas\s+)?(?:[a-z][a-z0-9.+_-]*|[A-Z][a-z]+-[A-Z][A-Za-z]+)(?:\s+[^\s|;&<>`]+){0,12}?(?:\s-{1,2}[A-Za-z][\w-]*|\s*\|\s*[a-z:]|\s*&&\s*[a-z]|(?<![-=<])\s*>>?\s*[\w/.~$]|\$\(|`[a-z])/m;
 /** 壳函数 / fork bomb 形态（`:(){ :|:& };:`），或块设备路径（`mkfs.ext4 /dev/sdb1`）。 */
-const BROAD_SHELL_FUNC_RE = /\w*\(\)\s*\{[^}]*[|&;][^}]*\}|\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|mapper\/)[\w]*/;
+const BROAD_SHELL_FUNC_RE = /(?<!\w)\w*\(\)\s*\{[^}]*[|&;][^}]*\}|\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|mapper\/)[\w]*/;
 /** SQL 语句形态（DDL / DML 主干），不要求分号。 */
 const BROAD_SQL_LINE_RE =
   /\b(?:drop\s+(?:table|database|schema|index|view|user)|delete\s+from\s+\w|truncate\s+(?:table\s+)?\w|alter\s+(?:table|user|role|database)\s+\w|update\s+[\w.`"]+\s+set\s+\w|insert\s+into\s+\w|grant\s+\w+.*\s+on\s+|revoke\s+\w+.*\s+on\s+|create\s+(?:table|user|role|database|trigger|procedure|function)\s+|(?:^|[：:(;`]\s*)select\s+[\w*.,()\s`"]+\s+from\s+\w)/im;
@@ -4170,6 +4170,9 @@ export function broadFoldReason(content: string | null | undefined): BroadFoldRe
     if (commandShape) return "broad:fetch";
     // R314 P0-2：凭证形态先于命令形态（`PGPASSWORD=x psql …` / 连接串不再被归为「命令备忘」默认展示）。
     if (credentialValueTokens(text).length > 0) return "broad:credential";
+    // R324 A3：凭证称谓词 + 短值同现（「柜子暗号 木石田」「暗証は やまざくら7823」「the phrase … for the cabinet」）
+    // 也按凭证折叠——只决定卡片默认折叠 / 标题占位，安全边界仍是取值型问句门禁 + 受守行替换。
+    if (text.split(/\r?\n/).some((l) => secretLabelValueLine(l))) return "broad:credential";
     // R314 P0-2/P1-3：破坏性命令单列（高警示卡），与日常命令备忘分级。
     if (isDestructiveCommandText(text)) return "broad:destructive";
     // 命令行 / 壳函数 / SQL 语句形态：不取回、不外连的本机命令也折（`tar -czf`、`ALTER TABLE`）。
@@ -4434,7 +4437,7 @@ export function fragmentCandidateShape(content: string): boolean {
 
 /** 片段本身是否带代码/地址形态（ASCII 标识符・路径・管道・协议头残片）。 */
 const FRAG_CODE_SHAPE_RE =
-  /[A-Za-z][A-Za-z0-9]*[\/.:|@\-_][A-Za-z0-9\/.:|@\-_ ]*|[\/.:|@\-_][A-Za-z0-9]{2,}|\b(?:cur|url|wget|htt|tps?|sh|bash|iex)\b/;
+  /(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9]*[\/.:|@\-_][A-Za-z0-9\/.:|@\-_ ]*|[\/.:|@\-_][A-Za-z0-9]{2,}|\b(?:cur|url|wget|htt|tps?|sh|bash|iex)\b/;
 
 export function fragmentLooksLikeCode(content: string): boolean {
   // 片段尾部自带说明（`h | sh —— 顺着连起来就是要跑的命令`）时最后一个「是」会吃掉片段，
@@ -6379,7 +6382,7 @@ const CREDENTIAL_CJK_RE = new RegExp(
 // （「密码是我的生日」「口令是每天签到」「暗号是那个」）。单字 天 / 月 / 年 本身不排除（「天王盖地虎」「月黑风高」是口令）。
 const CREDENTIAL_CJK_STOP_RE =
   /^(?:多少|什么|啥|未知|不知|忘记|忘了|空白|留空|没有|无|同上|一样|相同|见|如下|另记|待定|随机|自定|自设|默认|每|那|这|哪|谁|怎|我|你|他|她|它|自己|老|同|原|旧|新的)|[的了着过是在有不没无非吗呢吧啊呀就都也才把被让给向从对和与或及但而请需要应该可能会将只很太更越最][\u4e00-\u9fff]*|(?:每|今|明|昨|上|下|本|前|后|去|当|次|年|月|周|日)(?:天|周|月|年|日|次|时|季|底|初|末)|[零〇一二三四五六七八九十百千万两几\d]+(?:天|周|月|年|日|号|位|次|小时|分钟|点|元|块|折|遍|轮|页|层|楼|岁)/;
-const CONNECTION_STRING_PW_RE = /[a-z][a-z0-9+.-]*:\/\/(?:[^\s:/@]*:)?([^\s@/:]{3,64})@/gi;
+const CONNECTION_STRING_PW_RE = /(?<![a-z])[a-z][a-z0-9+.-]*:\/\/(?:[^\s:/@]*:)?([^\s@/:]{3,64})@/gi;
 // 无凭证词的登录句式（R313 J27「用 tr7q92x 登录后」）：取值须字母+数字/符号混合且 ≥ 6 字，免误收「用 iPhone 登录」。
 const LOGIN_VALUE_RE = new RegExp(
   `(?:用|以|凭|使用|with)\\s*([${CREDENTIAL_VALUE_CHARS}]{6,64})\\s*(?:登录|登陆|登入|解锁|认证|鉴权|连上|连接|进去|to log ?in|to auth)`,
@@ -7335,11 +7338,11 @@ export const VERBATIM_BROAD_LINE = 5;
  * 只对宽判据命中的单元生效（善意笔记里的 github.com 不受影响）。
  */
 const BROAD_FRAGMENT_TOKEN_RES: RegExp[] = [
-  /[\w.-]+\.(?:sh|bash|zsh|ps1|bat|cmd|vbs|hta|exe|msi|run|py|js|rb|pl|php|jar|tgz|tar\.gz|zip|txt|sock|pem|key)\b/gi,
+  /(?<![\w.-])[\w.-]+\.(?:sh|bash|zsh|ps1|bat|cmd|vbs|hta|exe|msi|run|py|js|rb|pl|php|jar|tgz|tar\.gz|zip|txt|sock|pem|key)\b/gi,
   /(?:https?|ftp|hxxps?|ssh|scp|sftp|telnet|javascript|data):[^\s"'<>]{4,}/gi,
   /\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{2,5})?\b/g,
   /\b(?:[a-z0-9-]+\.){1,}[a-z]{2,24}(?::\d{2,5})?(?:\/[^\s"'<>]*)?/gi,
-  /[\w.+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/gi,
+  /(?<![\w.+-])[\w.+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/gi,
   /\bxn--[a-z0-9-]+/gi,
   /(?<![\w])[0-9a-f]{16,}(?![\w])/gi,
   /(?<![\w+/])[A-Za-z0-9+/_-]{16,}={0,2}(?![A-Za-z0-9+/])/g,
@@ -8155,7 +8158,9 @@ function guardedValueCandidates(units: string[]): Array<{ value: string; kind: D
       const n = g.line.normalize("NFKC");
       const push = (v: string): void => {
         const t = v.trim();
-        if (normalizeForLeakCompare(t).length >= 4) out.push({ value: t, kind: g.kind });
+        // 纯汉字取值（「木石田」）三字已足够特征；ASCII / 数字仍要 4 位。
+        const norm = normalizeForLeakCompare(t);
+        if (norm.length >= 4 || (norm.length === 3 && /^\p{Script=Han}+$/u.test(norm))) out.push({ value: t, kind: g.kind });
       };
       for (const t of opaqueTokensOf(n)) push(t);
       for (const m of n.matchAll(/[A-Za-z0-9#@!$%^&*_-]{4,}/g)) if (/\d/.test(m[0])) push(m[0]);
@@ -8168,6 +8173,11 @@ function guardedValueCandidates(units: string[]): Array<{ value: string; kind: D
         for (const c of cjkNum ?? []) push(c);
         const phrase = labelAsciiPhraseValue(n);
         if (phrase) push(phrase);
+        // R324 A3：纯散文凭证的取值面（「就用…这句话」「settled on the phrase …」「パスフレーズは…」）也是归一化比对的候选。
+        const designated = designatedPhraseValue(n);
+        if (designated) push(designated);
+        const cjkShort = labelCjkShortValue(n);
+        if (cjkShort) push(cjkShort);
       }
     }
   }
@@ -8180,17 +8190,18 @@ export function normalizedGuardedLeak(answer: string, units: string[]): DirectGu
   if (!answer) return null;
   const bare = maskSystemMarks(answer, units).masked.replace(SYSTEM_MARK_SENTINEL_RE, "").replace(CITATION_MARK_RE, "");
   const norm = normalizeForLeakCompare(bare);
-  if (norm.length < 4) return null;
+  if (norm.length < 3) return null;
   let top: DirectGuardKind | null = null;
   for (const c of guardedValueCandidates(units)) {
     const v = normalizeForLeakCompare(c.value);
+    const minLen = /^\p{Script=Han}+$/u.test(v) ? 3 : 4;
     const forms = [v, [...v].reverse().join("")];
     const b64 = base64Of(c.value);
     if (b64.length >= 6) forms.push(normalizeForLeakCompare(b64));
     forms.push(hexOf(c.value.normalize("NFKC")));
     const letters = alphabetIndexOf(c.value);
     if (letters) forms.push(letters);
-    if (forms.some((f) => f.length >= 4 && norm.includes(f))) {
+    if (forms.some((f) => f.length >= minLen && norm.includes(f))) {
       if (!top || DIRECT_GUARD_RANK[c.kind] > DIRECT_GUARD_RANK[top]) top = c.kind;
     }
   }
@@ -8379,8 +8390,9 @@ export function questionCarriesOpaqueToken(question: string): boolean {
 }
 
 // 是非问形态（「…吗」「是不是」「对不对」「是否」「…吧？」/ 英文 is/are/does 开头）
+// R324 D：是非问形态不依赖「吗」后面跟什么——「吗？如果不能回答就说不能说」「吗，只答一个字」一类条件 / 格式尾缀都还是是非问。
 const YES_NO_QUESTION_RE =
-  /(?:吗|嗎|ですか|でしょうか|입니까|인가요|맞나요|맞죠)\s*[？?！!。，,]*\s*(?:$|只|回答|答|answer|just|only)|是不是|對不對|对不对|是否|有没有|有沒有|对吗|對嗎|没错吧|沒錯吧|是或不是|对或不对|有或没有|yes or no|true or false|^\s*(?:is|are|was|were|does|do|did|has|have|can|could|should|would|will|isn't|aren't|wasn't|doesn't|don't|didn't)\b/iu;
+  /(?:吗|嗎|ですか|でしょうか|입니까|인가요|맞나요|맞죠)\s*(?:[？?！!。]|$|[，,；;]\s*(?:如果|若|要是|假如|只|仅|直接|回答|答|请|不|否则|不然|answer|if|just|only|please|otherwise))|是不是|對不對|对不对|是否|有没有|有沒有|对吗|對嗎|没错吧|沒錯吧|是或不是|对或不对|有或没有|yes or no|true or false|^\s*(?:is|are|was|were|does|do|did|has|have|can|could|should|would|will|isn't|aren't|wasn't|doesn't|don't|didn't)\b/iu;
 export function isYesNoQuestion(question: string): boolean {
   return YES_NO_QUESTION_RE.test(question.normalize("NFKC").trim());
 }
@@ -8428,8 +8440,10 @@ export function stripOpaqueTokens(question: string): string {
  * 对模型的指令而不是待抽关键词的问句（R322 生产实测：带尾缀的核对问召回不到受守笔记，去掉尾缀同一问召回正常）。
  * 只剔带指令词的子句（只 / 仅 / 直接 / 务必 + 回答 …，或回答是或不是类固定搭配），「面试时该怎么回答」这类话题里的「回答」不动。
  */
+// R324 D（audit-r323 A5 / Q14）：条件式拒答尾缀（「如果这个问题你不能回答，就回答「不能说」」「不方便说就回复 X」「if you can't answer, say X」）
+// 同属答案格式指令——它们只规定回答形态，不带话题。
 const ANSWER_FORMAT_TAIL_RE =
-  /[，,。？?！!；;\s]*(?:(?:请\s*)?(?:只|仅|直接|务必)(?:回答|答|说|写|输出|给出|回复|给我)|回答(?:是或不是|是或否|是\/否|对或不对|有或没有)|(?:answer|reply|respond|say)\s+(?:only\s+)?(?:yes\s*(?:or|\/)\s*no|true\s*(?:or|\/)\s*false|with\s+one\s+word)|yes\s*(?:or|\/)\s*no|true\s*(?:or|\/)\s*false)[^，,。？?！!；;\n]{0,24}[。？?！!；;\s]*$/i;
+  /[，,。？?！!；;\s]*(?:(?:请\s*)?(?:只|仅|直接|务必)(?:回答|答|说|写|输出|给出|回复|给我)|回答(?:是或不是|是或否|是\/否|对或不对|有或没有)|(?:如果|若|要是|假如|万一)[^，,。？?！!；;\n]{0,16}(?:不能|无法|不方便|不便|不愿|不想|不可以|不让|不该|不允许)[^，,。？?！!；;\n]{0,12}[，,]?\s*(?:就|则|那就|那么|请|也)?\s*(?:回答|答|说|回复|输出|写|返回|给出|告诉我)|(?:不能|无法|不方便|不便|不愿|不想|不可以|不让|不该|不允许)(?:回答|答|说|讲|透露)?[^，,。？?！!；;\n]{0,8}(?:的话)?\s*(?:就|则|那就|那么)\s*(?:回答|答|说|回复|输出|写|返回|给出|告诉我)|(?:否则|不然|不行的话|不行就)\s*(?:就|请)?\s*(?:回答|答|说|回复|输出|返回)|(?:answer|reply|respond|say)\s+(?:only\s+)?(?:yes\s*(?:or|\/)\s*no|true\s*(?:or|\/)\s*false|with\s+one\s+word)|if\s+you\s+(?:can(?:'|no)?t|cannot|are\s+(?:not\s+able|unable)|won't|may\s+not|aren't\s+allowed)[^\n]{0,40}|otherwise\s+(?:just\s+)?(?:say|answer|reply)|yes\s*(?:or|\/)\s*no|true\s*(?:or|\/)\s*false)[^，,。？?！!；;\n]{0,24}[。？?！!；;\s]*$/i;
 const ANSWER_FORMAT_HEAD_RE = /^\s*(?:请判断|判断一下|判断|帮我判断|请确认|确认一下)[：:，,\s]+/;
 export function stripAnswerFormatDirectives(question: string): string {
   const out = question.replace(ANSWER_FORMAT_TAIL_RE, "").replace(ANSWER_FORMAT_HEAD_RE, "").trim();
@@ -8498,7 +8512,16 @@ export function directGuardKindOfLine(line: string, ctx?: { unitLabeled?: boolea
 
 /** 凭证 / 门禁 / 卡号一类标签词（跨语言）。命中只说明这行在讲某个秘密，是否受守还要看取值面。 */
 const SECRET_LABEL_RE =
-  /密码|口令|暗号|密钥|秘钥|登录串|开门串|登录用的|门禁|取款码|取现|提款码|提取码|保险柜|保险箱|柜门|铁柜|工资卡|银行卡|社保卡|证件号|身份证号|卡号|对公账户|网银|passcodes?|passwords?|passphrases?|pass ?phrases?|key ?phrases?|safe ?(?:phrase|code|combination)|gate ?codes?|(?:cabinet|locker|vault|door|login|access|recovery|seed|secret|unlock|mnemonic) ?(?:phrase|code|word)s?|(?<![a-z])pins?(?![a-z])|kennwort|passwort|contraseña|пароль|パスワード|暗証番号|비밀번호|كلمة\s*(?:السر|المرور|الدخول)/iu;
+  /密码|口令|暗号|密钥|秘钥|登录串|开门串|登录用的|门禁|取款码|取现|提款码|提取码|保险柜|保险箱|柜门|铁柜|工资卡|银行卡|社保卡|证件号|身份证号|卡号|对公账户|网银|passcodes?|passwords?|passphrases?|pass ?phrases?|key ?phrases?|safe ?(?:phrase|code|combination)|gate ?codes?|(?:cabinet|locker|vault|door|login|access|recovery|seed|secret|unlock|mnemonic) ?(?:phrase|code|word)s?|(?<![a-z])pins?(?![a-z])|kennwort|passwort|contraseña|clave de acceso|mot de passe|code d'acc[eè]s|senha|parola d'ordine|hasło|şifre|parol[ae]?(?![a-z])|kata sandi|пароль|кодов\p{L}* слов\p{L}*|код доступа|パスワード|パスフレーズ|パスコード|暗証番号|暗証(?![番])|合言葉|합言葉|비밀번호|비번|암호(?!화)|كلمة\s*(?:السر|المرور|الدخول)/iu;
+/** 锁具 / 门禁对象词（跨语言）：与「phrase / 词 / 组合」一类弱标签同现时才把那行当成在讲某个秘密。 */
+const LOCK_OBJECT_RE = /柜|锁|门禁|保险|金[庫库]|机房|仓库|车库|金庫|金库|safe(?![a-z])|cabinet|locker|vault|gate|door|lock(?![a-z])|tresor|schrank|сейф|caja fuerte|coffre/iu;
+/** 弱标签：单独不算凭证标签（「a phrase I liked」），与锁具对象同行时算（「the phrase … for the study cabinet」）。 */
+const WEAK_SECRET_LABEL_RE = /\b(?:phrases?|combinations?|code ?words?|magic words?|Losung|Parole|фраза|frase)\b|那句话?|这句话?|几个字|那几个字|组合/iu;
+/** 行内是否有凭证标签（强标签，或弱标签 + 锁具对象同现）。 */
+export function secretLabelLine(text: string): boolean {
+  const n = text.normalize("NFKC");
+  return SECRET_LABEL_RE.test(n) || (WEAK_SECRET_LABEL_RE.test(n) && LOCK_OBJECT_RE.test(n));
+}
 /** 纯数字类一次性码 / 编号标签（只配数字取值）。 */
 const CODE_LABEL_RE =
   /交易码|验证码|授权码|激活码|校验码|动态码|安全码|序列号|[零一二两三四五六七八九十\d]+\s*位(?:的)?(?:数字?|码|号)|(?<![a-z])(?:cvv|cvc|otp)(?![a-z])/i;
@@ -8548,7 +8571,52 @@ const QUOTED_PHRASE_RE = /[「『“"][^」』”"\n]{2,24}[」』”"]/;
 const COMPOSE_HINT_RE =
   /首字|藏头|每句(?:最后|末)|行末|末字|连起来|拼起来|合起来|按顺序|分三行|分开记|分成|前半|后半|前四位|接着那组|倒过来念|换算表|按字母表|first letters?|last (?:word|digit|number)s?|in order|reversed|second half|first half/i;
 
-/** 行里是否有「取值面」：4+ 位数字 / 含数字的 ASCII 记号（≥3 字）/ 汉字数字连读 / 引号短语 / 取值引导 + 汉字短语。 */
+/**
+ * R324 A3（decision-r324，折叠优先级判据）：标签后紧接的短汉字 / 假名 / 谚文取值——「柜子暗号 木石田」「書斎の金庫の暗証は やまざくら7823 にした」。
+ * 只认「标签 → 可选系词 / 助词 / 冒号 → 2–12 字短值 → 句末 / 助词收尾」这一形态；短值以描述词起头（忘了 / 错误 / 要改 / 已过期…）不算。
+ * 纯汉字 2 字短值须带系词（「口令是 青岛」），无系词时须 ≥ 3 字（「暗号 木石田」）。
+ */
+const LABEL_CJK_SHORT_VALUE_RE = new RegExp(
+  `(?:${SECRET_LABEL_RE.source})(?:番号|号码)?(?<sep>\\s+|\\s*(?:は|が|を|の|는|은|이|가|를)\\s*|\\s*(?<lead>(?:是|叫|为|就是|设成|设为|定的是|改成|换成|[：:=])\\s*))(?<value>[\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}][\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}A-Za-z0-9]{1,11})\\s*(?:$|[，,。．！!？?；;、]|にした|にする|です|だ(?:よ|ね)?|にしました|로|으로|입니다|이다|예요|에요)`,
+  "u"
+);
+/** 短值以这些词起头时是在描述这个秘密（忘了 / 错误 / 该改 / 已过期 / 保密 / 我生日那几位…），不是取值。 */
+const CJK_SHORT_VALUE_STOP_RE =
+  /^(?:忘|错|不|没|未|别|勿|要|该|已|太|很|还|再|改|换|重|输|锁|过|失|保密|外传|设置|正确|一样|相同|同上|见|如|后面|下面|另|同|每|各|随|自|请|和|与|或|是|为|有|在|被|把|给|让|用|到|从|对|也|都|只|就|才|又|先|再|我|你|他|她|它|这|那|哪|什么|啥|谁|咱|某|大家|生日|手机|电话|身份证|忘れ|変え|同じ|わから|なし|不明|없|잊|바꾸|틀|同じ|まだ|もう)/u;
+/** 标签后紧接短值的取值（返回短值本身），无则 null。 */
+export function labelCjkShortValue(nfkc: string): string | null {
+  const m = LABEL_CJK_SHORT_VALUE_RE.exec(nfkc);
+  if (!m?.groups) return null;
+  const value = m.groups.value;
+  const lead = m.groups.lead ?? "";
+  if (CJK_SHORT_VALUE_STOP_RE.test(value)) return null;
+  // 短值本身带标签词（「银行卡密码或身份证号」）是在罗列秘密种类，不是取值。
+  if (SECRET_LABEL_RE.test(value)) return null;
+  if (/[A-Za-z0-9]/.test(value)) return value;
+  if (value.length >= 3) return value;
+  return lead.trim().length > 0 ? value : null;
+}
+/**
+ * R324 A3（折叠优先级判据）：「定下来就用 X 这句 / 这几个字」一类指定短语的散文（R323 C01「就用秋天的枫叶落在桥上这句」）——
+ * 无标签，但「选定动词 + 短语 + 这句 / 那句 / 这几个字」的形态就是在指定一个要记住的短语。只认这一形态，不认「值」。
+ */
+const PHRASE_DESIGNATION_RE =
+  /(?:就用|用的是|用了|定下来?(?:就)?用|定的是|定成|设成|设的是|改成|换成|选了|选的是|挑了|记的是|记成|定为)\s*(?<value>\p{Script=Han}[\p{Script=Han}A-Za-z0-9]{2,20}?)\s*(?:这句话?|那句话?|这几个字|那几个字|这串|那串|这词|这个词|作为|当)/u;
+/** 英文选定动词 + phrase / password / code 名词 + 2–5 词短语（"settled on the phrase silver otter lantern for …"）：短语到虚词为止。 */
+const EN_PHRASE_WORD_SRC = "(?!(?:for|and|to|of|with|in|on|at|as|that|which|so|but|the|a|an|is|was|it|my|our|your|his|her|their|because|since|then|when|if)\\b)[A-Za-z][A-Za-z'-]*";
+const EN_PHRASE_DESIGNATION_RE = new RegExp(
+  `\\b(?:settled on|chose|picked|decided on|went with|set|use|using|used|switched to|changed to|made)\\s+(?:the\\s+|a\\s+|my\\s+|our\\s+)?(?:new\\s+)?(?:pass ?phrase|password|passcode|phrase|code ?words?|combination|words)\\s+(?:is\\s+|to\\s+|as\\s+|of\\s+)?(?<value>${EN_PHRASE_WORD_SRC}(?:\\s+${EN_PHRASE_WORD_SRC}){1,4})`,
+  "iu"
+);
+export function designatedPhraseValue(nfkc: string): string | null {
+  const cjk = PHRASE_DESIGNATION_RE.exec(nfkc);
+  if (cjk?.groups && !CJK_SHORT_VALUE_STOP_RE.test(cjk.groups.value)) return cjk.groups.value;
+  const en = EN_PHRASE_DESIGNATION_RE.exec(nfkc);
+  if (en?.groups && !PHRASE_DESCRIPTIVE_RE.test(en.groups.value)) return en.groups.value;
+  return null;
+}
+
+/** 行里是否有「取值面」：4+ 位数字 / 含数字的 ASCII 记号（≥3 字）/ 汉字数字连读 / 引号短语 / 取值引导 + 汉字短语 / 标签紧接短值。 */
 function secretValueFace(t: string, strict = false): boolean {
   const n = t.normalize("NFKC").replace(UNIT_NUMBER_RE, " ");
   if (/\d{4,}/.test(n)) return true;
@@ -8560,6 +8628,7 @@ function secretValueFace(t: string, strict = false): boolean {
   const tail = strict || !label ? n : n.slice(label.index + label[0].length);
   if ((strict ? CJK_STRONG_VALUE_LEAD_RE : CJK_VALUE_LEAD_RE).test(tail)) return true;
   if (!strict && labelAsciiPhraseValue(n) !== null) return true;
+  if (!strict && labelCjkShortValue(t.normalize("NFKC")) !== null) return true;
   return false;
 }
 
@@ -8574,7 +8643,13 @@ export function secretLabelValueLine(line: string, unitLabeled = false): boolean
   const labeled = SECRET_LABEL_RE.test(t);
   if (CODE_LABEL_RE.test(t) && /(?<!\d)\d{4,11}(?!\d)/.test(t)) return true;
   if (lockMaterialListLine(t)) return true;
-  if (!labeled && !unitLabeled) return false;
+  if (designatedPhraseValue(t) !== null) return true;
+  if (!labeled && !unitLabeled) {
+    // 弱标签（phrase / 那句 / 组合）+ 锁具对象同行：按标签行看取值面（"the phrase silver otter lantern for the study cabinet"）
+    if (!secretLabelLine(t)) return false;
+    if (!CJK_LETTER_RE.test(t)) return /(?<!\d)\d{3,11}(?!\d)/.test(t.replace(UNIT_NUMBER_RE, " ")) || labelAsciiPhraseValue(t) !== null || secretValueFace(t);
+    return secretValueFace(t);
+  }
   if (labeled && !CJK_LETTER_RE.test(t)) {
     if (/(?<!\d)\d{3,11}(?!\d)/.test(t.replace(UNIT_NUMBER_RE, " "))) return true;
     return labelAsciiPhraseValue(t) !== null || secretValueFace(t);
@@ -8821,7 +8896,7 @@ export function redactGraphTriplesForModel(triples: readonly string[], units: re
  * 转写（加空格 / 逐字念 / 拆开 / 倒序 / 编码 / 翻译 / 拼音）——与 R320 的「带候选值 / 是非问」同归一类：命中受守行时整答换成同一条中性话术。
  */
 const ORACLE_PROBE_RE =
-  /几位|多少位|几个字|多少个字|多少字|多长|长度|位数|第\s*[一二三四五六七八九十\d]+\s*(?:位|个字|个字符|字|个)|首字|末字|尾字|首位|末位|开头|结尾|结束|最后一|第一个|前\s*[一二两三四五六七八九\d]+\s*(?:位|个|字)|后\s*[一二两三四五六七八九\d]+\s*(?:位|个|字)|大于|小于|介于|范围|区间|之间|以内|以上|以下|排在|包含|含有|带不带|有没有|是不是|对不对|只回答|只答|只说|回答是或|是或不是|对或不对|有或没有|排除|不是.{1,12}就是|二选一|哪一个|哪个是|大写|小写|字母|数字|奇数|偶数|之和|加起来|加空格|空格|逐字|逐个|一个字一个字|念出|念一遍|念给|读出|读一遍|拼读|拆开|拆分|分开|倒着|倒序|反过来|反转|颠倒|逆序|编码|base64|十六进制|hex|二进制|unicode|摩斯|摩尔斯|nato|翻译|译成|拼音|谐音|移位|凯撒|rot13|每个字符|每一位|每位|中间加|隔开|转写|变形|缩写|首字母|whether|is it|does it|how many|how long|length|first (?:char|letter|digit|word)|last (?:char|letter|digit|word)|starts? with|ends? with|begins? with|contain|spell|letter by letter|character by character|with spaces|spaced|reverse|encode|decode|translate|separated|yes or no|true or false|greater|less than|between|odd|even/iu;
+  /不能回答|无法回答|不方便回答|不便回答|不能说|不方便说|不便透露|不能透露|拒答|can(?:'|no)?t answer|cannot answer|unable to answer|不含|含不含|含有|含着|含了|带有|带着|包括|几位|多少位|几个字|多少个字|多少字|多长|长度|位数|第\s*[一二三四五六七八九十\d]+\s*(?:位|个字|个字符|字|个)|首字|末字|尾字|首位|末位|开头|结尾|结束|最后一|第一个|前\s*[一二两三四五六七八九\d]+\s*(?:位|个|字)|后\s*[一二两三四五六七八九\d]+\s*(?:位|个|字)|大于|小于|介于|范围|区间|之间|以内|以上|以下|排在|包含|含有|带不带|有没有|是不是|对不对|只回答|只答|只说|回答是或|是或不是|对或不对|有或没有|排除|不是.{1,12}就是|二选一|哪一个|哪个是|大写|小写|字母|数字|奇数|偶数|之和|加起来|加空格|空格|逐字|逐个|一个字一个字|念出|念一遍|念给|读出|读一遍|拼读|拆开|拆分|分开|倒着|倒序|反过来|反转|颠倒|逆序|编码|base64|十六进制|hex|二进制|unicode|摩斯|摩尔斯|nato|翻译|译成|拼音|谐音|移位|凯撒|rot13|每个字符|每一位|每位|中间加|隔开|转写|变形|缩写|首字母|whether|is it|does it|how many|how long|length|first (?:char|letter|digit|word)|last (?:char|letter|digit|word)|starts? with|ends? with|begins? with|contain|spell|letter by letter|character by character|with spaces|spaced|reverse|encode|decode|translate|separated|yes or no|true or false|greater|less than|between|odd|even/iu;
 /** 属性 / 转写试探要有「指向被守内容」的锚：凭证标签、编号标签，或「那串 / 那条 / 这条 / 记的 / 笔记里」一类指代。 */
 const ORACLE_ANCHOR_RE = /那串|那条|这条|那个|那组|那段|那句|记的|记着|记录|笔记|口令|密码|暗号|密钥|门禁|卡号|保险|柜|命令|编号|串|码/u;
 // 预言机锚用的凭证标签：SECRET_LABEL_RE / CODE_LABEL_RE（受守行判据，只认「标签 + 取值面」）之外，裸标签词（「对象存储 secret」
@@ -8858,9 +8933,66 @@ export function isDeterministicRecallProbe(question: string, historyText = ""): 
   if (probeShape && (ORACLE_ANCHOR_RE.test(q) || ORACLE_LABEL_RE.test(q))) return true;
   return historyText.length > 0 && probeShape && conversationAnchorsGuarded(historyText);
 }
+// R324 A（方案 2）：凭证取值标签——「值本身就是秘密」的标签词（口令 / 密码 / 暗号 / 密钥 / passphrase / PIN / 合言葉 …多语言），
+// 不含卡号 / 证件号一类「有值但常被善意问起」的标签（那些走 R320 的行级判据）。
+const CREDENTIAL_VALUE_LABEL_RE =
+  /密码|口令|暗号|密钥|秘钥|登录串|开门串|门禁码|门禁密码|取款码|提款码|提取码|开锁码|保险柜(?:的)?(?:码|密码|口令|组合)|passcodes?|passwords?|passphrases?|pass ?phrases?|key ?phrases?|safe ?(?:phrase|code|combination)|gate ?codes?|(?:cabinet|locker|vault|door|login|access|recovery|seed|secret|unlock|mnemonic) ?(?:phrase|code|word|combination)s?|(?<![a-z])pins?(?![a-z])|kennwort|passwort|contraseña|clave de acceso|mot de passe|code d'acc[eè]s|senha|parola d'ordine|hasło|şifre|parol[ae]?(?![a-z])|kata sandi|пароль|кодов\p{L}* слов\p{L}*|код доступа|パスワード|パスフレーズ|パスコード|暗証番号|暗証(?![番])|合言葉|합言葉|비밀번호|비번|암호(?!화)|كلمة\s*(?:السر|المرور|الدخول)/iu;
+/** 指代受守取值的代词（召回里有在讲秘密的笔记时，「那串 / 那几个字」指的就是它）。 */
+const VALUE_ANAPHORA_RE = /那串|这串|那组|这组|那几个字|这几个字|那句|这句|那个词|那一?串|that (?:string|phrase|code|word)|the (?:string|phrase)/iu;
+/** 取值型问法：问「是什么 / 是多少 / 告诉我 / 忘了 / 念一下 / what is / 教えて / 뭐야」一类要拿到值的话。 */
+const VALUE_ASK_RE =
+  /是什么|是啥|是多少|多少|是哪|哪个|哪一个|叫什么|什么|啥|几号|告诉我|说一下|说给我|说出|报一下|报给我|给我|发我|发一下|写出|写一下|列出|念|读一下|贴|原样|原文|复述|重复|提醒我|帮我想|想起|回忆|忘了|忘记|记不得|记不清|想不起|查一下|查查|看看|是\s*[？?]|逐字|逐位|逐个|每个字|每一?位|每个字符|第\s*[\d一二三四五六七八九十]+\s*(?:位|个|到)|拆|转写|改写|换成|翻译|译成|变换|编码|倒着|反过来|竖着|做成|映射|大写|拼音|笔画|\bwhat(?:'s|\s+is|\s+was|\s+are|\s+were)?\b|\bwhich\b|tell me|give me|show me|remind me|forgot|forgotten|recall|repeat|read (?:me|out|back)|何(?:です|だ|でしょう|ですか|だった)|なに|なん(?:です|だ)|教えて|忘れ|思い出|뭐|무엇|알려|잊었|기억|как(?:ой|ая|ое|ие)|скажи|напомни|забыл|\bist was\b|was ist|wie lautet|welche[rs]?\b|sag mir|erinner|vergessen|cu[áa]l\b|dime\b|olvid[ée]|quel(?:le)?\s+est|dis-moi|oubli[ée]/iu;
+/**
+ * R324 A（方案 2，decision-r324）：对凭证的**取值型**问题——不看笔记内容长什么样（纯散文口令「木石田」「秋天的枫叶落在桥上」
+ * 没有 code 面 / 高熵面），只看问法：问的是某个凭证的值，且召回里有在讲某个秘密的笔记（受守行 / 凭证标签 / 跨笔记指代），
+ * 直答一律走「占位 + 点开卡片」，不进生成。是非 / 属性形态另走预言机中和（isOracleProbeQuestion）。
+ */
+export function isSecretValueQuestion(question: string, historyText = ""): boolean {
+  const q = question.normalize("NFKC").trim();
+  if (!q) return false;
+  // 多轮里标签可能只在上一轮（「保险柜那串先念 1、3、5 位」→「再念 2、4、6 位」）：历史非空时锚从整段对话里找。
+  const labeled =
+    CREDENTIAL_VALUE_LABEL_RE.test(q) ||
+    ORACLE_LABEL_RE.test(q) ||
+    VALUE_ANAPHORA_RE.test(q) ||
+    WEAK_SECRET_LABEL_RE.test(q) ||
+    (historyText.length > 0 && (conversationAnchorsGuarded(historyText) || CREDENTIAL_VALUE_LABEL_RE.test(historyText.normalize("NFKC"))));
+  if (!labeled) return false;
+  // 「什么时候改的密码 / why did I change it」问的是时间 / 原因，不是取值：剥掉时间 / 原因问法后再判。
+  const qv = q.replace(NON_VALUE_ASK_RE, " ");
+  return VALUE_ASK_RE.test(qv) || questionRequestsVerbatim(q);
+}
+const NON_VALUE_ASK_RE =
+  /什么时候|啥时候|何时|几点|哪天|哪年|哪一天|为什么|为啥|多久|多长时间|when (?:did|was|do)|why\b|how (?:often|long)/giu;
+const SECRET_LABEL_ALL_RE = new RegExp(SECRET_LABEL_RE.source, "giu");
+/**
+ * 取值 / 预言机闸门的引用归因（R324 E1，audit-r323 U2「跳板机→财务」错引）：问题主题词剥掉凭证称谓词
+ * （口令 / 密码 / 暗号…对每条凭证笔记都命中）后，只保留命中剩余主题词（「财务系统」「跳板机」）的候选；
+ * 全不命中时保留全部候选——占位话术不变，只是引用卡不再把用户带到另一条凭据。
+ */
+export function scopeGuardedByTopic<T>(guarded: readonly T[], topics: readonly string[], textOf: (n: T) => string): T[] {
+  const specific = topics
+    .map((t) => t.normalize("NFKC").replace(SECRET_LABEL_ALL_RE, "").trim())
+    .filter((t) => t.length >= 2);
+  if (specific.length === 0) return [...guarded];
+  const hit = guarded.filter((n) => {
+    const hay = textOf(n).normalize("NFKC");
+    return specific.some((t) => hay.includes(t));
+  });
+  return hit.length > 0 ? hit : [...guarded];
+}
+
+/** 单元（标题 + 正文 + 链接摘要）是否在讲某个秘密：受守行、跨笔记指代受守行，或任一行带凭证标签。 */
+export function unitTalksAboutSecret(unit: string, crossGuarded?: ReadonlySet<string>): boolean {
+  if (directGuardLines(unit).length > 0) return true;
+  const lines = unit.split("\n");
+  if (crossGuarded && lines.some((l) => crossGuarded.has(l.trim()))) return true;
+  return lines.some((l) => secretLabelLine(l) || CREDENTIAL_VALUE_LABEL_RE.test(l.normalize("NFKC")) || ORACLE_LABEL_RE.test(l.normalize("NFKC")));
+}
+
 // 预言机问句的语法词（指向 / 核对 / 属性 / 转写 / 是非 / 答案格式）与通用虚词：剥掉后剩下的就是话题词（「跳板机口令」「对象存储 secret」）。
 const PROBE_GRAMMAR_RE =
-  /我想核对|帮我核对|核对一下|核对|我笔记里|笔记里|我记的|记的|那个|那串|那条|这条|那组|那段|那句|一共|几位|多少位|位数|长度|多长|几个字|多少个字|多少字|个字符|字符|个字|字母|数字|大写|小写|井号|符号|空格|顿号|前面|后面|开头|结尾|结束|最后|首字|末字|尾字|首位|末位|倒过来念|倒过来|念出来|念法|逐个|逐字|用中文|写出来|分成前后两半|中间用|隔开|每个|之间|加一个|按字母表|排在|之前|之后|大于|小于|超过|介于|范围|区间|以内|以上|以下|就是别的|就是|别的|也不是|不是|是不是|是否|对不对|有没有|是或不是|对或不对|有或没有|只回答|只答|只写|回答|包含|里面|里有|里|大概|那种|是什么|是几|是|的|那|这|吗|吧|呢|啊|把我|把|我|你|第[一二两三四五六七八九十\d]*|一位|一个|yes or no|true or false|\b(?:only|just|answer|reply|is|are|was|does|do|did|it|its|the|a|an|in|on|of|my|your|that|this|those|what|which|how|many|much|long|length|characters?|digits?|letters?|first|last|start|starts|end|ends|with|begin|begins|contain|contains|or|not|than|more|less|and|to)\b/giu;
+  /我想核对|帮我核对|核对一下|核对|我笔记里|笔记里|我记的|记的|那个|那串|那条|这条|那组|那段|那句|一共|几位|多少位|位数|长度|多长|几个字|多少个字|多少字|个字符|字符|个字|大写字母|小写字母|字母|数字|大写|小写|井号|下划线|星号|连字符|横线|短横|减号|加号|感叹号|叹号|问号|逗号|句号|冒号|分号|百分号|美元符|艾特|at符|斜杠|反斜杠|括号|引号|点号|小数点|特殊字符|特殊符号|标点符号|标点|汉字|中文|英文|拼音|符号|空格|顿号|不能回答|无法回答|不方便回答|不能说|不方便说|拒答|如果|要是|就回答|就说|就回复|则|否则|不然|不含|含有|含着|含了|含|带有|带着|带|包括|前面|后面|开头|结尾|结束|最后|首字|末字|尾字|首位|末位|倒过来念|倒过来|念出来|念法|逐个|逐字|用中文|写出来|分成前后两半|中间用|隔开|每个|之间|加一个|按字母表|排在|之前|之后|大于|小于|超过|介于|范围|区间|以内|以上|以下|就是别的|就是|别的|也不是|不是|是不是|是否|对不对|有没有|是或不是|对或不对|有或没有|只回答|只答|只写|回答|包含|里面|里有|里|大概|那种|是什么|是几|是|的|那|这|吗|吧|呢|啊|把我|把|我|你|第[一二两三四五六七八九十\d]*|一位|一个|yes or no|true or false|\b(?:only|just|answer|reply|is|are|was|does|do|did|it|its|the|a|an|in|on|of|my|your|that|this|those|what|which|how|many|much|long|length|characters?|digits?|letters?|first|last|start|starts|end|ends|with|begin|begins|contain|contains|or|not|than|more|less|and|to)\b/giu;
 /**
  * 预言机问的确定性召回词：对已剥掉候选值的问句再剥掉探问语法词，剩下的连续片段（≥ 2 字）就是话题词。
  * 不走 LLM 关键词抽取：同一串剥后问句永远得到同一组词，对/错候选召回同一批引用。

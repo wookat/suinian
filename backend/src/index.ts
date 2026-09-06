@@ -15,7 +15,8 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, type BroadFoldReason } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, isSecretValueQuestion, unitTalksAboutSecret, scopeGuardedByTopic, normalizedGuardedLeak, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
+import { modelContextNoteText, reconcileDoneAnswer } from "./ask-context";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -5016,10 +5017,14 @@ app.post("/api/ask", async (c) => {
     if (gt.redacted > 0) console.log(`ask: ${gt.redacted} graph triple(s) carrying guarded values dropped from model context`);
     graphTriples = gt.triples;
   }
+  // R324 E1：两道闸门的引用卡只留命中问题主题词（剥掉称谓词）的候选，避免「问财务口令引到跳板机」（audit-r323 U2）。
+  // 主题词本身若对得上任一候选笔记的受守取值（问句里夹带的候选值），不得参与归因——否则「引哪张卡」就是存在性 bit。
+  const gateTopics = askTopicTerms(terms).filter((t) => normalizedGuardedLeak(t, askModelUnits) === null);
+  const gateNoteText = (n: NoteRow): string => `${n.title ?? ""}\n${n.content}\n${n.tags ?? ""}`;
   if (oracleProbe) {
     const guarded = notes.filter((_n, i) => askNoteGuarded(i));
     if (guarded.length > 0) {
-      const shown = guarded.slice(0, 3);
+      const shown = scopeGuardedByTopic(guarded, gateTopics, gateNoteText).slice(0, 3);
       const references = shown.map((n, i) => ({ index: i + 1, note_id: n.id }));
       const refNotes = await Promise.all(shown.map((n) => noteToJsonDecrypted(c.env, n)));
       console.log(`ask: oracle-shaped question neutralized before generation (${guarded.length} guarded note(s))`);
@@ -5028,6 +5033,31 @@ app.post("/api/ask", async (c) => {
         references,
         notes: refNotes,
         oracle_neutral: true,
+        trust_tier: references.length === 1 ? "single_note_direct" : "aggregate",
+        verbatim_closed_spans: 0,
+        guard_finalized: true,
+      });
+    }
+  }
+  // R324 A（方案 2，decision-r324）：对凭证的取值型问题（「口令是什么 / 密码多少 / 暗号告诉我」）命中在讲某个秘密的笔记
+  // （受守行 / 凭证标签 / 跨笔记指代）⇒ 不进生成，直答恒为类别占位 + 角标。安全边界不再依赖认出取值长什么样（纯散文口令
+  // 「木石田」「秋天的枫叶落在桥上」没有 code 面 / 高熵面，audit-r323 A1）。
+  const valueProbe = !metaQuestion && !oracleProbe && isSecretValueQuestion(question, history.length > 0 ? historyText : "");
+  if (valueProbe) {
+    const talking = notes.map((_n, i) => unitTalksAboutSecret(askModelUnits[i], askCrossGuarded));
+    const guarded = notes.filter((_n, i) => talking[i]);
+    if (guarded.length > 0) {
+      const shown = scopeGuardedByTopic(guarded, gateTopics, gateNoteText).slice(0, 3);
+      const references = shown.map((n, i) => ({ index: i + 1, note_id: n.id }));
+      const refNotes = await Promise.all(shown.map((n) => noteToJsonDecrypted(c.env, n)));
+      const kinds = shown.flatMap((n) => directGuardLines(askGuardNoteUnit(n)).filter((g) => g.own).map((g) => g.kind));
+      const kind: DirectGuardKind = kinds.includes("credential") || kinds.length === 0 ? "credential" : kinds[0];
+      console.log(`ask: credential value question withheld before generation (${guarded.length} note(s) talk about a secret)`);
+      return c.json({
+        answer: `${DIRECT_GUARD_PLACEHOLDER[kind]}${references.map((r) => `[${r.index}]`).join("")}`,
+        references,
+        notes: refNotes,
+        value_withheld: true,
         trust_tier: references.length === 1 ? "single_note_direct" : "aggregate",
         verbatim_closed_spans: 0,
         guard_finalized: true,
@@ -5074,13 +5104,7 @@ app.post("/api/ask", async (c) => {
   let askModelRedactedLines = 0;
   const CONTEXT_TOTAL_BUDGET = 12000;
   const perNoteBudget = Math.max(500, Math.floor(CONTEXT_TOTAL_BUDGET / Math.max(notes.length, 1)));
-  // 预算内整句收尾：截断点回退到最近的句读/换行，不产出半句残片。
-  const clipAtSentence = (text: string, budget: number): string => {
-    if (text.length <= budget) return text;
-    const head = text.slice(0, budget);
-    const m = head.match(/^[\s\S]*[。！？!?；;\n]/);
-    return m && m[0].length >= budget * 0.6 ? m[0] : head;
-  };
+  let askModelWithheld = 0;
   const context = notes
     .map((n, i) => {
       const tags = (JSON.parse(n.tags || "[]") as string[]).join(",");
@@ -5095,18 +5119,16 @@ app.post("/api/ask", async (c) => {
       // 时间窗忠实性（R244 P2 F-1）：范围外片段在元数据头里显式打标，
       // 不再只靠模型自己比对日期
       const outTag = timeRange && !inEventTimeRange(n, timeRange) ? `, 不在${timeRange.phrase}范围内` : "";
-      // 正文开头的 [xxx]/【xxx】前缀标记是元数据（R212 P3-5）：送进生成上下文
-      // 前剔除，避免模型把它们复制进回答充当引文号（引文只认 [数字]）
-      // 召回片段是不可信数据（R262 P1-2，audit-r261 §P1-2）：送进生成上下文前
-      // 走与分拣同一注入中和管道（R216 定界仿冒 + 祈使注入改写）
-      const body = neutralizePromptInjection(n.content).replace(/^\s*(?:[[【][^\]】\n]{1,24}[\]】]\s*)+/, "");
+      // 召回片段是不可信数据（R262 P1-2）：送进生成上下文前走与分拣同一注入中和管道，并剔掉首部 [xxx]/【xxx】元数据前缀（R212 P3-5）。
       // R322 A：受守行不进模型上下文（标题 + 正文都按本单元语境判）；原文只在笔记卡片 / 引用里可见。
-      const redacted = redactGuardedLinesForModel(`${n.title ?? ""}\n${clipAtSentence(body, perNoteBudget)}`, askModelUnits[i], askCrossGuarded);
+      // R324 B：替换先于中和 / 剔离 / 截断（那三步会改写行字面让逐字匹配失效），处理后再按归一化比对复查（modelContextNoteText）。
+      const redacted = modelContextNoteText({ title: n.title, content: n.content, unit: askModelUnits[i], crossGuarded: askCrossGuarded, budget: perNoteBudget });
       if (redacted.redacted > 0) askModelRedactedLines += redacted.redacted;
+      if (redacted.withheld) askModelWithheld += 1;
       return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${redacted.text}`;
     })
     .join("\n\n");
-  if (askModelRedactedLines > 0) console.log(`ask: ${askModelRedactedLines} guarded line(s) redacted from model context`);
+  if (askModelRedactedLines > 0) console.log(`ask: ${askModelRedactedLines} guarded line(s) redacted from model context${askModelWithheld > 0 ? `, ${askModelWithheld} note(s) withheld whole` : ""}`);
   // ask SSE（R174，R173 第四节方案）：只有走到这里的 LLM 生成分支才流式
   // （确定性路由 <2.2s 保持整段 JSON）；客户端以 Accept: text/event-stream
   // 协商，不带该头的客户端（Android/MCP/微信桥）行为完全不变。事件序列
@@ -6050,6 +6072,14 @@ app.post("/api/ask", async (c) => {
       heldCounts[reason] = (heldCounts[reason] ?? 0) + 1;
       return null;
     };
+    // R324 C3（audit-r323 A6：delta 扣下的句段在 done 里以明文重现）：因收口类原因被扣下的句段连同当时的信任域记下来，
+    // done 成型后逐句复核：同一句段若在 done 的信任域下仍过不了逐段闸门，就从 done 里也去掉——delta 与 done 同口径。
+    type HeldSeg = { s: string; tier: TrustTier["kind"] };
+    const heldClosed: HeldSeg[] = [];
+    const holdClosed = (reason: string, s: string, tier: TrustTier): null => {
+      heldClosed.push({ s, tier: tier.kind });
+      return hold(reason);
+    };
     const weakIdsS = new Set(extraIds.filter((id) => (semScore.get(id) ?? 0) < ASK_CITATION_MIN_SCORE));
     // R312：流式阶段的信任域预判（见 askTierOf 注）：召回仅 1 条非弱源笔记且已点到 [1] 才是单笔记直答。
     let streamCitedFirst = false;
@@ -6076,11 +6106,11 @@ app.post("/api/ask", async (c) => {
       const danglingProbe = survivingMarkers.replace(/^[\s　]+/, "");
       if (cleanDanglingCitations(danglingProbe) !== danglingProbe) return hold("dangling_citation");
       const sc = foldCompact(s);
-      if (groundedDemandsS.some((d) => d && sc.includes(foldCompact(d)))) return hold("demand_hit");
-      if (scrubDirectiveDemands(s, groundedDemandsS, askGuardQuestion) !== s) return hold("demand_scrub");
+      const tierS = streamTier();
+      if (groundedDemandsS.some((d) => d && sc.includes(foldCompact(d)))) return holdClosed("demand_hit", s, tierS);
+      if (scrubDirectiveDemands(s, groundedDemandsS, askGuardQuestion) !== s) return holdClosed("demand_scrub", s, tierS);
       if (scrubUnsourcedAmounts(s, askScrubSourceS) !== s) return hold("unsourced_amount");
       if (scrubUnsourcedNegations(s, askScrubSourceS) !== s) return hold("unsourced_negation");
-      const tierS = streamTier();
       const fin = finalizeAskAnswer(s, {
         dataText: askGuardData,
         dataUnits: askGuardUnits,
@@ -6095,7 +6125,7 @@ app.post("/api/ask", async (c) => {
       const onlyTrailingNotice =
         fin.answer === `${s}\n\n${VERBATIM_REDIRECT_NOTICE}` ||
         Object.values(DIRECT_GUARD_PLACEHOLDER).some((ph) => fin.answer === `${s.replace(/\s+$/, "")}\n${ph}`);
-      if (fin.isolated || fin.changed || (fin.answer !== s && !onlyTrailingNotice)) return hold("finalize_rewrite");
+      if (fin.isolated || fin.changed || (fin.answer !== s && !onlyTrailingNotice)) return holdClosed("finalize_rewrite", s, tierS);
       // R310 P0-1 / R309 P1-2：逐字复述收口按**累计已外发文本 + 本段**判，与 done 对整答的
       // 判定同口径——跨句段边界拼出的 ≥阈值公共串同样扣下，不存在「先泄后撤」窗口。
       if (
@@ -6106,8 +6136,8 @@ app.post("/api/ask", async (c) => {
           exemptText: question,
         }).count > 0
       )
-        return hold("verbatim_overlap");
-      if (scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) !== s) return hold("link_scrub");
+        return holdClosed("verbatim_overlap", s, tierS);
+      if (scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) !== s) return holdClosed("link_scrub", s, tierS);
       // 拒答形句段扣下不外发：整答为拒答时下游会走复问重试/诚实拒答通道整体
       // 替换答案（isRefusalAnswer 分支），先发的拒答 delta 会被 done 撤回。
       // 非拒答句段一旦存在，整答即非拒答，不受重试影响，照常外发。
@@ -6116,6 +6146,40 @@ app.post("/api/ask", async (c) => {
       // done 收口时才裁决，先发 delta 会构成「先泄后收」。
       if (segmentExecSuspicious(s)) return hold("exec_suspicious");
       return s;
+    };
+    /** done 信任域下重跑逐段闸门的收口部分（与 gateSegment 同一组判据，只是 tier 换成 done 的）。 */
+    const segmentPassesGate = (s: string, tier: TrustTier): boolean => {
+      const sc = foldCompact(s);
+      if (groundedDemandsS.some((d) => d && sc.includes(foldCompact(d)))) return false;
+      if (scrubDirectiveDemands(s, groundedDemandsS, askGuardQuestion) !== s) return false;
+      const fin = finalizeAskAnswer(s, {
+        dataText: askGuardData,
+        dataUnits: askGuardUnits,
+        execFragmentUnits: askGuardFragmentUnits,
+        question: askGuardQuestion,
+        verbatimExempt: question,
+        tier,
+      });
+      const onlyTrailingNotice =
+        fin.answer === `${s}\n\n${VERBATIM_REDIRECT_NOTICE}` ||
+        Object.values(DIRECT_GUARD_PLACEHOLDER).some((ph) => fin.answer === `${s.replace(/\s+$/, "")}\n${ph}`);
+      if (fin.isolated || fin.changed || (fin.answer !== s && !onlyTrailingNotice)) return false;
+      if (closeVerbatimForTier(s, { units: askGuardUnits, execFragmentUnits: askGuardFragmentUnits, tier, exemptText: question }).count > 0) return false;
+      return scrubAnswerLinks(s, undefined, { dataText: askGuardData, question: askGuardQuestion }) === s;
+    };
+    /**
+     * R324 C3：done 与 delta 同口径——逐段闸门因收口类原因扣下的句段，在 done 的答案里逐句复核：同一句段若在 done 的信任域下
+     * 仍过不了闸门，从 done 里去掉（整答被去空时退回原文指引 + 原角标）。逐段闸门与整答 finalize 的判据同源，但分段 / 信任域预判 /
+     * 累计重合三处口径差会让同一句在 delta 被扣、在 done 放行（audit-r323 A6 C01：emitted 只有指引，done 带明文）。
+     */
+    const reconcileDoneWithGate = (body: Record<string, unknown>): void => {
+      if (typeof body.answer !== "string" || heldClosed.length === 0) return;
+      const doneTier = askTierOf(body);
+      const r = reconcileDoneAnswer(body.answer, heldClosed, doneTier.kind, (seg) => segmentPassesGate(seg, doneTier));
+      if (r.dropped === 0) return;
+      body.answer = r.answer;
+      body.sse_done_reclosed = r.dropped;
+      console.log(`ask: ${r.dropped} segment(s) held at delta gate removed from done`);
     };
     const enc = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
@@ -6192,6 +6256,7 @@ app.post("/api/ask", async (c) => {
           flushSegments(true);
           const tFin = Date.now();
           const body = await finalizeGenerationBody(raw);
+          reconcileDoneWithGate(body);
           body.conaud_ms = Date.now() - tFin;
           if (Object.keys(heldCounts).length > 0) body.sse_held = heldCounts;
           // R308 P1-5（audit-r307 §9：27/30 全程 0 delta）：首 delta 慢/无的相位归因
