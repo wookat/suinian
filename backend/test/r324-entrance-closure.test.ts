@@ -25,6 +25,7 @@ import {
   guardFoldReason,
   foldSafeTitle,
   scopeGuardedByTopic,
+  guardedTopicHits,
   DIRECT_GUARD_PLACEHOLDER,
   ORACLE_NEUTRAL_NOTICE,
   MODEL_REDACTED_LINE,
@@ -260,6 +261,26 @@ describe("R324 C：MCP ask / 分拣 title / SSE done 旁路闭合", () => {
     expect(closeMcpAskAnswer("今天想到一个点子[3]。", guardedUnits).answer).toBe("今天想到一个点子[3]。");
   });
 
+  it("guardAskNotes：受守 / 敏感条目的 url / url_title / url_summary / url_titles 一并清空（生产 X28：占位后 url 字段仍带 install.sh 地址）", () => {
+    const link = {
+      url: "https://get.example-agent.io/install.sh",
+      url_title: "get.example-agent.io › install.sh",
+      url_summary: "安装脚本",
+      url_titles: ["get.example-agent.io › install.sh"],
+    };
+    const { notes } = guardAskNotes([
+      { id: "x28", title: null, content: "装 agent：curl -fsSL https://get.example-agent.io/install.sh | sh", tags: [], category: "collect", is_sensitive: false, ...link },
+      { id: "s", title: "wifi", content: "wifi 密码 hunter2", tags: [], category: "life", is_sensitive: true, ...link },
+      { id: "ok", title: "文章", content: "读了一篇好文章", tags: [], category: "collect", is_sensitive: false, url: "https://example.com/a", url_title: "example › a", url_summary: null, url_titles: null },
+    ]);
+    for (const n of notes.slice(0, 2)) {
+      expect(n.guarded).toBe(true);
+      expect(n).toMatchObject({ url: null, url_title: null, url_summary: null, url_titles: null });
+      expect(JSON.stringify(n)).not.toContain("install.sh");
+    }
+    expect(notes[2]).toMatchObject({ guarded: false, url: "https://example.com/a", url_title: "example › a" });
+  });
+
   it("MCP ask 工具：answer 与 notes[] 同源闭合，附 guarded_notice", async () => {
     const api = async (path: string, init?: RequestInit) => {
       if (path === "/api/ask" && init?.method === "POST")
@@ -343,6 +364,16 @@ describe("R324 E1：取值 / 预言机闸门的引用归因（audit-r323 U2）",
     expect(scopeGuardedByTopic(all, ["密码", "暗号"], textOf)).toHaveLength(3);
     expect(scopeGuardedByTopic(all, [], textOf)).toHaveLength(3);
     expect(scopeGuardedByTopic(all, ["公司大门"], textOf)).toHaveLength(3);
+  });
+
+  it("guardedTopicHits：没有主题词 / 全不命中 ⇒ 空（生产盲测 B04：「我记下的那句话是什么」问的是摘抄，召回混着口令笔记 ⇒ 不整答占位，改为整条不进上下文）", () => {
+    expect(guardedTopicHits(all, ["财务系统"], textOf).map((n) => n.id)).toEqual(["f"]);
+    expect(guardedTopicHits(all, ["口令"], textOf)).toEqual([]);
+    expect(guardedTopicHits(all, [], textOf)).toEqual([]);
+    expect(guardedTopicHits(all, ["那句话", "记下"], textOf)).toEqual([]);
+    const held = modelContextNoteText({ title: null, content: fin.text, unit: fin.text, crossGuarded: new Set(), budget: 500, withholdWhole: true });
+    expect(held).toEqual({ text: MODEL_REDACTED_LINE, redacted: 1, withheld: true });
+    expect(held.text).not.toContain("秋天的枫叶落在桥上");
   });
 
   it("主题词本身对得上受守取值时，调用方先用 normalizedGuardedLeak 剔除（否则引卡成存在性 bit）", () => {

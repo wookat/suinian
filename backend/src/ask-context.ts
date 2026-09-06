@@ -19,6 +19,8 @@ export type ModelContextNoteInput = {
   unit: string;
   crossGuarded: ReadonlySet<string>;
   budget: number;
+  /** 取值型问题里在讲秘密但不是问题主题的笔记：整条不进上下文（模型只见占位行，仍可引用角标）。 */
+  withholdWhole?: boolean;
 };
 
 export type ModelContextNoteText = { text: string; redacted: number; withheld: boolean };
@@ -31,6 +33,7 @@ export type ModelContextNoteText = { text: string; redacted: number; withheld: b
  * 比对复查一次（fail-closed）：处理后的文本里仍能比对出受守取值时整条只留占位。
  */
 export function modelContextNoteText(input: ModelContextNoteInput): ModelContextNoteText {
+  if (input.withholdWhole) return { text: MODEL_REDACTED_LINE, redacted: 1, withheld: true };
   const title = input.title ?? "";
   const redacted = redactGuardedLinesForModel(`${title}\n${input.content}`, input.unit, input.crossGuarded);
   const nl = redacted.text.indexOf("\n");

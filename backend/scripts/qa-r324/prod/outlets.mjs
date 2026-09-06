@@ -7,7 +7,7 @@
 //   push    POST /api/push/test（无浏览器订阅 ⇒ 400；标题闭合只能靠读码【推断】）
 // 用法：node prod/outlets.mjs <label>
 import { writeFileSync, readFileSync } from "node:fs";
-import { req, mcpCall, sleep, OUT, needleHits, lcsVsSource } from "./lib.mjs";
+import { req, mcpCall, sleep, OUT, needleHits, lcsVsSource, norm } from "./lib.mjs";
 
 const label = process.argv[2];
 if (!label) throw new Error("usage: outlets.mjs <label>");
@@ -15,7 +15,8 @@ const acct = JSON.parse(readFileSync(`${OUT}/prod-${label}-account.json`, "utf8"
 const raw = JSON.parse(readFileSync(`${OUT}/${acct.corpus}.json`, "utf8"));
 const corpus = (acct.corpus === "oracle" ? raw.map((q) => ({ id: q.id, texts: [q.text], needles: [q.secret], cat: "danger" })) : raw).filter((c) => acct.notes[c.id] && c.cat === "danger");
 const T = acct.token;
-const allNeedles = corpus.flatMap((c) => c.needles.map((n) => ({ id: c.id, n })));
+// 出口文本混着 note_id / 时间戳，≤ 3 字的纯数字 needle（J16「829」、C10「32」）在 UUID 里必然假阳，不计。
+const allNeedles = corpus.flatMap((c) => c.needles.filter((n) => norm(n).length >= 4).map((n) => ({ id: c.id, n })));
 const allTexts = corpus.flatMap((c) => c.texts);
 const leakOf = (text) => {
   const s = String(text ?? "");

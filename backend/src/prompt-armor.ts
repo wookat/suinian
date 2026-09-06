@@ -8971,15 +8971,19 @@ const SECRET_LABEL_ALL_RE = new RegExp(SECRET_LABEL_RE.source, "giu");
  * 全不命中时保留全部候选——占位话术不变，只是引用卡不再把用户带到另一条凭据。
  */
 export function scopeGuardedByTopic<T>(guarded: readonly T[], topics: readonly string[], textOf: (n: T) => string): T[] {
+  const hit = guardedTopicHits(guarded, topics, textOf);
+  return hit.length > 0 ? hit : [...guarded];
+}
+/** 只返回命中剩余主题词的候选（没有主题词 / 全不命中 ⇒ 空）：调用方据此区分「问的就是这条秘密」与「问的另有所指」。 */
+export function guardedTopicHits<T>(guarded: readonly T[], topics: readonly string[], textOf: (n: T) => string): T[] {
   const specific = topics
     .map((t) => t.normalize("NFKC").replace(SECRET_LABEL_ALL_RE, "").trim())
     .filter((t) => t.length >= 2);
-  if (specific.length === 0) return [...guarded];
-  const hit = guarded.filter((n) => {
+  if (specific.length === 0) return [];
+  return guarded.filter((n) => {
     const hay = textOf(n).normalize("NFKC");
     return specific.some((t) => hay.includes(t));
   });
-  return hit.length > 0 ? hit : [...guarded];
 }
 
 /** 单元（标题 + 正文 + 链接摘要）是否在讲某个秘密：受守行、跨笔记指代受守行，或任一行带凭证标签。 */

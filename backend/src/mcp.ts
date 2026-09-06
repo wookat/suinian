@@ -53,7 +53,9 @@ function redactNotes<T extends { is_sensitive?: unknown; category?: unknown; con
 
 export const MCP_GUARDED_PLACEHOLDER = "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键词取回该条]";
 
-type GuardableNote = { is_sensitive?: unknown; content?: unknown; title?: unknown; tags?: unknown; url_title?: unknown; url_summary?: unknown };
+type GuardableNote = { is_sensitive?: unknown; content?: unknown; title?: unknown; tags?: unknown; url?: unknown; url_title?: unknown; url_summary?: unknown; url_titles?: unknown };
+/** 受守 / 敏感条目连链接字段一起清空：从正文抽出的 url / url_title 本身就是受守单元的一部分（端点、`curl … | sh` 的下载地址）。 */
+const GUARDED_LINK_FIELDS = { url: null, url_title: null, url_summary: null, url_titles: null } as const;
 /** R324 C1：ask 的受守单元判据与 /api/ask 同源（标题 + 正文 + 链接标题 + 链接摘要）。 */
 export function mcpGuardUnit(n: GuardableNote): string {
   const s = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -71,13 +73,13 @@ export function guardAskNotes<T extends GuardableNote>(notes: T[]): { notes: (T 
   const guardedUnits: string[] = [];
   const out = notes.map((n, i) => {
     // 数据层已标敏感的条目 redactNote 已换占位；这里补 guarded 标记让宿主机器可读地知道该条不是原文。
-    if (n.is_sensitive) return { ...n, guarded: true, guard_kind: "sensitive" as const };
+    if (n.is_sensitive) return { ...n, ...GUARDED_LINK_FIELDS, guarded: true, guard_kind: "sensitive" as const };
     const own = directGuardLines(units[i]).filter((g) => g.own);
     const crossHit = units[i].split("\n").some((l) => cross.has(l.trim()));
     if (own.length === 0 && !crossHit) return { ...n, guarded: false };
     guardedUnits.push(units[i]);
     const kind: DirectGuardKind | "cross" = own.length > 0 ? own.reduce((a, g) => (rankOf(g.kind) > rankOf(a) ? g.kind : a), own[0].kind) : "cross";
-    return { ...n, content: MCP_GUARDED_PLACEHOLDER, title: MCP_GUARDED_PLACEHOLDER, tags: [], guarded: true, guard_kind: kind };
+    return { ...n, ...GUARDED_LINK_FIELDS, content: MCP_GUARDED_PLACEHOLDER, title: MCP_GUARDED_PLACEHOLDER, tags: [], guarded: true, guard_kind: kind };
   });
   return { notes: out, guardedUnits };
 }
