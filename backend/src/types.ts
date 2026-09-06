@@ -153,6 +153,11 @@ export interface NoteMeta {
    * （3+ 分片投放）；所有出口按 contains_executable_command=true 对待。
    */
   exec_fragment?: boolean;
+  /**
+   * R326：拆条传播——本条与相邻的那条（id 在此）是拆开记的同一条凭证（指针 ↔ 裸值），敏感标注随传播而来；
+   * applyTriage 不凭「正文无秘密值」降级，用户显式取消标记后放开。
+   */
+  sensitive_continuation?: string;
   /** Retriage retry counter maintained by the degrade sweep. */
   retriage_attempts?: number;
   /** Terminal state: retriage hit its attempt ceiling; cleared by a later successful triage or a manual category edit. */

@@ -348,6 +348,11 @@ const SENSITIVE_CRED_PAIR_RE =
 const SENSITIVE_TOPIC_RE =
   /密码|口令|暗号|咒语|门码|门禁码|开锁码|取件码|密钥|秘钥|私钥|passw(?:or)?d|passphrase|passcode|(?<![$\w])pwd\b|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|\bsecret\b|\btoken\b|验证码|pin\s?码|身份证|银行卡|信用卡|储蓄卡|卡号|账号|暗証|パスワード|밀번|비밀번호|Passwort|Kennwort|mot de passe|contraseña|\bclave\b|\bsenha\b|wachtwoord|пароль/i;
 
+/** 凭证称谓词（多语种）是否出现：与 maybeSensitive 的宽口径同源，供拆条传播等数据层规则复用。 */
+export function hasSensitiveTopic(content: string): boolean {
+  return SENSITIVE_TOPIC_RE.test(content);
+}
+
 /**
  * Write-time pre-check for notes awaiting AI triage (fail-closed): true when
  * the content certainly (detectSensitive) or possibly (topic hint) contains a

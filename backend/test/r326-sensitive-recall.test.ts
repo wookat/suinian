@@ -9,15 +9,18 @@ import { encryptContent, ENC_PLACEHOLDER } from "../src/crypto";
 import {
   recallSensitiveNotes,
   sensitiveTermScore,
+  sensitiveRecallHaystack,
   sensitiveAnswerLeak,
   sensitiveOnlyAnswer,
   SENSITIVE_CARD_PLACEHOLDER,
   SENSITIVE_MODEL_LINE,
 } from "../src/sensitive-recall";
-import { app, applyTriage, askRefNoteJson, searchTerms } from "../src/index";
+import { app, applyTriage, askRefNoteJson, extractAskTerms, oracleGateCards, searchTerms } from "../src/index";
 import { askTopicTerms } from "../src/ask";
 import { guardAskNotes, MCP_SENSITIVE_ASK_PLACEHOLDER } from "../src/mcp";
 import { maybeSensitive, detectSensitive } from "../src/triage";
+import { propagateSensitiveContinuation, isDeferredPointer, isBackrefPointer, isContinuationPointer } from "../src/sensitive-continuation";
+import { decryptContent } from "../src/crypto";
 import type { Env, NoteRow, TriageResult } from "../src/types";
 
 const KEY = btoa(String.fromCharCode(...new Uint8Array(32).map((_, i) => (i * 7 + 3) & 0xff)));
@@ -77,6 +80,13 @@ function fakeDb(notes: Row[]) {
         .sort((a, b) => (String(a.created_at) < String(b.created_at) ? 1 : -1))
         .slice(0, limit);
     }
+    if (sql.includes("deleted_at IS NULL AND id != ?")) {
+      const limit = typeof binds[2] === "number" ? binds[2] : Infinity;
+      return notes
+        .filter((n) => n.user_id === binds[0] && n.id !== binds[1] && !n.deleted_at)
+        .sort((a, b) => (String(a.created_at) < String(b.created_at) ? 1 : -1))
+        .slice(0, limit);
+    }
     if (sql.includes("WHERE user_id = ?")) return notes.filter((n) => n.user_id === binds[0]);
     return notes;
   };
@@ -118,6 +128,18 @@ function fakeDb(notes: Row[]) {
               nullCols.forEach((col) => (note[col] = null));
             }
             return { meta: { changes: targets.length } };
+          }
+          if (sql.startsWith("INSERT INTO notes")) {
+            const cols = sql
+              .slice(sql.indexOf("(") + 1, sql.indexOf(")"))
+              .split(",")
+              .map((s) => s.trim());
+            const row: Row = baseNote(String(binds[0]));
+            cols.forEach((col, i) => (row[col] = binds[i] ?? row[col]));
+            row.created_at = binds[cols.indexOf("created_at")] ?? "2026-09-01 00:02:00";
+            row.updated_at = binds[cols.indexOf("updated_at")] ?? "2026-09-01 00:02:00";
+            notes.push(row);
+            return { meta: { changes: 1 } };
           }
           return { meta: { changes: 0 } };
         },
@@ -212,6 +234,43 @@ describe("R326 §2 找回：敏感笔记按解密内存匹配召回，返回行�
     expect((await recallSensitiveNotes(makeEnv([]), "u1", ["门禁"])).rows).toEqual([]);
   });
 
+  it("存在性预言机：召回不由候选值驱动——值形态记号不进匹配文本、拉丁词整词匹配（对 / 错前缀召回同一批卡）", () => {
+    const S = (plain: string, terms: string[]) => sensitiveTermScore(plain, null, terms, terms);
+    // 字母数字混排 / 含符号：整值与前缀都不命中；标签词照常
+    expect(S("跳板机口令：Kq7#vb2x", ["kq7"])).toBe(0);
+    expect(S("跳板机口令：Kq7#vb2x", ["kq7#vb2x"])).toBe(0);
+    expect(S("跳板机口令：Kq7#vb2x", ["跳板机口令"])).toBe(1);
+    expect(S("跳板机口令：Kq7#vb2x", ["跳板机口令", "kq7"])).toBe(S("跳板机口令：Kq7#vb2x", ["跳板机口令", "kq8"]));
+    // 纯数字串（≥3 位）
+    expect(S("储物柜的数字是 482913", ["4829"])).toBe(0);
+    expect(S("储物柜的数字是 482913", ["482913"])).toBe(0);
+    expect(S("储物柜的数字是 482913", ["储物柜"])).toBe(1);
+    expect(S("灰度开关口令 GateKey7788", ["gatekey"])).toBe(0);
+    expect(S("妈妈家的 wifi 是 sunshine2024", ["sunshine"])).toBe(0);
+    expect(S("妈妈家的 wifi 是 sunshine2024", ["wifi"])).toBe(1);
+    // 纯字母词是标签词（wifi / github 要能找回）→ 整词匹配：部分匹配不算
+    expect(S("书柜暗号 mapletree", ["maple"])).toBe(0);
+    expect(S("书柜暗号 mapletree", ["tree"])).toBe(0);
+    expect(S("书柜暗号 mapletree", ["书柜暗号"])).toBe(1);
+    expect(S("github 密码改了", ["github"])).toBe(1);
+    // 1–2 位数字是标签词（3 楼 / 2 号柜）
+    expect(S("3 楼储物柜密码 4821", ["3"])).toBe(1);
+    expect(sensitiveRecallHaystack("跳板机口令：Kq7#vb2x，备用 wifi sunshine2024 3 楼")).toBe("跳板机口令： ，备用 wifi   3 楼");
+  });
+
+  it("整句型 CJK 词（关键词模型降级）：虚词切段后段内二元组覆盖——「进门的咒语现在是什么」召回「进门的咒语我换成了…」（生产 I08 零召回回归）", () => {
+    const plain = "进门的咒语我换成了 三只白猫排队走";
+    for (const q of ["进门的咒语现在是什么", "进门的咒语是什么", "进门咒语现在是啥", "现在进门的咒语是哪个"]) {
+      const t = extractAskTerms(q, []);
+      expect(sensitiveTermScore(plain, null, t, askTopicTerms(t)), q).toBeGreaterThan(0);
+    }
+    // 不相关整句不命中
+    for (const q of ["书房保险柜的暗号是什么", "健身房柜子的那个词是什么"]) {
+      const t = extractAskTerms(q, []);
+      expect(sensitiveTermScore(plain, null, t, askTopicTerms(t)), q).toBe(0);
+    }
+  });
+
   it("多词打分：全部命中最高；任一话题词命中即算（长指令句也能召回）；无话题词命中不算（U2 wifi→跳板机不串）", () => {
     expect(sensitiveTermScore("家里 wifi 密码 chunfeng2019", null, ["家里", "wifi", "密码"], ["wifi"])).toBe(3);
     expect(sensitiveTermScore("跳板机口令：Kq7#vb2x", null, ["家里", "wifi", "密码"], ["wifi"])).toBe(0);
@@ -257,6 +316,35 @@ describe("R326 §3 引用卡片：askRefNoteJson 对敏感行只给占位体 + i
     const row = baseNote("p1", { content: "周四例会改到下午三点", title: "例会" }) as unknown as NoteRow;
     const json = askRefNoteJson(row) as Record<string, unknown>;
     expect(json).toMatchObject({ id: "p1", content: "周四例会改到下午三点", title: "例会", content_withheld: false, is_sensitive: false });
+  });
+
+  it("REST GET /api/notes?q= 搜索结果是引用卡片：敏感命中只给占位体 + content_withheld，明文只在 GET /api/notes/:id", async () => {
+    const notes = [await sensitiveNote("s1", "跳板机口令：Kq7#vb2x", { tags: '["跳板机"]' }), baseNote("p1", { content: "周四例会改到下午三点" })];
+    const env = makeEnv(notes);
+    const res = await app.fetch(req("GET", `/api/notes?q=${encodeURIComponent("跳板机口令")}`), env, ctx);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { notes: Array<Record<string, unknown>> };
+    const hit = body.notes.find((n) => n.id === "s1");
+    expect(hit).toBeTruthy();
+    expect(hit).toMatchObject({ is_sensitive: true, content_withheld: true, content: SENSITIVE_CARD_PLACEHOLDER, match: "keyword" });
+    expect(JSON.stringify(body)).not.toContain("Kq7");
+    expect(JSON.stringify(body)).not.toContain(notes[0].content_enc as string);
+    const detail = await app.fetch(req("GET", "/api/notes/s1"), env, ctx);
+    expect(detail.status).toBe(200);
+    expect(((await detail.json()) as { note: { content: string } }).note.content).toBe("跳板机口令：Kq7#vb2x");
+  });
+
+  it("预言机闸门（受守普通候选 + 敏感命中混合）：敏感卡不被主题归因收窄掉（生产 oracle-pair Q03 B 侧敏感卡丢失回归）", async () => {
+    const plainGuarded = baseNote("g1", { content: "招行网银登录串 Xk1@ao4h" }) as unknown as NoteRow;
+    const other = baseNote("g2", { content: "跳板机口令：Kq7#vb2x" }) as unknown as NoteRow;
+    const sens = (await sensitiveNote("s1", "财务系统口令：Rt5&yy8q")) as unknown as NoteRow;
+    const textOf = (n: NoteRow) => `${n.title ?? ""}\n${n.content}\n${n.tags ?? ""}`;
+    const shown = oracleGateCards([plainGuarded, other], [sens], ["招行"], textOf);
+    expect(shown.map((n) => n.id)).toEqual(["g1", "s1"]);
+    // 主题词全不命中普通候选时保留全部普通受守卡（既有口径），敏感卡仍在
+    expect(oracleGateCards([plainGuarded, other], [sens], ["财务系统"], textOf).map((n) => n.id)).toEqual(["g1", "g2", "s1"]);
+    expect(oracleGateCards([], [sens], [], textOf).map((n) => n.id)).toEqual(["s1"]);
+    expect(shown.filter((n) => n.is_sensitive).map(askRefNoteJson).every((j) => j.content_withheld && !JSON.stringify(j).includes("Rt5"))).toBe(true);
   });
 
   it("只命中敏感时的确定性答案带全部角标；模型上下文行不含任何原文派生物", () => {
@@ -362,6 +450,165 @@ describe("R326 §5 取消敏感标记：对模型复判粘性，正文改动后�
     const env = makeEnv(notes);
     await applyTriage(env, "n1", triageSensitive, "小区门禁密码 4821");
     expect(notes[0].is_sensitive).toBe(1);
+  });
+});
+
+describe("R326 §1 拆条传播（I06）：指针笔记的敏感标注传播到相邻裸值短笔记", () => {
+  const metaCont = (row: Row) => (JSON.parse((row.meta as string) ?? "{}") as { sensitive_continuation?: string }).sensitive_continuation;
+
+  it("指针识别：称谓词 + 延后 / 回指提示；只有称谓词或只有提示词不算", () => {
+    expect(isDeferredPointer("衣柜密码明天再记，先占个位")).toBe(true);
+    expect(isDeferredPointer("wifi 密码分开记，下一条")).toBe(true);
+    expect(isDeferredPointer("衣柜密码是 1234")).toBe(false);
+    expect(isDeferredPointer("明天再记买菜")).toBe(false);
+    expect(isBackrefPointer("上一条就是衣柜密码")).toBe(true);
+    expect(isBackrefPointer("上一条是买菜清单")).toBe(false);
+    // 弱称谓指针（R325 L03）：没有任何凭证称谓词，只有「柜子…那个词/要用的那个」
+    expect(isContinuationPointer("昨天记的那个词，就是柜子要用的那个。")).toBe(true);
+    expect(isContinuationPointer("储物柜那串数字记在下一条")).toBe(true);
+    expect(isContinuationPointer("the word for the locker is in the next note")).toBe(true);
+    // 含值的不是指针（由 detectSensitive 直接定论）；普通短句不是指针
+    expect(isContinuationPointer("衣柜密码改成了 4821#")).toBe(false);
+    expect(isContinuationPointer("柜子要换成开放式的")).toBe(false);
+    expect(isContinuationPointer("明天再记买菜")).toBe(false);
+    expect(isContinuationPointer("密码学课下周再上")).toBe(false);
+  });
+
+  it("R325 L03：「昨天记的那个词，就是柜子要用的那个」（普通，未标敏）→「昨天想到的词：铜锁春雨」被标敏", async () => {
+    const notes = [
+      baseNote("p1", { content: "昨天记的那个词，就是柜子要用的那个。", created_at: "2026-09-01 00:00:00" }),
+      baseNote("p2", { content: "昨天想到的词：铜锁春雨", created_at: "2026-09-01 00:00:05" }),
+    ];
+    const env = makeEnv(notes);
+    expect(await propagateSensitiveContinuation(env, "u1", "p2")).toEqual(["p2", "p1"]);
+    expect(notes[1].is_sensitive).toBe(1);
+    expect(notes[1].content).toBe(ENC_PLACEHOLDER);
+    expect(metaCont(notes[1])).toBe("p1");
+    // 指针一并标敏（拆开记的同一条凭证），且模型复判「无值」不降级
+    expect(notes[0].is_sensitive).toBe(1);
+    expect(notes[0].content).toBe(ENC_PLACEHOLDER);
+    expect(metaCont(notes[0])).toBe("p2");
+    await applyTriage(env, "p1", { ...triageSensitive, is_sensitive: false }, "昨天记的那个词，就是柜子要用的那个。");
+    expect(notes[0].is_sensitive).toBe(1);
+  });
+
+  it("正向：「衣柜密码明天再记，先占个位」（已标敏）→「就是 铜锁春雨 这四个字」被标敏 + 加密，meta 记指针 id", async () => {
+    const notes = [
+      await sensitiveNote("s1", "衣柜密码明天再记，先占个位", { created_at: "2026-09-01 00:00:00" }),
+      baseNote("p2", { content: "就是 铜锁春雨 这四个字", created_at: "2026-09-01 00:02:00" }),
+    ];
+    const env = makeEnv(notes);
+    expect(await propagateSensitiveContinuation(env, "u1", "p2")).toEqual(["p2", "s1"]);
+    expect(notes[1].is_sensitive).toBe(1);
+    expect(notes[1].content).toBe(ENC_PLACEHOLDER);
+    expect(await decryptContent(KEY, notes[1].content_enc as string)).toBe("就是 铜锁春雨 这四个字");
+    expect(metaCont(notes[1])).toBe("s1");
+    // 已敏感的指针不重新加密，只补上互指以便复判粘住
+    expect(await decryptContent(KEY, notes[0].content_enc as string)).toBe("衣柜密码明天再记，先占个位");
+    expect(metaCont(notes[0])).toBe("p2");
+    // 模型复判「正文无秘密值」不得降级
+    await applyTriage(env, "p2", { ...triageSensitive, is_sensitive: false }, "就是 铜锁春雨 这四个字");
+    expect(notes[1].is_sensitive).toBe(1);
+    // 用户显式取消 → 退出占位，传播位清除，再复判也不重新标敏
+    const res = await app.request(req("PATCH", "/api/notes/p2", { is_sensitive: false }), undefined, env, ctx);
+    expect(res.status).toBe(200);
+    expect(notes[1].is_sensitive).toBe(0);
+    expect(notes[1].content).toBe("就是 铜锁春雨 这四个字");
+    expect(metaCont(notes[1])).toBeUndefined();
+    await applyTriage(env, "p2", triageSensitive, "就是 铜锁春雨 这四个字");
+    expect(notes[1].is_sensitive).toBe(0);
+  });
+
+  it("中间隔一条无关短笔记仍传播；隔两条 / 超出 30 分钟 / 新笔记过长 / 指针已被用户取消 / 非指针 / 指针无延后提示 → 不传播", async () => {
+    const gap = [
+      await sensitiveNote("s1", "衣柜密码明天再记，先占个位", { created_at: "2026-09-01 00:00:00" }),
+      baseNote("x", { content: "买菜", created_at: "2026-09-01 00:01:00" }),
+      baseNote("p2", { content: "铜锁春雨", created_at: "2026-09-01 00:02:00" }),
+    ];
+    expect(await propagateSensitiveContinuation(makeEnv(gap), "u1", "p2")).toEqual(["p2", "s1"]);
+    expect(gap[1].is_sensitive).toBe(0);
+
+    const cases: Array<[string, Row[]]> = [
+      [
+        "隔两条",
+        [
+          await sensitiveNote("s1", "衣柜密码明天再记，先占个位", { created_at: "2026-09-01 00:00:00" }),
+          baseNote("x1", { content: "买菜", created_at: "2026-09-01 00:01:00" }),
+          baseNote("x2", { content: "取快递", created_at: "2026-09-01 00:01:30" }),
+          baseNote("p2", { content: "铜锁春雨", created_at: "2026-09-01 00:02:00" }),
+        ],
+      ],
+      [
+        "超时",
+        [
+          await sensitiveNote("s1", "衣柜密码明天再记，先占个位", { created_at: "2026-09-01 00:00:00" }),
+          baseNote("p2", { content: "铜锁春雨", created_at: "2026-09-01 02:00:00" }),
+        ],
+      ],
+      [
+        "过长",
+        [
+          await sensitiveNote("s1", "衣柜密码明天再记，先占个位", { created_at: "2026-09-01 00:00:00" }),
+          baseNote("p2", { content: "今天下午去了图书馆，借了三本书，回来路上顺便去超市买了牛奶和面包，晚上准备看电影。", created_at: "2026-09-01 00:02:00" }),
+        ],
+      ],
+      [
+        "指针被用户显式取消标记",
+        [
+          baseNote("s1", {
+            content: "衣柜密码明天再记，先占个位",
+            meta: JSON.stringify({ manual_override: { is_sensitive: true } }),
+            created_at: "2026-09-01 00:00:00",
+          }),
+          baseNote("p2", { content: "铜锁春雨", created_at: "2026-09-01 00:02:00" }),
+        ],
+      ],
+      [
+        "相邻的不是指针而是普通短句",
+        [
+          baseNote("s1", { content: "明天再记买菜清单", created_at: "2026-09-01 00:00:00" }),
+          baseNote("p2", { content: "铜锁春雨", created_at: "2026-09-01 00:02:00" }),
+        ],
+      ],
+      [
+        "无延后提示",
+        [
+          await sensitiveNote("s1", "衣柜密码是 1234", { created_at: "2026-09-01 00:00:00" }),
+          baseNote("p2", { content: "铜锁春雨", created_at: "2026-09-01 00:02:00" }),
+        ],
+      ],
+    ];
+    for (const [name, notes] of cases) {
+      expect(await propagateSensitiveContinuation(makeEnv(notes), "u1", "p2"), name).toEqual([]);
+      expect(notes[notes.length - 1].is_sensitive, name).toBe(0);
+    }
+  });
+
+  it("反向：「铜锁春雨」后紧接「上一条就是衣柜密码」（预检已标敏）→ 前一条被标敏", async () => {
+    const notes = [
+      baseNote("p1", { content: "铜锁春雨", created_at: "2026-09-01 00:00:00" }),
+      await sensitiveNote("s2", "上一条就是衣柜密码", { created_at: "2026-09-01 00:01:00" }),
+    ];
+    const env = makeEnv(notes);
+    expect(await propagateSensitiveContinuation(env, "u1", "s2")).toEqual(["p1", "s2"]);
+    expect(notes[0].is_sensitive).toBe(1);
+    expect(notes[0].content).toBe(ENC_PLACEHOLDER);
+    expect(metaCont(notes[0])).toBe("s2");
+    expect(metaCont(notes[1])).toBe("p1");
+  });
+
+  it("POST /api/notes 写入链路同步完成传播：创建后立即返回的笔记已是敏感占位", async () => {
+    const notes = [await sensitiveNote("s1", "衣柜密码明天再记，先占个位", { created_at: "2026-09-01 00:00:00" })];
+    const env = makeEnv(notes);
+    const res = await app.request(req("POST", "/api/notes", { content: "就是 铜锁春雨 这四个字" }), undefined, env, ctx);
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { note: { id: string; is_sensitive: boolean; content: string } };
+    expect(body.note.is_sensitive).toBe(true);
+    expect(body.note.content).toBe("就是 铜锁春雨 这四个字");
+    const row = notes.find((n) => n.id === body.note.id)!;
+    expect(row.is_sensitive).toBe(1);
+    expect(row.content).toBe(ENC_PLACEHOLDER);
+    expect(metaCont(row)).toBe("s1");
   });
 });
 

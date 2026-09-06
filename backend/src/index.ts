@@ -84,6 +84,7 @@ import { registerMcpRoute } from "./mcp";
 import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES, BACKUP_AI_DERIVED_NOTICE, closeBackupDerived } from "./backup";
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
+import { propagateSensitiveContinuation } from "./sensitive-continuation";
 import { type AskEnumRoute, parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources, citeIsolationMarks } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
@@ -1572,6 +1573,11 @@ async function noteToJsonDecrypted(env: Env, n: NoteRow) {
   return noteToJson(await decryptNoteRow(env, n));
 }
 
+/** 预言机闸门的引用卡：普通受守候选按主题词归因收窄（≤ 3）；敏感标注笔记的归因已由 sensitiveTermScore 完成，一律保留。 */
+export function oracleGateCards(guarded: NoteRow[], sensitive: NoteRow[], topics: string[], textOf: (n: NoteRow) => string): NoteRow[] {
+  return [...scopeGuardedByTopic(guarded, topics, textOf).slice(0, 3), ...sensitive];
+}
+
 /**
  * R326（decision-r326 §3）：ask / MCP 引用卡片的唯一序列化点。数据层标注为敏感的
  * 笔记只给占位体 + id（title 置空、tags 为库内已洗净的主题词），原文由前端按 id
@@ -1806,6 +1812,8 @@ async function createNote(
   // R308 P0-1：同账号邻近短笔记拼接复判（分片投放），标记落 meta.exec_fragment。
   // 同步完成再返回：创建后紧接的 notes.list / 引用卡片必须已带标。
   await rejudgeExecFragmentsRecent(c.env, userId, waitUntil);
+  // R326 I06：相邻敏感指针笔记（「密码明天再记，先占个位」）的标注传播到紧接的裸值短笔记；同步完成再返回，异步分拣仅对该标注粘性。
+  await propagateSensitiveContinuation(c.env, userId, id);
 
   const runTriage = async (retry: boolean): Promise<TriageResult | null> => {
     const topTags = await loadTopTags(c.env.DB, userId).catch(() => [] as string[]);
@@ -2126,8 +2134,8 @@ app.get("/api/notes", async (c) => {
       .catch(() => []);
   }
 
-  // R326（decision-r326 §2）：搜索不得剔除敏感笔记——库内 content 是占位串，关键词 LIKE 永远命中不了；密文在本请求内解密匹配，
-  // 命中行走与列表页同一条登录态序列化（前端卡片仍需点开才显示原文）。
+  // R326（decision-r326 §2）：搜索不得剔除敏感笔记——库内 content 是占位串，关键词 LIKE 永远命中不了；密文在本请求内解密匹配。
+  // 搜索结果是「引用卡片」：敏感命中行与 ask 引用卡同一序列化（占位体 + id，content_withheld），前端点开时按 id 取原文。
   const sensPromise: Promise<NoteRow[]> = isSearch
     ? recallSensitiveNotes(c.env, userId, terms, { limit: 20 }).then((r) => r.rows).catch(() => [])
     : Promise.resolve([]);
@@ -2187,7 +2195,7 @@ app.get("/api/notes", async (c) => {
       c.env,
       await Promise.all(
         merged.map(async (n) => ({
-          ...(await noteToJsonDecrypted(c.env, n)),
+          ...(n.is_sensitive ? askRefNoteJson(n) : await noteToJsonDecrypted(c.env, n)),
           match:
             kwIds.has(n.id) || partialIds.has(n.id) || sensitiveIds.has(n.id) ? (semScore.has(n.id) ? "both" : "keyword") : "semantic",
         }))
@@ -2338,11 +2346,17 @@ app.patch("/api/notes/:id", async (c) => {
       meta.manual_override = rest;
       patch.meta = meta;
     }
+    if (meta.sensitive_continuation && typeof patch.is_sensitive !== "boolean") {
+      delete meta.sensitive_continuation;
+      patch.meta = meta;
+    }
   }
   if (Object.keys(override).length > 0) {
     // remember the user's hand-set values so AI triage / cron never overwrites them
     const meta = patch.meta ?? parseNoteMeta(existing.meta) ?? {};
     meta.manual_override = { ...meta.manual_override, ...override };
+    // 用户显式取消敏感标记：拆条传播来的标注一并解除（否则 applyTriage 的粘性位会把它标回去）
+    if (patch.is_sensitive === false) delete meta.sensitive_continuation;
     if (override.category) {
       // 手动定分类即离开分拣失败/待复判态（R170 P1-2）
       delete meta.triage_failed;
@@ -5095,9 +5109,11 @@ app.post("/api/ask", async (c) => {
   const gateTopics = askTopicTerms(terms).filter((t) => normalizedGuardedLeak(t, askModelUnits) === null);
   const gateNoteText = (n: NoteRow): string => `${n.title ?? ""}\n${n.content}\n${n.tags ?? ""}`;
   if (oracleProbe) {
-    const guarded = notes.filter((_n, i) => askNoteGuarded(i));
+    // 敏感标注的笔记本身就是受守条目（候选里只有占位行，形态判定看不见它），归因已由 sensitiveTermScore 按话题词完成，
+    // 直接作为引用卡保留；普通候选仍按受守行 + 主题词归因收窄。
+    const guarded = notes.filter((n, i) => !n.is_sensitive && askNoteGuarded(i));
     if (guarded.length > 0) {
-      const shown = scopeGuardedByTopic(guarded, gateTopics, gateNoteText).slice(0, 3);
+      const shown = oracleGateCards(guarded, sensRecall.rows, gateTopics, gateNoteText);
       const references = shown.map((n, i) => ({ index: i + 1, note_id: n.id }));
       const refNotes = shown.map(askRefNoteJson);
       console.log(`ask: oracle-shaped question neutralized before generation (${guarded.length} guarded note(s))`);

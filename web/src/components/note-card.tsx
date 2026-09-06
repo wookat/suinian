@@ -447,6 +447,15 @@ export function NoteCard({
         setSelfSensitivePending(false)
       }
     })
+  /** 占位体卡片上的编辑 / 复制 / 点开都先按 id 经登录态取回原文，永不让占位串当作正文被保存或进剪贴板 */
+  async function ensureContent(): Promise<Note | null> {
+    if (!note.content_withheld) return note
+    const fresh = await getNote(note.id)
+    if (!fresh) return null
+    const full = { ...fresh, content_withheld: false }
+    setLocalNote(full)
+    return full
+  }
   async function revealSensitive() {
     if (revealing) return
     if (!note.content_withheld) {
@@ -456,12 +465,11 @@ export function NoteCard({
     setRevealing(true)
     setRevealError(null)
     try {
-      const fresh = await getNote(note.id)
+      const fresh = await ensureContent()
       if (!fresh) {
         setRevealError("这条笔记已不存在或已删除")
         return
       }
-      setLocalNote({ ...fresh, content_withheld: false })
       setRevealed(true)
     } catch (e) {
       setRevealError(e instanceof Error ? e.message : String(e))
@@ -511,7 +519,9 @@ export function NoteCard({
 
   async function writeClipboard() {
     try {
-      await navigator.clipboard.writeText(note.content)
+      const full = await ensureContent()
+      if (!full) return
+      await navigator.clipboard.writeText(full.content)
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     } catch {
@@ -535,11 +545,24 @@ export function NoteCard({
   }
 
   function openEdit() {
-    setEditValue(note.content)
-    setEditCategory(note.category ?? "")
-    setEditTags(note.tags)
+    if (note.content_withheld) {
+      void ensureContent()
+        .then((full) => {
+          if (full) openEditWith(full)
+        })
+        .catch(() => {
+          // 原文取不到就不进编辑态，避免把占位串当正文保存
+        })
+      return
+    }
+    openEditWith(note)
+  }
+  function openEditWith(n: Note) {
+    setEditValue(n.content)
+    setEditCategory(n.category ?? "")
+    setEditTags(n.tags)
     setEditTagInput("")
-    setEditDue(dueToInput(note.todo_due))
+    setEditDue(dueToInput(n.todo_due))
     setConflictNote(null)
     setEditing(true)
   }

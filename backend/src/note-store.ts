@@ -366,6 +366,10 @@ export async function applyTriage(
   if (meta?.manual_override?.is_sensitive && row.is_sensitive && !triage.is_sensitive) {
     triage = { ...triage, is_sensitive: true };
   }
+  // R326 拆条传播位同样粘住降级方向：裸值笔记正文本来就没有秘密值形态，模型判非敏感是意料之中
+  if (meta?.sensitive_continuation && row.is_sensitive && !triage.is_sensitive) {
+    triage = { ...triage, is_sensitive: true };
+  }
   // R326（decision-r326 §5）：用户显式「取消敏感标记」后，同一份内容的模型复判不得静默重新标敏——标注是唯一安全开关，
   // 用户对自己已看过的内容做出的判断优于模型；正文被重新编辑时 PATCH 会清掉这个覆盖位，新内容照常 fail-closed。
   if (meta?.manual_override?.is_sensitive && !row.is_sensitive && triage.is_sensitive) {

@@ -45,24 +45,48 @@ const EMPTY: SensitiveRecall = { rows: [], plains: new Map(), overflow: 0 };
 const CJK_RUN_RE = /^[\u4e00-\u9fff]+$/;
 // 整句型 CJK 检索词（关键词抽取模型不可用 / 降级时 extractAskTerms 会把整问当一个词）
 // 剥掉的问句虚词：疑问尾缀、称谓、结构助词。
-const CJK_QUESTION_NOISE_RE = /(是多少|是什么|是啥|是哪个|是哪些|叫什么|多少|什么|哪个|哪些|怎么|如何|记得|还有|一下|来着|的话|呢|吗|啊|嘛|呀|吧|了|的|我的|我|你|请|帮|查|找|看)/g;
+const CJK_QUESTION_NOISE_RE = /(是多少|是什么|是啥|是哪个|是哪些|叫什么|多少|什么|哪个|哪些|怎么|如何|记得|还有|一下|来着|的话|现在|目前|如今|当前|最新|最近|之前|以前|上次|这次|后来|平时|呢|吗|啊|嘛|呀|吧|了|的|我的|我|你|请|帮|查|找|看)/g;
 
-/** 整句型 CJK 词剥虚词后的二元组覆盖率（普通笔记靠语义向量兜这种情况；敏感笔记没有向量，只能子串近似）。 */
+/**
+ * 整句型 CJK 词剥虚词后的二元组覆盖率（普通笔记靠语义向量兜这种情况；敏感笔记没有向量，只能子串近似）。
+ * 二元组只在虚词切开的片段内部生成——「进门|咒语」不会拼出「门咒」这种跨片段假词去稀释覆盖率。
+ */
 function cjkBigramCoverage(hay: string, term: string): number {
-  const core = term.replace(CJK_QUESTION_NOISE_RE, "");
+  const segs = term.split(CJK_QUESTION_NOISE_RE).filter((s, i) => i % 2 === 0 && s.length > 0);
+  const core = segs.join("");
   if (core.length < 2) return 0;
   if (hay.includes(core)) return 1;
   const grams = new Set<string>();
-  for (let i = 0; i + 2 <= core.length; i++) grams.add(core.slice(i, i + 2));
+  for (const seg of segs) for (let i = 0; i + 2 <= seg.length; i++) grams.add(seg.slice(i, i + 2));
   let hits = 0;
   for (const g of grams) if (hay.includes(g)) hits += 1;
   return hits < 2 ? 0 : hits / grams.size;
 }
 
-/** 「包含」语义；整句型 CJK 词（≥4 字）额外接受二元组覆盖 ≥ 1/2。 */
+// 值形态记号：字母数字串（可夹常见口令符号）。纯字母词（wifi / github / mapletree）和 1–2 位数字（3 楼）是标签词，其余
+// （含数字 ≥ 3 位、含符号、字母数字混排）一律视为取值。
+const VALUE_TOKEN_RE = /[A-Za-z0-9](?:[A-Za-z0-9#@$%_\-!.]*[A-Za-z0-9])?/g;
+const LABEL_TOKEN_RE = /^(?:[A-Za-z]+|\d{1,2})$/;
+const LATIN_WORD_RE = /^[a-z]+$/;
+
+/**
+ * 参与匹配的文本：明文里的值形态记号全部抹掉。召回不得由候选值驱动——「Kq7 是什么」对 / 错前缀必须召回同一批卡，
+ * 否则「有卡 / 没卡」就是逐位试探口令的存在性 bit（与 prompt-armor 对受守行的 normalizedGuardedLeak 同一口径，
+ * 但不依赖识别哪一行是口令）。ask 与搜索（含 MCP search_notes）同一口径。代价：敏感卡不能靠数字串 / 密码串本身
+ * 找回，只能靠标签词。残留：纯汉字口令短语仍可被整串（或 ≤3 字前缀）猜测确认，见 decision-r326 §7。
+ */
+export function sensitiveRecallHaystack(plain: string): string {
+  return plain.replace(VALUE_TOKEN_RE, (tok) => (LABEL_TOKEN_RE.test(tok) ? tok : " "));
+}
+
+/**
+ * 「包含」语义；拉丁词整词匹配（maple 不得命中 mapletree：部分匹配就是前缀预言机）；
+ * 整句型 CJK 词（≥4 字）额外接受二元组覆盖 ≥ 1/2。
+ */
 function hasTerm(hay: string, term: string): boolean {
   if (term.length === 0) return false;
   const t = term.toLowerCase();
+  if (LATIN_WORD_RE.test(t)) return new RegExp(`(?<![a-z])${t}(?![a-z])`).test(hay);
   if (hay.includes(t)) return true;
   if (t.length >= 4 && CJK_RUN_RE.test(t)) return cjkBigramCoverage(hay, t) >= 0.5;
   return false;
@@ -75,7 +99,7 @@ function hasTerm(hay: string, term: string): boolean {
  */
 export function sensitiveTermScore(plain: string, tagsJson: string | null, terms: string[], topicTerms: string[]): number {
   if (terms.length === 0) return 0;
-  const hay = `${plain}\n${tagsJson ?? ""}`.toLowerCase();
+  const hay = sensitiveRecallHaystack(`${plain}\n${tagsJson ?? ""}`).toLowerCase();
   const hits = terms.filter((t) => hasTerm(hay, t));
   if (hits.length === 0) return 0;
   if (hits.length === terms.length) return hits.length;
