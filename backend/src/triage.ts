@@ -313,6 +313,19 @@ export function normalizeDigitRuns(content: string): string {
 // values that are placeholders/templates, not real secrets
 const PLACEHOLDER_VALUE_RE = /^(<|\{|\[|\*{2,}|x{3,}|你的|your[-_]?|占位)/i;
 
+// R326（decision-r326 §4.2）弱称谓凭证赋值：「可上锁对象 + 弱称谓（word / 那个词 / 那串 / 那个数）+ 取值」。
+// 「the word for the gym locker is bluefalcon」「Das Wort für den Schrank ist jetzt Herbstlaterne」
+// 「柜子那个词：桃🌸花🌸源🌸记」「柜子那个数是三七二一」没有任何凭证主题词，模型降级时会漏标；
+// 这里只认「对象 + 弱称谓 + 赋值连接词 + 值」的完整结构，「柜子换成开放式」「柜子的数量是 3 个」不命中。
+const KEYABLE_OBJECT_LATIN =
+  "(?:locker|safe|vault|door|gate|garage|wifi|wi-fi|router|lock|padlock|alarm|mailbox|cabinet|closet|storage|Schrank|Tresor|T\u00fcr|Spind|Schlie\u00dffach|WLAN|armoire|casier|coffre|porte|armario|taquilla|caja|puerta)";
+const WEAK_LABEL_ASSIGN_LATIN_RE = new RegExp(
+  `\\b(?:word|phrase|combo|combination|code|Wort|Kombination|Losung|mot|combinaison|palabra|combinaci\u00f3n|clave|parola|codice)\\s+(?:for|f\u00fcr|pour|para|per|of|to)\\s+(?:[\\p{L}-]{1,20}\\s+){0,3}?${KEYABLE_OBJECT_LATIN}\\s+(?:is|ist|est|es|\u00e9|=|:)\\s+(?:now\\s+|jetzt\\s+|maintenant\\s+|ahora\\s+)?([^\\s,.;!?]{4,})`,
+  "iu"
+);
+const WEAK_LABEL_ASSIGN_CJK_RE =
+  /(?:柜子?|储物柜|保险柜|快递柜|衣柜|路由器|门禁|大门|仓库|信箱|车库|门|锁)[^\n]{0,6}?(?:那个词|那个数字?|那串数?|那几个数|那组数|那个码|那几位|的词|的数字?)[^\S\n]{0,3}(?:[:：是为=]|叫|就是|换成了|改成了)[^\S\n]*([^\s，。；,;]{2,})/u;
+
 // 无主题词的凭证对（R194 P2-2）：「admin / Sx-R193-mx-77」这类斜杠/竖线分隔的
 // 账号-口令对没有「密码/token」等主题词，被剪藏外壳包裹时模型常判成 collect
 // 而明文回流。确定性收口：左侧是典型账号词（admin/root 等）或紧跟在「账号/
@@ -351,6 +364,10 @@ export function detectSensitive(content: string): boolean {
   if (assign && !PLACEHOLDER_VALUE_RE.test(assign[3])) return true;
   const pair = content.match(SENSITIVE_CRED_PAIR_RE);
   if (pair && !PLACEHOLDER_VALUE_RE.test(pair[1])) return true;
+  const weakLatin = content.match(WEAK_LABEL_ASSIGN_LATIN_RE);
+  if (weakLatin && !PLACEHOLDER_VALUE_RE.test(weakLatin[1])) return true;
+  const weakCjk = content.match(WEAK_LABEL_ASSIGN_CJK_RE);
+  if (weakCjk && !PLACEHOLDER_VALUE_RE.test(weakCjk[1])) return true;
   if (SENSITIVE_KEY_LITERAL_RE.test(content)) return true;
   // 数字类规则同时跑原文与归一化文本：空格/连字符/全角/分段变体不再绕过
   const normalized = normalizeDigitRuns(content);

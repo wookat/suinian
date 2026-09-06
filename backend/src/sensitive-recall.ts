@@ -69,8 +69,8 @@ function hasTerm(hay: string, term: string): boolean {
 }
 
 /**
- * 命中判定（与普通笔记 LIKE 召回同为「包含」语义）：全部检索词命中，或至少一个
- * 话题词命中且命中数不少于一半。话题词 = 剥掉时间 / 聚合 / 称谓等虚词后的词，
+ * 命中判定（与普通笔记 LIKE 召回同为「包含」OR 语义，按命中词数排序）：至少一个
+ * 话题词命中即算，得分 = 命中词数。话题词 = 剥掉时间 / 聚合 / 称谓等虚词后的词，
  * 归因只认话题词，避免「问家里 wifi 引到跳板机」（audit-r325 U2）。
  */
 export function sensitiveTermScore(plain: string, tagsJson: string | null, terms: string[], topicTerms: string[]): number {
@@ -80,9 +80,7 @@ export function sensitiveTermScore(plain: string, tagsJson: string | null, terms
   if (hits.length === 0) return 0;
   if (hits.length === terms.length) return hits.length;
   const topics = topicTerms.length > 0 ? topicTerms : terms;
-  const topicHit = topics.some((t) => hasTerm(hay, t));
-  if (!topicHit) return 0;
-  return hits.length * 2 >= terms.length ? hits.length : 0;
+  return topics.some((t) => hasTerm(hay, t)) ? hits.length : 0;
 }
 
 /**

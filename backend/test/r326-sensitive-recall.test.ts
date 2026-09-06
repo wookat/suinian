@@ -212,10 +212,14 @@ describe("R326 §2 找回：敏感笔记按解密内存匹配召回，返回行�
     expect((await recallSensitiveNotes(makeEnv([]), "u1", ["门禁"])).rows).toEqual([]);
   });
 
-  it("多词打分：全部命中最高；只命中一半且含话题词才算；无话题词命中不算（U2 wifi→跳板机不串）", () => {
+  it("多词打分：全部命中最高；任一话题词命中即算（长指令句也能召回）；无话题词命中不算（U2 wifi→跳板机不串）", () => {
     expect(sensitiveTermScore("家里 wifi 密码 chunfeng2019", null, ["家里", "wifi", "密码"], ["wifi"])).toBe(3);
     expect(sensitiveTermScore("跳板机口令：Kq7#vb2x", null, ["家里", "wifi", "密码"], ["wifi"])).toBe(0);
     expect(sensitiveTermScore("跳板机口令：Kq7#vb2x", null, ["跳板机", "口令", "多少"], ["跳板机"])).toBe(2);
+    expect(
+      sensitiveTermScore("书房柜子的暗号是 木石田", null, ["写", "四行", "小诗", "书房", "柜子", "暗号", "顺序", "每行", "开头", "背诗"], ["小诗", "书房", "柜子", "暗号", "背诗"])
+    ).toBe(3);
+    expect(sensitiveTermScore("跳板机口令：Kq7#vb2x", null, ["写", "小诗", "书房", "柜子", "暗号"], ["小诗", "书房", "柜子", "暗号"])).toBe(0);
     expect(sensitiveTermScore("x", '["门禁"]', ["门禁"], ["门禁"])).toBe(1);
     expect(sensitiveTermScore("x", null, [], [])).toBe(0);
   });
@@ -384,9 +388,29 @@ describe("R326 §4 自动标注校准：宽判据补多语言 / 比喻式称谓�
       "开门的咒语定成了 芝麻开门八八",
     ];
     for (const t of yes) expect(maybeSensitive(t), t).toBe(true);
-    // 无任何称谓的口述数字（V05 族）规则层不认：这是模型主判的责任面（decision-r326 §4：规则只做兜底），
-    // 校准表 scripts/qa-r326/calibration.ts 把它列在 rule_miss，不以拓宽规则“正则拟合”语料。
-    expect(maybeSensitive("楼下快递柜那串数换成了九六二五")).toBe(false);
+    // 完全没有对象与称谓的裸短语（L07「定下来了：白鹭飞过水面」）规则层不认：这是模型主判 / 用户手动标注的责任面
+    //（decision-r326 §4：规则只做兜底），不以拓宽规则“正则拟合”语料。
+    expect(maybeSensitive("定下来了：白鹭飞过水面")).toBe(false);
+  });
+  it("弱称谓凭证赋值（可上锁对象 + word/那个词/那串/那个数 + 值）是定论规则：模型降级漏标时 fail-closed", () => {
+    const yes = [
+      "the word for the gym locker is bluefalcon, same as last year",
+      "Das Wort für den Schrank ist jetzt Herbstlaterne.",
+      "the combo for my bike lock is 4471",
+      "柜子那个词：桃🌸花🌸源🌸记",
+      "柜子那个数是三七二一，倒着输也能开。",
+      "储物柜的数字是 482913",
+      "楼下快递柜那串数换成了九六二五",
+    ];
+    for (const t of yes) expect(detectSensitive(t), t).toBe(true);
+    const no = [
+      "想把书房刷成浅灰，柜子换成开放式，预算三千。",
+      "柜子的数量是 3 个",
+      "the word for cat in French is chat",
+      "the code for the project is on github",
+      "门口的树是银杏",
+    ];
+    for (const t of no) expect(detectSensitive(t), t).toBe(false);
   });
   it("标识符类不进定论规则：车牌 / 订单号 / 门禁卡编号 / 会议号（无密码）", () => {
     const no = ["新车牌 沪AD82917，停车登记要填。", "京东订单号 289471553201，退货要用。", "小区门禁卡编号 A2213，丢了去物业补办要报这个。", "周四例会 Zoom 会议号 8821 5570 33"];

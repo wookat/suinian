@@ -27,6 +27,8 @@ const needleOf = (text) => {
   return m ? m[0].trim() : text.replace(/[，。：:；;]/g, "").slice(0, 8);
 };
 const inText = (hay, needle) => norm(hay).includes(norm(needle));
+// 卡片体只量 content/title/url_* 等文本面；tags 是分拣产物（sanitizeSensitiveTags 已剔除取值形态串），话题词命中不算原文
+const cardText = (ns) => JSON.stringify(ns.map(({ tags: _t, ...n }) => n));
 
 let acct;
 if (existsSync(STATE)) acct = JSON.parse(readFileSync(STATE, "utf8"));
@@ -112,10 +114,10 @@ if (step === "matrix" || step === "all") {
       search_kw: kw,
       ask_status: a.status, ask_answer: ans, ask_sensitive_cards: j.sensitive_cards === true, ask_trust_tier: j.trust_tier ?? null,
       ask_card: !!mine, ask_card_withheld: mine?.content_withheld === true, ask_card_placeholder: typeof mine?.content === "string" && mine.content.includes(CARD_PH),
-      ask_answer_raw: inText(ans, R.needle), ask_notes_raw: inText(JSON.stringify(notes), R.needle) || inText(JSON.stringify(notes), c.texts[0].slice(0, 10)),
+      ask_answer_raw: inText(ans, R.needle), ask_notes_raw: inText(cardText(notes), R.needle) || inText(cardText(notes), c.texts[0].slice(0, 10)),
       search_status: s.status, search_hit: !!sHit, search_sensitive_flag: sHit?.is_sensitive === true,
       open_status: g.status, open_raw: inText(String(gn.content ?? ""), c.texts[0].slice(0, 10)), open_sensitive: gn.is_sensitive === true,
-      mcp_status: m.status, mcp_card: !!mMine, mcp_guard_kind: mMine?.guard_kind ?? null, mcp_notes_raw: inText(JSON.stringify(mNotes), R.needle) || inText(JSON.stringify(mNotes), c.texts[0].slice(0, 10)), mcp_answer_raw: inText(mb.answer ?? "", R.needle),
+      mcp_status: m.status, mcp_card: !!mMine, mcp_guard_kind: mMine?.guard_kind ?? null, mcp_notes_raw: inText(cardText(mNotes), R.needle) || inText(cardText(mNotes), c.texts[0].slice(0, 10)), mcp_answer_raw: inText(mb.answer ?? "", R.needle),
     };
     R.matrix.ok = R.matrix.ask_card && R.matrix.ask_card_withheld && !R.matrix.ask_answer_raw && !R.matrix.ask_notes_raw && R.matrix.search_hit && R.matrix.open_raw && !R.matrix.mcp_notes_raw && !R.matrix.mcp_answer_raw && (!R.matrix.mcp_card || R.matrix.mcp_guard_kind === "sensitive");
     save();
