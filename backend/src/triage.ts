@@ -340,13 +340,26 @@ const ENTRY_CODE_RE =
 const WRITTEN_VALUE_RE = /(?:写的是|写着|写了|记的是|抄的是|贴的是)[^\S\n]*([^\s，。；,;]{5,})/u;
 const DIGIT_CONCAT_RULE_RE = /中间不加(?:符号|空格|任何)|不加符号|连起来(?:就是|写|记)|拼(?:起来|在一起|到一起)|接在后面|后面接上/u;
 const DIGIT_GROUP_RE = /(?<!\d)\d{2,}(?!\d)/g;
+// 「裸短语笔记」：整条笔记只是「定下来了 / 想到的词 / 就用这个：<2–12 字短语>」，短语无任何上下文；
+// 约定口令常这样记（「定下来了：白鹭飞过水面」「想到的词：铜锁春雨」）。日期 / 时间 / 纯数字短语不命中；
+// 带任何后缀句子的笔记不命中。误报只多一次点开。
+const BARE_PHRASE_NOTE_RE =
+  /^(?:昨天|今天|刚刚?|早上|晚上|最终|最后)?(?:那个|新的?)?(?:定下来了|定了|定下来的|决定了|选定了|就用这个|就用这句|换成了?|改成了?|想到的词|想好了|那个词|新词|那句)[：:][^\S\n]*([^\s，。；,;：:！!？?]{2,12})[。.]?$/u;
+const TIME_OR_NUMBER_PHRASE_RE =
+  /^(?:[\d.．年月日号点半分一二三四五六七八九十两零〇百千万块元]|周[一-六日天]|星期[一-六日天]|上午|下午|晚上|中午|早上|今天|明天|后天|下周|本周|下月|本月|年后|节后|周末|月底|月初)+$/u;
+
+function isBarePhraseNote(content: string): boolean {
+  const m = content.trim().match(BARE_PHRASE_NOTE_RE);
+  return !!m && !TIME_OR_NUMBER_PHRASE_RE.test(m[1]);
+}
 
 function hasEntryCode(content: string): boolean {
   const entry = content.match(ENTRY_CODE_RE);
   if (entry && !PLACEHOLDER_VALUE_RE.test(entry[1])) return true;
   const written = content.match(WRITTEN_VALUE_RE);
   if (written && opaqueTokensOf(written[1]).length > 0) return true;
-  return DIGIT_CONCAT_RULE_RE.test(content) && (content.match(DIGIT_GROUP_RE) ?? []).length >= 2;
+  if (DIGIT_CONCAT_RULE_RE.test(content) && (content.match(DIGIT_GROUP_RE) ?? []).length >= 2) return true;
+  return isBarePhraseNote(content);
 }
 
 // 无主题词的凭证对（R194 P2-2）：「admin / Sx-R193-mx-77」这类斜杠/竖线分隔的

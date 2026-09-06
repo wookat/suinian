@@ -636,9 +636,11 @@ describe("R326 §4 自动标注校准：宽判据补多语言 / 比喻式称谓�
       "开门的咒语定成了 芝麻开门八八",
     ];
     for (const t of yes) expect(maybeSensitive(t), t).toBe(true);
-    // 完全没有对象与称谓的裸短语（L07「定下来了：白鹭飞过水面」）规则层不认：这是模型主判 / 用户手动标注的责任面
+    // 「定下来了：<短语>」整条裸短语笔记由 detectSensitive 的裸短语规则兜底（见下）；
+    // 完全没有任何动词 / 冒号结构、只有短语本身的笔记规则层不认：这是模型主判 / 用户手动标注的责任面
     //（decision-r326 §4：规则只做兜底），不以拓宽规则“正则拟合”语料。
-    expect(maybeSensitive("定下来了：白鹭飞过水面")).toBe(false);
+    expect(maybeSensitive("白鹭飞过水面")).toBe(false);
+    expect(detectSensitive("白鹭飞过水面")).toBe(false);
   });
   it("弱称谓凭证赋值（可上锁对象 + word/那个词/那串/那个数 + 值）是定论规则：模型降级漏标时 fail-closed", () => {
     const yes = [
@@ -692,6 +694,20 @@ describe("R326 §4 自动标注校准：宽判据补多语言 / 比喻式称谓�
       "便签上写着 iphone15pro 的序列号要去查",
       "把两段代码拼在一起就是完整脚本",
       "买了 2 斤苹果 3 斤梨，一共 25 元",
+    ];
+    for (const t of no) expect(detectSensitive(t), t).toBe(false);
+  });
+  it("裸短语笔记（R325 盲测 L03 / L07 族）：「定下来了 / 想到的词：<短语>」整条无上下文 → fail-closed；日期 / 数字 / 带后缀句子不命中", () => {
+    const yes = ["定下来了：白鹭飞过水面", "昨天想到的词：铜锁春雨", "就用这个: 木石田", "换成了：青山不改。"];
+    for (const t of yes) expect(detectSensitive(t), t).toBe(true);
+    const no = [
+      "定下来了：周五",
+      "定下来了：3点半",
+      "定下来了：下周三下午",
+      "定下来了：白鹭飞过水面，下次拍照就去那个湿地公园",
+      "换成了新的路由器，速度快多了",
+      "想到的词：serendipity，意思是意外的惊喜发现",
+      "决定了要去杭州",
     ];
     for (const t of no) expect(detectSensitive(t), t).toBe(false);
   });
