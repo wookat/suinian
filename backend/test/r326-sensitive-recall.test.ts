@@ -493,6 +493,28 @@ describe("R326 §1 拆条传播（I06）：指针笔记的敏感标注传播到�
     expect(notes[0].is_sensitive).toBe(1);
   });
 
+  it("R325 L03 生产实况：裸值「昨天想到的词：铜锁春雨」已被预检规则标敏 → 前面未标敏的指针仍要跟着标（否则指针明文进出口点名卡片）", async () => {
+    const notes = [
+      baseNote("p1", { content: "昨天记的那个词，就是柜子要用的那个。", created_at: "2026-09-01 00:00:00" }),
+      await sensitiveNote("p2", "昨天想到的词：铜锁春雨", { created_at: "2026-09-01 00:00:05" }),
+    ];
+    const env = makeEnv(notes);
+    expect(await propagateSensitiveContinuation(env, "u1", "p2")).toEqual(["p2", "p1"]);
+    expect(notes[0].is_sensitive).toBe(1);
+    expect(notes[0].content).toBe(ENC_PLACEHOLDER);
+    expect(metaCont(notes[0])).toBe("p2");
+    expect(metaCont(notes[1])).toBe("p1");
+    expect(await decryptContent(KEY, notes[1].content_enc as string)).toBe("昨天想到的词：铜锁春雨");
+    // 反向同理：裸值已标敏、随后写入的指针也要标
+    const rev = [
+      await sensitiveNote("s1", "就用这个：铜锁春雨", { created_at: "2026-09-01 00:00:00" }),
+      baseNote("q2", { content: "上一条就是衣柜密码", created_at: "2026-09-01 00:01:00" }),
+    ];
+    expect(await propagateSensitiveContinuation(makeEnv(rev), "u1", "q2")).toEqual(["s1", "q2"]);
+    expect(rev[1].is_sensitive).toBe(1);
+    expect(metaCont(rev[1])).toBe("s1");
+  });
+
   it("正向：「衣柜密码明天再记，先占个位」（已标敏）→「就是 铜锁春雨 这四个字」被标敏 + 加密，meta 记指针 id", async () => {
     const notes = [
       await sensitiveNote("s1", "衣柜密码明天再记，先占个位", { created_at: "2026-09-01 00:00:00" }),

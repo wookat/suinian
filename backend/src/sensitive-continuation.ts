@@ -91,8 +91,9 @@ async function markContinuation(env: Pick<Env, "DB" | "SUINIAN_ENC_KEY" | "MEDIA
 /**
  * 单条笔记写入后：把相邻指针笔记的敏感标注传播到裸值笔记上。
  *  - 正向：新笔记是短裸值，且它前面 CONTINUATION_LOOKBACK 条内有一条指针（未被用户显式取消标记）→ 标新笔记；
- *  - 反向：新笔记本身是指针（「上一条就是衣柜密码」）→ 标紧邻的那条未标敏感短笔记。
- * 指针自身是否已标敏感不作前提：指针里没有值，模型复判很可能已把它降级，而值在另一条。
+ *  - 反向：新笔记本身是指针（「上一条就是衣柜密码」）→ 标紧邻的那条短笔记。
+ * 指针 / 裸值自身是否已标敏感都不作前提：指针里没有值，模型复判很可能已把它降级；裸值若已被规则 / 模型标敏感，
+ * 指针仍需跟着标（否则指针以明文进 AI 出口，直接点名了旁边那张卡片里是什么凭证）。
  * 传播成立后指针与裸值视为同一条拆开记的凭证：两条都标敏感并互记对方 id，模型复判不得单独降级其中一条
  * （否则指针以明文进 AI 出口，它直接点名了旁边那张卡片里是什么凭证）。
  * 返回本次新增标注的笔记 id（裸值在前，指针在后）。
@@ -123,16 +124,17 @@ export async function propagateSensitiveContinuation(
         if (await markContinuation(env, pointer, carrier.id)) marked.push(pointer.id);
       }
     };
-    if (!fresh.is_sensitive && continuationShape(fresh.content)) {
+    const freshPlain = await plainOf(env, fresh);
+    if (!manuallyUnmarked(fresh) && continuationShape(freshPlain) && !isContinuationPointer(freshPlain)) {
       for (const p of prior) {
         if (manuallyUnmarked(p)) continue;
         if (!isContinuationPointer(await plainOf(env, p))) continue;
         await pin(fresh, p);
         break;
       }
-    } else if (!manuallyUnmarked(fresh) && isContinuationPointer(await plainOf(env, fresh))) {
+    } else if (!manuallyUnmarked(fresh) && isContinuationPointer(freshPlain)) {
       const prev = prior[0];
-      if (!prev.is_sensitive && continuationShape(prev.content)) await pin(prev, fresh);
+      if (!manuallyUnmarked(prev) && continuationShape(await plainOf(env, prev))) await pin(prev, fresh);
     }
     return marked;
   } catch (err) {
