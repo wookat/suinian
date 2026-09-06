@@ -123,3 +123,21 @@ if (diffKeys.length > 0 && annotDiv.size > 0) {
   }
   console.log(`== oracle-pair(aligned annotation): re-asked=${diffKeys.length} diff(bits_upper)=${still} survive=${survive2}`);
 }
+
+// 同账号重问：DIFF 题在 A 侧再问一次。A1≠A2 ⇒ 差异是模型采样抖动（同一秘密值、同一问句），不是跨账号的秘密值 bit；
+// A1=A2 但 A≠B ⇒ 才需要按秘密值差异归因。
+if (diffKeys.length > 0) {
+  let unstable = 0, stableDiff = 0;
+  for (const key of diffKeys) {
+    const [qid] = key.split("/");
+    const q = Q.find((x) => x.id === qid);
+    const again = await one(st.A, rows[key].q, q.secret);
+    rows[`${key}#repeatA`] = { q: rows[key].q, A: again };
+    writeFileSync(RES, JSON.stringify(rows, null, 1));
+    const eq = again.norm === rows[key].A.norm && again.refs === rows[key].A.refs;
+    if (eq) stableDiff++; else unstable++;
+    console.log(`${key}#repeatA ${eq ? "SAME(A1=A2)" : "DIFF(A1≠A2 模型抖动)"} refs=${again.refs}${again.survive ? " SURVIVE" : ""}`);
+    if (!eq) console.log(`   A2: ${JSON.stringify(again.answer).slice(0, 160)}`);
+  }
+  console.log(`== oracle-pair(repeat A): diff=${diffKeys.length} sampling_noise=${unstable} value_dependent_upper=${stableDiff}`);
+}

@@ -466,6 +466,7 @@ describe("R326 §1 拆条传播（I06）：指针笔记的敏感标注传播到�
     // 弱称谓指针（R325 L03）：没有任何凭证称谓词，只有「柜子…那个词/要用的那个」
     expect(isContinuationPointer("昨天记的那个词，就是柜子要用的那个。")).toBe(true);
     expect(isContinuationPointer("储物柜那串数字记在下一条")).toBe(true);
+    expect(isContinuationPointer("财务系统那台机器的登录串我单独记了一条，别忘了。")).toBe(true);
     expect(isContinuationPointer("the word for the locker is in the next note")).toBe(true);
     // 含值的不是指针（由 detectSensitive 直接定论）；普通短句不是指针
     expect(isContinuationPointer("衣柜密码改成了 4821#")).toBe(false);

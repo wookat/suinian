@@ -8,6 +8,7 @@ const log = [];
 const L = (...a) => { console.log(...a); log.push(a.join(" ")); };
 
 async function delWithToken(label, token) {
+  if (!token) { L(label, "no token - keep file"); return false; }
   const me = await req("/api/auth/me", { token });
   if (me.status !== 200) { L(label, "me status", me.status, "- skip"); return me.status === 401; }
   const name = me.json?.name ?? me.json?.user?.name ?? "";
@@ -26,7 +27,8 @@ const FILES = readdirSync(OUT).filter((f) => /^(prod-.*-account|lh-account|brows
 const done = [];
 for (const f of FILES) {
   const parsed = JSON.parse(readFileSync(`${OUT}/${f}`, "utf8"));
-  const accounts = Array.isArray(parsed) ? parsed : [parsed];
+  // oracle-pair 的状态文件是 { A: {token,…}, B: {token,…}, alt } 双账号结构
+  const accounts = Array.isArray(parsed) ? parsed : parsed.A?.token && parsed.B?.token ? [parsed.A, parsed.B] : [parsed];
   let ok = true;
   for (const [i, a] of accounts.entries()) {
     if (!(await delWithToken(`${f}#${i}`, a.token))) ok = false;
