@@ -18,7 +18,7 @@ export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
 import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, isSecretValueQuestion, unitTalksAboutSecret, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
 import { modelContextNoteText, reconcileDoneAnswer } from "./ask-context";
-import { recallSensitiveNotes, sensitiveOnlyAnswer, sensitiveUncitedLine, sensitiveAnswerLeak, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
+import { recallSensitiveNotes, sensitiveOnlyAnswer, sensitiveUncitedLine, sensitiveAnswerLeak, attributableTopicTerms, sensitiveRecallTerms, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -5002,7 +5002,10 @@ app.post("/api/ask", async (c) => {
   // R326（decision-r326 §2）：敏感笔记的找回通道——密文只在本请求内解密用于匹配，行对象不解密；
   // 命中的敏感笔记以引用卡片（占位体 + id）出现，模型上下文只见 SENSITIVE_MODEL_LINE。
   const tSens = Date.now();
-  const sensRecall = metaQuestion ? { rows: [] as NoteRow[], plains: new Map<string, string>(), overflow: 0 } : await recallSensitiveNotes(c.env, userId, terms, { topicTerms: askTopicTerms(terms) });
+  // R328 D：敏感召回只用问句字面词（抽取模型的同义扩展词不参与归因），非探问形态再并入朴素整句词做二元组近似召回；
+  // 预言机 / 确定性探问形态不并入整句（候选值不进召回，R320 B1）。
+  const sensTerms = sensitiveRecallTerms(terms, deterministicRecall || oracleProbe ? [] : extractAskTerms(recallQuestion, []), `${recallQuestion}\n${askQuestion}\n${historyText}`);
+  const sensRecall = metaQuestion ? { rows: [] as NoteRow[], plains: new Map<string, string>(), overflow: 0 } : await recallSensitiveNotes(c.env, userId, sensTerms, { topicTerms: askTopicTerms(sensTerms) });
   askMarks.push(["senskw", Date.now() - tSens]);
   const sensitiveIds = new Set(sensRecall.rows.map((n) => n.id));
   const sensitiveCardsBody = () => {
@@ -5143,12 +5146,29 @@ app.post("/api/ask", async (c) => {
   const valueWithheld = new Set<string>();
   if (valueProbe) {
     const guarded = notes.filter((n, i) => !n.is_sensitive && unitTalksAboutSecret(askModelUnits[i], askCrossGuarded));
-    const topicHits = guardedTopicHits(guarded, gateTopics, gateNoteText);
-    if (guarded.length > 0 && topicHits.length === 0 && guarded.length < notes.length) {
+    // 归因用话题词剥掉称谓 / 元词 / 指代词（「门口暗号」→「门口」，「那串」→ 无）；剥空时按原主题词比对（R324 现状）。
+    const attribTopics = attributableTopicTerms(gateTopics);
+    const topicHits = guardedTopicHits(guarded, attribTopics.length > 0 ? attribTopics : gateTopics, gateNoteText);
+    // 问句有可归因话题而无一张讲秘密的卡命中：这些卡不是问题所指（向量召回按语义相近凑来的别人的秘密），
+    // 不得作为占位答案的引用卡（audit-r327 §5.3「门口暗号」→ 健身卡）。
+    const offTopic = guarded.length > 0 && topicHits.length === 0 && attribTopics.length > 0;
+    if (offTopic && guarded.length < notes.length) {
       for (const n of guarded) valueWithheld.add(n.id);
       console.log(`ask: credential value question — ${guarded.length} secret-talking note(s) withheld whole from model context (topic points elsewhere)`);
+    } else if (offTopic && sensRecall.rows.length === 0) {
+      const hint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
+      const { answer, references } = buildNoAnswerResponse([], "not_in_notes");
+      console.log(`ask: credential value question — ${guarded.length} secret-talking note(s) off-topic and no sensitive card attributed; answered as not-in-notes without citations`);
+      return c.json({
+        answer,
+        references,
+        notes: [],
+        no_answer: true,
+        value_withheld: true,
+        ...systemHintField(hint),
+      });
     } else if (guarded.length > 0) {
-      const shown = [...(topicHits.length > 0 ? topicHits : guarded).slice(0, 3), ...sensRecall.rows];
+      const shown = offTopic ? [...sensRecall.rows] : [...(topicHits.length > 0 ? topicHits : guarded).slice(0, 3), ...sensRecall.rows];
       const references = shown.map((n, i) => ({ index: i + 1, note_id: n.id }));
       const refNotes = shown.map(askRefNoteJson);
       const kinds = shown.filter((n) => !n.is_sensitive).flatMap((n) => directGuardLines(askGuardNoteUnit(n)).filter((g) => g.own).map((g) => g.kind));

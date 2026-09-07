@@ -73,6 +73,28 @@ export function sensitiveTopicTerms(topicTerms: readonly string[]): string[] {
   return strip([SENSITIVE_META_STRIP_RE]);
 }
 
+/**
+ * 敏感召回的检索词：只保留问句 / 历史里字面出现过的词（关键词抽取模型按「是多少」推出的「数字 / 密码」之类
+ * 同义扩展词不在问句里，拿它归因只会命中别人的卡：audit-r327 G04 → E07「罗马数字」），再并入朴素整句词
+ * （敏感笔记没有语义向量，整句二元组覆盖是它唯一的近似召回：「忘了三次才想起来那个」）。
+ */
+export function sensitiveRecallTerms(terms: readonly string[], naiveTerms: readonly string[], questionText: string): string[] {
+  const hay = collapseCjkSpace(questionText).toLowerCase();
+  const out = terms.filter((t) => hay.includes(collapseCjkSpace(t).toLowerCase()));
+  for (const t of naiveTerms) if (!out.includes(t)) out.push(t);
+  return out;
+}
+
+/** 严格归因话题词：称谓 / 元词 / 指代词全剥且不回落。为空 ⇒ 问句没有可归因的话题（「密码是多少」「那串是多少」）。 */
+export function attributableTopicTerms(topicTerms: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const t of topicTerms) {
+    const r = t.replace(SENSITIVE_LABEL_STRIP_RE, "").replace(SENSITIVE_META_STRIP_RE, "").trim();
+    if (r.length >= 2 && !out.includes(r)) out.push(r);
+  }
+  return out;
+}
+
 // 比对面去空白：问句「U盾」vs 正文「U 盾」、「wifi密码」vs「wifi 密码」比不中自己那条就是错引的一个根因。
 // 只折叠贴着 CJK 的空白，拉丁词之间的空格保留（整词匹配需要词边界）。
 const CJK_ADJACENT_SPACE_RE = /(?<=[\u4e00-\u9fff])\s+|\s+(?=[\u4e00-\u9fff])/g;

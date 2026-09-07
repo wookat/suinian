@@ -76,6 +76,6 @@ fi
 echo "deploy-sync: Worker 与 Pages 同为 $SHA"
 
 echo "== evidence: wrangler deployments list =="
-(cd backend && npx wrangler deployments list 2>&1 | head -n 20)
+(cd backend && npx wrangler deployments list 2>&1 | tail -n 9)
 echo "== evidence: wrangler pages deployment list =="
-(cd web && npx wrangler pages deployment list --project-name "$PAGES_PROJECT" 2>&1 | head -n 6)
+(cd web && npx wrangler pages deployment list --project-name "$PAGES_PROJECT" 2>&1 | grep -m 2 'pages.dev' | sed 's/  */ /g')
