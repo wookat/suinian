@@ -17,6 +17,9 @@ import {
   crossUnitGuardedLines,
   normalizedGuardedLeak,
   failClosedGuardAnswer,
+  sourceValueCandidates,
+  isSecretValueQuestion,
+  unitTalksAboutSecret,
   type BroadFoldReason,
   type DirectGuardKind,
 } from "./prompt-armor";
@@ -68,22 +71,31 @@ export type GuardedNoteMark = { guarded: boolean; guard_kind?: DirectGuardKind |
  * R324 C1（audit-r323 A2：MCP ask 的 notes[] 直接回传原文）：ask 是聚合 / 对外层，answer 里已经占位的受守内容不能从同一响应的
  * notes[] 里原文拿回去——含受守行（口令 / 命令 / 长串编号 / 端点，含跨笔记指代）的条目整条换占位并打 guarded 标记；
  * search_notes / get_thread 的原文契约不变。返回受守单元列表供 answer 归一化复查。
+ * R328 A3（audit-r327 §4：漏标条 notes[] 原文裸出）：条目是否占位不再只看标注 / 受守行——全资料取值候选
+ * （sourceValueCandidates：URL query token、口述数字、暗语引号短语、藏头 / 藏尾派生值）命中的未标注条目同样整条占位；
+ * 同时回传全部召回单元（units）供 answer 末端复核，比对面不再局限于已受守的条目。
+ * 取值型问句（isSecretValueQuestion）下与 /api/ask 的 R328 A 闸门同口径：在讲秘密的条目（unitTalksAboutSecret，含凭证标签但取值无法派生的
+ * 拼音首字母 / 键盘位移一类）整条占位，答案已占位的取值不能从 notes[] 拿回去。
  */
-export function guardAskNotes<T extends GuardableNote>(notes: T[]): { notes: (T & GuardedNoteMark)[]; guardedUnits: string[] } {
+export function guardAskNotes<T extends GuardableNote>(notes: T[], question?: string): { notes: (T & GuardedNoteMark)[]; guardedUnits: string[]; units: string[] } {
   const units = notes.map(mcpGuardUnit);
   const cross = crossUnitGuardedLines(units);
+  const valueProbe = !!question && isSecretValueQuestion(question);
   const guardedUnits: string[] = [];
   const out = notes.map((n, i) => {
     // 数据层已标敏感的条目 redactNote 已换占位；这里补 guarded 标记让宿主机器可读地知道该条不是原文。
     if (n.is_sensitive) return { ...n, ...GUARDED_LINK_FIELDS, content: MCP_SENSITIVE_ASK_PLACEHOLDER, title: null, tags: [], guarded: true, guard_kind: "sensitive" as const };
     const own = directGuardLines(units[i]).filter((g) => g.own);
     const crossHit = units[i].split("\n").some((l) => cross.has(l.trim()));
-    if (own.length === 0 && !crossHit) return { ...n, guarded: false };
+    const sourceValues = own.length === 0 && !crossHit ? sourceValueCandidates([units[i]], question) : [];
+    const valueTalk = own.length === 0 && !crossHit && sourceValues.length === 0 && valueProbe && unitTalksAboutSecret(units[i], cross);
+    if (own.length === 0 && !crossHit && sourceValues.length === 0 && !valueTalk) return { ...n, guarded: false };
     guardedUnits.push(units[i]);
-    const kind: DirectGuardKind | "cross" = own.length > 0 ? own.reduce((a, g) => (rankOf(g.kind) > rankOf(a) ? g.kind : a), own[0].kind) : "cross";
+    const ranked = own.length > 0 ? own.map((g) => g.kind) : sourceValues.length > 0 ? sourceValues.map((c) => c.kind) : valueTalk ? ["credential" as const] : [];
+    const kind: DirectGuardKind | "cross" = ranked.length > 0 ? ranked.reduce((a, k) => (rankOf(k) > rankOf(a) ? k : a), ranked[0]) : "cross";
     return { ...n, ...GUARDED_LINK_FIELDS, content: MCP_GUARDED_PLACEHOLDER, title: MCP_GUARDED_PLACEHOLDER, tags: [], guarded: true, guard_kind: kind };
   });
-  return { notes: out, guardedUnits };
+  return { notes: out, guardedUnits, units };
 }
 const GUARD_RANK: Record<DirectGuardKind, number> = { credential: 5, destructive: 4, opaque: 3, endpoint: 2, code: 1 };
 function rankOf(k: DirectGuardKind): number {
@@ -92,11 +104,12 @@ function rankOf(k: DirectGuardKind): number {
 /**
  * R324 C1：MCP ask 的 answer 再过一道与 REST 同源的闭合（/api/ask 已按 mcp 出口走 finalizeAskAnswer；这里是同一条管线的末端复核）：
  * 与受守单元的逐字重合换占位，归一化比对仍能对出受守取值时整答 fail-closed。
+ * R328 A3：比对面 = 全部召回单元（含未标注、未受守的条目），与 /api/ask 聚合层同口径；question 供取值候选判断问法线索。
  */
-export function closeMcpAskAnswer(answer: string, guardedUnits: readonly string[]): { answer: string; closed: number; failClosed: boolean } {
-  if (!answer || guardedUnits.length === 0) return { answer, closed: 0, failClosed: false };
-  const agg = closeAggregateOutlet(answer, guardedUnits);
-  const leak = normalizedGuardedLeak(agg.answer, [...guardedUnits]);
+export function closeMcpAskAnswer(answer: string, units: readonly string[], question?: string): { answer: string; closed: number; failClosed: boolean } {
+  if (!answer || units.length === 0) return { answer, closed: 0, failClosed: false };
+  const agg = closeAggregateOutlet(answer, units);
+  const leak = normalizedGuardedLeak(agg.answer, [...units], question);
   if (leak !== null) return { answer: failClosedGuardAnswer(agg.answer, leak), closed: agg.count + 1, failClosed: true };
   return { answer: agg.answer, closed: agg.count, failClosed: false };
 }
@@ -352,10 +365,10 @@ export function buildMcpServer(
         verbatim_closed_spans?: unknown;
       };
       // R324 C1：notes[] 里的受守条目整条占位 + guarded 标记；answer 再过同源闭合的末端复核。
-      const guardedAsk = guardAskNotes(redactNotes(body.notes));
+      const guardedAsk = guardAskNotes(redactNotes(body.notes), question);
       const askFlagged = flagExecNotes(guardedAsk.notes);
       onExecMarks(askFlagged.counts);
-      const closedAnswer = closeMcpAskAnswer(typeof body.answer === "string" ? body.answer : "", guardedAsk.guardedUnits);
+      const closedAnswer = closeMcpAskAnswer(typeof body.answer === "string" ? body.answer : "", guardedAsk.units, question);
       const closedSpans = (typeof body.verbatim_closed_spans === "number" ? body.verbatim_closed_spans : 0) + closedAnswer.closed;
       onVerbatimClosed(closedSpans);
       const anyGuarded = guardedAsk.notes.some((n) => n.guarded);

@@ -494,7 +494,7 @@ export async function applyTriage(
 }
 
 /** 分拣回写被并发编辑抢先时的处置：只标复判位，cron 用新内容重分拣。 */
-async function markNeedsRetriage(db: D1Database, noteId: string): Promise<void> {
+export async function markNeedsRetriage(db: D1Database, noteId: string): Promise<void> {
   await db
     .prepare("UPDATE notes SET meta = json_set(coalesce(meta, '{}'), '$.needs_retriage', json('true')) WHERE id = ?")
     .bind(noteId)

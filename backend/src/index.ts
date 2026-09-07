@@ -11,13 +11,14 @@ import {
   applyNotePatch,
   replaceNoteContent,
   applyTriage,
+  markNeedsRetriage,
   prepareTagsUpdate,
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, scopeGuardedByTopic, normalizedGuardedLeak, type BroadFoldReason } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, isSecretValueQuestion, unitTalksAboutSecret, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
 import { modelContextNoteText, reconcileDoneAnswer } from "./ask-context";
-import { recallSensitiveNotes, sensitiveOnlyAnswer, sensitiveUncitedLine, sensitiveAnswerLeak, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
+import { recallSensitiveNotes, sensitiveOnlyAnswer, sensitiveUncitedLine, sensitiveAnswerLeak, attributableTopicTerms, sensitiveRecallTerms, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -85,7 +86,7 @@ import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES, BACKUP_AI_DERIVED_NOT
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
 import { propagateSensitiveContinuation } from "./sensitive-continuation";
-import { type AskEnumRoute, parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources, citeIsolationMarks } from "./ask";
+import { type AskEnumRoute, parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, retargetMisindexedCitation, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources, citeIsolationMarks } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -591,7 +592,9 @@ app.get("/health", async (c) => {
   // ADMIN_TOKEN 持有者暴露；公开拨测只需 ok（R166 P2-5 同一口径）
   const auth = c.req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
   const isAdmin = !!c.env.ADMIN_TOKEN && auth === c.env.ADMIN_TOKEN;
-  return c.json(isAdmin ? { ok: true, enc_key: !!c.env.SUINIAN_ENC_KEY } : { ok: true });
+  // build：部署时注入的 git SHA（scripts/deploy-sync.sh），与 Pages 首页 `<meta name="build">` 同源核验 Worker / Pages 是否同一提交；仓库公开，SHA 不是内部信息。
+  const build = c.env.BUILD_SHA ? { build: c.env.BUILD_SHA } : {};
+  return c.json(isAdmin ? { ok: true, ...build, enc_key: !!c.env.SUINIAN_ENC_KEY } : { ok: true, ...build });
 });
 
 // ---- public auth: register / login (mounted before the bearer middleware) ----
@@ -1771,7 +1774,8 @@ async function createNote(
   // skipTriage (`!` inline command): store as-is under 想法 and mark the fields
   // manual so neither the sync triage nor the cron sweep re-sorts it. 敏感复判
   // 不在豁免之列（R126 P1-2）：skip 只跳过分类/打标，全部字段标 manual 后，
-  // 疑似含密的内容仍走 fail-closed 预检 + 模型复判，只裁决敏感与否。
+  // 内容仍走 fail-closed 预检 + 模型复判，只裁决敏感与否。R328 B（audit-r327 §5.2）：模型复判不再以
+  // 预检疑似命中为前提——预检没认出的口令（「解锁短语：橘子 台灯 秋天」）永不被裁决，就是这个旁路。
   const meta: NoteMeta | null =
     opts.skipTriage || manualTags.length > 0
       ? {
@@ -1841,6 +1845,8 @@ async function createNote(
     // （R234 P3-5 可观测性：异步重试耗尽落 NULL 时留下归因日志——超时/提供方
     // 失败与解析失败在 wrangler tail 里可直接区分，不再"归因未验证"）
     if (!triage) console.error(`triage incomplete note=${id} failure=${failure ?? "unknown"} retried=${retry}; awaiting cron/kick resweep`);
+    // `!` 笔记分类已落「想法」（非 NULL），cron 不会因 category IS NULL 复扫：模型不可用时显式标 needs_retriage 让敏感裁决必达。
+    if (!triage && opts.skipTriage) await markNeedsRetriage(c.env.DB, id);
     if (triage) await applyTriage(c.env, id, triage, content);
     return triage;
   };
@@ -1876,7 +1882,8 @@ async function createNote(
 
   let triage: TriageResult | null = null;
   if (opts.skipTriage) {
-    waitUntil(capped(runPipeline(false), PIPELINE_TIMEOUT_MS, `pipeline note=${id}`));
+    // `!` 路径与普通速记同一条分拣管线：applyTriage 按 manual_override 保留分类 / 标签 / 标题 / 截止，只落敏感位。
+    waitUntil(capped(runPipeline(true), PIPELINE_TIMEOUT_MS, `pipeline note=${id}`));
   } else if (opts.syncTriage) {
     // sync path (wechat reply) stays single-attempt: the reply must be fast
     triage = await runTriage(false);
@@ -4995,7 +5002,10 @@ app.post("/api/ask", async (c) => {
   // R326（decision-r326 §2）：敏感笔记的找回通道——密文只在本请求内解密用于匹配，行对象不解密；
   // 命中的敏感笔记以引用卡片（占位体 + id）出现，模型上下文只见 SENSITIVE_MODEL_LINE。
   const tSens = Date.now();
-  const sensRecall = metaQuestion ? { rows: [] as NoteRow[], plains: new Map<string, string>(), overflow: 0 } : await recallSensitiveNotes(c.env, userId, terms, { topicTerms: askTopicTerms(terms) });
+  // R328 D：敏感召回只用问句字面词（抽取模型的同义扩展词不参与归因），非探问形态再并入朴素整句词做二元组近似召回；
+  // 预言机 / 确定性探问形态不并入整句（候选值不进召回，R320 B1）。
+  const sensTerms = sensitiveRecallTerms(terms, deterministicRecall || oracleProbe ? [] : extractAskTerms(recallQuestion, []), `${recallQuestion}\n${askQuestion}\n${historyText}`);
+  const sensRecall = metaQuestion ? { rows: [] as NoteRow[], plains: new Map<string, string>(), overflow: 0 } : await recallSensitiveNotes(c.env, userId, sensTerms, { topicTerms: askTopicTerms(sensTerms) });
   askMarks.push(["senskw", Date.now() - tSens]);
   const sensitiveIds = new Set(sensRecall.rows.map((n) => n.id));
   const sensitiveCardsBody = () => {
@@ -5093,8 +5103,8 @@ app.post("/api/ask", async (c) => {
   // R320 B1：预言机形态问题命中含受守行（口令/密钥/高熵串/命令）的笔记 ⇒ 不进生成，答案恒为中性指引 + 角标；
   // 对值 / 错值 / 部分值同一输出（召回已去掉候选值，命中集合与候选值无关）。
   // R322 A（方案 1）：受守行（口令 / 命令 / 长串编号，含跨笔记指代的裸取值）在进模型前替换为占位——模型没见过就变形不出来。
-  const askModelUnits = notes.map(askGuardNoteUnit);
-  const askCrossGuarded = crossUnitGuardedLines(askModelUnits);
+  let askModelUnits = notes.map(askGuardNoteUnit);
+  let askCrossGuarded = crossUnitGuardedLines(askModelUnits);
   const askNoteGuarded = (i: number): boolean =>
     directGuardLines(askModelUnits[i]).length > 0 ||
     askModelUnits[i].split("\n").some((l) => askCrossGuarded.has(l.trim()));
@@ -5128,9 +5138,56 @@ app.post("/api/ask", async (c) => {
       });
     }
   }
-  // R326 A（decision-r326 §1）：R324 的「取值型问句才占位」分支已删除——安全边界不再看问句 / 内容形态，只看数据层
-  // 标注（is_sensitive）：标注为敏感的笔记在上面以占位行进候选，模型从未见过它的原文；未标注的笔记是普通笔记，
-  // 仅由 R322 行级替换与出口层归一化闭合做纵深防御。
+  // R328 A（decision-r328 §2）：恢复 R324 A 的取值型问句闸门，作为数据层标注之上的第二道（R326 删掉它后，漏标笔记只剩出口层
+  // 归一化比对，而编码 / 拼音首字母一类「出口层算不出真值」的载体无从比对——audit-r327 §3.1）。只看未标注笔记：标注为敏感的
+  // 已在上面以占位行进候选。在讲秘密（受守行 / 凭证标签 / 跨笔记指代 / R328 强形态取值候选）的笔记碰上取值型问句 ⇒ 不进生成，
+  // 直答恒为类别占位 + 角标；问题主题另有所指时这些笔记整条不进上下文，其余照常作答。
+  const valueProbe = !metaQuestion && !oracleProbe && isSecretValueQuestion(question, history.length > 0 ? historyText : "");
+  if (valueProbe) {
+    const guarded = notes.filter((n, i) => !n.is_sensitive && unitTalksAboutSecret(askModelUnits[i], askCrossGuarded));
+    // 归因用话题词剥掉称谓 / 元词 / 指代词（「门口暗号」→「门口」，「那串」→ 无）；剥空时按原主题词比对（R324 现状）。
+    const attribTopics = attributableTopicTerms(gateTopics);
+    const topicHits = guardedTopicHits(guarded, attribTopics.length > 0 ? attribTopics : gateTopics, gateNoteText);
+    // 问句有可归因话题而无一张讲秘密的卡命中：这些卡不是问题所指（向量召回按语义相近凑来的别人的秘密），
+    // 不得作为占位答案的引用卡（audit-r327 §5.3「门口暗号」→ 健身卡）。
+    const offTopic = guarded.length > 0 && topicHits.length === 0 && attribTopics.length > 0;
+    if (offTopic && guarded.length < notes.length) {
+      // 整条出候选（不是留占位行）：占位行会被模型当「这条笔记记了它 [n]」引出去，角标仍指向别人的秘密卡（audit-r327 G07 → BR07）。
+      const drop = new Set(guarded.map((n) => n.id));
+      notes = notes.filter((n) => !drop.has(n.id));
+      askModelUnits = notes.map(askGuardNoteUnit);
+      askCrossGuarded = crossUnitGuardedLines(askModelUnits);
+      console.log(`ask: credential value question — ${guarded.length} secret-talking note(s) dropped from candidates (topic points elsewhere)`);
+    } else if (offTopic && sensRecall.rows.length === 0) {
+      const hint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
+      const { answer, references } = buildNoAnswerResponse([], "not_in_notes");
+      console.log(`ask: credential value question — ${guarded.length} secret-talking note(s) off-topic and no sensitive card attributed; answered as not-in-notes without citations`);
+      return c.json({
+        answer,
+        references,
+        notes: [],
+        no_answer: true,
+        value_withheld: true,
+        ...systemHintField(hint),
+      });
+    } else if (guarded.length > 0) {
+      const shown = offTopic ? [...sensRecall.rows] : [...(topicHits.length > 0 ? topicHits : guarded).slice(0, 3), ...sensRecall.rows];
+      const references = shown.map((n, i) => ({ index: i + 1, note_id: n.id }));
+      const refNotes = shown.map(askRefNoteJson);
+      const kinds = shown.filter((n) => !n.is_sensitive).flatMap((n) => directGuardLines(askGuardNoteUnit(n)).filter((g) => g.own).map((g) => g.kind));
+      const kind: DirectGuardKind = kinds.includes("credential") || kinds.length === 0 ? "credential" : kinds[0];
+      console.log(`ask: credential value question withheld before generation (${guarded.length} unmarked note(s) talk about a secret)`);
+      return c.json({
+        answer: `${DIRECT_GUARD_PLACEHOLDER[kind]}${references.map((r) => `[${r.index}]`).join("")}`,
+        references,
+        notes: refNotes,
+        value_withheld: true,
+        trust_tier: references.length === 1 ? "single_note_direct" : "aggregate",
+        verbatim_closed_spans: 0,
+        guard_finalized: true,
+      });
+    }
+  }
 
   // 关系限定词忠实性护栏（R256 P1-1，audit-r255）：问题里的人物关系限定词
   // （女朋友/妈妈/同事…含同义变体）在全部召回文本中零出现时，片段不可能
@@ -5195,7 +5252,7 @@ app.post("/api/ask", async (c) => {
         askModelWithheld += 1;
         return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${tags ? `, 标签:${tags}` : ""}) ${SENSITIVE_MODEL_LINE}`;
       }
-      const redacted = modelContextNoteText({ title: n.title, content: n.content, unit: askModelUnits[i], crossGuarded: askCrossGuarded, budget: perNoteBudget, withholdWhole: false });
+      const redacted = modelContextNoteText({ title: n.title, content: n.content, unit: askModelUnits[i], crossGuarded: askCrossGuarded, budget: perNoteBudget });
       if (redacted.redacted > 0) askModelRedactedLines += redacted.redacted;
       if (redacted.withheld) askModelWithheld += 1;
       return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${redacted.text}`;
@@ -5698,6 +5755,11 @@ app.post("/api/ask", async (c) => {
     // 充数；否则「银行卡密码」这类问题会引三条无关笔记误导用户
     const credentialQ = CREDENTIAL_Q_RE.test(question);
     if (credentialQ) suggestions = suggestions.filter((n) => noteHitsTopic(n, topics));
+    // 取值型问句同理（R328 D）：「门口暗号那句」零召回时不拿别的凭证卡（订单号 / 车牌）当相近记录
+    if (valueProbe && !credentialQ) {
+      const sugTopics = attributableTopicTerms(gateTopics);
+      if (sugTopics.length > 0) suggestions = suggestions.filter((n) => noteHitsTopic(n, sugTopics));
+    }
     // 建议位不当执行通道（audit-r268：R268-32/33 跨笔记分片的 demand 文字藏在
     // 笔记标题/正文里，随建议标签原样外带）：含指令要求物的笔记不进建议列表
     const refusalDemands = (await Promise.race([
@@ -5731,7 +5793,7 @@ app.post("/api/ask", async (c) => {
   // 否定话术实体后校验（R200，audit-r199 P3-1）：否定分句引入问句与片段中
   // 都不存在的实体时改写成通用指代（流式 delta 原样透传，done 事件全文替换
   // 时生效——与引证补全同一收口时机）
-  const negScrubbed = scrubUnsourcedNegations(answer2 ?? "", askScrubSource);
+  const negScrubbed = retargetMisindexedCitation(scrubUnsourcedNegations(answer2 ?? "", askScrubSource), notes);
   // weak semantic-only hits stay in the context but never surface as
   // citations; the answer text and the references array are rewritten
   // together so no [n] marker dangles
