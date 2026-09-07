@@ -8256,14 +8256,22 @@ const SOURCE_IDENTIFIER_LABEL_RE =
 const SOURCE_UNIT_SUFFIX_RE = /^\s*(?:年|月|日|号|元|块|万|千|亿|米|斤|克|页|楼|层|室|栋|路|线|度|%|％|点|分|秒|kg|km|cm|mm|ml|g\b)/iu;
 const SOURCE_UNIT_PREFIX_RE = /(?:[¥￥$€£]|第|\bv|№)\s*$/iu;
 const SOURCE_JOIN_CUE_RE = /连起来|合起来|拼起来|接起来|连在一起|合在一起|拼在一起/u;
+/** 分片线索：这行自报只是取值的一段（前半段 / 后半段 / 第 N 段 / 接上一条）——分段的取值任何形态都可能，标识符形态不豁免。 */
+const SOURCE_FRAGMENT_CUE_RE = /[前后上下]半段|[前后]半(?![年夜场天月周生小时])|前一段|后一段|第[一二三四五1-5]段|接上一?条|上一条的/u;
+/** 参与跨单元拼接的单元数上界（召回集里夹带的无关单元不计入拼接面，见 sourceValueCandidates）。 */
+const SOURCE_JOIN_MAX_UNITS = 6;
+/** 拼接子集里全排列的段数上界：≤4 段枚举全部排列，5–6 段只取正 / 逆序。 */
+const SOURCE_JOIN_PERM_MAX = 4;
 
 /** 载体行内一个取值是否被日常识别符标签 / 计量形态豁免（只对 R330 新增语境的行生效，锁称谓行维持既有行为）。 */
-function shortValueExempt(line: string, start: number, end: number, value: string): boolean {
+function shortValueExempt(line: string, start: number, end: number, value: string, opts: { fragment?: boolean } = {}): boolean {
   const before = line.slice(Math.max(0, start - 12), start);
   const after = line.slice(end, end + 4);
   if (SOURCE_IDENTIFIER_LABEL_RE.test(before)) return true;
   if (SOURCE_UNIT_PREFIX_RE.test(before) || SOURCE_UNIT_SUFFIX_RE.test(after)) return true;
   if (/^\d{4}[-_/.]\d{1,2}[-_/.]\d{1,2}/.test(value) || /^\d{1,2}[:：]\d{2}/.test(value)) return true;
+  // 分片行（「前半段是 grape41」）的取值是钥匙的一段，词 + 短序号形态（iPhone15 一类）的豁免不适用。
+  if (opts.fragment) return false;
   return SOURCE_IDENTIFIER_SHAPE_RE.test(value.replace(/[ \-]/g, "")) && !/^\d+$/.test(value.replace(/[ \-]/g, ""));
 }
 
@@ -8271,6 +8279,7 @@ function shortValueExempt(line: string, start: number, end: number, value: strin
 function shortCredentialLineValues(line: string): string[] {
   const plain = line.replace(/[\uFE0F\u20E3]/g, "");
   const cvv = SOURCE_CVV_CUE_RE.test(plain);
+  const fragment = SOURCE_FRAGMENT_CUE_RE.test(plain);
   const out: string[] = [];
   const digitRe = cvv ? /(?<!\d)\d(?:[ \-]?\d){2,}(?!\d)/g : SOURCE_SHORT_DIGIT_RUN_RE;
   for (const m of plain.matchAll(digitRe)) {
@@ -8282,7 +8291,7 @@ function shortCredentialLineValues(line: string): string[] {
     const start = m.index ?? 0;
     if ((t.match(/\d/g) ?? []).length < 2 || (t.match(/\p{L}/gu) ?? []).length < 2) continue;
     if (hyphenSegmentsHomogeneous(t) || /^[0-9a-f]{32,}$/i.test(t)) continue;
-    if (shortValueExempt(plain, start, start + t.length, t)) continue;
+    if (shortValueExempt(plain, start, start + t.length, t, { fragment })) continue;
     out.push(t);
   }
   return out;
@@ -8293,6 +8302,8 @@ function isShortCredentialCarrierLine(line: string): boolean {
   const t = line.trim();
   if (!t) return false;
   if (SOURCE_LOCKABLE_OBJECT_RE.test(t) || SOURCE_SHORT_CODE_LABEL_RE.test(t) || SOURCE_CVV_CUE_RE.test(t)) return true;
+  // 自报分片 + 拼接线索的行（「接上一条，后半段是 -stone77，合起来才是完整的」）：说的就是某个取值的一段。
+  if (SOURCE_FRAGMENT_CUE_RE.test(t) && SOURCE_JOIN_CUE_RE.test(t)) return true;
   const lv = t.match(SOURCE_LABEL_VALUE_LINE_RE);
   if (!lv || SOURCE_IDENTIFIER_LABEL_RE.test(`${lv[1]} `)) return false;
   const at = t.indexOf(lv[2]);
@@ -8529,19 +8540,44 @@ export function sourceValueCandidates(units: readonly string[], question?: strin
     }
   }
   // R330：跨单元拼接（X06「q / 7 / mzt 三个连起来是柜子那串」、X05「前半段 grape41 / 后半段 -stone77，合起来才是完整的」）：
-  // 任一单元有拼接线索、且任一单元行有凭证语境时，全部单元按序（及逆序）各取首个 ASCII 记号拼成候选。
-  if (units.length >= 2 && units.length <= 6 && units.some((u) => SOURCE_JOIN_CUE_RE.test(u))) {
+  // 任一单元有拼接线索、且任一单元行有凭证语境时，各单元首个 ASCII 记号按序拼成候选。
+  // 拼接面按**子集**枚举：召回集里夹着无关单元（X07「A 柜子的数是 771904」）时，硬拼全部首记号会把片段串污染成
+  // `mztqBA7`；且单元没有 ASCII 首记号不使整个拼接面失效。子集必须含至少一个带拼接线索的单元，候选仍需 ≥4 归一化字。
+  if (units.length >= 2 && units.some((u) => SOURCE_JOIN_CUE_RE.test(u))) {
     const lines = units.flatMap((u) => u.normalize("NFKC").split("\n"));
     if (lines.some((l) => SOURCE_LOCK_CUE_RE.test(l) || SOURCE_RECALL_CUE_RE.test(l) || isShortCredentialCarrierLine(l))) {
-      const heads = units.map((x) => x.normalize("NFKC").match(/(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9_@#$%!-]*/)?.[0] ?? "");
-      if (heads.every((h) => h.length > 0 && h.length <= 24)) {
-        // 召回顺序 ≠ 拼接顺序（直答层把被引用单元排在最前），≤4 段时枚举全部排列，否则只取正 / 逆序。
-        const perms = (xs: string[]): string[][] =>
-          xs.length <= 1 ? [xs] : xs.flatMap((x, i) => perms([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p]));
-        const orders = heads.length <= 4 ? perms(heads) : [heads, [...heads].reverse()];
-        for (const o of orders) push(o.join(""), "opaque");
-      }
+      for (const o of jointHeadOrders(units)) push(o.join(""), "opaque");
     }
+  }
+  return out;
+}
+
+/** 单元的首个 ASCII 记号（拼接片段）。 */
+export function jointHeadToken(unit: string): string {
+  const h = unit.normalize("NFKC").match(/(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9_@#$%!-]*/)?.[0] ?? "";
+  return h.length <= 24 ? h : "";
+}
+
+/**
+ * 跨单元拼接的候选顺序：取有首记号的单元（带拼接线索的优先，最多 SOURCE_JOIN_MAX_UNITS 个），枚举含至少一个
+ * 拼接线索单元、大小 ≥2 的全部子集；≤SOURCE_JOIN_PERM_MAX 段的子集枚举全排列（召回顺序 ≠ 拼接顺序），更大的只取正 / 逆序。
+ */
+function jointHeadOrders(units: readonly string[]): string[][] {
+  const frags = units
+    .map((u) => ({ head: jointHeadToken(u), cue: SOURCE_JOIN_CUE_RE.test(u) }))
+    .filter((f) => f.head.length > 0);
+  const picked = [...frags.filter((f) => f.cue), ...frags.filter((f) => !f.cue)].slice(0, SOURCE_JOIN_MAX_UNITS);
+  if (picked.length < 2 || !picked.some((f) => f.cue)) return [];
+  const perms = (xs: string[]): string[][] =>
+    xs.length <= 1 ? [xs] : xs.flatMap((x, i) => perms([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p]));
+  const out: string[][] = [];
+  const n = picked.length;
+  for (let mask = 1; mask < 1 << n; mask += 1) {
+    const sub = picked.filter((_, i) => mask & (1 << i));
+    if (sub.length < 2 || !sub.some((f) => f.cue)) continue;
+    const heads = sub.map((f) => f.head);
+    if (heads.length <= SOURCE_JOIN_PERM_MAX) out.push(...perms(heads));
+    else out.push(heads, [...heads].reverse());
   }
   return out;
 }

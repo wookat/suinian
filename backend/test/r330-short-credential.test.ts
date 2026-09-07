@@ -149,6 +149,30 @@ describe("R330 B：短凭证候选只看「值与凭证语境同一行共现」"
     const x06 = ["mzt 是第三台的代号，三台连起来是柜子那串", "q 是第一台", "7 是第二台"];
     expect(vals(x06)).toContain("q7mzt");
   });
+  it("生产召回形态（6680e70 复测 X06 漏出）：召回集夹带无关单元 / 无 ASCII 首记号的单元时拼接面按子集派生，聚合出口仍占位", () => {
+    const x06 = ["mzt 是第三台，三个连起来是柜子那串", "第一台机器的代号\nq 是我给第一台机器的代号", "7 是第二台"];
+    const noise = ["B 柜子的数是 338612", "A 柜子的数是 771904", "今天的咖啡不错", "做了个决定：把车库用房间号 305 命名"];
+    const q = "三台机器代号连起来，柜子那串是什么";
+    const answer = "〔原文片段略，见引用笔记卡片〕[1]结合 [3] 和 [2]，第二台是 7，第一台的代号是 q。因此，三台机器代号连起来是 q-7-mzt [1][2]。";
+    for (const units of [[x06[0], x06[1], ...noise.slice(0, 2), x06[2]], [...noise, ...x06], [x06[2], noise[2], x06[0], noise[3], x06[1]]]) {
+      expect(vals(units, q)).toContain("q7mzt");
+      const agg = finalizeAskAnswer(answer, { dataText: units.join("\n"), dataUnits: units, question: q }).answer;
+      expect(norm(agg), agg).not.toContain("q7mzt");
+      expect(closeMcpAskAnswer(answer, units, q).answer).not.toContain("q-7-mzt");
+    }
+  });
+  it("分片行（前半段 / 后半段 / 接上一条）的取值不套「词 + 短序号」标识符豁免；非分片行 iPhone15 仍豁免", () => {
+    expect(vals(["新仓库钥匙盒的前半段是 grape41"])).toContain("grape41");
+    expect(vals(["接上一条，后半段是 -stone77，合起来才是完整的那个"])).toContain("-stone77");
+    expect(vals(["新手机 iPhone15 用起来不错", "钥匙盒旁边放着 iPhone15 的盒子"])).toEqual([]);
+    expect(vals(["前半场 2-1，后半场 iPhone15 拍的照片很清楚"])).toEqual([]);
+  });
+  it("MCP notes[]：被引用的半片段 + 弱召回（不在 notes[] 里）的另一半片段——拼接面对齐 recall_units，被引用条目整条占位", () => {
+    const cited = [{ id: "a", is_sensitive: false, content: "新仓库钥匙盒的前半段是 grape41", title: null, tags: [] as string[] }];
+    const recall = ["\n接上一条，后半段是 -stone77，合起来才是完整的那个\n\n"];
+    expect(guardAskNotes(cited, "钥匙盒完整的那串是什么", recall).notes[0]).toMatchObject({ content: MCP_GUARDED_PLACEHOLDER, guarded: true });
+    expect(guardAskNotes(cited, "钥匙盒完整的那串是什么").notes[0].guarded).toBe(true);
+  });
   it("误伤边界：日常识别符 / 计量 / 日期时间 / 金额 / 配置键 / 纯 ASCII 键值 不产生候选", () => {
     for (const t of [
       "快递柜取件码 7326，明天到期。",

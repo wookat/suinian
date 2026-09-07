@@ -18,6 +18,7 @@ import {
   normalizedGuardedLeak,
   failClosedGuardAnswer,
   sourceValueCandidates,
+  jointHeadToken,
   normalizeForLeakCompare,
   isSecretValueQuestion,
   unitTalksAboutSecret,
@@ -78,17 +79,24 @@ export type GuardedNoteMark = { guarded: boolean; guard_kind?: DirectGuardKind |
  * 取值型问句（isSecretValueQuestion）下与 /api/ask 的 R328 A 闸门同口径：在讲秘密的条目（unitTalksAboutSecret，含凭证标签但取值无法派生的
  * 拼音首字母 / 键盘位移一类）整条占位，答案已占位的取值不能从 notes[] 拿回去。
  */
-export function guardAskNotes<T extends GuardableNote>(notes: T[], question?: string): { notes: (T & GuardedNoteMark)[]; guardedUnits: string[]; units: string[] } {
+export function guardAskNotes<T extends GuardableNote>(
+  notes: T[],
+  question?: string,
+  recallUnits: readonly string[] = []
+): { notes: (T & GuardedNoteMark)[]; guardedUnits: string[]; units: string[] } {
   const units = notes.map(mcpGuardUnit);
   const cross = crossUnitGuardedLines(units);
   const valueProbe = !!question && isSecretValueQuestion(question);
   const guardedUnits: string[] = [];
   // R330：跨笔记拼接候选（X05「前半段 grape41 / 后半段 -stone77 合起来」）只在全部单元一起看时才派生；
   // 贡献了片段（首记号 ≥4 字落在拼接候选里）的条目同样整条占位，否则 answer 占位的值能从 notes[] 分片拿回。
-  const joint = units.length >= 2 ? sourceValueCandidates(units, question) : [];
-  const jointOnly = joint.filter((c) => !units.some((u) => normalizeForLeakCompare(u).includes(normalizeForLeakCompare(c.value))));
+  // 拼接面 = notes[]（被引用条目）+ /api/ask 回传的其余召回单元：弱召回的另一半片段模型看得到却不在 notes[] 里，
+  // 只看 notes[] 拼不出完整取值，被引用的那半就会裸出。
+  const jointFace = [...units, ...recallUnits.filter((u) => !units.includes(u))];
+  const joint = jointFace.length >= 2 ? sourceValueCandidates(jointFace, question) : [];
+  const jointOnly = joint.filter((c) => !jointFace.some((u) => normalizeForLeakCompare(u).includes(normalizeForLeakCompare(c.value))));
   const jointHit = (u: string): typeof joint => {
-    const head = u.normalize("NFKC").match(/(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9_@#$%!-]*/)?.[0] ?? "";
+    const head = jointHeadToken(u);
     if (head.length < 4) return [];
     const h = normalizeForLeakCompare(head);
     return jointOnly.filter((c) => normalizeForLeakCompare(c.value).includes(h));
@@ -371,12 +379,15 @@ export function buildMcpServer(
         answer: string;
         references: unknown;
         notes: GuardableNote[];
+        recall_units?: unknown;
         instruction_isolated?: unknown;
         trust_tier?: unknown;
         verbatim_closed_spans?: unknown;
       };
       // R324 C1：notes[] 里的受守条目整条占位 + guarded 标记；answer 再过同源闭合的末端复核。
-      const guardedAsk = guardAskNotes(redactNotes(body.notes), question);
+      // R330：拼接候选面对齐 /api/ask 的全部召回（recall_units 只在 mcp 出口回传，不含敏感笔记），不透传给宿主。
+      const recallUnits = Array.isArray(body.recall_units) ? body.recall_units.filter((u): u is string => typeof u === "string") : [];
+      const guardedAsk = guardAskNotes(redactNotes(body.notes), question, recallUnits);
       const askFlagged = flagExecNotes(guardedAsk.notes);
       onExecMarks(askFlagged.counts);
       const closedAnswer = closeMcpAskAnswer(typeof body.answer === "string" ? body.answer : "", guardedAsk.units, question);
