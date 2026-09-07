@@ -6189,6 +6189,9 @@ app.post("/api/ask", async (c) => {
       ...(fin.degraded || cls.unavailable ? { exec_guard_degraded: true } : {}),
       ...(execGateMark !== null ? { exec_gate: execGateMark } : {}),
       ...(execClsMark !== null ? { execcls_ms: execClsMark } : {}),
+      // R330：MCP 出口的 notes[] 守护候选面要与模型看到的召回一致（弱召回、未被引用的另一半片段也在其中），
+      // 回传非敏感召回单元供 guardAskNotes 派生拼接候选；MCP 层不透传给宿主。敏感笔记明文不出 /api/ask。
+      ...(askOutlet === "mcp" ? { recall_units: notes.filter((n) => !n.is_sensitive).map((n) => askUnitByNoteId.get(n.id) ?? "") } : {}),
     };
   };
 
