@@ -11,6 +11,7 @@ import {
   broadFoldReason,
   EXEC_OUTLET_WARN_TAG,
   BROAD_OUTLET_FOLD_TAG,
+  titleCarriesAnyGuardedValue,
 } from "./prompt-armor";
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 
@@ -93,7 +94,8 @@ export function threadTitleVerbatim(
 ): boolean {
   if (broadFoldReason(title) !== null) return true;
   const units = rows.map((n) => `${n.title ?? ""}\n${n.content}`);
-  return closeAggregateOutlet(title, units).count > 0;
+  // R332 P1-4：标题携带成员笔记的受守取值（短值 / 跨成员拼接的段）同样整体不采用
+  return closeAggregateOutlet(title, units).count > 0 || titleCarriesAnyGuardedValue(title, units);
 }
 
 async function newThread(env: Env, userId: string, seeds: ThreadSeed[]): Promise<string> {

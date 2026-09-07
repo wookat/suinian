@@ -22,6 +22,7 @@ import {
   normalizeForLeakCompare,
   isSecretValueQuestion,
   unitTalksAboutSecret,
+  titleCarriesAnyGuardedValue,
   type BroadFoldReason,
   type DirectGuardKind,
 } from "./prompt-armor";
@@ -108,9 +109,15 @@ export function guardAskNotes<T extends GuardableNote>(
     const crossHit = units[i].split("\n").some((l) => cross.has(l.trim()));
     const sourceValues = own.length === 0 && !crossHit ? [...sourceValueCandidates([units[i]], question), ...jointHit(units[i])] : [];
     const valueTalk = own.length === 0 && !crossHit && sourceValues.length === 0 && valueProbe && unitTalksAboutSecret(units[i], cross);
-    if (own.length === 0 && !crossHit && sourceValues.length === 0 && !valueTalk) return { ...n, guarded: false };
+    // R332 P0-2：notes[].content 与 answer 同口径——这条正文若作为答案输出会被全召回面的归一化比对判泄（它复述了另一条的取值），同样整条占位。
+    const echoLeak =
+      own.length === 0 && !crossHit && sourceValues.length === 0 && !valueTalk
+        ? normalizedGuardedLeak(units[i], jointFace.filter((u) => u !== units[i]), question)
+        : null;
+    if (own.length === 0 && !crossHit && sourceValues.length === 0 && !valueTalk && echoLeak === null) return { ...n, guarded: false };
     guardedUnits.push(units[i]);
-    const ranked = own.length > 0 ? own.map((g) => g.kind) : sourceValues.length > 0 ? sourceValues.map((c) => c.kind) : valueTalk ? ["credential" as const] : [];
+    const ranked =
+      own.length > 0 ? own.map((g) => g.kind) : sourceValues.length > 0 ? sourceValues.map((c) => c.kind) : valueTalk ? ["credential" as const] : echoLeak !== null ? [echoLeak] : [];
     const kind: DirectGuardKind | "cross" = ranked.length > 0 ? ranked.reduce((a, k) => (rankOf(k) > rankOf(a) ? k : a), ranked[0]) : "cross";
     return { ...n, ...GUARDED_LINK_FIELDS, content: MCP_GUARDED_PLACEHOLDER, title: MCP_GUARDED_PLACEHOLDER, tags: [], guarded: true, guard_kind: kind };
   });
@@ -244,9 +251,9 @@ export function closeThreadText<T extends { title?: unknown; summary?: unknown }
   const out = { ...thread };
   if (typeof thread.title === "string") {
     const c = closeAggregateOutlet(thread.title, units);
-    if (c.count > 0) {
+    if (c.count > 0 || titleCarriesAnyGuardedValue(thread.title, units)) {
       out.title = UNTITLED_THREAD;
-      closed += c.count;
+      closed += Math.max(1, c.count);
     }
   }
   if (typeof thread.summary === "string") {

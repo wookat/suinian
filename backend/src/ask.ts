@@ -3129,6 +3129,59 @@ export function retargetMisindexedCitation(
   return answer.replace(CITE_RE, `[${owners[0]}]`);
 }
 
+/** 逐句切分：句末标点后紧跟的角标（「…。[1]」）归入本句。 */
+const SENTENCE_TOKEN_RE = /[^。！？!?\n]*(?:[。！？!?\n](?:\s*[\[［]\d{1,2}[\]］])*|$)/gu;
+const MISINDEX_TOKEN_RE = /(?<![A-Za-z0-9])(?:(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{4,}|\d{3,})(?![A-Za-z0-9])/g;
+const MISINDEX_RUN_MIN = 6;
+
+/**
+ * 句级角标错位纠正（R332 P1-1，audit-r331 §6 S4：「西门闸机的密码是 kqmzt。[1]」点到端口命令卡，[2] 才是西门）：
+ * 多角标答案里逐句看——一句只点了一个角标，被点的那条与句体连 4 字都不重合，而句体里的不透明记号（≥ 4 位字母数字 / ≥ 3 位数字）
+ * 或 ≥ 6 字连续片段恰好只在一条其它非敏感候选里出现，改指那条。引用卡仍由 reconcileAskCitations 按改写后的角标统一重编，
+ * 角标与卡片顺序同源。句体与被点条目有重合、归属不唯一或无归属片段时一律不动。
+ */
+export function retargetMisindexedSentences(
+  answer: string,
+  notes: readonly { id: string; title?: string | null; content: string; is_sensitive?: number | boolean | null }[]
+): string {
+  const norm = (n: { title?: string | null; content: string }) => `${n.title ?? ""}${n.content}`.replace(VERBATIM_NONWORD_RE, "");
+  const texts = notes.map(norm);
+  const overlaps = (text: string, body: string): boolean => {
+    for (let i = 0; i + MISINDEX_MIN_BODY <= body.length; i += 1) {
+      if (text.includes(body.slice(i, i + MISINDEX_MIN_BODY))) return true;
+    }
+    return false;
+  };
+  const ownerOf = (body: string, cited: number): number | null => {
+    const keys = new Set<string>();
+    for (const m of body.matchAll(MISINDEX_TOKEN_RE)) keys.add(m[0]);
+    for (let i = 0; i + MISINDEX_RUN_MIN <= body.length; i += 1) keys.add(body.slice(i, i + MISINDEX_RUN_MIN));
+    if (keys.size === 0) return null;
+    const owners = new Set<number>();
+    for (let k = 1; k <= notes.length; k++) {
+      if (k === cited || notes[k - 1].is_sensitive) continue;
+      for (const key of keys) {
+        if (texts[k - 1].includes(key)) {
+          owners.add(k);
+          break;
+        }
+      }
+    }
+    return owners.size === 1 ? [...owners][0] : null;
+  };
+  return (answer.match(SENTENCE_TOKEN_RE) ?? [answer])
+    .filter((s) => s.length > 0)
+    .map((sentence) => {
+      const idx = [...new Set([...sentence.matchAll(CITE_RE)].map((m) => parseInt(m[1], 10)))].filter((n) => n >= 1 && n <= notes.length);
+      if (idx.length !== 1) return sentence;
+      const body = sentence.replace(CITE_RE, "").replace(VERBATIM_NONWORD_RE, "");
+      if (body.length < MISINDEX_MIN_BODY || overlaps(texts[idx[0] - 1], body)) return sentence;
+      const owner = ownerOf(body, idx[0]);
+      return owner === null ? sentence : sentence.replace(CITE_RE, `[${owner}]`);
+    })
+    .join("");
+}
+
 /**
  * Single source of truth for /api/ask citations: the answer text and the
  * references array are rewritten together so every [n] marker left in the

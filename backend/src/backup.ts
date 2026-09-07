@@ -22,6 +22,7 @@ import {
   OUTLET_GLOBAL_RISK_NOTICE,
   OUTLET_GLOBAL_RISK_HEADER,
   OUTLET_GLOBAL_RISK_HEADER_VALUE,
+  titleCarriesAnyGuardedValue,
   type BroadFoldReason,
 } from "./prompt-armor";
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
@@ -141,9 +142,9 @@ export function closeBackupDerived(
     let summary = t.summary;
     if (title) {
       const c = closeAggregateOutlet(title, units);
-      if (c.count > 0) {
+      if (c.count > 0 || titleCarriesAnyGuardedValue(title, units)) {
         title = UNTITLED_THREAD;
-        spans += c.count;
+        spans += Math.max(1, c.count);
       }
     }
     if (summary) {
