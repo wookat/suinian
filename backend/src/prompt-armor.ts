@@ -8589,17 +8589,34 @@ function jointHeadOrders(units: readonly string[]): string[][] {
   return out;
 }
 
-/** 分段列举时片段之间允许夹的归一化字数（「q、7 和 mzt」→ `q7和mzt`；「第一台 q，第二台 7，第三台 mzt」）。 */
-const JOINT_PARTS_GAP_MAX = 6;
 /**
- * 拼接候选的分段列举形态：答案没有把片段连成一串，而是按拼接顺序逐段报出（顶多夹连词 / 序数短语），
- * 读者照样拿到完整取值。片段按序出现、相邻片段间隔 ≤ JOINT_PARTS_GAP_MAX 个归一化字即命中。
+ * 分段列举时相邻片段之间允许夹的归一化字数：「q、7 和 mzt」→ `q7和mzt`；「第二台机器的代号是 7 [2]。第三台机器的代号是 mzt [3]」
+ * → 片段间夹「2第三台机器的代号是」10 字。
+ */
+const JOINT_PARTS_GAP_MAX = 12;
+/**
+ * 拼接候选的分段列举形态：答案没有把片段连成一串，而是按拼接顺序逐段报出（夹连词 / 序数短语 / 角标），
+ * 读者照样拿到完整或大半取值。按拼接顺序数出现的片段（可跳过缺失片段，相邻命中片段间隔 ≤ JOINT_PARTS_GAP_MAX），
+ * 命中 ≥ max(2, ⌈n/2⌉) 个即成立——三段里报出两段（`7`…`mzt`）也算漏出；只报一段不算。
  */
 function jointPartsLeak(parts: readonly string[], norm: string): boolean {
   const ps = parts.map((p) => normalizeForLeakCompare(p)).filter((p) => p.length > 0);
   if (ps.length < 2) return false;
-  const re = new RegExp(ps.map(escapeRegExp).join(`[\\p{L}\\p{N}]{0,${JOINT_PARTS_GAP_MAX}}`), "u");
-  return re.test(norm);
+  const need = Math.max(2, Math.ceil(ps.length / 2));
+  for (let i = 0; i < ps.length; i++) {
+    for (let at = norm.indexOf(ps[i]); at >= 0; at = norm.indexOf(ps[i], at + 1)) {
+      let hits = 1;
+      let end = at + ps[i].length;
+      for (let j = i + 1; j < ps.length; j++) {
+        const idx = norm.indexOf(ps[j], end);
+        if (idx < 0 || idx - end > JOINT_PARTS_GAP_MAX) continue;
+        hits++;
+        end = idx + ps[j].length;
+      }
+      if (hits >= need) return true;
+    }
+  }
+  return false;
 }
 
 const HAN_CHARSET_MIN_LEN = 4;
@@ -8965,9 +8982,13 @@ export function directGuardKindOfLine(line: string, ctx?: { unitLabeled?: boolea
 // 三类——它们没有 code 面，R320 的结构面判据自然判不到。R322 把这三类补进受守行判据（仍不认「值」，只认「标签 + 取值面」/
 // 「拼装提示」/「删除动词 + 对象 + 范围」的形态），受守行随即从模型上下文里被替换掉（redactGuardedLinesForModel）。
 
-/** 凭证 / 门禁 / 卡号一类标签词（跨语言）。命中只说明这行在讲某个秘密，是否受守还要看取值面。 */
+/**
+ * 凭证 / 门禁 / 卡号一类标签词（跨语言）。命中只说明这行在讲某个秘密，是否受守还要看取值面。
+ * 「卡号」前面明写的是借书卡 / 健身卡 / 会员卡 / 工牌 / 校园卡 / 公交卡一类非金融卡时不算标签——那是识别符不是钥匙
+ * （triage 口径「门禁卡 / 会员卡 / 工牌的编号必须为 false」，R322 `SOURCE_IDENTIFIER_LABEL_RE` 同此）；无卡种或金融卡的「卡号」照旧。
+ */
 const SECRET_LABEL_RE =
-  /密码|口令|暗号|密钥|秘钥|登录串|开门串|登录用的|门禁|取款码|取现|提款码|提取码|保险柜|保险箱|柜门|铁柜|工资卡|银行卡|社保卡|证件号|身份证号|卡号|对公账户|网银|passcodes?|passwords?|passphrases?|pass ?phrases?|key ?phrases?|safe ?(?:phrase|code|combination)|gate ?codes?|(?:cabinet|locker|vault|door|login|access|recovery|seed|secret|unlock|mnemonic) ?(?:phrase|code|word)s?|(?<![a-z])pins?(?![a-z])|kennwort|passwort|contraseña|clave de acceso|mot de passe|code d'acc[eè]s|senha|parola d'ordine|hasło|şifre|parol[ae]?(?![a-z])|kata sandi|пароль|кодов\p{L}* слов\p{L}*|код доступа|パスワード|パスフレーズ|パスコード|暗証番号|暗証(?![番])|合言葉|합言葉|비밀번호|비번|암호(?!화)|كلمة\s*(?:السر|المرور|الدخول)/iu;
+  /密码|口令|暗号|密钥|秘钥|登录串|开门串|登录用的|门禁|取款码|取现|提款码|提取码|保险柜|保险箱|柜门|铁柜|工资卡|银行卡|社保卡|证件号|身份证号|(?<!(?:借书|图书|读者|健身|会员|工牌|校园|饭|公交|交通|地铁|积分|储值|游泳|洗车|理发|电影|游戏|超市|购物|礼品|加油|洗衣)卡?)卡号|对公账户|网银|passcodes?|passwords?|passphrases?|pass ?phrases?|key ?phrases?|safe ?(?:phrase|code|combination)|gate ?codes?|(?:cabinet|locker|vault|door|login|access|recovery|seed|secret|unlock|mnemonic) ?(?:phrase|code|word)s?|(?<![a-z])pins?(?![a-z])|kennwort|passwort|contraseña|clave de acceso|mot de passe|code d'acc[eè]s|senha|parola d'ordine|hasło|şifre|parol[ae]?(?![a-z])|kata sandi|пароль|кодов\p{L}* слов\p{L}*|код доступа|パスワード|パスフレーズ|パスコード|暗証番号|暗証(?![番])|合言葉|합言葉|비밀번호|비번|암호(?!화)|كلمة\s*(?:السر|المرور|الدخول)/iu;
 /** 锁具 / 门禁对象词（跨语言）：与「phrase / 词 / 组合」一类弱标签同现时才把那行当成在讲某个秘密。 */
 const LOCK_OBJECT_RE = /柜|锁|门禁|保险|金[庫库]|机房|仓库|车库|金庫|金库|safe(?![a-z])|cabinet|locker|vault|gate|door|lock(?![a-z])|tresor|schrank|сейф|caja fuerte|coffre/iu;
 /** 弱标签：单独不算凭证标签（「a phrase I liked」），与锁具对象同行时算（「the phrase … for the study cabinet」）。 */

@@ -89,17 +89,17 @@ export function guardAskNotes<T extends GuardableNote>(
   const valueProbe = !!question && isSecretValueQuestion(question);
   const guardedUnits: string[] = [];
   // R330：跨笔记拼接候选（X05「前半段 grape41 / 后半段 -stone77 合起来」）只在全部单元一起看时才派生；
-  // 贡献了片段（首记号 ≥4 字落在拼接候选里）的条目同样整条占位，否则 answer 占位的值能从 notes[] 分片拿回。
+  // 贡献了片段（首记号是拼接候选 parts 之一，不限长度——X06「q / 7 / mzt」三段各 ≤3 字）的条目同样整条占位，
+  // 否则 answer 占位的值能从 notes[] 逐条拿回（search_notes 原文契约不变，找回靠卡）。
   // 拼接面 = notes[]（被引用条目）+ /api/ask 回传的其余召回单元：弱召回的另一半片段模型看得到却不在 notes[] 里，
   // 只看 notes[] 拼不出完整取值，被引用的那半就会裸出。
   const jointFace = [...units, ...recallUnits.filter((u) => !units.includes(u))];
   const joint = jointFace.length >= 2 ? sourceValueCandidates(jointFace, question) : [];
   const jointOnly = joint.filter((c) => !jointFace.some((u) => normalizeForLeakCompare(u).includes(normalizeForLeakCompare(c.value))));
   const jointHit = (u: string): typeof joint => {
-    const head = jointHeadToken(u);
-    if (head.length < 4) return [];
-    const h = normalizeForLeakCompare(head);
-    return jointOnly.filter((c) => normalizeForLeakCompare(c.value).includes(h));
+    const h = normalizeForLeakCompare(jointHeadToken(u));
+    if (!h) return [];
+    return jointOnly.filter((c) => c.parts?.some((p) => normalizeForLeakCompare(p) === h) ?? false);
   };
   const out = notes.map((n, i) => {
     // 数据层已标敏感的条目 redactNote 已换占位；这里补 guarded 标记让宿主机器可读地知道该条不是原文。
