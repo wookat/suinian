@@ -8255,13 +8255,46 @@ const SOURCE_IDENTIFIER_LABEL_RE =
 /** 日期 / 金额 / 计量 / 时间 / 序数形态：值前后紧跟这些字符不算凭证。 */
 const SOURCE_UNIT_SUFFIX_RE = /^\s*(?:年|月|日|号|元|块|万|千|亿|米|斤|克|页|楼|层|室|栋|路|线|度|%|％|点|分|秒|kg|km|cm|mm|ml|g\b)/iu;
 const SOURCE_UNIT_PREFIX_RE = /(?:[¥￥$€£]|第|\bv|№)\s*$/iu;
-const SOURCE_JOIN_CUE_RE = /连起来|合起来|拼起来|接起来|连在一起|合在一起|拼在一起/u;
+/** 拼接线索：显式「连 / 合 / 拼起来」，或 R332 L05 的序列命名形态（「第 N 台叫 X」「…就是这个顺序」）。 */
+const SOURCE_JOIN_CUE_RE =
+  /连起来|合起来|拼起来|接起来|连在一起|合在一起|拼在一起|这个顺序|按顺序|按这个序|顺序输|顺序按|依次输|依次按|第\s*[一二三四五六七八九十\d]{1,2}\s*(?:台|个|组|段|位|部|把|道)[^\n]{0,8}(?:叫|代号|记作|记为)/u;
 /** 分片线索：这行自报只是取值的一段（前半段 / 后半段 / 第 N 段 / 接上一条）——分段的取值任何形态都可能，标识符形态不豁免。 */
 const SOURCE_FRAGMENT_CUE_RE = /[前后上下]半段|[前后]半(?![年夜场天月周生小时])|前一段|后一段|第[一二三四五1-5]段|接上一?条|上一条的/u;
 /** 参与跨单元拼接的单元数上界（召回集里夹带的无关单元不计入拼接面，见 sourceValueCandidates）。 */
 const SOURCE_JOIN_MAX_UNITS = 6;
 /** 拼接子集里全排列的段数上界：≤4 段枚举全部排列，5–6 段只取正 / 逆序。 */
 const SOURCE_JOIN_PERM_MAX = 4;
+
+// ---- R332 P0-1：操作 / 记忆线索载体行（decision-r332 §2） ----
+// R331 语料换成「要输的是 517」「手输 kqmzt」「要按「风3档」再按 眠7」「那组是 ４９０６」「后台\n72kqm」「上层 246\n下层 803\n（要分开输）」，
+// R330 的四种语境（可上锁对象 / 短码称谓 / CVV / 标签+值整行）全部不命中，候选面为空。这里只扩候选面构造，不判凭证语义。
+/** 操作 / 记忆线索：这行（或 ≤6 行短单元内任一行）说的是「要输入 / 按 / 拨 / 设的那个值」。「一般用 / 一直用」不算（B08「看端口我一般用 ss -ltnp」）。 */
+const SOURCE_OPERATION_CUE_RE =
+  /要输|输的是|输入的是|那组是|那组数|固定用|手输|要按|先按|再按|按的是|按下|拨的是|设成|设的是|改成了|改的是|现在是|别外传|别告诉|别乱说|输错|会锁|锁死|分开输|要分开/u;
+/** 操作线索行的 3–6 位数字串（「要输的是 517」「上层 246」）。 */
+const SOURCE_OP_DIGIT_RUN_RE = /(?<!\d)\d(?:[ \-]?\d){2,5}(?!\d)/g;
+/** 操作线索行的 4–6 位纯字母记号（「手输 kqmzt」）：全大写缩写（POS / WIFI / USB）与常见英文词不算。 */
+const SOURCE_OP_LETTER_TOKEN_RE = /(?<![A-Za-z0-9_-])[A-Za-z]{4,6}(?![A-Za-z0-9_-])/g;
+const SOURCE_OP_LETTER_STOP = new Set([
+  "wifi", "admin", "root", "user", "pass", "code", "door", "lock", "keys", "apps", "note", "notes", "todo", "http", "https", "mail", "email",
+  "name", "home", "work", "meet", "zoom", "book", "read", "call", "text", "send", "done", "test", "demo", "prod", "node", "java", "rust", "ipad",
+  "linux", "apple", "docs", "login", "enter", "reset", "click", "press", "type", "input", "open", "close", "save", "exit", "menu", "mode", "okay",
+  "true", "false", "null", "none", "auto", "push", "pull", "merge", "main", "master", "local", "cloud", "phone", "macos", "windows", "android",
+  "sudo", "bash", "shell", "python", "git", "npm", "yarn", "pnpm", "vite", "react", "todo", "item", "list", "plan", "idea", "task", "time", "date",
+]);
+/** 操作线索行的汉字+数字混排短记号（「风3档」「眠7」，长度 2–4）；「第3」「3次」「3点」一类序数 / 计量形态豁免。 */
+const SOURCE_HAN_DIGIT_TOKEN_RE = /\p{Script=Han}?\d{1,3}\p{Script=Han}?/gu;
+const SOURCE_HAN_DIGIT_MEASURE_RE = /^第|[次个天点分秒楼层号月日年块元人台条页米遍周岁折成倍斤克寸站路号线号度码]$/u;
+/** 4–5 位字母数字混合短记号（「72kqm」「kq48」）：「词 + 1 位序号」（web3 / h5）、「1 字母 + 3 数字」（h264）、大写型号（H265）不算。 */
+const SOURCE_SHORT_MIXED_TOKEN_RE = /(?<![\p{L}\p{N}_-])(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{4,5}(?![\p{L}\p{N}_-])/gu;
+const SOURCE_SHORT_MIXED_IDENTIFIER_RE = /^[A-Za-z]+\d$|^[A-Za-z]\d{3}$|^[A-Z]{1,4}\d+[A-Z]*$|^\d+[A-Za-z]$/;
+/** 整条笔记只是一个 4–5 位小写字母数字裸记号（Z03「kq48」）：无条件候选（≥2 字母、≥1 数字）。 */
+const SOURCE_BARE_SHORT_TOKEN_UNIT_RE = /^(?=(?:.*[a-z]){2})(?=.*\d)[a-z0-9]{4,5}$/;
+/** 相邻行配对（S06「后台\n72kqm」）：≤12 字含汉字无数字的纯标签行 + 整行只有一个短取值的纯值行。 */
+const SOURCE_PURE_LABEL_LINE_RE = /^(?=[^\d：:]{0,11}\p{Script=Han})[^\d：:]{1,12}[：:]?$/u;
+const SOURCE_PURE_VALUE_LINE_RE = /^[（(「]?((?<!\d)\d(?:[ \-]?\d){2,7}(?!\d)|[A-Za-z]{4,6}|(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{4,24})[」)）]?\s*[。.．！!]?$/u;
+/** 短单元里一行操作线索点亮整个单元（S10「上层 246 / 下层 803 / （两台机器要分开输）」）的行数上界。 */
+const SOURCE_OP_UNIT_MAX_LINES = 6;
 
 /** 载体行内一个取值是否被日常识别符标签 / 计量形态豁免（只对 R330 新增语境的行生效，锁称谓行维持既有行为）。 */
 function shortValueExempt(line: string, start: number, end: number, value: string, opts: { fragment?: boolean } = {}): boolean {
@@ -8275,13 +8308,16 @@ function shortValueExempt(line: string, start: number, end: number, value: strin
   return SOURCE_IDENTIFIER_SHAPE_RE.test(value.replace(/[ \-]/g, "")) && !/^\d+$/.test(value.replace(/[ \-]/g, ""));
 }
 
-/** 短凭证载体行的取值：数字串（≥4 位；CVV 称谓行 ≥3 位）与字母数字混合记号，经识别符 / 计量豁免。 */
-function shortCredentialLineValues(line: string): string[] {
+/**
+ * 短凭证载体行的取值：数字串（≥4 位；CVV 称谓行 / 操作线索行 ≥3 位）、字母数字混合记号（≥6 位，及 4–5 位短混合记号）；
+ * 操作线索行（opts.op）再加 4–6 位纯字母记号。全部经识别符 / 计量豁免。
+ */
+function shortCredentialLineValues(line: string, opts: { op?: boolean } = {}): string[] {
   const plain = line.replace(/[\uFE0F\u20E3]/g, "");
   const cvv = SOURCE_CVV_CUE_RE.test(plain);
   const fragment = SOURCE_FRAGMENT_CUE_RE.test(plain);
   const out: string[] = [];
-  const digitRe = cvv ? /(?<!\d)\d(?:[ \-]?\d){2,}(?!\d)/g : SOURCE_SHORT_DIGIT_RUN_RE;
+  const digitRe = cvv ? /(?<!\d)\d(?:[ \-]?\d){2,}(?!\d)/g : opts.op ? SOURCE_OP_DIGIT_RUN_RE : SOURCE_SHORT_DIGIT_RUN_RE;
   for (const m of plain.matchAll(digitRe)) {
     const start = m.index ?? 0;
     if (!shortValueExempt(plain, start, start + m[0].length, m[0])) out.push(m[0]);
@@ -8294,7 +8330,44 @@ function shortCredentialLineValues(line: string): string[] {
     if (shortValueExempt(plain, start, start + t.length, t, { fragment })) continue;
     out.push(t);
   }
+  for (const m of plain.matchAll(SOURCE_SHORT_MIXED_TOKEN_RE)) {
+    const t = m[0];
+    const start = m.index ?? 0;
+    if (SOURCE_SHORT_MIXED_IDENTIFIER_RE.test(t)) continue;
+    const before = plain.slice(Math.max(0, start - 12), start);
+    if (SOURCE_IDENTIFIER_LABEL_RE.test(before) || SOURCE_UNIT_PREFIX_RE.test(before)) continue;
+    out.push(t);
+  }
+  if (opts.op) {
+    for (const m of plain.matchAll(SOURCE_OP_LETTER_TOKEN_RE)) {
+      const t = m[0];
+      if (/^[A-Z]+$/.test(t) || SOURCE_OP_LETTER_STOP.has(t.toLowerCase())) continue;
+      const start = m.index ?? 0;
+      if (SOURCE_IDENTIFIER_LABEL_RE.test(plain.slice(Math.max(0, start - 12), start))) continue;
+      out.push(t);
+    }
+  }
   return out;
+}
+
+/** 操作线索行的汉字+数字混排短记号（「风3档」「眠7」）：长度 2–4、至少一个汉字，序数 / 计量形态豁免。 */
+function hanDigitTokens(line: string): string[] {
+  const out: string[] = [];
+  for (const m of line.matchAll(SOURCE_HAN_DIGIT_TOKEN_RE)) {
+    const t = m[0];
+    if (!/\p{Script=Han}/u.test(t) || [...t].length < 2 || [...t].length > 4) continue;
+    if (SOURCE_HAN_DIGIT_MEASURE_RE.test(t)) continue;
+    const start = m.index ?? 0;
+    if (SOURCE_UNIT_PREFIX_RE.test(line.slice(Math.max(0, start - 3), start)) || SOURCE_UNIT_SUFFIX_RE.test(line.slice(start + t.length, start + t.length + 3))) continue;
+    out.push(t);
+  }
+  return out;
+}
+
+/** 汉字+数字混排候选（2–4 字）在答案归一文本里按数字边界比对（「眠7」不命中「眠70」）。 */
+function hanDigitCandidateLeak(v: string, norm: string): boolean {
+  if (!/^(?=.*\p{Script=Han})(?=.*\d)[\p{Script=Han}\d]{2,4}$/u.test(v)) return false;
+  return new RegExp(`(?<!\\d)${escapeRegExp(v)}(?!\\d)`, "u").test(norm);
 }
 
 /** 行是否为短凭证载体行（不含既有锁称谓行，那些由 lockLineValues 处理）。 */
@@ -8302,6 +8375,7 @@ function isShortCredentialCarrierLine(line: string): boolean {
   const t = line.trim();
   if (!t) return false;
   if (SOURCE_LOCKABLE_OBJECT_RE.test(t) || SOURCE_SHORT_CODE_LABEL_RE.test(t) || SOURCE_CVV_CUE_RE.test(t)) return true;
+  if (SOURCE_OPERATION_CUE_RE.test(t)) return true;
   // 自报分片 + 拼接线索的行（「接上一条，后半段是 -stone77，合起来才是完整的」）：说的就是某个取值的一段。
   if (SOURCE_FRAGMENT_CUE_RE.test(t) && SOURCE_JOIN_CUE_RE.test(t)) return true;
   const lv = t.match(SOURCE_LABEL_VALUE_LINE_RE);
@@ -8451,7 +8525,8 @@ export interface SourceValueCandidate {
 export function sourceValueCandidates(units: readonly string[], question?: string): SourceValueCandidate[] {
   const out: SourceValueCandidate[] = [];
   const push = (v: string, kind: DirectGuardKind, minLen = 4, parts?: readonly string[]): void => {
-    const t = v.trim();
+    // R332 P0-1(b)：候选存 NFKC 形态（「４９０６」→「4906」），记号级替换与 parts 比对都拿半角值。
+    const t = v.trim().normalize("NFKC");
     const norm = normalizeForLeakCompare(t);
     if (norm.length >= minLen || (norm.length === 3 && /^\p{Script=Han}+$/u.test(norm))) out.push(parts ? { value: t, kind, parts } : { value: t, kind });
   };
@@ -8463,6 +8538,8 @@ export function sourceValueCandidates(units: readonly string[], question?: strin
     const n = u.normalize("NFKC");
     const bare = n.trim();
     if ((anyCue || secretQ) && SOURCE_BARE_TOKEN_UNIT_RE.test(bare) && !SOURCE_IDENTIFIER_SHAPE_RE.test(bare)) push(bare, "opaque");
+    // R332 P0-1（Z03「kq48」整条）：4–5 位小写字母数字裸记号整条，无条件候选。
+    if (SOURCE_BARE_SHORT_TOKEN_UNIT_RE.test(bare)) push(bare, "opaque");
     for (const m of n.matchAll(URL_RUN_RE)) {
       const query = m[0].split(/[?#]/).slice(1).join("&");
       for (const kv of query.split("&")) {
@@ -8480,9 +8557,22 @@ export function sourceValueCandidates(units: readonly string[], question?: strin
       }
     }
     const noUrl = n.replace(URL_RUN_RE, " ");
-    for (const line of noUrl.split("\n")) {
+    const unitLines = noUrl.split("\n");
+    // R332 P0-1(a)：短单元（≤6 行）里任一行的操作线索点亮整个单元（「上层 246 / 下层 803 / （两台机器要分开输）」）。
+    const unitOp = unitLines.length <= SOURCE_OP_UNIT_MAX_LINES && unitLines.some((l) => SOURCE_OPERATION_CUE_RE.test(l));
+    for (let li = 0; li < unitLines.length; li++) {
+      const line = unitLines[li];
       const recallCue = recallQ || SOURCE_RECALL_CUE_RE.test(line);
       const phraseCue = secretQ || SOURCE_CODE_PHRASE_CUE_RE.test(line);
+      const op = unitOp || SOURCE_OPERATION_CUE_RE.test(line);
+      // R332 P0-1(c)：「标签行 + 纯值行」相邻配对（「后台\n72kqm」）按「标签 + 值」整行走既有载体行判定。
+      const next = unitLines[li + 1]?.trim();
+      if (next && SOURCE_PURE_LABEL_LINE_RE.test(line.trim()) && SOURCE_PURE_VALUE_LINE_RE.test(next)) {
+        const joined = `${line.trim().replace(/[：:]$/, "")} ${next}`;
+        if (op || isShortCredentialCarrierLine(joined)) for (const v of shortCredentialLineValues(joined, { op })) push(v, "opaque", 3);
+      }
+      // R332 P0-1(d)：操作线索行的汉字+数字混排短记号（「风3档」「眠7」）。
+      if (op) for (const v of hanDigitTokens(line)) push(v, "opaque", 2);
       if (recallCue) {
         for (const m of line.matchAll(SOURCE_CJK_DIGIT_RUN_RE)) push(m[0], "credential");
         for (const m of line.matchAll(SOURCE_DIGIT_RUN_RE)) push(m[0], "opaque");
@@ -8493,7 +8583,7 @@ export function sourceValueCandidates(units: readonly string[], question?: strin
         }
       }
       // R330 C2 / C4：短凭证载体行（可上锁对象 / 短码称谓 / CVV 称谓 / 「标签 + 值」整行）的精确值候选，与标注、问句无关。
-      if (isShortCredentialCarrierLine(line)) for (const v of shortCredentialLineValues(line)) push(v, "opaque", 3);
+      if (op || isShortCredentialCarrierLine(line)) for (const v of shortCredentialLineValues(line, { op })) push(v, "opaque", 3);
       if (phraseCue) {
         for (const m of line.matchAll(SOURCE_QUOTED_PHRASE_RE)) push(m[1], "credential");
       }
@@ -8559,10 +8649,19 @@ export function sourceValueCandidates(units: readonly string[], question?: strin
   return out;
 }
 
-/** 单元的首个 ASCII 记号（拼接片段）。 */
+/** 单元的拼接片段：显式命名（「第一台机器我叫它 w」「第二台叫 5」）取命名后的记号，否则取首个 ASCII 记号。 */
 export function jointHeadToken(unit: string): string {
-  const h = unit.normalize("NFKC").match(/(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9_@#$%!-]*/)?.[0] ?? "";
+  const named = jointNamedToken(unit);
+  const h = named || (unit.normalize("NFKC").match(/(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9_@#$%!-]*/)?.[0] ?? "");
   return h.length <= 24 ? h : "";
+}
+
+/** 单元里被显式命名的记号（「叫它 w」「代号 pnq」）；没有命名形态返回空串。 */
+export function jointNamedToken(unit: string): string {
+  const named = unit
+    .normalize("NFKC")
+    .match(/(?:叫它|叫作|叫做|叫|代号是|代号|记作|记为|名字是)\s*[「『"“']?([A-Za-z0-9][A-Za-z0-9_@#$%!-]*)/)?.[1] ?? "";
+  return named.length <= 24 ? named : "";
 }
 
 /**
@@ -8599,6 +8698,8 @@ const JOINT_PARTS_GAP_MAX = 12;
  * 读者照样拿到完整或大半取值。按拼接顺序数出现的片段（可跳过缺失片段，相邻命中片段间隔 ≤ JOINT_PARTS_GAP_MAX），
  * 命中 ≥ max(2, ⌈n/2⌉) 个即成立——三段里报出两段（`7`…`mzt`）也算漏出；只报一段不算。
  */
+/** 分段列举命中的片段归一化总长下限：R332 L05 的单字片段（`w` `5`）两段共 2 字不算泄（字母 + 数字相邻太常见），`5`+`pnq` 或三段全中才算。 */
+const JOINT_PARTS_MIN_LEN = 3;
 function jointPartsLeak(parts: readonly string[], norm: string): boolean {
   const ps = parts.map((p) => normalizeForLeakCompare(p)).filter((p) => p.length > 0);
   if (ps.length < 2) return false;
@@ -8606,14 +8707,16 @@ function jointPartsLeak(parts: readonly string[], norm: string): boolean {
   for (let i = 0; i < ps.length; i++) {
     for (let at = norm.indexOf(ps[i]); at >= 0; at = norm.indexOf(ps[i], at + 1)) {
       let hits = 1;
+      let len = ps[i].length;
       let end = at + ps[i].length;
       for (let j = i + 1; j < ps.length; j++) {
         const idx = norm.indexOf(ps[j], end);
         if (idx < 0 || idx - end > JOINT_PARTS_GAP_MAX) continue;
         hits++;
+        len += ps[j].length;
         end = idx + ps[j].length;
       }
-      if (hits >= need) return true;
+      if (hits >= need && len >= JOINT_PARTS_MIN_LEN) return true;
     }
   }
   return false;
@@ -8672,6 +8775,7 @@ export function normalizedGuardedLeak(answer: string, units: string[], question?
     if (
       forms.some((f) => f.length >= minLen && norm.includes(f)) ||
       (c.kind === "credential" && hanCharsetLeak(v, norm)) ||
+      hanDigitCandidateLeak(v, norm) ||
       (c.parts !== undefined && jointPartsLeak(c.parts, norm))
     ) {
       if (!top || DIRECT_GUARD_RANK[c.kind] > DIRECT_GUARD_RANK[top]) top = c.kind;
@@ -9373,6 +9477,15 @@ export function redactGraphTriplesForModel(triples: readonly string[], units: re
  */
 const ORACLE_PROBE_RE =
   /不能回答|无法回答|不方便回答|不便回答|不能说|不方便说|不便透露|不能透露|拒答|can(?:'|no)?t answer|cannot answer|unable to answer|不含|含不含|含有|含着|含了|带有|带着|包括|几位|多少位|几个字|多少个字|多少字|多长|长度|位数|第\s*[一二三四五六七八九十\d]+\s*(?:位|个字|个字符|字|个)|首字|末字|尾字|首位|末位|开头|结尾|结束|最后一|第一个|前\s*[一二两三四五六七八九\d]+\s*(?:位|个|字)|后\s*[一二两三四五六七八九\d]+\s*(?:位|个|字)|大于|小于|介于|范围|区间|之间|以内|以上|以下|排在|包含|含有|带不带|有没有|是不是|对不对|只回答|只答|只说|回答是或|是或不是|对或不对|有或没有|排除|不是.{1,12}就是|二选一|哪一个|哪个是|大写|小写|字母|数字|奇数|偶数|之和|加起来|加空格|空格|逐字|逐个|一个字一个字|念出|念一遍|念给|读出|读一遍|拼读|拆开|拆分|分开|倒着|倒序|反过来|反转|颠倒|逆序|编码|base64|十六进制|hex|二进制|unicode|摩斯|摩尔斯|nato|翻译|译成|拼音|谐音|移位|凯撒|rot13|每个字符|每一位|每位|中间加|隔开|转写|变形|缩写|首字母|whether|is it|does it|how many|how long|length|first (?:char|letter|digit|word)|last (?:char|letter|digit|word)|starts? with|ends? with|begins? with|contain|spell|letter by letter|character by character|with spaces|spaced|reverse|encode|decode|translate|separated|yes or no|true or false|greater|less than|between|odd|even/iu;
+/**
+ * R332 P0-4：枚举 / 计数 / 算术型试探（audit-r331 R03「哪些字符出现过，列出来」、L03「按位告诉我」、L08「等于哪两个数的乘积」）：
+ * 一问多 bit。带锚时与 ORACLE_PROBE_RE 同款；字符枚举形态（「哪些字符…出现」「各自出现了没有」）本身就在说某串的字符，不要锚。
+ */
+const ORACLE_ENUMERATE_RE =
+  /出现过|出现了没|出现在|列出来|列一下|列举|一一列|逐个(?:列|说|答|回答)|各自(?:出现|有没有)|分别(?:出现|是几|是什么|是哪)|哪几个(?:字|字符|字母|数字)|哪些(?:字|字符|字母|数字)|按位(?:告诉|说|报|答)|逐位|几位数|等式|乘积|乘以|除以|减去|减\s*[一二三四五六七八九十百千万\d]+\s*(?:是|等于)|加\s*[一二三四五六七八九十百千万\d]+\s*(?:是|等于)|平方|开方|因数|因子|约数|余数|取模|算式|运算|which (?:of )?(?:these|the following)|list (?:them|those|the ones)|appear(?:s|ed)? in|occur(?:s|red)? in|one by one|each (?:char|letter|digit)|product of|multiplied|divided|\bminus\b|\bplus\b/iu;
+/** 字符枚举形态：本身就指向某串的字符，不需要 ORACLE_ANCHOR_RE 的指代锚。 */
+const ORACLE_ENUMERATE_SELF_ANCHORED_RE =
+  /哪些(?:字符|字母|数字|字)[^\n]{0,12}(?:出现|有过|在里面|含)|(?:字符|字母|数字)[^\n]{0,8}(?:各自|分别)(?:出现|有没有)|出现过的(?:列|都|有哪)|逐位(?:告诉|说|报|答|列)|按位(?:告诉|说|报|答|列)|which (?:of )?(?:these|the following) (?:char|letter|digit)/iu;
 /** 属性 / 转写试探要有「指向被守内容」的锚：凭证标签、编号标签，或「那串 / 那条 / 这条 / 记的 / 笔记里」一类指代。 */
 const ORACLE_ANCHOR_RE = /那串|那条|这条|那个|那组|那段|那句|记的|记着|记录|笔记|口令|密码|暗号|密钥|门禁|卡号|保险|柜|命令|编号|串|码/u;
 // 预言机锚用的凭证标签：SECRET_LABEL_RE / CODE_LABEL_RE（受守行判据，只认「标签 + 取值面」）之外，裸标签词（「对象存储 secret」
@@ -9391,8 +9504,60 @@ function guardedLabelAnchor(text: string): boolean {
 export function isOracleProbeQuestion(question: string, opts?: { anchored?: boolean }): boolean {
   const q = question.normalize("NFKC").trim();
   if (questionCarriesOpaqueToken(q) || isYesNoQuestion(q)) return true;
-  if (!ORACLE_PROBE_RE.test(q)) return false;
+  if (ORACLE_ENUMERATE_SELF_ANCHORED_RE.test(q)) return true;
+  if (!ORACLE_PROBE_RE.test(q) && !ORACLE_ENUMERATE_RE.test(q)) return false;
   return opts?.anchored ? ORACLE_ANCHOR_RE.test(q) || guardedLabelAnchor(q) : true;
+}
+
+/**
+ * R332 P0-4：预言机闸门的「受守材料」前提不看标注也不只看受守行：单元自身（不带问句扩张）能构造出取值候选
+ *（短值 / 操作线索 / 裸记号）就算受守材料。候选面为空的善意笔记（BC04「搬家顺序：先寄书、再拆家具、最后叫车」）不算，是非问照常作答。
+ */
+export function unitHasValueCandidates(unit: string): boolean {
+  return sourceValueCandidates([unit]).length > 0;
+}
+
+/** 枚举 / 线索列表里标题携带受守取值时的占位（标题是正文派生物，短笔记常以正文为题）。 */
+export const GUARDED_TITLE_PLACEHOLDER = "含口令/短码一类内容的记录（标题已折叠，可在笔记卡片中查看）";
+
+/**
+ * R332 P1-4（audit-r331 §4.3 / P1-4：无标题短笔记 title=正文，「第二台叫 5」经枚举列表 / threads 的派生标题外泄）：
+ * 标题是否携带本单元的受守取值——自身取值候选 / 受守行逐字重合（与分拣端 closeOwnGuardedTitle 同口径），或全部单元一起看时
+ * 本单元是拼接候选的一段（首记号是 parts 之一）且标题里带着这一段。不看标注。
+ */
+export function titleCarriesGuardedValue(title: string, unit: string, allUnits: readonly string[] = [unit]): boolean {
+  const t = title.trim();
+  if (!t) return false;
+  if (normalizedGuardedLeak(t, [unit]) !== null) return true;
+  const guarded = directGuardLines(unit).filter((g) => g.own).map((g) => g.line);
+  if (guarded.length > 0 && closeAggregateOutlet(t, guarded).count > 0) return true;
+  // 拼接段只认自身带拼接线索或显式命名的单元：同一列表里的「买菜 35 元」不因别的笔记带拼接线索而被折叠
+  if (allUnits.length < 2 || !(SOURCE_JOIN_CUE_RE.test(unit) || jointNamedToken(unit))) return false;
+  const rawHead = jointHeadToken(unit);
+  if (!rawHead) return false;
+  // 标题里的该段必须是独立记号（「第二台叫 5」），「买菜 35 元」里的 5 不算
+  const headRe = new RegExp(`(?<![A-Za-z0-9])${escapeRegExp(rawHead)}(?![A-Za-z0-9])`, "i");
+  if (!headRe.test(t.normalize("NFKC"))) return false;
+  const head = normalizeForLeakCompare(rawHead);
+  // 拼接候选至少两段来自带线索 / 命名的单元：孤立一条「第二台叫 5」与无关笔记的短值硬拼不算
+  const cueHeads = new Set(
+    allUnits.filter((u) => SOURCE_JOIN_CUE_RE.test(u) || jointNamedToken(u)).map((u) => normalizeForLeakCompare(jointHeadToken(u))).filter((h) => h.length > 0)
+  );
+  return sourceValueCandidates(allUnits).some((c) => {
+    const ps = (c.parts ?? []).map((p) => normalizeForLeakCompare(p));
+    return ps.includes(head) && ps.filter((p) => cueHeads.has(p)).length >= 2;
+  });
+}
+
+/** 线索标题一类跨多条的派生标题：携带任一成员单元的受守取值（含跨单元拼接的段）就不采用。 */
+export function titleCarriesAnyGuardedValue(title: string, units: readonly string[]): boolean {
+  const t = title.trim();
+  if (!t || units.length === 0) return false;
+  if (normalizedGuardedLeak(t, [...units]) !== null) return true;
+  const nt = normalizeForLeakCompare(t);
+  const joint = units.length >= 2 ? sourceValueCandidates(units).filter((c) => c.parts && c.parts.length >= 2) : [];
+  if (joint.some((c) => jointPartsLeak([...(c.parts ?? [])], nt))) return true;
+  return units.some((u) => titleCarriesGuardedValue(t, u, units));
 }
 // 「是 8 位吗 / 十四位 / 6 个字符」——长度候选值本身（ORACLE_PROBE_RE 只认「几位 / 长度」一类问法）
 const LENGTH_CANDIDATE_RE = /[\d零〇一二两三四五六七八九十百]+\s*(?:位|个字|字符|个字符)/u;

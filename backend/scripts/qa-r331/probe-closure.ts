@@ -9,7 +9,7 @@
  *  - 善意：`<原文> [1]` 过直答 tier，统计被改写 / 占位的条数与候选面非空的条数。
  * 运行：cd backend && npx tsx scripts/qa-r331/probe-closure.ts
  */
-import { DANGER, B, type R331Carrier } from "./blind-carriers";
+import { DANGER, B, O, type R331Carrier } from "./blind-carriers";
 import {
   finalizeAskAnswer,
   normalizeForLeakCompare,
@@ -20,6 +20,7 @@ import {
   isOracleProbeQuestion,
   isYesNoQuestion,
   unitTalksAboutSecret,
+  unitHasValueCandidates,
   DIRECT_GUARD_PLACEHOLDER,
   ORACLE_NEUTRAL_NOTICE,
 } from "../../src/prompt-armor";
@@ -36,7 +37,8 @@ const lastAsk = (c: R331Carrier) => c.asks[c.asks.length - 1];
 function gateOf(c: R331Carrier, q: string): "oracle" | "value" | null {
   const units = unitsOf(c);
   const cross = crossUnitGuardedLines(units);
-  const guardedUnit = units.some((u) => directGuardLines(u).length > 0 || u.split("\n").some((l) => cross.has(l.trim())));
+  // R332 P0-4：与 /api/ask 同口径——受守行 / 跨笔记指代 / 取值候选面非空（不看标注）都算受守材料。
+  const guardedUnit = units.some((u) => directGuardLines(u).length > 0 || u.split("\n").some((l) => cross.has(l.trim())) || unitHasValueCandidates(u));
   if (guardedUnit && (isYesNoQuestion(q) || isOracleProbeQuestion(q, { anchored: true }) || isOracleProbeQuestion(q))) return "oracle";
   if (isSecretValueQuestion(q) && units.some((u) => unitTalksAboutSecret(u, cross))) return "value";
   return null;
@@ -104,3 +106,16 @@ for (const c of B) {
   if (d !== ans) changed.push(c.id);
 }
 console.log(`== R331 benign ${B.length}: direct_changed=${changed.length} [${changed.join(",")}] gated=[${gated.join(",")}] candidates=[${withCands.join(" ")}]`);
+
+// R332 P0-4：预言机语料（O 族）——T / F / 放大问句是否全部在召回前被闸门中和（不看标注：受守材料 = 受守行 / 候选面）。
+const oracleOpen: string[] = [];
+for (const o of O) {
+  const unit = askGuardNoteUnit({ title: null, content: o.text } as never);
+  const material = directGuardLines(unit).length > 0 || unitHasValueCandidates(unit);
+  const qs = [o.askT, o.askF, ...(o.amplify ?? []).map((a) => a.q)].map((q) => q.replace("{S}", o.subject));
+  for (const q of qs) {
+    const shaped = isYesNoQuestion(q) || isOracleProbeQuestion(q, { anchored: true });
+    if (!shaped || (!material && o.id !== "R05")) oracleOpen.push(`${o.id}:${JSON.stringify(q).slice(0, 40)}${shaped ? "" : "(shape)"}${material ? "" : "(material)"}`);
+  }
+}
+console.log(`== R331 oracle ${O.length} carriers: open=${oracleOpen.length} [${oracleOpen.join(" ")}]`);
