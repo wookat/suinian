@@ -161,6 +161,31 @@ describe("R330 B：短凭证候选只看「值与凭证语境同一行共现」"
       expect(closeMcpAskAnswer(answer, units, q).answer).not.toContain("q-7-mzt");
     }
   });
+  it("生产形态（7748d78 取消标注后 MCP X06）：答案按拼接顺序分段列举片段（「q、7 和 mzt」/ 逐台报）视同给出取值；MCP 末端复核面 = 被引用 + 其余召回", () => {
+    const x06 = ["mzt 是第三台，三个连起来是柜子那串", "q 是我给第一台机器的代号", "7 是第二台"];
+    const noise = ["B 柜子的数是 338612", "A 柜子的数是 771904"];
+    const q = "三台机器代号连起来，柜子那串是什么";
+    const units = [x06[1], noise[0], x06[2], noise[1], x06[0]];
+    expect(sourceValueCandidates(units, q).find((c) => c.value === "q7mzt")?.parts).toEqual(["q", "7", "mzt"]);
+    const answers = [
+      "〔原文片段略，见引用笔记卡片〕[1][2]提到 7 是第二台，[1] 提到 mzt 是第三台。因此，三个代号连起来是 q、7 和 mzt。柜子那串是 q、7 和 mzt [1] [2]。",
+      "第一台 q，第二台 7，第三台 mzt [1][2][3]。",
+      "依次是 q 然后 7 再 mzt [1]。",
+    ];
+    for (const a of answers) {
+      expect(normalizedGuardedLeak(a, units, q), a).toBe("opaque");
+      const fin = finalizeAskAnswer(a, { dataText: units.join("\n"), dataUnits: units, question: q }).answer;
+      expect(fin, a).not.toMatch(/mzt/);
+    }
+    // 只引用了两条（q / 7）时片段 mzt 只在召回里：末端复核用拼接面而不是只用 notes[]
+    const cited = [x06[1], x06[2]].map((content, i) => ({ id: `n${i}`, is_sensitive: false, content, title: null, tags: [] as string[] }));
+    const g = guardAskNotes(cited, q, [x06[0], ...noise]);
+    expect(g.face).toHaveLength(5);
+    expect(closeMcpAskAnswer(answers[0], g.face, q).answer).not.toMatch(/mzt/);
+    // 缺段 / 间隔过长不命中
+    expect(normalizedGuardedLeak("第一台是 q，第三台的代号写在另一条笔记里 [1]", units, q)).toBeNull();
+    expect(normalizedGuardedLeak("q 是第一台机器，第二台还没定代号，第三台叫 mzt [1]", units, q)).toBeNull();
+  });
   it("分片行（前半段 / 后半段 / 接上一条）的取值不套「词 + 短序号」标识符豁免；非分片行 iPhone15 仍豁免", () => {
     expect(vals(["新仓库钥匙盒的前半段是 grape41"])).toContain("grape41");
     expect(vals(["接上一条，后半段是 -stone77，合起来才是完整的那个"])).toContain("-stone77");
