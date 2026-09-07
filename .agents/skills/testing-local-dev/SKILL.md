@@ -23,6 +23,12 @@ description: How to run and test suinian (backend Worker + web SPA) fully locall
 - Web: `cd web && npm ci && cp .env.example .env.local && npm run dev` → http://localhost:5173.
 
 ## Known pitfall
+### Real Workers AI against local app state
+- For real model/outlet tests, replace the example mock model with `AI_MODEL=workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast` and start backend `npm run dev` without `--local`; the AI binding uses Cloudflare while D1/R2 remain local.
+- With explicit approval for the provider, inherit `CLOUDFLARE_GLOBAL_API_TOKEN` as process-only `CLOUDFLARE_API_TOKEN` plus `CLOUDFLARE_ACCOUNT_ID`; keep any encryption key process-only and stable across restarts that reuse encrypted local notes. Never print or persist secret values.
+- Check local `/health` reports `ai.ok=true` and `degraded=false` before treating model answers as valid evidence. Provider billing/auth errors require an approved alternative, not mock answers counted as security passes.
+- When testing annotation-independent outlet rules, record automatic sensitive classification separately, then use the UI cancellation menu for the explicitly labelled unannotated check; auto-marking can otherwise hide the outlet boundary being tested.
+
 `wrangler dev` (4.119.x) may crash at startup with `Incorrect type for map entry 'RETRIAGE_TIME_BUDGET_MS': not of type 'function or ExportedHandler'` — workerd rejects non-function exports from the entry module (backend/src/index.ts exports consts like `RETRIAGE_TIME_BUDGET_MS`, `SOFT_DELETE_RETENTION_DAYS` for tests). Workaround for local testing: temporarily remove `export` from those consts (revert before running `npm test`, which imports `SOFT_DELETE_RETENTION_DAYS`). Proper fix: stop exporting constants from the Worker entry module (re-export from a separate module).
 
 ## UI flow
