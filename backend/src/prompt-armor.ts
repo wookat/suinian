@@ -8441,12 +8441,19 @@ function lockLineValues(line: string, opts: { cell?: boolean; encoded?: boolean 
   return out;
 }
 
-export function sourceValueCandidates(units: readonly string[], question?: string): Array<{ value: string; kind: DirectGuardKind }> {
-  const out: Array<{ value: string; kind: DirectGuardKind }> = [];
-  const push = (v: string, kind: DirectGuardKind, minLen = 4): void => {
+/** 取值候选；`parts` 只有跨单元拼接候选才带（各片段按拼接顺序），供答案侧按「分段列举」形态比对。 */
+export interface SourceValueCandidate {
+  value: string;
+  kind: DirectGuardKind;
+  parts?: readonly string[];
+}
+
+export function sourceValueCandidates(units: readonly string[], question?: string): SourceValueCandidate[] {
+  const out: SourceValueCandidate[] = [];
+  const push = (v: string, kind: DirectGuardKind, minLen = 4, parts?: readonly string[]): void => {
     const t = v.trim();
     const norm = normalizeForLeakCompare(t);
-    if (norm.length >= minLen || (norm.length === 3 && /^\p{Script=Han}+$/u.test(norm))) out.push({ value: t, kind });
+    if (norm.length >= minLen || (norm.length === 3 && /^\p{Script=Han}+$/u.test(norm))) out.push(parts ? { value: t, kind, parts } : { value: t, kind });
   };
   const secretQ = !!question && isSecretValueQuestion(question);
   const derivedQ = !!question && SOURCE_DERIVED_CUE_RE.test(question);
@@ -8546,7 +8553,7 @@ export function sourceValueCandidates(units: readonly string[], question?: strin
   if (units.length >= 2 && units.some((u) => SOURCE_JOIN_CUE_RE.test(u))) {
     const lines = units.flatMap((u) => u.normalize("NFKC").split("\n"));
     if (lines.some((l) => SOURCE_LOCK_CUE_RE.test(l) || SOURCE_RECALL_CUE_RE.test(l) || isShortCredentialCarrierLine(l))) {
-      for (const o of jointHeadOrders(units)) push(o.join(""), "opaque");
+      for (const o of jointHeadOrders(units)) push(o.join(""), "opaque", 4, o);
     }
   }
   return out;
@@ -8582,6 +8589,19 @@ function jointHeadOrders(units: readonly string[]): string[][] {
   return out;
 }
 
+/** 分段列举时片段之间允许夹的归一化字数（「q、7 和 mzt」→ `q7和mzt`；「第一台 q，第二台 7，第三台 mzt」）。 */
+const JOINT_PARTS_GAP_MAX = 6;
+/**
+ * 拼接候选的分段列举形态：答案没有把片段连成一串，而是按拼接顺序逐段报出（顶多夹连词 / 序数短语），
+ * 读者照样拿到完整取值。片段按序出现、相邻片段间隔 ≤ JOINT_PARTS_GAP_MAX 个归一化字即命中。
+ */
+function jointPartsLeak(parts: readonly string[], norm: string): boolean {
+  const ps = parts.map((p) => normalizeForLeakCompare(p)).filter((p) => p.length > 0);
+  if (ps.length < 2) return false;
+  const re = new RegExp(ps.map(escapeRegExp).join(`[\\p{L}\\p{N}]{0,${JOINT_PARTS_GAP_MAX}}`), "u");
+  return re.test(norm);
+}
+
 const HAN_CHARSET_MIN_LEN = 4;
 const HAN_CHARSET_MIN_DISTINCT = 3;
 /**
@@ -8615,7 +8635,8 @@ export function normalizedGuardedLeak(answer: string, units: string[], question?
   const norm = normalizeForLeakCompare(bare);
   if (norm.length < 3) return null;
   let top: DirectGuardKind | null = null;
-  for (const c of [...guardedValueCandidates(units), ...sourceValueCandidates(units, question)]) {
+  const cands: SourceValueCandidate[] = [...guardedValueCandidates(units), ...sourceValueCandidates(units, question)];
+  for (const c of cands) {
     const v = normalizeForLeakCompare(c.value);
     // R330：3 位纯数字候选只来自 CVV 称谓行（sourceValueCandidates 的 minLen=3），按数字边界比对（`704` 不命中 `1704`）。
     if (/^\d{3}$/.test(v)) {
@@ -8631,7 +8652,11 @@ export function normalizedGuardedLeak(answer: string, units: string[], question?
     forms.push(hexOf(c.value.normalize("NFKC")));
     const letters = alphabetIndexOf(c.value);
     if (letters) forms.push(letters);
-    if (forms.some((f) => f.length >= minLen && norm.includes(f)) || (c.kind === "credential" && hanCharsetLeak(v, norm))) {
+    if (
+      forms.some((f) => f.length >= minLen && norm.includes(f)) ||
+      (c.kind === "credential" && hanCharsetLeak(v, norm)) ||
+      (c.parts !== undefined && jointPartsLeak(c.parts, norm))
+    ) {
       if (!top || DIRECT_GUARD_RANK[c.kind] > DIRECT_GUARD_RANK[top]) top = c.kind;
     }
   }

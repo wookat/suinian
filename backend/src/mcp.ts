@@ -83,7 +83,7 @@ export function guardAskNotes<T extends GuardableNote>(
   notes: T[],
   question?: string,
   recallUnits: readonly string[] = []
-): { notes: (T & GuardedNoteMark)[]; guardedUnits: string[]; units: string[] } {
+): { notes: (T & GuardedNoteMark)[]; guardedUnits: string[]; units: string[]; face: string[] } {
   const units = notes.map(mcpGuardUnit);
   const cross = crossUnitGuardedLines(units);
   const valueProbe = !!question && isSecretValueQuestion(question);
@@ -114,7 +114,7 @@ export function guardAskNotes<T extends GuardableNote>(
     const kind: DirectGuardKind | "cross" = ranked.length > 0 ? ranked.reduce((a, k) => (rankOf(k) > rankOf(a) ? k : a), ranked[0]) : "cross";
     return { ...n, ...GUARDED_LINK_FIELDS, content: MCP_GUARDED_PLACEHOLDER, title: MCP_GUARDED_PLACEHOLDER, tags: [], guarded: true, guard_kind: kind };
   });
-  return { notes: out, guardedUnits, units };
+  return { notes: out, guardedUnits, units, face: jointFace };
 }
 const GUARD_RANK: Record<DirectGuardKind, number> = { credential: 5, destructive: 4, opaque: 3, endpoint: 2, code: 1 };
 function rankOf(k: DirectGuardKind): number {
@@ -390,7 +390,8 @@ export function buildMcpServer(
       const guardedAsk = guardAskNotes(redactNotes(body.notes), question, recallUnits);
       const askFlagged = flagExecNotes(guardedAsk.notes);
       onExecMarks(askFlagged.counts);
-      const closedAnswer = closeMcpAskAnswer(typeof body.answer === "string" ? body.answer : "", guardedAsk.units, question);
+      // answer 末端复核的比对面 = 拼接面（被引用条目 + 其余可见召回）：只看被引用条目时跨笔记拼接候选缺片段。
+      const closedAnswer = closeMcpAskAnswer(typeof body.answer === "string" ? body.answer : "", guardedAsk.face, question);
       const closedSpans = (typeof body.verbatim_closed_spans === "number" ? body.verbatim_closed_spans : 0) + closedAnswer.closed;
       onVerbatimClosed(closedSpans);
       const anyGuarded = guardedAsk.notes.some((n) => n.guarded);
