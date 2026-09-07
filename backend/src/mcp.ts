@@ -18,6 +18,7 @@ import {
   normalizedGuardedLeak,
   failClosedGuardAnswer,
   sourceValueCandidates,
+  normalizeForLeakCompare,
   isSecretValueQuestion,
   unitTalksAboutSecret,
   type BroadFoldReason,
@@ -82,12 +83,22 @@ export function guardAskNotes<T extends GuardableNote>(notes: T[], question?: st
   const cross = crossUnitGuardedLines(units);
   const valueProbe = !!question && isSecretValueQuestion(question);
   const guardedUnits: string[] = [];
+  // R330：跨笔记拼接候选（X05「前半段 grape41 / 后半段 -stone77 合起来」）只在全部单元一起看时才派生；
+  // 贡献了片段（首记号 ≥4 字落在拼接候选里）的条目同样整条占位，否则 answer 占位的值能从 notes[] 分片拿回。
+  const joint = units.length >= 2 ? sourceValueCandidates(units, question) : [];
+  const jointOnly = joint.filter((c) => !units.some((u) => normalizeForLeakCompare(u).includes(normalizeForLeakCompare(c.value))));
+  const jointHit = (u: string): typeof joint => {
+    const head = u.normalize("NFKC").match(/(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9_@#$%!-]*/)?.[0] ?? "";
+    if (head.length < 4) return [];
+    const h = normalizeForLeakCompare(head);
+    return jointOnly.filter((c) => normalizeForLeakCompare(c.value).includes(h));
+  };
   const out = notes.map((n, i) => {
     // 数据层已标敏感的条目 redactNote 已换占位；这里补 guarded 标记让宿主机器可读地知道该条不是原文。
     if (n.is_sensitive) return { ...n, ...GUARDED_LINK_FIELDS, content: MCP_SENSITIVE_ASK_PLACEHOLDER, title: null, tags: [], guarded: true, guard_kind: "sensitive" as const };
     const own = directGuardLines(units[i]).filter((g) => g.own);
     const crossHit = units[i].split("\n").some((l) => cross.has(l.trim()));
-    const sourceValues = own.length === 0 && !crossHit ? sourceValueCandidates([units[i]], question) : [];
+    const sourceValues = own.length === 0 && !crossHit ? [...sourceValueCandidates([units[i]], question), ...jointHit(units[i])] : [];
     const valueTalk = own.length === 0 && !crossHit && sourceValues.length === 0 && valueProbe && unitTalksAboutSecret(units[i], cross);
     if (own.length === 0 && !crossHit && sourceValues.length === 0 && !valueTalk) return { ...n, guarded: false };
     guardedUnits.push(units[i]);
