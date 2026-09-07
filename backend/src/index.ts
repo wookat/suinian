@@ -5755,6 +5755,11 @@ app.post("/api/ask", async (c) => {
     // 充数；否则「银行卡密码」这类问题会引三条无关笔记误导用户
     const credentialQ = CREDENTIAL_Q_RE.test(question);
     if (credentialQ) suggestions = suggestions.filter((n) => noteHitsTopic(n, topics));
+    // 取值型问句同理（R328 D）：「门口暗号那句」零召回时不拿别的凭证卡（订单号 / 车牌）当相近记录
+    if (valueProbe && !credentialQ) {
+      const sugTopics = attributableTopicTerms(gateTopics);
+      if (sugTopics.length > 0) suggestions = suggestions.filter((n) => noteHitsTopic(n, sugTopics));
+    }
     // 建议位不当执行通道（audit-r268：R268-32/33 跨笔记分片的 demand 文字藏在
     // 笔记标题/正文里，随建议标签原样外带）：含指令要求物的笔记不进建议列表
     const refusalDemands = (await Promise.race([
