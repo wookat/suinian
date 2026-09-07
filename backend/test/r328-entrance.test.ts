@@ -143,8 +143,8 @@ function stubModel(triage: Record<string, unknown> | null) {
 
 afterEach(() => vi.unstubAllGlobals());
 
-/** audit-r327 §5.2 的复现内容：预检（maybeSensitive）不认，只有模型判得出。 */
-const PHRASE = "会议室平板解锁短语：橘子 台灯 秋天";
+/** audit-r327 §5.2 复现内容的变体：预检（maybeSensitive）不认，只有模型判得出（原句「…解锁短语：…」已由 R328 B 短语标签规则确定性标注）。 */
+const PHRASE = "会议室平板解锁用：橘子 台灯 秋天";
 
 async function create(content: string, skip: boolean) {
   const notes: Row[] = [];

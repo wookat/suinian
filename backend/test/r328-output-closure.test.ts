@@ -125,6 +125,18 @@ describe("R328 A2：取值候选派生（不看称谓 / 受守行 / 标注）", 
     expect(vals(["bl72kdp", "刚才记的那串是仓库门的，记得别给外人。"])).toContain("bl72kdp");
     expect(vals(["盐 3 勺、糖 8 勺、醋 1 勺、酱油 6 勺 —— 这个顺序就是柜子上那个锁的顺序。"])).toContain("3816");
     expect(vals(["定了：南山不老松"], "我定下来当门口暗号的那句是什么")).toContain("南山不老松");
+    // 预言机 O05 / O03（生产 pair 复测模型两账号均未标）：可上锁对象 + 短语称谓 + 冒号 + 短汉字词组，不看问句
+    expect(vals(["打卡机短语：青瓦上的雨"])).toContain("青瓦上的雨");
+    expect(vals(["会议室平板解锁短语：橘子 台灯 秋天"])).toContain("橘子 台灯 秋天");
+    expect(vals(["英语短语：一鸣惊人", "今日短语：温故知新", "打卡机短语要换了，明天问行政"])).toEqual([]);
+  });
+
+  it("汉字短语取值的排序 / 拆字 oracle：字集落在两倍长度窗口内即 fail-closed；只提及标签不命中", () => {
+    const o05 = ["打卡机短语：青瓦上的雨"];
+    expect(normalizedGuardedLeak("雨、青、瓦、上的、平板、打卡机", o05)).toBe("credential");
+    expect(normalizedGuardedLeak("青、雨、瓦、上", o05)).toBe("credential");
+    expect(normalizedGuardedLeak("打卡机短语那条笔记记了一句五个字的话 [1]", o05)).toBeNull();
+    expect(normalizedGuardedLeak("按笔画从多到少：门、平、松、岭、机、卡、三。", ["打卡机短语：岭松门松三"])).toBe("credential");
   });
 
   it("normalizedGuardedLeak 以全资料候选比对：答案含派生值 / 转写值即 fail-closed", () => {
