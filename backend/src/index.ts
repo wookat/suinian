@@ -86,7 +86,7 @@ import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES, BACKUP_AI_DERIVED_NOT
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
 import { propagateSensitiveContinuation } from "./sensitive-continuation";
-import { type AskEnumRoute, parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources, citeIsolationMarks } from "./ask";
+import { type AskEnumRoute, parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, retargetMisindexedCitation, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources, citeIsolationMarks } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -5103,8 +5103,8 @@ app.post("/api/ask", async (c) => {
   // R320 B1：预言机形态问题命中含受守行（口令/密钥/高熵串/命令）的笔记 ⇒ 不进生成，答案恒为中性指引 + 角标；
   // 对值 / 错值 / 部分值同一输出（召回已去掉候选值，命中集合与候选值无关）。
   // R322 A（方案 1）：受守行（口令 / 命令 / 长串编号，含跨笔记指代的裸取值）在进模型前替换为占位——模型没见过就变形不出来。
-  const askModelUnits = notes.map(askGuardNoteUnit);
-  const askCrossGuarded = crossUnitGuardedLines(askModelUnits);
+  let askModelUnits = notes.map(askGuardNoteUnit);
+  let askCrossGuarded = crossUnitGuardedLines(askModelUnits);
   const askNoteGuarded = (i: number): boolean =>
     directGuardLines(askModelUnits[i]).length > 0 ||
     askModelUnits[i].split("\n").some((l) => askCrossGuarded.has(l.trim()));
@@ -5143,7 +5143,6 @@ app.post("/api/ask", async (c) => {
   // 已在上面以占位行进候选。在讲秘密（受守行 / 凭证标签 / 跨笔记指代 / R328 强形态取值候选）的笔记碰上取值型问句 ⇒ 不进生成，
   // 直答恒为类别占位 + 角标；问题主题另有所指时这些笔记整条不进上下文，其余照常作答。
   const valueProbe = !metaQuestion && !oracleProbe && isSecretValueQuestion(question, history.length > 0 ? historyText : "");
-  const valueWithheld = new Set<string>();
   if (valueProbe) {
     const guarded = notes.filter((n, i) => !n.is_sensitive && unitTalksAboutSecret(askModelUnits[i], askCrossGuarded));
     // 归因用话题词剥掉称谓 / 元词 / 指代词（「门口暗号」→「门口」，「那串」→ 无）；剥空时按原主题词比对（R324 现状）。
@@ -5153,8 +5152,12 @@ app.post("/api/ask", async (c) => {
     // 不得作为占位答案的引用卡（audit-r327 §5.3「门口暗号」→ 健身卡）。
     const offTopic = guarded.length > 0 && topicHits.length === 0 && attribTopics.length > 0;
     if (offTopic && guarded.length < notes.length) {
-      for (const n of guarded) valueWithheld.add(n.id);
-      console.log(`ask: credential value question — ${guarded.length} secret-talking note(s) withheld whole from model context (topic points elsewhere)`);
+      // 整条出候选（不是留占位行）：占位行会被模型当「这条笔记记了它 [n]」引出去，角标仍指向别人的秘密卡（audit-r327 G07 → BR07）。
+      const drop = new Set(guarded.map((n) => n.id));
+      notes = notes.filter((n) => !drop.has(n.id));
+      askModelUnits = notes.map(askGuardNoteUnit);
+      askCrossGuarded = crossUnitGuardedLines(askModelUnits);
+      console.log(`ask: credential value question — ${guarded.length} secret-talking note(s) dropped from candidates (topic points elsewhere)`);
     } else if (offTopic && sensRecall.rows.length === 0) {
       const hint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
       const { answer, references } = buildNoAnswerResponse([], "not_in_notes");
@@ -5249,7 +5252,7 @@ app.post("/api/ask", async (c) => {
         askModelWithheld += 1;
         return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${tags ? `, 标签:${tags}` : ""}) ${SENSITIVE_MODEL_LINE}`;
       }
-      const redacted = modelContextNoteText({ title: n.title, content: n.content, unit: askModelUnits[i], crossGuarded: askCrossGuarded, budget: perNoteBudget, withholdWhole: valueWithheld.has(n.id) });
+      const redacted = modelContextNoteText({ title: n.title, content: n.content, unit: askModelUnits[i], crossGuarded: askCrossGuarded, budget: perNoteBudget });
       if (redacted.redacted > 0) askModelRedactedLines += redacted.redacted;
       if (redacted.withheld) askModelWithheld += 1;
       return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${redacted.text}`;
@@ -5785,7 +5788,7 @@ app.post("/api/ask", async (c) => {
   // 否定话术实体后校验（R200，audit-r199 P3-1）：否定分句引入问句与片段中
   // 都不存在的实体时改写成通用指代（流式 delta 原样透传，done 事件全文替换
   // 时生效——与引证补全同一收口时机）
-  const negScrubbed = scrubUnsourcedNegations(answer2 ?? "", askScrubSource);
+  const negScrubbed = retargetMisindexedCitation(scrubUnsourcedNegations(answer2 ?? "", askScrubSource), notes);
   // weak semantic-only hits stay in the context but never surface as
   // citations; the answer text and the references array are rewritten
   // together so no [n] marker dangles

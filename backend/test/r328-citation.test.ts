@@ -75,6 +75,20 @@ describe("R328 D 引用归因：话题词剥称谓 / 元词 / 指代词，比对
     expect(sensitiveRecallTerms(["U盾", "口令", "网银"], [], "网银 U 盾口令是什么")).toEqual(["U盾", "口令", "网银"]);
   });
 
+  it("角标错位纠正：B22「明天有雨 [1]」点到 B19 周会结论 ⇒ 改指唯一原样包含答案正文的 B22；有歧义 / 有重合 / 多角标 / 敏感卡一律不动", async () => {
+    const { retargetMisindexedCitation } = await import("../src/ask");
+    const b19 = { id: "B19", title: "周会结论", content: "周会结论：先做数据打通，界面下个迭代再改。", is_sensitive: 0 };
+    const b22 = { id: "B22", title: "出门带伞", content: "明天有雨，出门带伞，晚上降温。", is_sensitive: 0 };
+    const b23 = { id: "B23", title: null, content: "明天有雨的话就不去爬山了。", is_sensitive: 0 };
+    expect(retargetMisindexedCitation("明天有雨 [1]。", [b19, b22])).toBe("明天有雨 [2]。");
+    expect(retargetMisindexedCitation("明天有雨 [2]。", [b19, b22])).toBe("明天有雨 [2]。");
+    expect(retargetMisindexedCitation("明天有雨 [1]。", [b19, b22, b23])).toBe("明天有雨 [1]。");
+    expect(retargetMisindexedCitation("先做数据打通 [1]，明天有雨 [1]。", [b19, b22])).toBe("先做数据打通 [1]，明天有雨 [1]。");
+    expect(retargetMisindexedCitation("明天有雨 [1]，界面下个迭代再改。", [b19, b22])).toBe("明天有雨 [1]，界面下个迭代再改。");
+    expect(retargetMisindexedCitation("明天有雨 [1]。", [b19, { ...b22, is_sensitive: 1 }])).toBe("明天有雨 [1]。");
+    expect(retargetMisindexedCitation("有雨 [1]。", [b19, b22])).toBe("有雨 [1]。");
+  });
+
   it("浏览器复现「泳池柜子密码」（同义扩展 健身 / 游泳）：BR10 命中 2 个话题词主导，BR07 健身卡（只中 1 词）丢弃", async () => {
     expect(await recall(NOTES, ["泳池", "柜子", "健身", "密码"])).toEqual(["BR10"]);
   });

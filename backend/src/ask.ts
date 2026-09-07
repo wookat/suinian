@@ -3103,6 +3103,32 @@ export function dedupeNotesByContent<T extends { content: string }>(notes: T[]):
   });
 }
 
+const MISINDEX_MIN_BODY = 4;
+
+/**
+ * 角标错位纠正（R328 D，audit-r327 §5.3 / 83 题矩阵 B22 → B19）：模型偶发把「[1]」写成第一条候选而不是它实际转述的那条。
+ * 只在证据无歧义时改写：答案只点了一个角标，被点的那条与答案正文（剔角标 / 标点）连 4 字都不重合，而恰有一条其它候选
+ * 把整段答案正文原样包含。其余形态一律不动（宁缺毋滥，错纠比错引更糟）。
+ */
+export function retargetMisindexedCitation(
+  answer: string,
+  notes: readonly { id: string; title?: string | null; content: string; is_sensitive?: number | boolean | null }[]
+): string {
+  const markers = [...answer.matchAll(CITE_RE)];
+  const idx = [...new Set(markers.map((m) => parseInt(m[1], 10)))].filter((n) => n >= 1 && n <= notes.length);
+  if (markers.length !== 1 || idx.length !== 1) return answer;
+  const body = answer.replace(CITE_RE, "").replace(VERBATIM_NONWORD_RE, "");
+  if (body.length < MISINDEX_MIN_BODY) return answer;
+  const norm = (n: { title?: string | null; content: string }) => `${n.title ?? ""}${n.content}`.replace(VERBATIM_NONWORD_RE, "");
+  const citedText = norm(notes[idx[0] - 1]);
+  for (let i = 0; i + MISINDEX_MIN_BODY <= body.length; i += 1) {
+    if (citedText.includes(body.slice(i, i + MISINDEX_MIN_BODY))) return answer;
+  }
+  const owners = notes.map((n, i) => i + 1).filter((k) => k !== idx[0] && !notes[k - 1].is_sensitive && norm(notes[k - 1]).includes(body));
+  if (owners.length !== 1) return answer;
+  return answer.replace(CITE_RE, `[${owners[0]}]`);
+}
+
 /**
  * Single source of truth for /api/ask citations: the answer text and the
  * references array are rewritten together so every [n] marker left in the
