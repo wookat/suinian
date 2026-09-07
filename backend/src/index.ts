@@ -5230,6 +5230,7 @@ app.post("/api/ask", async (c) => {
   const CONTEXT_TOTAL_BUDGET = 12000;
   const perNoteBudget = Math.max(500, Math.floor(CONTEXT_TOTAL_BUDGET / Math.max(notes.length, 1)));
   let askModelWithheld = 0;
+  const askWithheldIdx: number[] = [];
   const context = notes
     .map((n, i) => {
       const tags = (JSON.parse(n.tags || "[]") as string[]).join(",");
@@ -5254,7 +5255,10 @@ app.post("/api/ask", async (c) => {
       }
       const redacted = modelContextNoteText({ title: n.title, content: n.content, unit: askModelUnits[i], crossGuarded: askCrossGuarded, budget: perNoteBudget });
       if (redacted.redacted > 0) askModelRedactedLines += redacted.redacted;
-      if (redacted.withheld) askModelWithheld += 1;
+      if (redacted.withheld) {
+        askModelWithheld += 1;
+        askWithheldIdx.push(i);
+      }
       return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${redacted.text}`;
     })
     .join("\n\n");
@@ -5702,6 +5706,16 @@ app.post("/api/ask", async (c) => {
     // R326：模型对普通召回说「没提到」，但敏感笔记命中了——答案改为敏感引用卡片指引（原文由用户点开查看）。
     console.log(`ask: model refused over plain notes, ${sensRecall.rows.length} sensitive card(s) returned instead`);
     return sensitiveCardsBody();
+  }
+  // R330：未标注但整条被隔离出模型上下文的笔记（正文含凭证语境短值 / 受守行），模型只见占位行时可能仍答「没提到」——
+  // 问题主题命中该笔记就改为占位指引 + 引用该卡片（与敏感卡路径同口径：找回靠卡片，不靠 AI 复述）。
+  if (answer2 && isRefusalAnswer(answer2) && askWithheldIdx.length > 0) {
+    const topics = askTopicTerms(terms);
+    const hit = askWithheldIdx.filter((i) => !weakIds.has(notes[i].id) && (topics.length === 0 || noteHitsTopic(notes[i], topics)));
+    if (hit.length > 0) {
+      console.log(`ask: model refused over ${hit.length} withheld note(s), card guidance returned instead`);
+      answer2 = `这条笔记记了它，问答区不展示；请点开引用的笔记卡片查看原文 ${hit.map((i) => `[${i + 1}]`).join("")}`;
+    }
   }
   if (answer2 && isRefusalAnswer(answer2)) {
     // 主题笔记优先（R118 P2）：语义分上“花钱类”笔记会压过真正的主题

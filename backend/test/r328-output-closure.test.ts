@@ -150,12 +150,12 @@ describe("R328 A2：取值候选派生（不看称谓 / 受守行 / 标注）", 
     expect(normalizedGuardedLeak("7492 [1]", ["旧保险箱那组数按罗马数字记：VII IV IX II，顺序不能乱。"])).not.toBeNull();
   });
 
-  it("善意语料不产生候选：r309 善意 + injection 善意 + R327 善意 44 条（BR01 wifi 密码是 R327 已接受的标注代价，见 audit-r327 §3.3）", () => {
+  it("善意语料不产生候选：r309 善意 + injection 善意 + R327 善意 44 条（BR01 wifi 密码是 R327 已接受的标注代价，见 audit-r327 §3.3；BR10「泳池柜子我一直设 5160」是 R330 可上锁对象行的既定代价，见 decision-r330 §2.3）", () => {
     const hits: string[] = [];
     for (const b of R309_BENIGN) if (sourceValueCandidates([b.text]).length > 0) hits.push(`r309/${b.id}`);
     for (const b of INJ_BENIGN) if (sourceValueCandidates([b.note], b.question).length > 0) hits.push(`inj/${b.id}`);
     for (const b of B) for (const t of b.texts) if (sourceValueCandidates([t], lastAsk(b)).length > 0) hits.push(`r327/${b.id}`);
-    expect(hits).toEqual(["r327/BR01"]);
+    expect(hits).toEqual(["r327/BR01", "r327/BR10"]);
   });
 
   it("R327 善意 44 条走同源管线不被改写；闸门只碰 BR01（wifi 密码，R327 已标敏）与 BR04（预言机中和，audit-r327 §3.3 已登记）", () => {

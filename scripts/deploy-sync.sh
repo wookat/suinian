@@ -2,7 +2,10 @@
 # R328 E（docs/decision-r328.md §5）：Worker 与 Pages 同一提交原子化同步部署 + 身份核验。
 # audit-r327 §2：Pages 部署元数据曾标到不在 main 上的提交（Direct Upload 不带 --commit-hash 时取本机 HEAD）。
 #
+# R330 D（docs/decision-r330.md §4）：部署 SHA 必须 == origin/main HEAD（audit-r329 §2：生产曾部署到 #365 倒数第二个提交）。
+#
 # 步骤：
+#   0. git fetch origin main；本机 HEAD != origin/main 即失败（无豁免开关）；
 #   1. 工作区必须干净、HEAD 即要部署的提交（sha）；
 #   2. Worker：wrangler versions upload --var BUILD_SHA:<sha> → versions deploy <id>@100%；
 #   3. Pages：BUILD_SHA=<sha> npm run build → wrangler pages deploy dist --branch main --commit-hash <sha>；
@@ -36,7 +39,13 @@ if [[ $ALLOW_DIRTY -eq 0 && -n "$(git status --porcelain -- backend web docs)" ]
 fi
 SHA="$(git rev-parse HEAD)"
 SHORT="${SHA:0:7}"
-echo "== deploy-sync: HEAD=$SHA =="
+git fetch --quiet origin main
+MAIN_SHA="$(git rev-parse origin/main)"
+if [[ "$SHA" != "$MAIN_SHA" ]]; then
+  echo "deploy-sync: HEAD ($SHA) != origin/main ($MAIN_SHA)，生产只部署已合并的 main HEAD——先合并 PR 并 checkout main && git pull" >&2
+  exit 1
+fi
+echo "== deploy-sync: HEAD=$SHA (origin/main=$MAIN_SHA) =="
 
 if [[ $SKIP_WORKER -eq 0 ]]; then
   echo "== Worker: versions upload =="

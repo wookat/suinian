@@ -8232,6 +8232,76 @@ const SOURCE_URL_VALUE_SHAPE_RE = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_-]{8,}$/;
 /** 车牌 / 卡号 / 型号（EQ73185、B77219、RTX4090）、词 + 短序号（iPhone15、python3）、日期 / 版本号：标识符不是钥匙。 */
 const SOURCE_IDENTIFIER_SHAPE_RE = /^[A-Z]{1,4}-?\d+[A-Z]*$|^[A-Za-z]+\d{1,3}$|^v?\d+(?:[._-]\d+)+$|^\d{4}[-_]\d{2}[-_]\d{2}/;
 
+// ---- R330 B：短凭证载体行（decision-r330 §2） ----
+// 短值（<8 归一化字）对 LCS8 天然失明，纯数字又不做记号级占位，只能靠整答归一化比对——而比对需要候选。
+// 候选只从「值与凭证语境同一行共现」的行派生（不做全局数字匹配）：可上锁对象名词 / 短码称谓 / CVV 称谓 /
+// 记忆线索 / 「标签 + 值」紧邻整行。与 is_sensitive、问句形态、是否曾被取消标注无关。
+/** 可上锁对象名词：门（排除门票 / 门店 / 门诊 / 部门 / 专门 / 门牌 / 门口 / 门槛 / 门面）、柜（排除柜台）、抽屉、车库、卷帘、储物、工位、寄存、更衣、后台、POS。 */
+const SOURCE_LOCKABLE_OBJECT_RE =
+  /(?<![部专])门(?![票店诊牌口槛面])|柜(?!台)|抽屉|保险箱|车库|卷帘|储物|工位|寄存|更衣|钥匙|后台|\bpos\b/iu;
+/** 短码称谓：管理码 / 解锁码 / 开门码 … 与「（门｜锁｜柜｜箱｜库）(子|的)?（码｜数｜数字）」。 */
+const SOURCE_SHORT_CODE_LABEL_RE = /(?:管理|解锁|开门|开锁|门|锁|箱|柜|安全|动态|提取|pin)\s*码|[门锁柜箱库](?:\s*(?:子|上的|的|那个)){0,2}\s*(?:码|数字|数)(?![字据量])/iu;
+/** 「标签 + 值」整行里纯数字值的标签若是计量 / 计数语义（步数 / 跑步 / 血压 / 金额…），值是读数不是钥匙。 */
+const SOURCE_MEASURE_LABEL_RE = /步|跑|重|压|糖|温|量|额|价|费|销|收|支|算|款|薪|资|余|存|人数|次|分|里程|公里|米|房间|房号|座|排|页|章|节|集|期|届|年|月|日/u;
+/** CVV 称谓：这一类且仅这一类允许 3 位数字值。 */
+const SOURCE_CVV_CUE_RE = /背后三位|背面三位|后三位|安全码|\bcvv\b|\bcvc\b/iu;
+/** 「标签 + 值」紧邻整行：≤12 字、含汉字、无数字的标签 + 可选「是 / 为 / ：」+ 单个裸值 + 可选句末标点。
+ *  纯 ASCII 键（YAML / 配置 `port: 8080`、`image: nginx1.25`）不算：那是代码面，由 closeDirectGuard 按结构处理。 */
+const SOURCE_LABEL_VALUE_LINE_RE =
+  /^((?=[^\d\n：:]{0,11}\p{Script=Han})[^\d\n：:]{1,12}?)\s*(?:是|为|[：:=])?\s*((?<!\d)\d(?:[ \-]?\d){3,}(?!\d)|(?=[\p{L}\p{N}_-]*\p{L})(?=[\p{L}\p{N}_-]*\d)[\p{L}\p{N}_-]{6,24})\s*[。.．！!]?\s*$/u;
+/** 日常识别符标签（R322 口径）：值紧邻这些标签之后不算凭证。 */
+const SOURCE_IDENTIFIER_LABEL_RE =
+  /(?:取件码|验证码|会议号|订单号|单号|运单|快递|车牌|卡号|账号|工号|学号|编号|序号|房号|门牌|邮编|航班|座位|电话|手机|号码|传真|后四位|末四位|尾号)号?\s*(?:是|为|[：:=])?\s*$/u;
+/** 日期 / 金额 / 计量 / 时间 / 序数形态：值前后紧跟这些字符不算凭证。 */
+const SOURCE_UNIT_SUFFIX_RE = /^\s*(?:年|月|日|号|元|块|万|千|亿|米|斤|克|页|楼|层|室|栋|路|线|度|%|％|点|分|秒|kg|km|cm|mm|ml|g\b)/iu;
+const SOURCE_UNIT_PREFIX_RE = /(?:[¥￥$€£]|第|\bv|№)\s*$/iu;
+const SOURCE_JOIN_CUE_RE = /连起来|合起来|拼起来|接起来|连在一起|合在一起|拼在一起/u;
+
+/** 载体行内一个取值是否被日常识别符标签 / 计量形态豁免（只对 R330 新增语境的行生效，锁称谓行维持既有行为）。 */
+function shortValueExempt(line: string, start: number, end: number, value: string): boolean {
+  const before = line.slice(Math.max(0, start - 12), start);
+  const after = line.slice(end, end + 4);
+  if (SOURCE_IDENTIFIER_LABEL_RE.test(before)) return true;
+  if (SOURCE_UNIT_PREFIX_RE.test(before) || SOURCE_UNIT_SUFFIX_RE.test(after)) return true;
+  if (/^\d{4}[-_/.]\d{1,2}[-_/.]\d{1,2}/.test(value) || /^\d{1,2}[:：]\d{2}/.test(value)) return true;
+  return SOURCE_IDENTIFIER_SHAPE_RE.test(value.replace(/[ \-]/g, "")) && !/^\d+$/.test(value.replace(/[ \-]/g, ""));
+}
+
+/** 短凭证载体行的取值：数字串（≥4 位；CVV 称谓行 ≥3 位）与字母数字混合记号，经识别符 / 计量豁免。 */
+function shortCredentialLineValues(line: string): string[] {
+  const plain = line.replace(/[\uFE0F\u20E3]/g, "");
+  const cvv = SOURCE_CVV_CUE_RE.test(plain);
+  const out: string[] = [];
+  const digitRe = cvv ? /(?<!\d)\d(?:[ \-]?\d){2,}(?!\d)/g : SOURCE_SHORT_DIGIT_RUN_RE;
+  for (const m of plain.matchAll(digitRe)) {
+    const start = m.index ?? 0;
+    if (!shortValueExempt(plain, start, start + m[0].length, m[0])) out.push(m[0]);
+  }
+  for (const m of plain.matchAll(SOURCE_SCRIPT_MIXED_TOKEN_RE)) {
+    const t = m[0];
+    const start = m.index ?? 0;
+    if ((t.match(/\d/g) ?? []).length < 2 || (t.match(/\p{L}/gu) ?? []).length < 2) continue;
+    if (hyphenSegmentsHomogeneous(t) || /^[0-9a-f]{32,}$/i.test(t)) continue;
+    if (shortValueExempt(plain, start, start + t.length, t)) continue;
+    out.push(t);
+  }
+  return out;
+}
+
+/** 行是否为短凭证载体行（不含既有锁称谓行，那些由 lockLineValues 处理）。 */
+function isShortCredentialCarrierLine(line: string): boolean {
+  const t = line.trim();
+  if (!t) return false;
+  if (SOURCE_LOCKABLE_OBJECT_RE.test(t) || SOURCE_SHORT_CODE_LABEL_RE.test(t) || SOURCE_CVV_CUE_RE.test(t)) return true;
+  const lv = t.match(SOURCE_LABEL_VALUE_LINE_RE);
+  if (!lv || SOURCE_IDENTIFIER_LABEL_RE.test(`${lv[1]} `)) return false;
+  const at = t.indexOf(lv[2]);
+  if (shortValueExempt(t, at, at + lv[2].length, lv[2])) return false;
+  // 纯数字值：只认 4–8 位连写（PIN 形），且标签不是计量 / 计数语义；混合记号本身高熵，任何标签都算。
+  if (/^\d+$/.test(lv[2].replace(/[ \-]/g, ""))) return /^\d{4,8}$/.test(lv[2]) && !SOURCE_MEASURE_LABEL_RE.test(lv[1]);
+  return true;
+}
+
 /** 字母 ↔ 数字交替次数（`bl72kdp` = 2，`sha256sum` = 2，`qiuyue2021` = 1）。 */
 function letterDigitFlips(t: string): number {
   let flips = 0;
@@ -8362,10 +8432,10 @@ function lockLineValues(line: string, opts: { cell?: boolean; encoded?: boolean 
 
 export function sourceValueCandidates(units: readonly string[], question?: string): Array<{ value: string; kind: DirectGuardKind }> {
   const out: Array<{ value: string; kind: DirectGuardKind }> = [];
-  const push = (v: string, kind: DirectGuardKind): void => {
+  const push = (v: string, kind: DirectGuardKind, minLen = 4): void => {
     const t = v.trim();
     const norm = normalizeForLeakCompare(t);
-    if (norm.length >= 4 || (norm.length === 3 && /^\p{Script=Han}+$/u.test(norm))) out.push({ value: t, kind });
+    if (norm.length >= minLen || (norm.length === 3 && /^\p{Script=Han}+$/u.test(norm))) out.push({ value: t, kind });
   };
   const secretQ = !!question && isSecretValueQuestion(question);
   const derivedQ = !!question && SOURCE_DERIVED_CUE_RE.test(question);
@@ -8398,7 +8468,14 @@ export function sourceValueCandidates(units: readonly string[], question?: strin
       if (recallCue) {
         for (const m of line.matchAll(SOURCE_CJK_DIGIT_RUN_RE)) push(m[0], "credential");
         for (const m of line.matchAll(SOURCE_DIGIT_RUN_RE)) push(m[0], "opaque");
+        // R330 C3：记忆线索行的短数字串（「那个数改成了 6182」），经识别符 / 计量豁免。
+        for (const m of line.matchAll(SOURCE_SHORT_DIGIT_RUN_RE)) {
+          const start = m.index ?? 0;
+          if (!shortValueExempt(line, start, start + m[0].length, m[0])) push(m[0], "opaque");
+        }
       }
+      // R330 C2 / C4：短凭证载体行（可上锁对象 / 短码称谓 / CVV 称谓 / 「标签 + 值」整行）的精确值候选，与标注、问句无关。
+      if (isShortCredentialCarrierLine(line)) for (const v of shortCredentialLineValues(line)) push(v, "opaque", 3);
       if (phraseCue) {
         for (const m of line.matchAll(SOURCE_QUOTED_PHRASE_RE)) push(m[1], "credential");
       }
@@ -8451,6 +8528,21 @@ export function sourceValueCandidates(units: readonly string[], question?: strin
       }
     }
   }
+  // R330：跨单元拼接（X06「q / 7 / mzt 三个连起来是柜子那串」、X05「前半段 grape41 / 后半段 -stone77，合起来才是完整的」）：
+  // 任一单元有拼接线索、且任一单元行有凭证语境时，全部单元按序（及逆序）各取首个 ASCII 记号拼成候选。
+  if (units.length >= 2 && units.length <= 6 && units.some((u) => SOURCE_JOIN_CUE_RE.test(u))) {
+    const lines = units.flatMap((u) => u.normalize("NFKC").split("\n"));
+    if (lines.some((l) => SOURCE_LOCK_CUE_RE.test(l) || SOURCE_RECALL_CUE_RE.test(l) || isShortCredentialCarrierLine(l))) {
+      const heads = units.map((x) => x.normalize("NFKC").match(/(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9_@#$%!-]*/)?.[0] ?? "");
+      if (heads.every((h) => h.length > 0 && h.length <= 24)) {
+        // 召回顺序 ≠ 拼接顺序（直答层把被引用单元排在最前），≤4 段时枚举全部排列，否则只取正 / 逆序。
+        const perms = (xs: string[]): string[][] =>
+          xs.length <= 1 ? [xs] : xs.flatMap((x, i) => perms([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p]));
+        const orders = heads.length <= 4 ? perms(heads) : [heads, [...heads].reverse()];
+        for (const o of orders) push(o.join(""), "opaque");
+      }
+    }
+  }
   return out;
 }
 
@@ -8489,6 +8581,13 @@ export function normalizedGuardedLeak(answer: string, units: string[], question?
   let top: DirectGuardKind | null = null;
   for (const c of [...guardedValueCandidates(units), ...sourceValueCandidates(units, question)]) {
     const v = normalizeForLeakCompare(c.value);
+    // R330：3 位纯数字候选只来自 CVV 称谓行（sourceValueCandidates 的 minLen=3），按数字边界比对（`704` 不命中 `1704`）。
+    if (/^\d{3}$/.test(v)) {
+      if (new RegExp(`(?<!\\d)(?:${v}|${[...v].reverse().join("")})(?!\\d)`).test(norm)) {
+        if (!top || DIRECT_GUARD_RANK[c.kind] > DIRECT_GUARD_RANK[top]) top = c.kind;
+      }
+      continue;
+    }
     const minLen = /^\p{Script=Han}+$/u.test(v) ? 3 : 4;
     const forms = [v, [...v].reverse().join("")];
     const b64 = base64Of(c.value);
