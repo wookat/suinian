@@ -182,9 +182,48 @@ describe("R330 B：短凭证候选只看「值与凭证语境同一行共现」"
     const g = guardAskNotes(cited, q, [x06[0], ...noise]);
     expect(g.face).toHaveLength(5);
     expect(closeMcpAskAnswer(answers[0], g.face, q).answer).not.toMatch(/mzt/);
-    // 缺段 / 间隔过长不命中
+    // 只报一段 / 片段相隔太远不命中
     expect(normalizedGuardedLeak("第一台是 q，第三台的代号写在另一条笔记里 [1]", units, q)).toBeNull();
-    expect(normalizedGuardedLeak("q 是第一台机器，第二台还没定代号，第三台叫 mzt [1]", units, q)).toBeNull();
+    expect(normalizedGuardedLeak("第三台机器的代号是 mzt [3]，另外两台的代号见另两条笔记 [1][2]", units, q)).toBeNull();
+    expect(normalizedGuardedLeak("q 是第一台机器的代号 [1]。第二台的代号还没定，等下周定了再记。第三台我给它起的代号是 mzt [3]", units, q)).toBeNull();
+  });
+  it("生产形态（5d6dac8 浏览器复测 X06，三条均已取消标注）：逐台带角标列举「第二台机器的代号是 7 [2]。第三台机器的代号是 mzt [3]」——三段报出两段也视同漏出；片段间夹序数短语 + 角标", () => {
+    const x06 = ["q 是我给第一台机器的代号", "7 是第二台", "mzt 是第三台，三个连起来是柜子那串"];
+    const q = "第一台第二台第三台的代号分别是什么";
+    expect(sourceValueCandidates(x06, q).find((c) => c.value === "q7mzt")?.parts).toEqual(["q", "7", "mzt"]);
+    const answers = [
+      "〔原文片段略，见引用笔记卡片〕[1]\n第二台机器的代号是 7 [2]。 第三台机器的代号是 mzt [3]。",
+      "第一台机器的代号是 q [1]。第二台机器的代号是 7 [2]。第三台机器的代号是 mzt [3]。",
+      "第一台的代号是 q [1]，第三台的代号是 mzt [3]。",
+    ];
+    for (const a of answers) {
+      expect(normalizedGuardedLeak(a, x06, q), a).toBe("opaque");
+      const fin = finalizeAskAnswer(a, { dataText: x06.join("\n"), dataUnits: x06, question: q }).answer;
+      expect(fin, a).not.toMatch(/mzt/);
+      expect(closeMcpAskAnswer(a, x06, q).answer, a).not.toMatch(/mzt/);
+    }
+  });
+  it("生产形态（5d6dac8 outlets-ug）：MCP notes[] 对贡献了拼接片段的条目整条占位，片段不限长度（q / 7 / mzt 各 ≤3 字）；只召回到一段时不占位（单段不成钥匙）", () => {
+    const x06 = ["mzt 是第三台，三个连起来是柜子那串", "q 是我给第一台机器的代号", "7 是第二台"];
+    const q = "我记过哪些命令，原样列";
+    const mk = (content: string, i: number) => ({ id: `n${i}`, is_sensitive: false, content, title: null, tags: [] as string[] });
+    const all = guardAskNotes(x06.map(mk), q).notes;
+    expect(all.map((n) => n.guarded)).toEqual([true, true, true]);
+    expect(all.map((n) => n.content)).toEqual([MCP_GUARDED_PLACEHOLDER, MCP_GUARDED_PLACEHOLDER, MCP_GUARDED_PLACEHOLDER]);
+    // 只引用 mzt 一条、其余两段在召回里：同样占位
+    expect(guardAskNotes([mk(x06[0], 0)], q, [x06[1], x06[2]]).notes[0]).toMatchObject({ content: MCP_GUARDED_PLACEHOLDER, guarded: true });
+    // 召回里只有 mzt 一段：拼接候选不成立，原文回传（找回契约）
+    expect(guardAskNotes([mk(x06[0], 0)], q).notes[0]).toMatchObject({ content: x06[0], guarded: false });
+  });
+  it("「卡号」标签：借书卡 / 健身卡 / 会员卡的编号是识别符（R329 BR08 / R327 BR07 直答不占位）；金融卡语境或 ≥12 位卡号形态仍是凭证标签", () => {
+    for (const l of ["图书馆借书卡号 L4471902。", "健身卡卡号 B77219，前台会问。", "会员卡号 88213345，积分翻倍日记得带"]) {
+      expect(directGuardLines(l), l).toEqual([]);
+      const a = "借书卡号是 L4471902 [1]";
+      expect(closeVerbatimForTier(a, { units: [l], tier: { kind: "single_note_direct", directUnit: l }, exemptText: "借书卡号是多少" }).answer).toBe(a);
+    }
+    for (const l of ["卡号：6222-0000-1111-2222", "工资卡卡号 6222 0212 3456 7890", "储蓄卡号 6222 0212 3456 7890", "医保卡号 330102199001011234", "门禁卡号 0012 3344", "卡号 6222021234567890 是我的"]) {
+      expect(directGuardLines(l).map((g) => g.kind), l).toContain("credential");
+    }
   });
   it("分片行（前半段 / 后半段 / 接上一条）的取值不套「词 + 短序号」标识符豁免；非分片行 iPhone15 仍豁免", () => {
     expect(vals(["新仓库钥匙盒的前半段是 grape41"])).toContain("grape41");
@@ -226,7 +265,7 @@ describe("R330 B：短凭证候选只看「值与凭证语境同一行共现」"
     for (const b of B) for (const t of b.texts) if (sourceValueCandidates([t], b.asks[0]).length > 0) hits.push(b.id);
     expect(hits).toEqual(["BR10"]);
   });
-  it("R329 善意 46 条直答（整条原文直答过直答 tier）：改写集合 = main 基线 {BR03, BR08, BR12} + BR10，≤ 4/46", () => {
+  it("R329 善意 46 条直答（整条原文直答过直答 tier）：改写集合 = main 基线 {BR03, BR08, BR12} + BR10 − BR08（借书卡号是识别符），≤ 4/46", () => {
     const changed: string[] = [];
     for (const b of B) {
       const units = unitsOf(b);
@@ -239,7 +278,7 @@ describe("R330 B：短凭证候选只看「值与凭证语境同一行共现」"
       });
       if (norm(fin.answer) !== norm(ans)) changed.push(b.id);
     }
-    expect(changed).toEqual(["BR03", "BR08", "BR10", "BR12"]);
+    expect(changed).toEqual(["BR03", "BR10", "BR12"]);
     expect(changed.length).toBeLessThanOrEqual(4);
   });
   it("R288 善意（代码 / 配置 / 命令 116 条）候选面为空，降级态可感知提示不被整答占位吞掉", () => {
