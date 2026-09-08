@@ -3189,6 +3189,29 @@ export function retargetMisindexedSentences(
 }
 
 /**
+ * 弱源角标是否有句级依据（R334 §7.3，生产 Q12 长问）：带 [n] 的句子与第 n 条候选的标题 + 正文连 4 字重合。
+ * 弱源（语义分不达线、关键词未命中）默认剔角标，是防模型给不相干的低分候选乱点角标；但模型转述的正是这条笔记
+ * （「烘焙课堂司康需要的黄油是 80 克 [2]」）时剔掉角标 + 掉卡，就成了「已引用事实丢卡」。
+ */
+export function weakCitationGrounded(
+  answer: string,
+  n: number,
+  note: { title?: string | null; content: string }
+): boolean {
+  const text = `${note.title ?? ""}${note.content}`.replace(VERBATIM_NONWORD_RE, "");
+  if (text.length < MISINDEX_MIN_BODY) return false;
+  const markRe = new RegExp(`[\\[［]0?${n}[\\]］]`);
+  for (const sentence of answer.match(SENTENCE_TOKEN_RE) ?? [answer]) {
+    if (!markRe.test(sentence)) continue;
+    const body = sentence.replace(CITE_RE, "").replace(VERBATIM_NONWORD_RE, "");
+    for (let i = 0; i + MISINDEX_MIN_BODY <= body.length; i += 1) {
+      if (text.includes(body.slice(i, i + MISINDEX_MIN_BODY))) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Single source of truth for /api/ask citations: the answer text and the
  * references array are rewritten together so every [n] marker left in the
  * answer maps to exactly one returned reference card.
@@ -3196,7 +3219,8 @@ export function retargetMisindexedSentences(
  * - [n] markers cite the prompt snippet order (1-based over `noteIds`).
  * - Weak semantic-only sources (low-score recall that never matched a keyword)
  *   are dropped from the citations AND their markers removed from the text —
- *   unless that would leave the answer with zero references.
+ *   unless that would leave the answer with zero references, or `keepWeak(n)`
+ *   vouches for the marker (sentence-level grounding on a benign note).
  * - Out-of-range markers (model hallucination) are removed from the text.
  * - Surviving citations are renumbered 1..k in first-citation order, both in
  *   the text and in the returned references.
@@ -3206,7 +3230,8 @@ export function retargetMisindexedSentences(
 export function reconcileAskCitations(
   answer: string,
   noteIds: string[],
-  weakIds: ReadonlySet<string>
+  weakIds: ReadonlySet<string>,
+  opts: { keepWeak?: (n: number) => boolean } = {}
 ): { answer: string; references: { index: number; note_id: string }[] } {
   const cited: number[] = [];
   for (const m of answer.matchAll(CITE_RE)) {
@@ -3220,7 +3245,7 @@ export function reconcileAskCitations(
     const cleaned = cleanDanglingCitations(answer.replace(CITE_RE, ""));
     return { answer: cleaned, references: list.map((id, i) => ({ index: i + 1, note_id: id })) };
   }
-  let keep = cited.filter((n) => !weakIds.has(noteIds[n - 1]));
+  let keep = cited.filter((n) => !weakIds.has(noteIds[n - 1]) || opts.keepWeak?.(n) === true);
   if (keep.length === 0) keep = cited;
   const renumber = new Map(keep.map((n, i) => [n, i + 1] as const));
   const rewritten = answer.replace(CITE_RE, (_marker, d: string) => {

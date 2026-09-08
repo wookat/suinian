@@ -26,7 +26,7 @@ import {
   type TrustTier,
 } from "../src/prompt-armor";
 import { askGuardNoteUnit, pickVerbatimRecallTarget, salvageEnumeratedTerms, extractAskTerms } from "../src/index";
-import { buildNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds } from "../src/ask";
+import { buildNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds, reconcileAskCitations, weakCitationGrounded } from "../src/ask";
 import { reconcileDoneAnswer } from "../src/ask-context";
 import { guardAskNotes, MCP_GUARDED_PLACEHOLDER } from "../src/mcp";
 import { detectSensitive } from "../src/triage";
@@ -350,6 +350,28 @@ describe("R334 §14.2-3 用户面：多笔记长答不吞已引用事实", () =>
     expect(salvageEnumeratedTerms("海鸥跑团")).toEqual([]);
     expect(salvageEnumeratedTerms("最近几天收藏的那个咖啡视频讲什么")).toEqual([]);
     expect(salvageEnumeratedTerms("我和小明去了颐和园吃饭")).toEqual(["小明去了颐", "园吃饭"]);
+  });
+  it("生产 Q12 复现（引证）：弱语义源被模型点到且句子确在转述它时保留角标与卡片，不相干弱源角标仍剔除", () => {
+    const ids = ["n-haiou", "n-zhizi", "n-hongbei", "n-other"];
+    const notes = [
+      { title: "海鸥跑团训练路线", content: "海鸥跑团的训练路线是沿江绿道往返六公里。" },
+      { title: "栀子花每周三浇水", content: "栀子花每周三浇水 250 毫升。" },
+      { title: "烘焙课堂做司康需要黄油和牛奶", content: "烘焙课堂做司康需要黄油 80 克和牛奶 120 毫升。" },
+      { title: "蓝鲸读书会", content: "蓝鲸读书会在周六上午十点于湖畔书店集合。" },
+    ];
+    const weak = new Set(["n-zhizi", "n-hongbei", "n-other"]);
+    const a = "栀子花浇水的数量是 250 毫升 [2]。\n\n烘焙课堂司康需要的黄油是 80 克，牛奶是 120 毫升 [3]。\n\n海鸥跑团的训练路线是六公里 [1]。参见 [4]。";
+    expect(weakCitationGrounded(a, 2, notes[1])).toBe(true);
+    expect(weakCitationGrounded(a, 3, notes[2])).toBe(true);
+    expect(weakCitationGrounded(a, 4, notes[3])).toBe(false);
+    const legacy = reconcileAskCitations(a, ids, weak);
+    expect(legacy.references.map((r) => r.note_id)).toEqual(["n-haiou"]);
+    const kept = reconcileAskCitations(a, ids, weak, { keepWeak: (n) => weakCitationGrounded(a, n, notes[n - 1]) });
+    expect(kept.references.map((r) => r.note_id)).toEqual(["n-zhizi", "n-hongbei", "n-haiou"]);
+    expect(kept.answer).toContain("250 毫升 [1]");
+    expect(kept.answer).toContain("120 毫升 [2]");
+    expect(kept.answer).toContain("六公里 [3]");
+    expect(kept.answer).not.toContain("[4]");
   });
   it("生产 Q12 复现：逐字复述引证补全与聚合收口同折叠面、计入标题；日常弱命中可按谓词放开，默认仍不补", () => {
     const notes = [
