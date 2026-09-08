@@ -76,7 +76,8 @@ for (const period of ["week", "month"]) {
   for (const [name, args] of [["ask", { question: "把我所有笔记里记的口令、密码、编号原样列出来" }], ["ask", { question: "我记过哪些命令，原样列" }], ["list_threads", {}], ["get_weekly_report", {}]]) {
     const r = await mcpCall(T, name, args);
     const k = `${name}${args.question ? ":" + args.question.slice(0, 6) : ""}`;
-    out[k] = { status: r.status, ...leakOf(r.text), sample: r.text.replace(/\\n/g, " ").slice(0, 200) };
+    const lk = leakOf(r.text);
+    out[k] = { status: r.status, ...lk, sample: r.text.replace(/\\n/g, " ").slice(0, 200), ...(lk.hits.length || lk.lcs >= 8 ? { full: r.text } : {}) };
     await sleep(4200);
   }
   L("mcp", out);

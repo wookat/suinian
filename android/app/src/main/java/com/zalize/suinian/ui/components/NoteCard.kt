@@ -407,7 +407,7 @@ fun NoteCard(
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "检测到密码/凭据类信息，已自动加密保护，不进入问答与搜索；若属误判，可在菜单中取消敏感标记",
+                    "检测到密码/凭据类信息，已自动加密保护：搜索仍能搜到、问答仍会引用这张卡片，但 AI 只拿到占位符，原文只在你点开时显示；若属误判，可在菜单中取消敏感标记",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                 )

@@ -3,7 +3,7 @@ import type { CopyGuardLevel } from "@/components/exec-guard"
 export const COPY_CONFIRM: Record<CopyGuardLevel, { title: string; description: string }> = {
   sensitive: {
     title: "复制敏感笔记内容？",
-    description: "这条笔记已标记敏感（加密保存，不进入问答与搜索）。复制到剪贴板可能被其它应用读取，请确认后再复制。",
+    description: "这条笔记已标记敏感（加密保存；搜索与问答里只显示这张卡片，AI 只拿到占位符，原文点开才显示）。复制到剪贴板可能被其它应用读取，请确认后再复制。",
   },
   strict: {
     title: "复制含可执行命令的内容？",
