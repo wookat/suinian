@@ -23,7 +23,7 @@ import {
   PHANTOM_REDACTION_CLAIM_RE,
   type TrustTier,
 } from "../src/prompt-armor";
-import { askGuardNoteUnit, pickVerbatimRecallTarget } from "../src/index";
+import { askGuardNoteUnit, pickVerbatimRecallTarget, salvageEnumeratedTerms, extractAskTerms } from "../src/index";
 import { buildNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds } from "../src/ask";
 import { reconcileDoneAnswer } from "../src/ask-context";
 import { guardAskNotes, MCP_GUARDED_PLACEHOLDER } from "../src/mcp";
@@ -322,6 +322,15 @@ describe("R334 §14.2-3 用户面：多笔记长答不吞已引用事实", () =>
     const done = "星河展览的预约场次是下午两点半，入口在东门。[3]";
     expect(reconcileDoneAnswer(done, held, "aggregate", () => true)).toEqual({ answer: done, dropped: 0 });
     expect(reconcileDoneAnswer(done, held, "aggregate", () => false).dropped).toBe(1);
+  });
+  it("生产 Q12 复现（召回）：长并列子句按连词拆出短项补进 LIKE 词，短句 / 无并列不拆", () => {
+    const q = "请根据我记的栀子花浇水、烘焙课堂司康和海鸥跑团，分别用三段整理每项的数量和单位。";
+    const salvaged = extractAskTerms(q, []).flatMap(salvageEnumeratedTerms);
+    expect(salvaged).toContain("海鸥跑团");
+    expect(salvaged).toContain("烘焙课堂司康");
+    expect(salvageEnumeratedTerms("海鸥跑团")).toEqual([]);
+    expect(salvageEnumeratedTerms("最近几天收藏的那个咖啡视频讲什么")).toEqual([]);
+    expect(salvageEnumeratedTerms("我和小明去了颐和园吃饭")).toEqual(["小明去了颐", "园吃饭"]);
   });
   it("生产 Q12 复现：逐字复述引证补全与聚合收口同折叠面、计入标题；日常弱命中可按谓词放开，默认仍不补", () => {
     const notes = [

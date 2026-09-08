@@ -3512,6 +3512,24 @@ export function stripTermFunctionalWrap(term: string): string {
 
 const CJK_RE = /[\u4e00-\u9fff]/;
 
+/** 并列连词（只在整句已被判为「长句不可 LIKE」后才拆，不影响短词保留） */
+const ENUM_CONJ_SPLIT_RE = /(?:以及|还有|和|与|及|跟)/;
+const SALVAGE_TERM_MAX = 7;
+
+/**
+ * 长 CJK 子句（≥ 8 字，LIKE 永远命不中）里的并列项：「烘焙课堂司康和海鸥跑团」→「烘焙课堂司康」「海鸥跑团」。
+ * 抽取模型限 2-6 词，多项并列的长问句里排在后面的项会被数量 / 单位 / 引用类要求词挤掉，整条笔记零召回。
+ * 只保留成对出现的短项（2-7 字）：单项就是原句本身；误拆的复合词（「颐和园」）只多一个命不中的 OR 项，不减召回。
+ */
+export function salvageEnumeratedTerms(clause: string): string[] {
+  if (!(CJK_RE.test(clause) && clause.length >= 8)) return [];
+  const parts = clause
+    .split(ENUM_CONJ_SPLIT_RE)
+    .map((p) => stripTermFunctionalWrap(p.trim()))
+    .filter((p) => p.length >= 2 && p.length <= SALVAGE_TERM_MAX);
+  return parts.length >= 2 ? parts : [];
+}
+
 /**
  * Whether naive punctuation-splitting failed to produce usable recall terms:
  * long unsegmented CJK questions come out as whole clauses ("最近几天收藏的那
@@ -4864,10 +4882,13 @@ app.post("/api/ask", async (c) => {
   if (kwExtPromise) {
     const kw = await kwExtPromise;
     askMarks.push(["kwext", Date.now() - tKwExtStart]);
+    const salvaged = terms.flatMap(salvageEnumeratedTerms);
     if (kw.length > 0) {
-      terms = [...kw, ...terms.filter((t) => !(CJK_RE.test(t) && t.length >= 8))]
+      terms = [...kw, ...terms.filter((t) => !(CJK_RE.test(t) && t.length >= 8)), ...salvaged]
         .filter((t, i, a) => a.indexOf(t) === i)
-        .slice(0, 8);
+        .slice(0, 10);
+    } else if (salvaged.length > 0) {
+      terms = [...terms, ...salvaged].filter((t, i, a) => a.indexOf(t) === i).slice(0, 10);
     }
   }
   // 带历史时改写器可能丢掉原问题里能命中目标笔记的关键词（R115 P2 召回
