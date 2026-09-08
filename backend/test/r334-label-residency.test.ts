@@ -323,6 +323,19 @@ describe("R334 §14.2-3 用户面：多笔记长答不吞已引用事实", () =>
     expect(reconcileDoneAnswer(done, held, "aggregate", () => true)).toEqual({ answer: done, dropped: 0 });
     expect(reconcileDoneAnswer(done, held, "aggregate", () => false).dropped).toBe(1);
   });
+  it("生产 Q12 复现（出口）：同屏善意卡片的「标题 + 正文」复述（「海鸥跑团：训练路线是…」）按片段铺满豁免，掺入非同屏取值不豁免", () => {
+    const mk = (title: string, content: string) => askGuardNoteUnit({ title, content } as never);
+    const units = [
+      mk("栀子花每周三浇水", "栀子花每周三浇水 250 毫升。"),
+      mk("烘焙课堂做司康需要黄油和牛奶", "烘焙课堂做司康需要黄油 80 克和牛奶 120 毫升。"),
+      mk("海鸥跑团训练路线", "海鸥跑团的训练路线是沿江绿道往返六公里。"),
+    ];
+    const a = "- 栀子花浇水：每周三浇水 250 毫升 [1]。\n- 烘焙课堂司康：需要黄油 80 克和牛奶 120 毫升 [2]。\n- 海鸥跑团：训练路线是沿江绿道往返六公里 [3]。";
+    expect(closeVerbatimForTier(a, { units, tier: AGG, citedBenignUnits: units }).answer).toBe(a);
+    const guarded = mk("路由器", "路由器后台密码 sky云3q，训练路线备注见跑团。");
+    const leak = "- 海鸥跑团：训练路线是沿江绿道往返六公里，后台密码 sky云3q [3]。";
+    expect(closeVerbatimForTier(leak, { units: [...units, guarded], tier: AGG, citedBenignUnits: units }).answer).not.toContain("sky云3q");
+  });
   it("生产 Q12 复现（召回）：长并列子句按连词拆出短项补进 LIKE 词，短句 / 无并列不拆", () => {
     const q = "请根据我记的栀子花浇水、烘焙课堂司康和海鸥跑团，分别用三段整理每项的数量和单位。";
     const salvaged = extractAskTerms(q, []).flatMap(salvageEnumeratedTerms);

@@ -7746,6 +7746,25 @@ function closeAggregateVerbatimMasked(
   return replaceHitSentences(answer, aggregateHitSpans(answer, live, opts));
 }
 
+const VISIBLE_PIECE_MIN = 4;
+
+/** 折叠面 f 能否被同屏卡片折叠面 visibleLcs 里 ≥VISIBLE_PIECE_MIN 字的片段（贪心取最长）无缝铺满。 */
+function tiledByVisible(f: string, visibleLcs: string): boolean {
+  let i = 0;
+  while (i < f.length) {
+    let len = 0;
+    for (let l = f.length - i; l >= VISIBLE_PIECE_MIN; l -= 1) {
+      if (visibleLcs.includes(f.slice(i, i + l))) {
+        len = l;
+        break;
+      }
+    }
+    if (len === 0) return false;
+    i += len;
+  }
+  return true;
+}
+
 /** 聚合层全部命中判据（LCS8 基线 + 只增不减的补充）产出的原面命中区间；不含句级提升与占位替换。 */
 function aggregateHitSpans(
   answer: string,
@@ -7763,10 +7782,12 @@ function aggregateHitSpans(
   // 聚合层同屏卡片（visibleUnits：被引用且无任何受守面的单元）只豁免 LCS8 基线 / 拼接复述 / 分节拼装三条「原文重合」判据；
   // 凭证取值 / 端点 / 代码 / 受守行取值 / 高熵记号等只增不减的补充判据不看它。折叠面以 `|` 相接（折叠面只含字母数字，不会跨单元拼出子串）。
   const visibleLcs = [visible, ...(opts.visibleUnits ?? []).map(foldPlain)].filter((f) => f.length > 0).join("|");
+  // 相邻公共片段会并成一个区间（pieces），「标题 + 正文」的复述（「海鸥跑团：训练路线是…」）在同一张同屏卡片里是两段
+  // 而非一个连续子串；改按 ≥VISIBLE_PIECE_MIN 折叠字的片段无缝铺满判豁免——每一片都得出自同屏卡片，掺入任何非同屏取值即不豁免。
   const inVisibleLcs = (s: { start: number; end: number }): boolean => {
     if (!visibleLcs) return false;
     const f = foldPlain(answer.slice(s.start, s.end));
-    return f.length > 0 && visibleLcs.includes(f);
+    return f.length > 0 && tiledByVisible(f, visibleLcs);
   };
   const raw = verbatimOverlapSpans(answer, live, {
     lcs: AGGREGATE_LCS_CHARS,
