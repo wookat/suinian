@@ -189,6 +189,12 @@ R333 §9 的 15 条扣留分两类：
 
 `closeAggregateVerbatim(answer, units, { visibleUnits })`：聚合层对**被引用且** `directGuardLines(u).length === 0 && !unitTalksAboutSecret(u) && guardFoldReason(u) === null` 的非敏感单元不做 LCS8 整句占位（等同直答层「卡片同屏」豁免）；凭证 / 端点 / code / 不透明 / 平铺 / 派生等「只增不减」补充判据对全部单元不变。`isRefusalAnswer` 的「带引用的部分否认」已不算拒答，但 `PHANTOM_REDACTION_CLAIM_RE` 分支会把整答替成「笔记里没提到」——改为只在答案**不含任何角标**时替换。
 
+候选版生产复测（Worker/Pages `7144468b`，浏览器 Q11/Q12 仍失败）暴露的三处口径缝隙，补齐后才算 7.3 落地：
+
+1. `aggregateCitedBenignUnit` 借用了分片拼接口径 `fragmentLooksLikeCode`，而日期 `2026-09-12` / 电话 `0571-88001234` / 版本 `22.4.1` 的分隔符被当成代码残片 → 牙科 / 物业 / sharp 三条日常单元全被排除在同屏豁免外。改 `unitLooksLikeCode`（数字分隔组不计），聚合层「代码形态单元」补充判据也不再看已享豁免的 visibleUnits。
+2. SSE `reconcileDoneAnswer`：逐段闸门在 delta 时还不知道最终 references，扣段用的是无 `citedBenignUnits` 的聚合闸门；done 与 delta 同信任域时按「判据同源」直接删句，等于把 7.3 的豁免在流式出口整个绕掉（Q11 展览句 `sse_done_reclosed=1`）。改为 done 一律重跑带同屏善意单元的闸门，过闸即留。
+3. 引证补全 `verbatimUncitedSourceIds` 与聚合收口不同折叠面（`\p{L}\p{N}` 去符 vs `foldPlain` NFKC+小写）、且只比正文不比标题，弱语义命中一律不补；模型复述了 A/B 却只标 C 的引用时，A/B 进不了 references → 信任域退成 `single_note_direct`，A/B 的句子按「未引用单元」整句占位、卡片又不在屏上（Q12 `verbatim_closed_spans=2`，1 卡）。改为同折叠面 + 计入标题；弱命中仅当该笔记为非敏感且 `aggregateCitedBenignUnit`（app 出口）时补——被复述的日常事实宁可多一张卡，不能「见引用笔记卡片」却无卡。弱语义 + 含称谓 / 受守 / 敏感的笔记维持不补、整句占位。
+
 ### 7.4 已标注条 no_answer
 
 `sensitiveHintLine` 与 `buildNoAnswerResponse` 合流：命中 N>0 条敏感元数据时答案首句为「有 N 条敏感笔记可能相关（已折叠，正文不进入问答），可到时间流搜索「kw」后点开解锁查看。」，不再出现「没找到相关笔记」；`sensitiveOnlyAnswer`（敏感卡片路径）同措辞。

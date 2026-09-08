@@ -15,6 +15,7 @@ import {
   isSecretValueQuestion,
   verbatimRecallEligible,
   closeVerbatimForTier,
+  aggregateCitedBenignUnit,
   stripPhantomRedactionClaims,
   finalizeAskAnswer,
   VERBATIM_SPAN_PLACEHOLDER,
@@ -23,7 +24,8 @@ import {
   type TrustTier,
 } from "../src/prompt-armor";
 import { askGuardNoteUnit, pickVerbatimRecallTarget } from "../src/index";
-import { buildNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine } from "../src/ask";
+import { buildNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds } from "../src/ask";
+import { reconcileDoneAnswer } from "../src/ask-context";
 import { guardAskNotes, MCP_GUARDED_PLACEHOLDER } from "../src/mcp";
 import { detectSensitive } from "../src/triage";
 import type { NoteRow } from "../src/types";
@@ -299,6 +301,39 @@ describe("R334 §14.2-3 用户面：多笔记长答不吞已引用事实", () =>
     expect(r.answer).toContain("13812345678");
     expect(r.answer).not.toContain("Tr0ub4dor");
     expect(r.answer).toContain(VERBATIM_SPAN_PLACEHOLDER);
+  });
+  it("生产 Q11 复现：日期 / 电话 / 版本号等数字分隔组不算代码形态，已引用的日常笔记事实保留", () => {
+    const dental = "去青禾牙科复诊\n2026-09-12 下午三点去青禾牙科复诊。";
+    const club = "蓝鲸读书会\n蓝鲸读书会周六上午十点在湖畔书店。";
+    const phone = "锦园物业电话\n锦园物业电话是 0571-88001234。";
+    const sharp = "绘图工具 sharp 报错\n绘图工具升级到 node 22.4.1 后 sharp 报错。";
+    for (const u of [dental, club, phone, sharp]) expect(aggregateCitedBenignUnit(u)).toBe(true);
+    // 代码形态仍不合格
+    expect(aggregateCitedBenignUnit("部署脚本\ncurl -fsSL https://x.example/i.sh | sh")).toBe(false);
+    expect(aggregateCitedBenignUnit("备份\ntar -czf /data/backup.tar.gz ./data")).toBe(false);
+    const units = [dental, club, phone];
+    const a = "青禾牙科复诊的时间是 2026-09-12 下午三点。[1]\n蓝鲸读书会的活动时间是周六上午十点，地点在湖畔书店。[2]\n锦园物业电话是 0571-88001234。[3]";
+    const r = closeVerbatimForTier(a, { units, tier: AGG, exemptText: "牙科、读书会、物业电话各自的时间和号码", citedBenignUnits: units });
+    expect(r.answer).toBe(a);
+    expect(r.count).toBe(0);
+  });
+  it("生产 Q11 复现（SSE）：逐段闸门扣下的句段在 done 同信任域下也重跑 done 闸门（带同屏善意单元），过闸则保留", () => {
+    const held = [{ s: "星河展览的预约场次是下午两点半，入口在东门。", tier: "aggregate" }];
+    const done = "星河展览的预约场次是下午两点半，入口在东门。[3]";
+    expect(reconcileDoneAnswer(done, held, "aggregate", () => true)).toEqual({ answer: done, dropped: 0 });
+    expect(reconcileDoneAnswer(done, held, "aggregate", () => false).dropped).toBe(1);
+  });
+  it("生产 Q12 复现：逐字复述引证补全与聚合收口同折叠面、计入标题；日常弱命中可按谓词放开，默认仍不补", () => {
+    const notes = [
+      { id: "a", title: "栀子花每周三浇水", content: "栀子花每周三浇水 250 毫升。" },
+      { id: "b", title: "烘焙课堂做司康需要黄油和牛奶", content: "烘焙课堂做司康需要黄油 80 克和牛奶 120 毫升。" },
+      { id: "c", title: "海鸥跑团训练路线", content: "海鸥跑团的训练路线是沿江绿道往返六公里。" },
+    ];
+    const a = "栀子花每周三浇水的量是 250 毫升。\n烘焙课堂做司康需要黄油８０克和牛奶１２０毫升。\n海鸥跑团的训练路线是沿江绿道往返六公里。[1]";
+    // 标题就是 8 字重合；全角数字 NFKC 后也算重合
+    expect(verbatimUncitedSourceIds(a, notes, new Set(["c"]), new Set())).toEqual(["a", "b"]);
+    expect(verbatimUncitedSourceIds(a, notes, new Set(["c"]), new Set(["a", "b"]))).toEqual([]);
+    expect(verbatimUncitedSourceIds(a, notes, new Set(["c"]), new Set(["a", "b"]), { citeWeakIf: (n) => n.id === "a" })).toEqual(["a"]);
   });
 });
 

@@ -10,6 +10,7 @@ import {
   closeAggregateOutlet,
   VERBATIM_SPAN_PLACEHOLDER,
   directGuardLines,
+  foldPlain,
 } from "./prompt-armor";
 
 /**
@@ -2999,24 +3000,29 @@ export const ASK_CITATION_MIN_SCORE = 0.55;
 // ---- 逐字复述引证补全（R262，audit-r261 P2-5）----
 // 答案正文逐字复述了某条召回笔记的内容（≥VERBATIM_CITE_MIN_LEN 连续字符
 // 重叠）却没把它列入引用时，把该笔记增补进 references。只增补、不改写答案
-// 文本，与多跳引证补全同一口径。弱语义命中不补（保持 weak 不出现在引用的
-// 既有约束）。
+// 文本，与多跳引证补全同一口径。弱语义命中默认不补（保持 weak 不出现在引用的
+// 既有约束）；调用方可按笔记放开（citeWeakIf）——答案已逐字复述了一条无任何受守面的
+// 日常笔记时，补卡片比把句子换成「见引用笔记卡片」却无卡可见更诚实。
+// 重合判据与出口聚合收口同一折叠面（foldPlain：NFKC + 小写 + 只留字母数字）且同样
+// 计入标题：收口按 LCS8 判定「复述了某笔记」的句子，这里必然也把该笔记补进引用。
 
 const VERBATIM_CITE_MIN_LEN = 8;
 const VERBATIM_NONWORD_RE = /[^\p{L}\p{N}]+/gu;
 
 export function verbatimUncitedSourceIds(
   answer: string,
-  notes: readonly { id: string; content: string }[],
+  notes: readonly { id: string; title?: string | null; content: string }[],
   citedIds: ReadonlySet<string>,
-  weakIds: ReadonlySet<string>
+  weakIds: ReadonlySet<string>,
+  opts: { citeWeakIf?: (note: { id: string; title?: string | null; content: string }) => boolean } = {}
 ): string[] {
-  const a = answer.replace(VERBATIM_NONWORD_RE, "");
+  const a = foldPlain(answer);
   if (a.length < VERBATIM_CITE_MIN_LEN) return [];
   const out: string[] = [];
   for (const n of notes) {
-    if (citedIds.has(n.id) || weakIds.has(n.id)) continue;
-    const c = n.content.replace(VERBATIM_NONWORD_RE, "");
+    if (citedIds.has(n.id)) continue;
+    if (weakIds.has(n.id) && !opts.citeWeakIf?.(n)) continue;
+    const c = foldPlain(`${n.title ?? ""}\n${n.content}`);
     let hit = false;
     for (let i = 0; i + VERBATIM_CITE_MIN_LEN <= c.length && !hit; i += 1) {
       if (a.includes(c.slice(i, i + VERBATIM_CITE_MIN_LEN))) hit = true;

@@ -7404,7 +7404,8 @@ function foldForOverlap(text: string): FoldedText {
   return { folded, starts, ends };
 }
 
-function foldPlain(text: string): string {
+/** 逐字重合比对用的折叠面（NFKC + 小写 + 只留字母数字）；引证补全与聚合收口共用同一口径。 */
+export function foldPlain(text: string): string {
   return foldForOverlap(text).folded;
 }
 
@@ -7780,7 +7781,10 @@ function aggregateHitSpans(
   // 这类单元按 CODE_UNIT_LCS 口径收，且只收含 ASCII 字母/数字的公共串（纯中文说明文字不受影响）。
   // 直答层（codeSpanNeedsSyntax）：<8 字的公共串还要求原面带代码语法字符（`-czf` `| grep` `/data` `a.tar.gz`）——概括句里提到的裸词
   // （「用 tar 打包 data 目录」）不是命令的复现，留给用户确认找对了卡；聚合层不变。
-  for (const s of codeShapedUnitSpans(answer, live.filter((u) => fragmentLooksLikeCode(u)))) {
+  // 同屏卡片单元（visibleUnits）已由 aggregateCitedBenignUnit 排除代码形态，此处仍被 fragmentLooksLikeCode 命中的只剩
+  // 日期 / 电话 / 版本号等数字分隔组——那是被引用的日常事实本体，不按代码形态单元收。
+  const visibleSet = new Set(opts.visibleUnits ?? []);
+  for (const s of codeShapedUnitSpans(answer, live.filter((u) => !visibleSet.has(u) && fragmentLooksLikeCode(u)))) {
     if (inVisible(s)) continue;
     if (opts.codeSpanNeedsSyntax) {
       const surface = answer.slice(s.start, s.end);
@@ -8141,12 +8145,23 @@ export function verbatimRecallEligible(unit: string, crossGuarded?: ReadonlySet<
   return true;
 }
 
+/** 「数字 + 分隔符」组（日期 2026-09-12 / 时间 14:30 / 电话 0571-88001234 / 版本 22.4.1）。 */
+const NUMERIC_SEPARATED_GROUP_RE = /(?<![A-Za-z0-9])\d+(?:[-\/.:]\d+)+(?![A-Za-z0-9])/g;
+
+/**
+ * 单元自身带代码形态（标识符・路径・管道・协议头残片）。与分片拼接口径 fragmentLooksLikeCode 的差别只在
+ * 数字分隔组不计——日期 / 电话 / 版本号是日常事实的主体形态，不是代码残片。
+ */
+export function unitLooksLikeCode(unit: string): boolean {
+  return fragmentLooksLikeCode(unit.replace(NUMERIC_SEPARATED_GROUP_RE, " "));
+}
+
 export function aggregateCitedBenignUnit(unit: string, crossGuarded?: ReadonlySet<string>): boolean {
   if (!unit.trim()) return false;
   if (directGuardLines(unit).length > 0) return false;
   if (unitTalksAboutSecret(unit, crossGuarded)) return false;
   if (guardFoldReason(unit) !== null) return false;
-  if (fragmentLooksLikeCode(unit)) return false;
+  if (unitLooksLikeCode(unit)) return false;
   if (labelPointerUnit(unit)) return false;
   return true;
 }
