@@ -327,14 +327,23 @@ function topicKeywords(text: string): Set<string> {
 /** token 周围的贴近上下文里是否直接出现提问关键词（字符级邻域）。 */
 const TOKEN_CONTEXT_WINDOW = 6;
 
+const WORD_CHAR_RE = /[A-Za-z0-9]/;
+
+/** 邻域窗口两端落在拉丁词 / 数字串中间时外扩到整词（「tsc 报错 TS7006」的 6 字窗口只剩「sc 报错 」，词头被切掉就对不上问句里的 `tsc`）。 */
+function wordAlignedWindow(line: string, at: number, len: number): string {
+  let s = Math.max(0, at - TOKEN_CONTEXT_WINDOW);
+  while (s > 0 && WORD_CHAR_RE.test(line[s - 1]) && WORD_CHAR_RE.test(line[s])) s--;
+  let e = Math.min(line.length, at + len + TOKEN_CONTEXT_WINDOW);
+  while (e < line.length && WORD_CHAR_RE.test(line[e - 1]) && WORD_CHAR_RE.test(line[e])) e++;
+  return line.slice(s, at) + line.slice(at + len, e);
+}
+
 function tokenAnswersQuestion(line: string, token: string, qKeys: Set<string>): boolean {
   let from = 0;
   for (;;) {
     const at = line.indexOf(token, from);
     if (at < 0) return false;
-    const near =
-      line.slice(Math.max(0, at - TOKEN_CONTEXT_WINDOW), at) +
-      line.slice(at + token.length, at + token.length + TOKEN_CONTEXT_WINDOW);
+    const near = wordAlignedWindow(line, at, token.length);
     for (const k of topicKeywords(near)) {
       if (qKeys.has(k)) return true;
     }

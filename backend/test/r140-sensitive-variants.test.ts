@@ -31,9 +31,10 @@ describe("detectSensitive 数字类对抗变体", () => {
     expect(detectSensitive("身份证 110101199001011234")).toBe(true);
   });
 
-  it("手机号：关键词 + 分段号码判敏感", () => {
-    expect(detectSensitive("张三手机号 138 1234 5678")).toBe(true);
-    expect(detectSensitive("电话：138-1234-5678")).toBe(true);
+  it("手机号：联系标识符不进定论规则（R334：电话族直答；本人号+姓名交模型复判）", () => {
+    expect(detectSensitive("张三手机号 138 1234 5678")).toBe(false);
+    expect(detectSensitive("电话：138-1234-5678")).toBe(false);
+    expect(detectSensitive("爸爸电话 13987654321")).toBe(false);
   });
 
   it("普通含数字文本不误伤", () => {

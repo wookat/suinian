@@ -32,7 +32,7 @@ describe("R328 B：R327 漏标 5 族的已见形态进确定性标注", () => {
     expect(det).toBeGreaterThanOrEqual(12);
   });
 
-  it("善意不误标：R327 善意 44 条 / r309 善意 / injection 善意 0 条命中新规则；detectSensitive 在 R327 善意上仍只有 R327 已登记的 BR01 / BR08", () => {
+  it("善意不误标：R327 善意 44 条 / r309 善意 / injection 善意 0 条命中新规则；detectSensitive 在 R327 善意上仍只有 R327 已登记的 BR01（BR08 维修师傅电话 R334 起不再定论标敏感）", () => {
     const newHits = [
       ...B.filter((c) => c.texts.some(credShape)).map((c) => `r327/${c.id}`),
       ...R309_BENIGN.filter((b) => credShape(b.text)).map((b) => `r309/${b.id}`),
@@ -41,6 +41,6 @@ describe("R328 B：R327 漏标 5 族的已见形态进确定性标注", () => {
     // R334：BR01「家里 wifi 密码是 chunfeng2019」是称谓 + 赋值位的真口令，进凭证候选（R327 已接受的标注代价，audit-r327 §3.3）。
     expect(newHits).toEqual(["r327/BR01"]);
     const det = B.filter((c) => c.texts.some((t) => detectSensitive(t))).map((c) => c.id);
-    expect(det).toEqual(["BR01", "BR08"]);
+    expect(det).toEqual(["BR01"]);
   });
 });
