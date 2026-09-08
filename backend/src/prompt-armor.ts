@@ -10088,11 +10088,19 @@ export function isDeterministicRecallProbe(question: string, historyText = ""): 
 // 「要输入身高」「表单里要填」不算。
 const CREDENTIAL_VALUE_LABEL_RE =
   /(?:机|锁|柜|门|盘|终端|后台|闸机)(?:上|前|里)?(?:要|得|该|需要)(?:输入|输|按|键入|敲)|密码|口令|暗号|密钥|秘钥|登录串|开门串|门禁码|门禁密码|取款码|提款码|提取码|开锁码|保险柜(?:的)?(?:码|密码|口令|组合)|passcodes?|passwords?|passphrases?|pass ?phrases?|key ?phrases?|safe ?(?:phrase|code|combination)|gate ?codes?|(?:cabinet|locker|vault|door|login|access|recovery|seed|secret|unlock|mnemonic) ?(?:phrase|code|word|combination)s?|(?<![a-z])pins?(?![a-z])|kennwort|passwort|contraseña|clave de acceso|mot de passe|code d'acc[eè]s|senha|parola d'ordine|hasło|şifre|parol[ae]?(?![a-z])|kata sandi|пароль|кодов\p{L}* слов\p{L}*|код доступа|パスワード|パスフレーズ|パスコード|暗証番号|暗証(?![番])|合言葉|합言葉|비밀번호|비번|암호(?!화)|كلمة\s*(?:السر|المرور|الدخول)/iu;
+/**
+ * R334 称谓驻留的问句侧：可上锁对象 / 拨盘 / 门禁 / 保险柜一类称谓（笔记侧 RESIDENCY_LABEL_RE 已把它们算作凭据载体）
+ * 出现在取值型问句里同样是在问凭据（「健身房柜子的锁是什么」「储物柜转盘多少」）。「锁定 / 锁屏 / 封锁 / 锁具 / 锁匠」不算。
+ */
+const RESIDENCY_QUESTION_LABEL_RE =
+  /门禁|門禁|转盘|轉盤|拨盘|撥盤|密码盘|保险柜|保險櫃|保险箱|保險箱|备用码|恢复码|助记词|(?<![连封死闭])锁(?![定屏链具匠车])/u;
+/** 在讲锁具本身（买 / 换 / 修 / 价钱 / 型号）而不是锁的取值——不按凭据取值问处理。 */
+const LOCK_OBJECT_TALK_RE = /钱|价|费|元|牌子|品牌|型号|买|修|坏|安装|撬|钥匙|锁芯|智能锁|指纹锁|电子锁/u;
 /** 指代受守取值的代词（召回里有在讲秘密的笔记时，「那串 / 那几个字」指的就是它）。 */
 const VALUE_ANAPHORA_RE = /那串|这串|那组|这组|那几个字|这几个字|那句|这句|那个词|那一?串|that (?:string|phrase|code|word)|the (?:string|phrase)/iu;
 /** 取值型问法：问「是什么 / 是多少 / 告诉我 / 忘了 / 念一下 / what is / 教えて / 뭐야」一类要拿到值的话。 */
 const VALUE_ASK_RE =
-  /是什么|是啥|是多少|多少|是哪|哪个|哪一个|叫什么|什么|啥|几号|告诉我|说一下|说给我|说出|报一下|报给我|给我|发我|发一下|写出|写一下|列出|念|读一下|贴|原样|原文|复述|重复|提醒我|帮我想|想起|回忆|忘了|忘记|记不得|记不清|想不起|查一下|查查|看看|是\s*[？?]|逐字|逐位|逐个|每个字|每一?位|每个字符|第\s*[\d一二三四五六七八九十]+\s*(?:位|个|到)|拆|转写|改写|换成|翻译|译成|变换|编码|倒着|反过来|竖着|做成|映射|大写|拼音|笔画|\bwhat(?:'s|\s+is|\s+was|\s+are|\s+were)?\b|\bwhich\b|tell me|give me|show me|remind me|forgot|forgotten|recall|repeat|read (?:me|out|back)|何(?:です|だ|でしょう|ですか|だった)|なに|なん(?:です|だ)|教えて|忘れ|思い出|뭐|무엇|알려|잊었|기억|как(?:ой|ая|ое|ие)|скажи|напомни|забыл|\bist was\b|was ist|wie lautet|welche[rs]?\b|sag mir|erinner|vergessen|cu[áa]l\b|dime\b|olvid[ée]|quel(?:le)?\s+est|dis-moi|oubli[ée]/iu;
+  /是什么|是啥|是多少|多少|是哪|哪个|哪一个|叫什么|什么|啥|几号|是几(?![月年天周点])|告诉我|说一下|说给我|说出|报一下|报给我|给我|发我|发一下|写出|写一下|列出|念|读一下|贴|原样|原文|复述|重复|提醒我|帮我想|想起|回忆|忘了|忘记|记不得|记不清|想不起|查一下|查查|看看|是\s*[？?]|逐字|逐位|逐个|每个字|每一?位|每个字符|第\s*[\d一二三四五六七八九十]+\s*(?:位|个|到)|拆|转写|改写|换成|翻译|译成|变换|编码|倒着|反过来|竖着|做成|映射|大写|拼音|笔画|\bwhat(?:'s|\s+is|\s+was|\s+are|\s+were)?\b|\bwhich\b|tell me|give me|show me|remind me|forgot|forgotten|recall|repeat|read (?:me|out|back)|何(?:です|だ|でしょう|ですか|だった)|なに|なん(?:です|だ)|教えて|忘れ|思い出|뭐|무엇|알려|잊었|기억|как(?:ой|ая|ое|ие)|скажи|напомни|забыл|\bist was\b|was ist|wie lautet|welche[rs]?\b|sag mir|erinner|vergessen|cu[áa]l\b|dime\b|olvid[ée]|quel(?:le)?\s+est|dis-moi|oubli[ée]/iu;
 /**
  * R324 A（方案 2，decision-r324）：对凭证的**取值型**问题——不看笔记内容长什么样（纯散文口令「木石田」「秋天的枫叶落在桥上」
  * 没有 code 面 / 高熵面），只看问法：问的是某个凭证的值，且召回里有在讲某个秘密的笔记（受守行 / 凭证标签 / 跨笔记指代），
@@ -10107,6 +10115,7 @@ export function isSecretValueQuestion(question: string, historyText = ""): boole
     ORACLE_LABEL_RE.test(q) ||
     VALUE_ANAPHORA_RE.test(q) ||
     WEAK_SECRET_LABEL_RE.test(q) ||
+    (RESIDENCY_QUESTION_LABEL_RE.test(q) && !LOCK_OBJECT_TALK_RE.test(q)) ||
     (historyText.length > 0 && (conversationAnchorsGuarded(historyText) || CREDENTIAL_VALUE_LABEL_RE.test(historyText.normalize("NFKC"))));
   if (!labeled) return false;
   // 「什么时候改的密码 / why did I change it」问的是时间 / 原因，不是取值：剥掉时间 / 原因问法后再判。

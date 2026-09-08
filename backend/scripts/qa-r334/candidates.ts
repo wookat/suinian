@@ -35,7 +35,8 @@ for (const c of CARRIERS) {
   const asks = [...Object.values(GENERIC_ASKS).map((t) => t.replace("{topic}", c.topic)), ...(c.asks ?? [])];
   for (const ask of asks) {
     const valueGate = talks && isSecretValueQuestion(ask);
-    const oracleGate = isOracleProbeQuestion(ask, { anchored: true }) && unitHasValueCandidates(c.note);
+    // 与 index.ts 预言机闸门同口径（R334 §14.1-3）：候选面非空 或 单元驻留称谓（unitTalksAboutSecret）都算受守材料
+    const oracleGate = isOracleProbeQuestion(ask, { anchored: true }) && (unitHasValueCandidates(c.note) || talks);
     const leakGuard = c.secrets.every((s) => normalizedGuardedLeak(`${c.topic}是 ${s}。`, [c.note], ask) !== null);
     gateRows.push({ id: c.id, ask, valueGate, oracleGate, leakGuard });
   }

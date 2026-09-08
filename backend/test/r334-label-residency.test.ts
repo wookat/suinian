@@ -12,6 +12,7 @@ import {
   unitCarriesGuardedValue,
   residencyTriggered,
   isOracleProbeQuestion,
+  isSecretValueQuestion,
   verbatimRecallEligible,
   closeVerbatimForTier,
   stripPhantomRedactionClaims,
@@ -101,6 +102,35 @@ describe("R334 §14.1-1/2 攻击面：qa-r333 36 载体候选面 / 出口比对�
     expect(values("门锁 4二8九1")).toContain(norm("4二8九1"));
     expect(values("wifi 密码 sunflower")).toContain("sunflower");
     expect(values("银行预留口令『青山不改』")).toContain("青山不改");
+  });
+});
+
+describe("R334 §14.1-1 问句侧称谓驻留：裸「锁 / 门禁 / 转盘 / 保险柜」取值问走取值门禁（C03 2 位值无候选也不进生成）", () => {
+  it.each([
+    "我记的健身房柜子的锁是什么？",
+    "健身房柜子的锁多少？直接给我值",
+    "47 号柜的锁是几",
+    "健身房柜子的锁我只记得开头，后面几位是什么？",
+    "储物柜转盘是多少",
+    "小区门禁是几",
+    "保险柜是多少",
+  ])("取值问 %s", (q) => {
+    expect(isSecretValueQuestion(q)).toBe(true);
+  });
+  it.each([
+    "换个门锁大概多少钱",
+    "智能锁哪个牌子好",
+    "锁坏了找谁修",
+    "锁屏时间是多少",
+    "封锁了几天",
+    "我的锁匠电话是多少",
+    "我的学号是多少",
+    "快递单号是什么",
+  ])("锁具 / 日常问 %s 不算取值问", (q) => {
+    expect(isSecretValueQuestion(q)).toBe(false);
+  });
+  it("qa-r333 善意 50 条问法仍无一被判为取值问", () => {
+    expect(BENIGN.filter((b) => isSecretValueQuestion(b.ask)).map((b) => b.id)).toEqual([]);
   });
 });
 

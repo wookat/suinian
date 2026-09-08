@@ -155,7 +155,7 @@
    "cands": [
     "7🔑3🔑9🔑2"
    ],
-   "secretQ": false,
+   "secretQ": true,
    "covered": {
     "7392": "credential"
    },
@@ -282,7 +282,7 @@
     "一二三456",
     "一二三456"
    ],
-   "secretQ": false,
+   "secretQ": true,
    "covered": {
     "123456": "opaque",
     "一二三456": "opaque"
@@ -308,7 +308,7 @@
    "cands": [
     "12.34.56"
    ],
-   "secretQ": false,
+   "secretQ": true,
    "covered": {
     "123456": "credential",
     "12.34.56": "credential"
