@@ -259,6 +259,8 @@ describe("R334 §14.2-2 用户面：照抄型找回（verbatim 意图 + 单条�
     expect(topic("那条围巾的笔记原文是什么")).toEqual(["围巾"]);
     expect(topic("那条黄色围巾的笔记原文是什么")).toEqual(["黄色围巾"]);
     expect(topic("我的笔记本电脑放哪了")).toEqual(["笔记本电脑放哪了"]);
+    expect(topic("把我记的栀子花那条原文贴出来")).toEqual(["栀子"]);
+    expect(topic("青禾牙科复诊那条笔记原文贴一下")).toEqual(["青禾牙科复诊"]);
     const notes = [row("山茶色围巾放在衣柜第二层的白色收纳盒。", { title: "山茶色围巾存放位置" }), row("栀子花每周三浇水 250 毫升。")];
     const units = notes.map((n) => askGuardNoteUnit(n));
     expect(pickVerbatimRecallTarget(notes, units, undefined, topic("那条围巾的笔记原文是什么"))?.idx).toBe(0);
