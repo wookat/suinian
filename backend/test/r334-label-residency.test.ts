@@ -12,6 +12,7 @@ import {
   unitCarriesGuardedValue,
   residencyTriggered,
   isOracleProbeQuestion,
+  ORACLE_NEUTRAL_NOTICE,
   questionRequestsVerbatim,
   questionCarriesOpaqueToken,
   isYesNoQuestion,
@@ -29,7 +30,7 @@ import {
   type TrustTier,
 } from "../src/prompt-armor";
 import { askGuardNoteUnit, pickVerbatimRecallTarget, salvageEnumeratedTerms, extractAskTerms } from "../src/index";
-import { askTopicTerms, buildNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds, reconcileAskCitations, weakCitationGrounded, phantomClaimCitesOnlyCleanNotes } from "../src/ask";
+import { askTopicTerms, buildNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds, reconcileAskCitations, weakCitationGrounded, phantomClaimCitesOnlyCleanNotes, degradeAskTerms } from "../src/ask";
 import { attributableTopicTerms, sensitiveRecallTerms } from "../src/sensitive-recall";
 import { reconcileDoneAnswer } from "../src/ask-context";
 import { guardAskNotes, MCP_GUARDED_PLACEHOLDER } from "../src/mcp";
@@ -299,6 +300,31 @@ describe("R334 §14.2-2 用户面：照抄型找回（verbatim 意图 + 单条�
     });
     expect(fin.answer).not.toContain("Tr0ub4dor");
   });
+  it("照抄路由：「逐字给我」这类转写形态问句对合格 code 单元不触发预言机短路（W02），对含称谓单元仍中性", () => {
+    const q = "tail 那条命令原文是什么，逐字给我";
+    expect(isOracleProbeQuestion(q)).toBe(true);
+    const opts = (u: string) => ({
+      dataText: u,
+      dataUnits: [u],
+      question: q,
+      verbatimExempt: q,
+      tier: { kind: "single_note_direct" as const, directUnit: u },
+      verbatimRecall: true,
+      execDangerSegments: [],
+      execClassifierUnavailable: false,
+    });
+    const benign = unit("tail -n 200 app.log 看最近日志");
+    const ok = finalizeAskAnswer(`${benign} [1]`, opts(benign));
+    expect(ok.answer).toBe(`${benign} [1]`);
+    expect(ok.changed).toBe(false);
+    const cred = unit("跳板机口令 Tr0ub4dor&3");
+    const closed = finalizeAskAnswer(`${cred} [1]`, opts(cred));
+    expect(closed.answer).toContain(ORACLE_NEUTRAL_NOTICE);
+    expect(closed.answer).not.toContain("Tr0ub4dor");
+    // 没有 verbatimRecall 标志时 code 单元照常走预言机中性（既有 R322 B 口径不变）
+    const plain = finalizeAskAnswer(`${benign} [1]`, { ...opts(benign), verbatimRecall: false });
+    expect(plain.answer).toContain(ORACLE_NEUTRAL_NOTICE);
+  });
 });
 
 describe("R334 §14.2-3 用户面：多笔记长答不吞已引用事实", () => {
@@ -427,6 +453,17 @@ describe("R334 §14.2-3 用户面：幻觉「不展示 / 请点开卡片」话�
     expect(phantomClaimCitesOnlyCleanNotes("这条笔记记了它，问答区不展示", redacted, 3)).toBe(false);
     expect(phantomClaimCitesOnlyCleanNotes("问答区不展示 [4]", redacted, 3)).toBe(false);
     expect(phantomClaimCitesOnlyCleanNotes("问答区不展示 ［3］", redacted, 3)).toBe(true);
+  });
+  // 生产 699291c 复测：「航班号是多少」关键词零命中（正文是「航班 MU5137」），只剩语义召回把混放账号里的受守载体送给模型，
+  // 模型就对那张卡答「记了它，问答区不展示」。降级重试剥掉问值尾与编号后缀后词干能 LIKE 命中。
+  it("degradeAskTerms：编号族问值词剥「是多少」与「号 / 号码」后缀，词干 < 2 字不动", () => {
+    expect(degradeAskTerms(["航班号是多少"])).toEqual(["航班"]);
+    expect(degradeAskTerms(["航班号"])).toEqual(["航班"]);
+    expect(degradeAskTerms(["车牌号"])).toEqual(["车牌"]);
+    expect(degradeAskTerms(["爸爸", "电话号码"])).toEqual(["爸爸", "电话"]);
+    expect(degradeAskTerms(["学号"])).toBe(null);
+    expect(degradeAskTerms(["学号是多少"])).toEqual(["学号"]);
+    expect(degradeAskTerms(["航班", "青岛"])).toBe(null);
   });
 });
 

@@ -8102,10 +8102,14 @@ export function closeVerbatimForTier(
   }
   const direct = tier.directUnit;
   const others = [...opts.units, ...frag].filter((u) => u !== direct);
+  // R334 §7.2 照抄型找回：调用方已按 verbatimRecallEligible 选定单一非敏感单元（受守行只有日常 code、无称谓 / 端点 /
+  // 破坏 / 不透明面），这里不信调用方再复判一次；合格时 code 行的结构性占位与「逐字 / 原文」转写类预言机短路不再套用
+  // （没有可被试探的取值，用户点名要自己这条笔记的原文，卡片同屏）；凭证取值 / 记号 / 归一化比对 / 破坏标记照常。
+  const recallExempt = opts.verbatimRecall === true && verbatimRecallEligible(direct);
   // R320 B1：问句本身带口令/密钥样字符串（「X 是我笔记里的口令吗」）时，直答单元只要有受守行，整答换成中性核对提示——
   // 正确值与错误值得到完全相同的输出，不存在逐位试探通道。角标保留，卡片照常同屏。
   // R322 B：试探形态扩到属性 / 范围 / 排除 / 二分 / 转写全形态（isOracleProbeQuestion），同一条中性话术。
-  if (opts.exemptText && isOracleProbeQuestion(opts.exemptText) && directGuardLines(direct).length > 0)
+  if (opts.exemptText && isOracleProbeQuestion(opts.exemptText) && directGuardLines(direct).length > 0 && !recallExempt)
     return { answer: oracleNeutralAnswer(answer, direct), count: 1, aggregate: 0 };
   // R322 C：直答单元自身含受守行时，卡片同屏豁免不再适用——受守笔记的说明句（「公司内网那套系统的登录串」）是取值的
   // 上下文，与聚合层同一条 LCS8 规则整句占位；原文仍在引用卡片里。无受守行的直答单元维持同屏豁免。
@@ -8122,9 +8126,7 @@ export function closeVerbatimForTier(
   // R320 A：直答单元的结构性 fail-closed（closeDirectGuard）——含 code/命令形态/短高熵/端点面的**行**一律不逐字，
   // 判据类别只决定占位文案（概括 + 警示强度），不决定是否占位。整条默认折叠（frag / defaultFoldedReason）的单元
   // 仍叠加原有宽判据任意片段口径（只增不减）。
-  // R334 §7.2 照抄型找回：直答单元已经 verbatimRecallEligible 复判（只有日常 code 行、无称谓 / 端点 / 破坏 / 不透明面）时，
-  // code 行的结构性占位不再套用（用户点名要自己这条笔记的原文，卡片同屏）；凭证取值 / 记号 / 归一化比对 / 破坏标记照常。
-  const guard = opts.verbatimRecall && verbatimRecallEligible(direct) ? { answer: cred.answer, count: 0 } : closeDirectGuard(cred.answer, direct);
+  const guard = recallExempt ? { answer: cred.answer, count: 0 } : closeDirectGuard(cred.answer, direct);
   const directFolded = frag.includes(direct) || defaultFoldedReason(broadFoldReason(direct));
   const closed = directFolded ? closeVerbatimOverlap(guard.answer, { units: [], broadUnits: [direct], question: opts.exemptText }) : { answer: guard.answer, count: 0 };
   // R322 A 兜底（方案 2）：归一化后再比一次——受守取值的加空格 / 拆字 / 倒序 / 全角 / 汉字数字 / base64 / hex 形态仍在答案里时整答换成类别占位（fail-closed）。

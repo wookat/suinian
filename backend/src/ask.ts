@@ -1574,6 +1574,10 @@ export function degradeFinanceSubsetTerms(terms: string[]): string[] | null {
 // 剥不出新词集则返回 null（不重试，不做宽泛分词）。
 const ASK_TERM_TAIL_RE = /(?:[这那][趟次回个]|一趟|这边|那边)$/;
 const CJK_TERM_RE = /^[\u4e00-\u9fff]+$/;
+// R334（audit-r333 §14.2-1 编号族）：「航班号是多少」在关键词抽取不可用时整串进 LIKE，而笔记写的是「航班 MU5137」——
+// 问值尾（是多少 / 是什么）与编号后缀（号 / 号码）都不在正文里。剩下的词干 ≥ 2 字才剥（「学号」不动）。
+const ASK_TERM_VALUE_TAIL_RE = /(?:是)?(?:多少|什么|哪个|哪一个|几号|几点)$/;
+const ASK_TERM_ID_SUFFIX_RE = /(?:号码|号)$/;
 
 /** 生成普通召回关键词的降级重试词集；无可降级时返回 null。 */
 export function degradeAskTerms(terms: string[]): string[] | null {
@@ -1589,6 +1593,12 @@ export function degradeAskTerms(terms: string[]): string[] | null {
     if (s.length >= 3 && CJK_TERM_RE.test(s)) s = s.replace(/^[那这](?=..)/, "");
     // 动宾回声残片：首尾同一个字（「打羽毛球打」）时剥掉尾字
     if (s.length >= 4 && CJK_TERM_RE.test(s) && s[0] === s[s.length - 1]) s = s.slice(0, -1);
+    if (CJK_TERM_RE.test(s)) {
+      const noTail = s.replace(ASK_TERM_VALUE_TAIL_RE, "");
+      if (noTail !== s && noTail.length >= 2) s = noTail;
+      const stem = s.replace(ASK_TERM_ID_SUFFIX_RE, "");
+      if (stem !== s && stem.length >= 2) s = stem;
+    }
     push(s);
   }
   if (out.length === 0) return null;
