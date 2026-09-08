@@ -1,5 +1,6 @@
-// R333 QA 账号注销：产品级联 DELETE /api/auth/me，再用旧 token 访问 /api/auth/me 必须 401。
-// 只接受名字以 [QA-R333] 开头的账号；user_id === u_boss 一律拒绝。成功后删除状态文件（其中只有 token/user_id/name）。
+// R334 QA 账号注销（同 qa-r333）：产品级联 DELETE /api/auth/me，再用旧 token 访问 /api/auth/me 必须 401。
+// 只接受名字以 QA_PREFIX（[QA-R334]）开头的账号；user_id === u_boss 一律拒绝。成功后删除状态文件（其中只有 token/user_id/name）。
+// 只扫 QA_OUT 顶层的 account-*.json；子目录（r333-rerun/ seed-fdbf876/ …）用 QA_OUT=<子目录> 逐个跑。
 import { readFileSync, writeFileSync, existsSync, unlinkSync, readdirSync } from "node:fs";
 import { OUT, req, QA_PREFIX } from "../../qa-r333/prod/lib.mjs";
 

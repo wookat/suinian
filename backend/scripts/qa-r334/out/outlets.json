@@ -1,0 +1,167 @@
+{
+ "checked_at": "2026-09-08T11:24:05.304Z",
+ "rest_search": {
+  "status": 200,
+  "n": 12,
+  "raw_value_hits": [
+   "D01:moon7Light",
+   "D04:龍飛鳳舞88",
+   "D07:li_ke-2024",
+   "D07:like2024",
+   "D10:五八二零",
+   "D11:Kitty99",
+   "D11:Ｋｉｔｔｙ９９",
+   "D13:3kq9Lm",
+   "D14:abc123",
+   "D14:xyz789",
+   "D17:pIx7q",
+   "D18:mk88",
+   "D18:zz77",
+   "D19:velvet-moon-19",
+   "D19:velvetmoon19",
+   "D23:我在春天种下一棵树"
+  ],
+  "fields": [
+   "id",
+   "user_id",
+   "source",
+   "raw_type",
+   "content",
+   "url",
+   "url_title",
+   "url_summary",
+   "category",
+   "tags",
+   "title",
+   "thread_id",
+   "is_sensitive",
+   "todo_due",
+   "todo_done",
+   "created_at",
+   "updated_at",
+   "url_titles",
+   "meta",
+   "done_at",
+   "amount",
+   "currency",
+   "deleted_at",
+   "todo_reminded_at",
+   "contains_executable_command",
+   "fold",
+   "fold_reason",
+   "match"
+  ]
+ },
+ "mcp_handshake": {
+  "init": {
+   "protocolVersion": "2025-06-18",
+   "capabilities": {
+    "tools": {
+     "listChanged": true
+    }
+   },
+   "serverInfo": {
+    "name": "suinian",
+    "version": "1.0.0"
+   }
+  },
+  "tools": [
+   "save_note",
+   "search_notes",
+   "ask",
+   "list_threads",
+   "get_thread",
+   "get_weekly_report",
+   "list_todos",
+   "complete_todo",
+   "set_todo_due",
+   "delete_note",
+   "restore_notes"
+  ],
+  "initStatus": 200
+ },
+ "mcp_search": {
+  "status": 200,
+  "raw_value_hits": [
+   "D01:moon7Light",
+   "D04:龍飛鳳舞88",
+   "D07:li_ke-2024",
+   "D07:like2024",
+   "D10:五八二零",
+   "D11:Kitty99",
+   "D11:Ｋｉｔｔｙ９９",
+   "D13:3kq9Lm",
+   "D14:abc123",
+   "D14:xyz789",
+   "D17:pIx7q",
+   "D18:mk88",
+   "D18:zz77",
+   "D19:velvet-moon-19",
+   "D19:velvetmoon19",
+   "D23:我在春天种下一棵树"
+  ],
+  "n": 12,
+  "notice": [
+   "data_notice",
+   "content_risk_notice",
+   "do_not_execute",
+   "notes"
+  ]
+ },
+ "review": {
+  "status": 200,
+  "value_hits": [],
+  "keys": [
+   "date",
+   "items"
+  ]
+ },
+ "threads": {
+  "rebuild": 202,
+  "status": 200,
+  "n": 3,
+  "list_value_hits": [],
+  "detail_value_hits": [
+   "D01:moon7Light",
+   "D04:龍飛鳳舞88",
+   "D05:4491",
+   "D12:7392",
+   "D14:abc123",
+   "D14:xyz789"
+  ]
+ },
+ "mcp_threads": {
+  "status": 200,
+  "value_hits": []
+ },
+ "reports": {
+  "week": 201,
+  "week_value_hits": [],
+  "week_empty": null,
+  "month": 201,
+  "month_value_hits": [],
+  "month_empty": null
+ },
+ "mcp_weekly": {
+  "status": 200,
+  "value_hits": []
+ },
+ "export": {
+  "json": 200,
+  "json_value_hits": 32,
+  "md": 200,
+  "md_value_hits": 33,
+  "note": "export 是用户自己的原文导出（契约=原文），只记数不判泄"
+ },
+ "backup": {
+  "status": 200,
+  "ct": "application/zip",
+  "bytes": 10907,
+  "plaintext_value_hits": 0,
+  "note": "备份契约=原文/加密包；记录明文命中数"
+ },
+ "push_test": {
+  "status": 400,
+  "value_hits": []
+ }
+}
