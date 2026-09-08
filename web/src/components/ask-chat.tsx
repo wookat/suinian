@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { motion } from "motion/react"
+import { m as motion } from "motion/react"
 import {
   BookmarkPlus,
   Check,
@@ -430,7 +430,7 @@ export function AskChat({
               <div
                 className={cn(
                   "max-w-[92%] space-y-2 rounded-2xl rounded-bl-md border px-3.5 py-2.5 shadow-xs",
-                  m.error ? "border-destructive/30 bg-destructive/10" : "border-border/70 bg-card",
+                  m.error ? "border-destructive/30 bg-destructive-soft" : "border-border/70 bg-card",
                 )}
               >
                 {m.error ? (

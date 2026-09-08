@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react"
-import { PenLine, Sparkles, MessageCircleQuestion, Share2, BellRing, Loader2, Check } from "lucide-react"
+import { AnimatePresence, m } from "motion/react"
+import { PenLine, Sparkles, MessageCircleQuestion, Share2, BellRing, Loader2, Check, ArrowRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import { Progress } from "@/components/ui/progress"
 import { isWechatConfigured } from "@/lib/api"
 import { detectPushSupport, enablePush } from "@/lib/push"
 import { loadSettings, saveSettings } from "@/lib/settings"
@@ -55,6 +58,7 @@ const NOTIFY_STEP = STEPS.length - 1
  */
 export function FirstRunTour({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(0)
+  const [direction, setDirection] = useState(1)
   const [wechatOn, setWechatOn] = useState(false)
   const [pushState, setPushState] = useState<"idle" | "working" | "on" | "error">("idle")
   const [pushError, setPushError] = useState("")
@@ -75,6 +79,11 @@ export function FirstRunTour({ onDone }: { onDone: () => void }) {
     onDone()
   }
 
+  function goTo(next: number) {
+    setDirection(next > step ? 1 : -1)
+    setStep(next)
+  }
+
   async function turnOnPush() {
     setPushState("working")
     setPushError("")
@@ -92,65 +101,114 @@ export function FirstRunTour({ onDone }: { onDone: () => void }) {
   const last = step === STEPS.length - 1
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-sm rounded-xl border bg-card p-6 shadow-lg animate-in fade-in zoom-in-95 duration-300">
-        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-xs font-bold text-primary-foreground">
-            碎
-          </span>
-          {step + 1} / {STEPS.length}
+    <Dialog open>
+      <DialogContent
+        showCloseButton={false}
+        onEscapeKeyDown={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+        className="max-w-sm gap-0 overflow-hidden p-0"
+      >
+        <div className="px-6 pt-5">
+          <div className="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
+            <span className="flex items-center gap-2">
+              <span
+                aria-hidden
+                className="flex size-7 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-[color-mix(in_oklch,var(--color-primary)_70%,var(--color-chart-2))] text-xs font-bold text-primary-foreground"
+              >
+                碎
+              </span>
+              功能引导
+            </span>
+            <span className="tabular-nums">
+              {step + 1} / {STEPS.length}
+            </span>
+          </div>
+          <Progress
+            className="mt-3 h-1"
+            aria-label="引导进度"
+            value={Math.round(((step + 1) / STEPS.length) * 100)}
+          />
         </div>
-        <div className="mt-4 flex flex-col items-center gap-3 text-center">
-          <span className="flex size-14 items-center justify-center rounded-full bg-accent">
-            <Icon className="size-7 text-accent-foreground" />
-          </span>
-          <h2 className="text-base font-semibold">{current.title}</h2>
-          <p className="min-h-20 text-sm leading-relaxed text-muted-foreground">
-            {step === 3 ? channelStepDescription(wechatOn) : current.description}
-          </p>
-          {step === NOTIFY_STEP && (
-            <div className="flex w-full flex-col items-center gap-2">
-              {pushSupport === "ok" && pushState !== "on" && (
-                <Button size="sm" variant="outline" onClick={() => void turnOnPush()} disabled={pushState === "working"}>
-                  {pushState === "working" ? <Loader2 className="size-4 animate-spin" /> : <BellRing className="size-4" />}
-                  开启每日回顾推送
-                </Button>
+
+        <div className="relative min-h-[15.5rem] overflow-hidden px-6 pt-6 pb-2">
+          <AnimatePresence mode="wait" initial={false} custom={direction}>
+            <m.div
+              key={step}
+              custom={direction}
+              initial={{ opacity: 0, x: direction * 24 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: direction * -24 }}
+              transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+              className="flex flex-col items-center gap-3 text-center"
+            >
+              <span className="flex size-14 items-center justify-center rounded-2xl bg-accent shadow-xs">
+                <Icon className="size-7 text-accent-foreground" />
+              </span>
+              <DialogTitle className="text-display text-base font-semibold sm:text-lg">{current.title}</DialogTitle>
+              <DialogDescription className="min-h-20 text-sm leading-relaxed">
+                {step === 3 ? channelStepDescription(wechatOn) : current.description}
+              </DialogDescription>
+              {step === NOTIFY_STEP && (
+                <div className="flex w-full flex-col items-center gap-2">
+                  {pushSupport === "ok" && pushState !== "on" && (
+                    <Button size="sm" variant="outline" onClick={() => void turnOnPush()} disabled={pushState === "working"}>
+                      {pushState === "working" ? <Loader2 className="size-4 animate-spin" /> : <BellRing className="size-4" />}
+                      开启每日回顾推送
+                    </Button>
+                  )}
+                  {pushState === "on" && (
+                    <p role="status" className="inline-flex items-center gap-1 text-sm font-medium text-success">
+                      <Check className="size-4" />
+                      已开启，每天早上见
+                    </p>
+                  )}
+                  {pushState === "error" && (
+                    <p role="alert" className="text-xs text-destructive">
+                      {pushError}
+                    </p>
+                  )}
+                  {pushSupport === "ios-needs-install" && (
+                    <p className="text-xs text-muted-foreground">iOS 需先「添加到主屏幕」安装为 App 后才能开启通知，之后可到设置页开启。</p>
+                  )}
+                  {pushSupport === "unsupported" && (
+                    <p className="text-xs text-muted-foreground">当前浏览器不支持通知，可换 Chrome/Edge 后到设置页开启。</p>
+                  )}
+                </div>
               )}
-              {pushState === "on" && (
-                <p className="inline-flex items-center gap-1 text-sm font-medium text-green-700 dark:text-green-400">
-                  <Check className="size-4" />
-                  已开启，每天早上见
-                </p>
-              )}
-              {pushState === "error" && <p className="text-xs text-destructive">{pushError}</p>}
-              {pushSupport === "ios-needs-install" && (
-                <p className="text-xs text-muted-foreground">iOS 需先「添加到主屏幕」安装为 App 后才能开启通知，之后可到设置页开启。</p>
-              )}
-              {pushSupport === "unsupported" && (
-                <p className="text-xs text-muted-foreground">当前浏览器不支持通知，可换 Chrome/Edge 后到设置页开启。</p>
-              )}
-            </div>
-          )}
+            </m.div>
+          </AnimatePresence>
         </div>
-        <div className="mt-2 flex justify-center gap-1.5">
+
+        <div className="flex justify-center gap-1.5 px-6 pb-2">
           {STEPS.map((_, i) => (
             <button
               key={i}
+              type="button"
               aria-label={`第 ${i + 1} 步`}
-              onClick={() => setStep(i)}
-              className={cn("size-2 rounded-full transition-colors", i === step ? "bg-primary" : "bg-muted")}
-            />
+              aria-current={i === step ? "step" : undefined}
+              onClick={() => goTo(i)}
+              className="flex size-6 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <span
+                className={cn(
+                  "block h-1.5 rounded-full transition-all duration-300",
+                  i === step ? "w-4 bg-primary" : "w-1.5 bg-muted-foreground/30",
+                )}
+              />
+            </button>
           ))}
         </div>
-        <div className="mt-5 flex items-center justify-between">
-          <button onClick={finish} className="text-xs font-medium text-muted-foreground hover:text-foreground">
+
+        <div className="flex items-center justify-between border-t bg-muted/30 px-6 py-3">
+          <Button variant="ghost" size="sm" onClick={finish} className="text-muted-foreground">
             跳过
-          </button>
-          <Button size="sm" onClick={() => (last ? finish() : setStep((s) => s + 1))}>
+          </Button>
+          <Button size="sm" onClick={() => (last ? finish() : goTo(step + 1))}>
             {last ? "开始使用" : "下一步"}
+            {!last && <ArrowRight />}
           </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

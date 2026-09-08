@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { motion } from "motion/react"
+import { m } from "motion/react"
 import { GitBranch, ChevronLeft, ChevronRight, RefreshCw, Network, Loader2, Clock, Layers } from "lucide-react"
 import { ThreadGraphView } from "@/components/thread-graph"
 import { Card } from "@/components/ui/card"
@@ -308,7 +308,7 @@ export function ThreadsPage() {
                   const prev = i > 0 ? timelineDate(detail.notes[i - 1].created_at) : null
                   const showDate = date !== prev
                   return (
-                    <motion.div
+                    <m.div
                       key={n.id}
                       id={`thread-note-${n.id}`}
                       className="relative"
@@ -335,7 +335,7 @@ export function ThreadsPage() {
                               : undefined
                         }
                       />
-                    </motion.div>
+                    </m.div>
                   )
                 })}
                 {detail.notes.length === 0 && (
@@ -406,7 +406,7 @@ export function ThreadsPage() {
       </div>
       {jobBanner}
       {threads.map((t, i) => (
-        <motion.div
+        <m.div
           key={t.id}
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -451,7 +451,7 @@ export function ThreadsPage() {
               </div>
             </div>
           </Card>
-        </motion.div>
+        </m.div>
       ))}
       {threads.length <= 2 && (
         <Card className="border-dashed p-4 text-center">

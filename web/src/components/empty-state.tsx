@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react"
-import { motion } from "motion/react"
+import { m } from "motion/react"
 import { Button } from "@/components/ui/button"
 
 export function EmptyState({
@@ -26,7 +26,7 @@ export function EmptyState({
   const hasActions =
     (actionLabel && onAction) || (secondaryActionLabel && onSecondaryAction) || (tertiaryActionLabel && onTertiaryAction)
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.28, ease: [0.25, 1, 0.5, 1] }}
@@ -60,6 +60,6 @@ export function EmptyState({
           )}
         </div>
       )}
-    </motion.div>
+    </m.div>
   )
 }

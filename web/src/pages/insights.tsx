@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { motion } from "motion/react"
+import { m } from "motion/react"
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Tooltip, XAxis, YAxis } from "recharts"
 import { BarChart3, Dices, Flame, GitBranch, Loader2, RefreshCw, StickyNote, Tag, TrendingUp, Trophy } from "lucide-react"
 import { Card } from "@/components/ui/card"
@@ -165,7 +165,7 @@ function StatTile({
   index?: number
 }) {
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay: index * 0.05, ease: [0.25, 1, 0.5, 1] }}
@@ -187,7 +187,7 @@ function StatTile({
           {unit && <span className="text-sm text-muted-foreground">{unit}</span>}
         </span>
       </Card>
-    </motion.div>
+    </m.div>
   )
 }
 
@@ -529,7 +529,7 @@ export function InsightsPage() {
               <a
                 key={t.tag}
                 href={`#/?tag=${encodeURIComponent(t.tag)}`}
-                className="inline-flex min-h-8 items-center gap-1.5 rounded-full border bg-card px-3 py-1 text-xs font-medium text-foreground shadow-xs transition-colors hover:border-primary/40 hover:bg-accent hover:text-accent-foreground"
+                className="hit-44 inline-flex min-h-8 items-center gap-1.5 rounded-full border bg-card px-3 py-1 text-xs font-medium text-foreground shadow-xs transition-colors hover:border-primary/40 hover:bg-accent hover:text-accent-foreground"
               >
                 #{t.tag}
                 <span className="text-muted-foreground">{t.count}</span>

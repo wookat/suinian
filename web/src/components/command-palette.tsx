@@ -11,12 +11,7 @@ import {
   CommandShortcut,
 } from "@/components/ui/command"
 import { setTheme } from "@/lib/theme"
-
-export const COMMAND_PALETTE_EVENT = "suinian:command-palette"
-
-export function openCommandPalette() {
-  window.dispatchEvent(new CustomEvent(COMMAND_PALETTE_EVENT))
-}
+import { COMMAND_PALETTE_EVENT, consumePendingOpen } from "@/lib/command-palette"
 
 export interface CommandRoute {
   path: string
@@ -27,7 +22,7 @@ export interface CommandRoute {
 
 /** 全局命令面板（⌘K / Ctrl+K）：页面跳转、搜索碎念、快速记录、切换主题 */
 export function CommandPalette({ routes }: { routes: readonly CommandRoute[] }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(() => consumePendingOpen())
   const [query, setQuery] = useState("")
 
   useEffect(() => {
@@ -37,7 +32,10 @@ export function CommandPalette({ routes }: { routes: readonly CommandRoute[] }) 
         setOpen((o) => !o)
       }
     }
-    const onOpen = () => setOpen(true)
+    const onOpen = () => {
+      consumePendingOpen()
+      setOpen(true)
+    }
     window.addEventListener("keydown", onKey)
     window.addEventListener(COMMAND_PALETTE_EVENT, onOpen)
     return () => {

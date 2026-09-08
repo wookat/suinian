@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { AnimatePresence, motion } from "motion/react"
-import { toast as sonnerToast } from "sonner"
+import { AnimatePresence, m } from "motion/react"
+import { toast as sonnerToast } from "@/lib/toast"
 import {
   Search,
   Sparkles,
@@ -16,6 +16,7 @@ import {
   Eraser,
   FolderInput,
   SlidersHorizontal,
+  ChevronDown,
 } from "lucide-react"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
@@ -29,7 +30,13 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, restoreCategories, getThreads, getStats, ApiError, NetworkError } from "@/lib/api"
 import type { BatchFilter } from "@/lib/api"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
@@ -1068,23 +1075,31 @@ export function TimelinePage() {
       </div>
 
       {filtersOpen && (
-        <motion.div
+        <m.div
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
           className="flex flex-wrap items-center gap-2 rounded-xl border bg-card/60 p-2.5 text-sm"
         >
-          <Select value={sourceFilter || "__all"} onValueChange={(v) => setSourceFilter(v === "__all" ? "" : v)}>
-            <SelectTrigger aria-label="来源筛选" className="w-[9.5rem]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SOURCE_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value || "__all"}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="h-9 w-[9.5rem] justify-between font-normal" aria-label="来源筛选">
+                {SOURCE_OPTIONS.find((o) => o.value === sourceFilter)?.label ?? SOURCE_OPTIONS[0].label}
+                <ChevronDown className="text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-[9.5rem]">
+              <DropdownMenuRadioGroup
+                value={sourceFilter || "__all"}
+                onValueChange={(v) => setSourceFilter(v === "__all" ? "" : v)}
+              >
+                {SOURCE_OPTIONS.map((o) => (
+                  <DropdownMenuRadioItem key={o.value} value={o.value || "__all"}>
+                    {o.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <div className="flex items-center gap-1">
             <input
               type="date"
@@ -1116,7 +1131,7 @@ export function TimelinePage() {
               <X className="size-3" /> 清除筛选
             </button>
           )}
-        </motion.div>
+        </m.div>
       )}
 
       {askMode && (
@@ -1154,7 +1169,7 @@ export function TimelinePage() {
               )}
             >
               {isActive && (
-                <motion.span
+                <m.span
                   layoutId="category-pill"
                   aria-hidden
                   className="absolute inset-0 rounded-full bg-primary shadow-sm"
@@ -1276,7 +1291,7 @@ export function TimelinePage() {
             }}
           />
         ) : (
-          <motion.div
+          <m.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             className="relative flex flex-col items-center gap-3 overflow-hidden rounded-2xl border border-dashed bg-card/60 px-6 py-12 text-center"
@@ -1308,7 +1323,7 @@ export function TimelinePage() {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">示例会打上 #{SAMPLE_TAG} 标签，可随时一键清除</p>
-          </motion.div>
+          </m.div>
         )
       ) : (
         <div className="space-y-4">
@@ -1330,7 +1345,7 @@ export function TimelinePage() {
               <div className="mt-1 space-y-3">
                 <AnimatePresence initial={false}>
                 {g.notes.map((n) => (
-                  <motion.div
+                  <m.div
                     key={n.id}
                     initial={newIds.has(n.id) ? { opacity: 0, y: -10, scale: 0.98 } : false}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -1356,7 +1371,7 @@ export function TimelinePage() {
                       window.scrollTo({ top: 0, behavior: "smooth" })
                     }}
                   />
-                  </motion.div>
+                  </m.div>
                 ))}
                 </AnimatePresence>
               </div>

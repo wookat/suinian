@@ -63,6 +63,8 @@
   /* L=0.55：白字与白底上的红字对比度均 ≥5.3:1 ≥ WCAG AA 4.5:1（R218 P3-2） */
   --destructive: oklch(0.55 0.2 25);
   --destructive-foreground: oklch(0.99 0 0);
+  /* 错误卡 / destructive 徽标底色；暗色下降到 6% 保证 destructive 文字在其上 ≥ 4.5:1 */
+  --destructive-soft: color-mix(in oklab, var(--destructive) 10%, transparent);
   --success: oklch(0.5 0.13 155);
   --warning: oklch(0.55 0.14 70);
   --info: oklch(0.52 0.14 250);
@@ -112,6 +114,7 @@
    * ——R228 P3-1（axe color-contrast serious）；实底按钮已单独压深 red-700 */
   --destructive: oklch(0.72 0.17 25);
   --destructive-foreground: oklch(0.99 0 0);
+  --destructive-soft: color-mix(in oklab, var(--destructive) 6%, transparent);
   --success: oklch(0.75 0.13 155);
   --warning: oklch(0.8 0.13 75);
   --info: oklch(0.75 0.12 250);
@@ -154,6 +157,7 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-soft: var(--destructive-soft);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-info: var(--info);
@@ -233,25 +237,6 @@
     scrollbar-color: color-mix(in oklch, var(--color-foreground) 18%, transparent) transparent;
   }
 
-  /* 触屏设备上把小控件的命中区扩到 44×44px（WCAG 2.5.5 / Apple HIG），
-     视觉尺寸不变：用伪元素向外扩展命中区，不影响大于 44px 的控件 */
-  @media (pointer: coarse) {
-    button:not(.fixed):not(.absolute):not(.sticky),
-    [role="button"]:not(.fixed):not(.absolute):not(.sticky),
-    [role="checkbox"]:not(.fixed):not(.absolute):not(.sticky),
-    [role="switch"]:not(.fixed):not(.absolute):not(.sticky) {
-      position: relative;
-    }
-    button::after,
-    [role="button"]::after,
-    [role="checkbox"]::after,
-    [role="switch"]::after {
-      content: "";
-      position: absolute;
-      inset: min(0px, calc((100% - 44px) / 2));
-    }
-  }
-
   /* 尊重系统「减少动态效果」：所有 CSS 过渡/动画压到瞬时（motion 侧由 MotionConfig reducedMotion="user" 处理） */
   @media (prefers-reduced-motion: reduce) {
     *,
@@ -289,6 +274,21 @@
   /* 数字等宽 */
   .nums {
     font-variant-numeric: tabular-nums;
+  }
+  /* 非 button 元素（如标签链接 chip）在触屏上按 44×44 扩大命中区，视觉不变 */
+  @media (pointer: coarse) {
+    .hit-44 {
+      position: relative;
+    }
+    .hit-44::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+      transform: translate(-50%, -50%);
+    }
   }
   /* 页面级 stagger 进场（配合 style="--i: n"） */
   .stagger-in {

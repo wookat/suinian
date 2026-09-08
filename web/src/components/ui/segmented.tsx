@@ -1,5 +1,5 @@
 import * as React from "react";
-import { motion } from "motion/react";
+import { m } from "motion/react";
 import { cn } from "@/lib/utils";
 
 export interface SegmentedOption<T extends string> {
@@ -76,7 +76,7 @@ export function Segmented<T extends string>({
             )}
           >
             {active && (
-              <motion.span
+              <m.span
                 layoutId={layoutId}
                 aria-hidden
                 className="absolute inset-0 rounded-md bg-card shadow-sm"
