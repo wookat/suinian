@@ -8585,10 +8585,10 @@ function lockLineValues(line: string, opts: { cell?: boolean; encoded?: boolean 
 // 该单元内所有非称谓 token 一律入候选，不看形态。这里只扩候选面，不改受守行判据。
 /** 凭据称谓（驻留触发词）：值本身就是秘密的称谓 + 可上锁对象 / 拨盘 / 令牌 / 备用码一类。「码」「号」单字不算，「锁定 / 锁屏 / 封锁」不算。 */
 const RESIDENCY_LABEL_RE =
-  /密码|口令|暗号|暗语|密钥|秘钥|密匙|令牌|门禁|转盘|拨盘|密码盘|保险柜|保险箱|(?<![连封死])锁(?![定屏链])|开锁|解锁|开门码|进门码|(?:加密|解密|签名|授权|激活)\s*keys?(?![a-z])|登录串|开门串|取款码|提款码|提取码|取件码|备用码|恢复码|激活码|助记词|私钥|接头|放行|(?<![a-z])(?:pwd|passwd|passwords?|passphrases?|passcodes?|pins?|tokens?|secrets?|api[ -]?keys?|access[ -]?(?:keys?|codes?)|secret[ -]?keys?|private[ -]?keys?|(?:encryption|license|serial|activation|ssh|gpg|pgp|signing|master)[ -]?keys?|combination|otp|totp|kennwort|passwort|contraseña|senha|пароль|パスワード|暗証番号|비밀번호|(?:locker|cabinet|vault|gate|door|safe|unlock|login|recovery|backup)[ -]?codes?)(?![a-z])/iu;
+  /密码|密碼|口令|暗号|暗號|暗语|暗語|密钥|密鑰|秘钥|秘鑰|密匙|令牌|门禁|門禁|转盘|轉盤|拨盘|撥盤|密码盘|保险柜|保險櫃|保险箱|保險箱|(?<![连封死])锁(?![定屏链])|开锁|解锁|开门码|进门码|(?:加密|解密|签名|授权|激活)\s*keys?(?![a-z])|登录串|开门串|取款码|提款码|提取码|取件码|备用码|恢复码|激活码|助记词|私钥|接头|放行|(?<![a-z])(?:pwd|passwd|passwords?|passphrases?|passcodes?|pins?|tokens?|secrets?|api[ -]?keys?|access[ -]?(?:keys?|codes?)|secret[ -]?keys?|private[ -]?keys?|(?:encryption|license|serial|activation|ssh|gpg|pgp|signing|master)[ -]?keys?|combination|otp|totp|kennwort|passwort|contraseña|senha|пароль|パスワード|暗証番号|비밀번호|(?:locker|cabinet|vault|gate|door|safe|unlock|login|recovery|backup)[ -]?codes?)(?![a-z])/iu;
 /** 强称谓：值区里的纯汉字 token 不需要「是 / ：」引导也算取值（「银行预留口令『青山不改』」）；弱称谓（锁 / 解锁 / 接头 / 令牌…）的纯汉字值要有引导或引号。 */
 const RESIDENCY_STRONG_LABEL_RE =
-  /密码|口令|暗号|暗语|密钥|秘钥|密匙|门禁|转盘|拨盘|保险柜|保险箱|开门码|进门码|登录串|开门串|取款码|提款码|提取码|备用码|恢复码|助记词|(?<![a-z])(?:pwd|passwd|passwords?|passphrases?|passcodes?|kennwort|passwort|contraseña|senha|пароль|パスワード|暗証番号|비밀번호)(?![a-z])/iu;
+  /密码|密碼|口令|暗号|暗號|暗语|暗語|密钥|密鑰|秘钥|秘鑰|密匙|门禁|門禁|转盘|轉盤|拨盘|撥盤|保险柜|保險櫃|保险箱|保險箱|开门码|进门码|登录串|开门串|取款码|提款码|提取码|备用码|恢复码|助记词|(?<![a-z])(?:pwd|passwd|passwords?|passphrases?|passcodes?|kennwort|passwort|contraseña|senha|пароль|パスワード|暗証番号|비밀번호)(?![a-z])/iu;
 /** 「账户服务名: 值」结构（C29「Gmail: sun.flower.77」）：服务 / 账户名词做 key 时，冒号后的值就是登录凭据。 */
 const RESIDENCY_SERVICE_KEY_RE =
   /^(?:gmail|outlook|hotmail|yahoo|icloud|apple\s*id|github|gitlab|bitbucket|steam|epic|netflix|spotify|discord|telegram|twitter|instagram|facebook|tiktok|reddit|paypal|amazon|aws|azure|gcp|cloudflare|vercel|npm|docker\s*hub|dockerhub|wifi|wi-fi|wlan|vpn|ssh|ftp|sftp|smtp|imap|pop3|admin|root|mysql|postgres|redis|mongo|zoom|slack|notion|figma|linear|jira|qq|微信|支付宝|淘宝|京东|拼多多|美团|饿了么|滴滴|抖音|快手|小红书|知乎|微博|哔哩哔哩|b站|网易云|百度网盘|阿里云|腾讯云|华为云|钉钉|飞书|企业微信|邮箱|网盘|路由器|账号|账户|后台|登录|12306|银行|网银|手机银行|app\s*store|play\s*store|xbox|switch|psn|ps5|nintendo)\s*(?:账号|账户|登录|后台)?$/iu;
@@ -8638,9 +8638,35 @@ const RESIDENCY_CONNECTOR_RE =
   /^\s*(?:(?:的|我|你|他|她|我们|咱们|现在|目前|暂时|一直|就|都|还是|统一|全部|新的|旧的|临时){0,2}(?:是|为|叫|就是|写成|定的是|设成|设为|设置为|设置成|设的是|改成|改为|换成|定为|用的是|用的|要输的是|输的是|记的是|记作|记为|改了是)|(?:的)?(?:前|后|头|末|尾|最后|开头|结尾)\s*[\d一二两三四五六七八九十]+\s*位(?:的)?(?:数字|是|为|[：:])?|[：:=]|[「『“"'‘《]|(?:is|ist|es|est|are|lautet|это|equals?)\s+)/iu;
 /** 值区起手的否定 / 未设 / 占位：「密码还没设」「Kennwort ist noch nicht gesetzt」「密码：<你的密码>」——这一句没有在给值。 */
 const RESIDENCY_NEGATED_ZONE_RE =
-  /^\s*(?:还没|没有|没|未|尚未|不再|不是|不|别|待定|待填|待补|[<\[{（(]|你的|您的|自己的|我|你|您|他|她|咱|大家|同|跟|和|与|原来|以前|之前|老的|默认的|初始的|生日|手机|电话|身份证|工号|学号|车牌|门牌|房号|出生|结婚|纪念日|xxx|\*{3,}|•{3,}|…|\.{3}|(?:not|never|no|none|nicht|noch|kein|keine|nie|pas|non|нет|не|your|yours|tbd|todo|placeholder|redacted|hidden|omitted|required|needed|optional|mandatory|wrong|incorrect|invalid|expired|correct|same|different|case|stored|saved|shared|changed|updated|encrypted|hashed|unknown|missing|reset|set|unset|too|at|about|the|a|an|only|also|still|already|now|either|probably|usually|always|in|on|for|to|of|with|by|from|that|this|what|where|how|when|which|who)(?![\p{L}\p{N}]))/iu;
+  /^\s*(?:还没|没有|没|未|尚未|不再|不是|不|别|待定|待填|待补|[<\[{（(]|自己的|(?:我|你|您|他|她|咱|大家|我们|咱们|你们|他们)(?:的|们的|生日|手机|电话|名字|姓名|工号|学号|车牌|身份证|老婆|老公|孩子|爸|妈|女儿|儿子)|同|跟|和|与|原来|以前|之前|老的|默认的|初始的|生日|手机|电话|身份证|工号|学号|车牌|门牌|房号|出生|结婚|纪念日|xxx|\*{3,}|•{3,}|…|\.{3}|(?:not|never|no|none|nicht|noch|kein|keine|nie|pas|non|нет|не|your|yours|tbd|todo|placeholder|redacted|hidden|omitted|required|needed|optional|mandatory|wrong|incorrect|invalid|expired|correct|same|different|case|stored|saved|shared|changed|updated|encrypted|hashed|unknown|missing|reset|set|unset|too|at|about|the|a|an|only|also|still|already|now|either|probably|usually|always|in|on|for|to|of|with|by|from|that|this|what|where|how|when|which|who)(?![\p{L}\p{N}]))/iu;
 /** 反向赋值（「4218 是工位抽屉密码」「sky云3q 就是路由器的密码」）：值 + 系词 + ≤10 字修饰 + 称谓收句。 */
-const RESIDENCY_REVERSE_RE = /^(.{1,40}?)\s*(?:是|为|就是|作为|当|做|叫|=)\s*(?:[^\s，。；,;]{0,10}?)$/u;
+const RESIDENCY_REVERSE_RE = /^(.{1,40}?)\s*(?:是|为|就是|作为|当|做|叫|=)\s*(?:[^，。；,;]{0,16}?)$/u;
+/** 汉数拆读值区（「保险柜密码 五、八、二、零」）：≥3 个汉数字以顿号 / 逗号 / 空白相隔。 */
+const RESIDENCY_HAN_DIGIT_SEQ_RE = /^\s*[零〇一二两三四五六七八九十]{1,2}(?:\s*[、，,]\s*|\s+)[零〇一二两三四五六七八九十]{1,2}(?:(?:\s*[、，,]\s*|\s+)[零〇一二两三四五六七八九十]{1,2})+/u;
+/** 称谓收尾的标题行（「客厅路由器密码」「车库遥控密码」）：≤16 字、无动词修饰，值在其后的裸 token 行里。 */
+const RESIDENCY_TITLE_LINE_RE = /^\s*[^\s，。；！？,;!?：:]{0,12}?(?:密码|口令|暗号|密钥|秘钥|令牌|门禁|转盘|拨盘|备用码|恢复码|助记词|私钥|(?<![a-z])(?:pwd|passwd|passwords?|passphrases?|passcodes?|pins?|tokens?|secrets?)(?![a-z]))\s*[：:]?\s*$/iu;
+const RESIDENCY_TITLE_VERB_RE = /改|换|忘|重置|重设|修改|更新|设置|输入|输错|泄露|策略|规则|要求|提示|提醒|教程|流程|步骤/u;
+/** 裸 token 行：整行一个 ≤24 字的 token（数字 / 拉丁 / 符号混排，或 2–12 字纯汉字）。 */
+const RESIDENCY_BARE_TOKEN_LINE_RE = /^\s*(\S{1,24})\s*$/u;
+
+/**
+ * 标题行 + 裸 token 行（D01「客厅路由器密码 / moon7Light」、D16「车库遥控密码 / 41 / 77 / 09」）：返回标题行之后连续的裸 token 行
+ * （最多 6 行），不足 1 行或标题行不合格返回空。
+ */
+function residencyTitleValues(lines: readonly string[], i: number): string[] {
+  const title = lines[i] ?? "";
+  if (!RESIDENCY_TITLE_LINE_RE.test(title) || RESIDENCY_TITLE_VERB_RE.test(title) || residencyAssignment(title) !== null) return [];
+  const out: string[] = [];
+  for (let j = i + 1; j < lines.length && out.length < 6; j++) {
+    const m = lines[j].match(RESIDENCY_BARE_TOKEN_LINE_RE);
+    if (!m) break;
+    const tok = m[1];
+    if (RESIDENCY_LABEL_RE.test(tok) || RESIDENCY_MEASURE_TOKEN_RE.test(tok) || RESIDENCY_HAN_STOP.has(tok) || RESIDENCY_NEGATED_ZONE_RE.test(tok)) break;
+    if (/^\p{Script=Han}+$/u.test(tok) && ([...tok].length < 2 || [...tok].length > 12)) break;
+    out.push(tok);
+  }
+  return out;
+}
 
 /** 一行内称谓处于「赋值位」时的值区（正向：称谓之后到子句末；反向：系词之前的取值）；不在赋值位返回 null。 */
 interface ResidencyAssignment {
@@ -8684,6 +8710,8 @@ function residencyAssignment(line: string): ResidencyAssignment | null {
       if (!tok) continue;
       // 称谓 + 空格 + 数量 / 日期（「密钥 2026 年 3 月到期」「密码 6 位数」）是计量，不是取值。
       if (/^\s*\d+(?:\.\d+)?\s*(?:年|月|日|号|点|分|秒|个|位|次|天|周|块|元|万|千|%|％|折|楼|层|寸|斤|米|公里|km|kg|g|gb|mb|到期|过期|失效|以上|以下|左右|左|右)/iu.test(rest)) continue;
+      // 汉数拆读（「五、八、二、零」）整段是值区
+      if (RESIDENCY_STRONG_LABEL_RE.test(label) && RESIDENCY_HAN_DIGIT_SEQ_RE.test(rest)) return { zone: clause(rest.replace(/、/g, " ")), led: true, nextLine: false };
       // 拉丁称谓 + 空格 + 纯字母词是复合名词（password policy / token bucket），不是赋值；汉字称谓 + 空格 + 汉字词只认强称谓 + 纯汉字短词。
       if (latinLabel && /^[A-Za-z][A-Za-z'-]*$/.test(tok)) continue;
       // 弱汉字称谓（锁 / 令牌 / 接头…）+ 空格 + 纯字母词是散文（「锁 lockfile」），不是赋值。
@@ -8719,6 +8747,7 @@ export function residencyTriggered(unit: string): boolean {
   const lines = n.replace(URL_RUN_RE, " ").split("\n");
   if (lines.some((l) => residencyAssignment(l) !== null)) return true;
   if (lines.some((l) => residencyServiceKeyValue(l) !== null)) return true;
+  if (lines.some((_, i) => residencyTitleValues(lines, i).length > 0)) return true;
   if (lines.some((l) => RESIDENCY_LABEL_RE.test(l) && !/^PWD$/.test(RESIDENCY_LABEL_RE.exec(l)?.[0] ?? "")) && lines.filter((l) => RESIDENCY_SEGMENT_LINE_RE.test(l)).length >= 2) return true;
   const table = lines.filter((l) => /^\s*\|/.test(l));
   return table.length >= 2 && RESIDENCY_LABEL_RE.test(table[0]);
@@ -8760,7 +8789,7 @@ function residencyToken(raw: string, zone: { inZone: boolean; hanOk: boolean }):
     t = t.replace(new RegExp(RESIDENCY_LABEL_RE.source, "giu"), "").replace(/^[^\p{L}\p{N}#$%@!*~^&+]+|[^\p{L}\p{N}#$%@!*~^&+]+$/gu, "");
     if (!t) return null;
   }
-  if (RESIDENCY_MEASURE_TOKEN_RE.test(t)) return null;
+  if (RESIDENCY_MEASURE_TOKEN_RE.test(t) && !(zone.inZone && /^\d+(?:\.\d+){2,}$/.test(t))) return null;
   const chars = [...t];
   if (/^\p{Script=Han}+$/u.test(t)) {
     if (!zone.inZone || chars.length < 2 || chars.length > 12 || RESIDENCY_HAN_STOP.has(t)) return null;
@@ -8775,6 +8804,8 @@ function residencyToken(raw: string, zone: { inZone: boolean; hanOk: boolean }):
   }
   // 数字串：≥3 位（2 位极短值在 decision-r334 §2.4 里明示不覆盖）
   if (/^\d+$/.test(t)) return t.length >= 3 ? t : null;
+  // 值区里的点号分隔数字组（「保险箱 12.34.56」）是取值，不按版本号剔除
+  if (zone.inZone && /^\d+(?:\.\d+){2,}$/.test(t)) return t;
   return normalizeForLeakCompare(t).length >= 2 || /[#$%@!*~^&+]/.test(t) ? t : null;
 }
 
@@ -8815,6 +8846,15 @@ function residencyCandidates(unitNfkc: string, question?: string): SourceValueCa
   // 称谓不在赋值位但单元里有分段行（C16「储物柜密码分三段 / 第一段 39 / …」、C17「…（按顺序拼，是邮箱密码）」）：分段就是值。
   const labelAny = lines.some((l) => RESIDENCY_LABEL_RE.test(l) && !/^PWD$/.test(RESIDENCY_LABEL_RE.exec(l)?.[0] ?? ""));
   const segmentIdx = labelAny ? lines.flatMap((l, i) => (RESIDENCY_SEGMENT_LINE_RE.test(l) ? [i] : [])) : [];
+  // 标题行 + 裸 token 行（D01 / D16）：标题行算称谓行，裸行算分段
+  const titleValues = new Map<number, string[]>();
+  lines.forEach((_, i) => {
+    const vs = residencyTitleValues(lines, i);
+    if (vs.length > 0) {
+      titleValues.set(i, vs);
+      labelIdx.add(i);
+    }
+  });
   if (labelIdx.size === 0 && serviceLines.size === 0 && !tableLabeled && segmentIdx.length < 2) return [];
   // 取件码是一次性短码（R322 识别符口径）：值仍进候选（R333 C24 出口比对要判漏），但只算 opaque，不触发确定性自动标注。
   const pickupOnly = lines.every((l) => [...l.matchAll(new RegExp(RESIDENCY_LABEL_RE.source, "giu"))].every((mm) => mm[0] === "取件码"));
@@ -8848,6 +8888,15 @@ function residencyCandidates(unitNfkc: string, question?: string): SourceValueCa
         const tok = residencyToken(t, { inZone: true, hanOk: true });
         if (tok) add(tok, kind);
       }
+    }
+    for (const vs of titleValues.get(i) ?? []) {
+      const hanOk = RESIDENCY_STRONG_LABEL_RE.test(line);
+      const tok = residencyToken(vs, { inZone: true, hanOk });
+      if (tok) add(tok, kind);
+    }
+    if ((titleValues.get(i)?.length ?? 0) >= 2) {
+      const vs = titleValues.get(i) ?? [];
+      if (vs.length <= SOURCE_JOIN_MAX_UNITS) add(vs.join(""), kind, vs);
     }
     if (!near(i)) continue;
     const seg = line.match(RESIDENCY_SEGMENT_LINE_RE);
@@ -8887,7 +8936,7 @@ function residencyCandidates(unitNfkc: string, question?: string): SourceValueCa
     const bodyTokens = zoneBody.split(RESIDENCY_TOKEN_SPLIT_RE).map((t) => t.trim()).filter(Boolean);
     // 值区全是 ≤2 字的碎片（C13「q 7 m 2 x 9」拆读）也按整体入候选。
     const spelled = bodyTokens.length >= 3 && bodyTokens.every((t) => [...t].length <= 2);
-    if ((zoneHit || spelled) && zone && bodyTokens.length >= 2 && normalizeForLeakCompare(zone).length >= 6 && !RESIDENCY_HAN_STOP.has(zone)) add(zone, kind);
+    if ((zoneHit || spelled) && zone && bodyTokens.length >= 2 && normalizeForLeakCompare(zone).length >= (spelled ? 3 : 6) && !RESIDENCY_HAN_STOP.has(zone)) add(zone, kind);
   }
   // 分段行 ≥2：按行序拼接（C16「392784」、C17「Ab77#k」）；单段 ≥3 归一化字的也各自入候选。
   if (segments.length >= 2 && segments.length <= SOURCE_JOIN_MAX_UNITS) {

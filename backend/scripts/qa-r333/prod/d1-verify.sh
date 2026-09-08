@@ -1,7 +1,7 @@
 #!/bin/bash
 # R333 D1 逐表权威核验（R322 同款）：每张表按列结构核验孤儿/QA 残留。只读；token 取自环境变量。
 set -euo pipefail
-OUT="$(cd "$(dirname "$0")/.." && pwd)/out/d1-verify.txt"
+OUT="${QA_OUT:-$(cd "$(dirname "$0")/.." && pwd)/out}/d1-verify.txt"
 cd "$(dirname "$0")/../../.."
 export CLOUDFLARE_API_TOKEN="${CLOUDFLARE_GLOBAL_API_TOKEN:?}"
 q() { npx wrangler d1 execute suinian --remote --json --command "$1" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(JSON.stringify(j[0].results))})'; }

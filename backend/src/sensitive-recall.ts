@@ -16,9 +16,7 @@ export const SENSITIVE_MODEL_LINE = "〔敏感笔记：正文已加密，不提�
 /** 只命中敏感笔记时的确定性答案（不调模型）。 */
 export function sensitiveOnlyAnswer(count: number, refs: Array<{ index: number }>): string {
   const marks = refs.map((r) => `[${r.index}]`).join("");
-  return count === 1
-    ? `找到 1 条相关的敏感笔记，正文已加密保护、不会由 AI 复述；点开下方引用卡片即可查看原文${marks}`
-    : `找到 ${count} 条相关的敏感笔记，正文已加密保护、不会由 AI 复述；点开下方引用卡片即可查看原文${marks}`;
+  return `有 ${count} 条敏感笔记可能相关（已折叠，正文不进入问答、不由 AI 复述）；点开下方引用卡片解锁查看原文${marks}`;
 }
 /** 混合命中时模型没引到的敏感笔记，用这一行补角标。 */
 export function sensitiveUncitedLine(refs: Array<{ index: number }>): string {

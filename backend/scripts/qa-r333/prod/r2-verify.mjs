@@ -4,7 +4,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "out");
+const OUT = process.env.QA_OUT ?? join(dirname(fileURLToPath(import.meta.url)), "..", "out");
 mkdirSync(OUT, { recursive: true });
 const ACC = process.env.CF_ACCOUNT_ID ?? process.env.CLOUDFLARE_ACCOUNT_ID;
 const TOKEN = process.env.CLOUDFLARE_GLOBAL_API_TOKEN ?? process.env.CLOUDFLARE_API_TOKEN;

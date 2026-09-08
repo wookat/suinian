@@ -1,0 +1,4 @@
+# 运行时账号状态（含生产 token）——永不入库
+out/account-*.json
+out/*.log
+browser/*.png
