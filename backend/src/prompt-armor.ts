@@ -1505,6 +1505,8 @@ export function scrubDirectiveDemands(
     return found;
   };
   for (const seg of segs) {
+    // 系统占位 / 中性话术的片段不是模型落地的资料要求物（demand 撞上「…笔记卡片查看原文」时整答会断成半句丢角标）。
+    if (isSystemNoticeFragment(seg.text)) continue;
     const compact = foldCompact(seg.text);
     const hit = targets.filter((t) => compact.includes(t) || hitsPartial(compact, t));
     if (hit.length === 0) continue;

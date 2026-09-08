@@ -5694,7 +5694,10 @@ app.post("/api/ask", async (c) => {
             );
           };
         })();
-        const audKeep = (t: string) => Boolean(verbatimKeep?.(t) || noDirectiveKeep?.(t) || faithfulKeep(t));
+        // 系统占位 / 中性话术片段（含服务端改指话术「…请点开引用的笔记卡片查看原文 [n]」）是服务端产物，
+        // 不可能派生自资料指令；审计器把它当「访问链接类行动指示」报出属误报（整条隔离卡在模型上下文里
+        // 是 MODEL_REDACTED_LINE，审计器视作资料指令）。
+        const audKeep = (t: string) => Boolean(isSystemNoticeFragment(t) || verbatimKeep?.(t) || noDirectiveKeep?.(t) || faithfulKeep(t));
         const isolatedBeforeAudit = genIsolated;
         const isolatedReasonBeforeAudit = genIsolatedReason;
         const audited = applyConductVerdict(answer2, verdict, audKeep);
