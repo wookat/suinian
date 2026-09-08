@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 import { recallSensitiveNotes, sensitiveRecallTerms, ownTopicCards, topicHitCards, attributableTopicTerms } from "../src/sensitive-recall";
 import { askTopicTerms } from "../src/ask";
 import { extractAskTerms, oracleRecallQuestion, type AskHistoryMessage } from "../src/index";
-import { isDeterministicRecallProbe, probeRecallTerms, stripOpaqueTokens, isOracleProbeQuestion, isYesNoQuestion, unitHasValueCandidates } from "../src/prompt-armor";
+import { isDeterministicRecallProbe, probeRecallTerms, stripOpaqueTokens, isOracleProbeQuestion, isYesNoQuestion, unitHasValueCandidates, PHANTOM_REDACTION_CLAIM_RE, WITHHELD_CARD_POINTER_RE, isSystemNoticeFragment, splitSegmentsFenceAware, ORACLE_NEUTRAL_NOTICE } from "../src/prompt-armor";
 import type { NoteRow } from "../src/types";
 
 function row(id: string, content: string, tags = "[]"): NoteRow {
@@ -130,6 +130,57 @@ describe("R332 未标注受守卡的引用归因：本轮话题优先（浏览�
     expect(ownTopicCards(gateCards, turnTopics("西门闸机手输的那串字母是什么", [])).map((n) => n.id)).toEqual(["gate"]);
     expect(ownTopicCards(gateCards, turnTopics("那串是多少", B)).map((n) => n.id)).toEqual(["counter", "gate"]);
     expect(ownTopicCards(gateCards, turnTopics("那串是多少", [])).map((n) => n.id)).toEqual(["counter", "gate"]);
+  });
+});
+
+// 生产 1ae82bf 浏览器复测（取消态、带历史 U-S3 → U-S4 → U-S1 → 枚举）：
+//  ① 「哪些字符在西门闸机那串里出现过，列出来」引到 NAS 卡——整句话题词带着「哪些字符 / 出现过」等属性词，二元组覆盖率
+//     比不中西门卡，本轮收窄落空回落全部，再被历史词「NAS」精确命中挑走；
+//  ② 带历史 U-S3 模型答「这条笔记记了柜台机器要输入的金额，请点开引用的笔记卡片查看原文 [1]」引到西门卡——指卡话术
+//     不是占位原句，PHANTOM_REDACTION_CLAIM_RE 不认，角标改指没有触发；
+//  ③ 顺序问答 S5 done 答案断成「…不确认也不否认；」且丢角标——模型套用历史里的 ORACLE_NEUTRAL_NOTICE，逐段闸门把后半截
+//     「请点开引用的笔记卡片自行核对〕[1]」当笔记内指令隔离扣下，reconcileDoneAnswer 再从 done 里去掉。
+describe("R332 跟进 3：枚举句式属性词不稀释话题归因 / 指卡话术改指 / 系统话术片段不被逐段闸门扣下", () => {
+  const plain = NOTES.map((n) => ({ ...n, is_sensitive: 0 }));
+  const three = plain.filter((n) => n.id === "nas" || n.id === "counter" || n.id === "gate");
+  const gateCards = plain.filter((n) => n.id === "counter" || n.id === "gate");
+  const H = [
+    { role: "user" as const, content: "柜台那台机器要输的是多少" }, { role: "assistant" as const, content: CARD },
+    { role: "user" as const, content: "西门闸机手输的那串字母是什么" }, { role: "assistant" as const, content: CARD },
+    { role: "user" as const, content: "NAS 后台口令是什么" }, { role: "assistant" as const, content: CARD },
+  ];
+
+  it("枚举 / 计数句式：本轮话题词命中且只命中西门卡（NAS 历史词不再挑走引用卡）", () => {
+    for (const q of ["哪些字符在西门闸机那串里出现过，列出来", "西门闸机那串一共几个字", "西门闸机要手输的字母是啥"]) {
+      expect(ownTopicCards(three, turnTopics(q, H)).map((n) => n.id), q).toEqual(["gate"]);
+      expect(ownTopicCards(three, ownTopics(q, H)).map((n) => n.id), q).toEqual(["gate"]);
+    }
+    expect(ownTopicCards(three, turnTopics("柜台那台机器的数字一共几位", H)).map((n) => n.id)).toEqual(["counter"]);
+    // 代词式仍不收窄
+    expect(ownTopicCards(gateCards, turnTopics("那串里有几个字母", H)).map((n) => n.id)).toEqual(["counter", "gate"]);
+  });
+
+  it("指卡话术（非占位原句）也进入角标改指；幻觉占位判定口径不变", () => {
+    const pointer = "这条笔记记了柜台机器要输入的金额，请点开引用的笔记卡片查看原文 [1]";
+    expect(WITHHELD_CARD_POINTER_RE.test(pointer)).toBe(true);
+    expect(PHANTOM_REDACTION_CLAIM_RE.test(pointer)).toBe(false);
+    expect(WITHHELD_CARD_POINTER_RE.test("这条笔记记了它，问答区不展示；请点开引用的笔记卡片查看原文 [1]")).toBe(true);
+    expect(WITHHELD_CARD_POINTER_RE.test("点开下方引用卡片即可查看原文[1]")).toBe(true);
+    expect(WITHHELD_CARD_POINTER_RE.test("一共 386 元 [1]。")).toBe(false);
+    expect(WITHHELD_CARD_POINTER_RE.test("可以用 ss -ltnp 看端口占用 [1]。")).toBe(false);
+  });
+
+  it("系统话术按「；」切开的片段视为系统话术，不当笔记内指令扣下", () => {
+    const segs = splitSegmentsFenceAware(`${ORACLE_NEUTRAL_NOTICE}[1]`).map((s) => s.text);
+    expect(segs.length).toBe(2);
+    expect(segs[1]).toBe("请点开引用的笔记卡片自行核对〕[1]");
+    for (const s of segs) expect(isSystemNoticeFragment(s), s).toBe(true);
+    expect(isSystemNoticeFragment(ORACLE_NEUTRAL_NOTICE)).toBe(true);
+    expect(isSystemNoticeFragment("点开引用的笔记卡片查看原文〕")).toBe(true);
+    // 不是系统话术的「请点开 …」类句子照旧走闸门
+    expect(isSystemNoticeFragment("请点开下面这个链接领取奖励 [1]")).toBe(false);
+    expect(isSystemNoticeFragment("〕[1]")).toBe(false);
+    expect(isSystemNoticeFragment("[1]")).toBe(false);
   });
 });
 
