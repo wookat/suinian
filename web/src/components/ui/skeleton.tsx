@@ -2,17 +2,12 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 
 function Skeleton({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      className={cn("animate-pulse rounded-md bg-muted", className)}
-      {...props}
-    />
-  )
+  return <div data-slot="skeleton" className={cn("skeleton-shimmer rounded-md", className)} {...props} />
 }
 
 function NoteCardSkeleton() {
   return (
-    <div className="rounded-xl border bg-card p-4 shadow-sm">
+    <div className="surface p-4">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <Skeleton className="h-5 w-14 rounded-full" />
@@ -40,7 +35,9 @@ function NoteListSkeleton({ count = 3 }: { count?: number }) {
   return (
     <div className="space-y-3" role="status" aria-label="加载中">
       {Array.from({ length: count }, (_, i) => (
-        <NoteCardSkeleton key={i} />
+        <div key={i} className="stagger-in" style={{ "--i": i } as React.CSSProperties}>
+          <NoteCardSkeleton />
+        </div>
       ))}
       {slow && (
         <p className="text-center text-sm text-muted-foreground" aria-live="polite">

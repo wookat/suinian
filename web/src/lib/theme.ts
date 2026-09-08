@@ -8,7 +8,7 @@ export function loadTheme(): ThemeMode {
   return v === "light" || v === "dark" ? v : "system"
 }
 
-const THEME_COLOR = { light: "#fafafa", dark: "#18181b" }
+const THEME_COLOR = { light: "#f8fafc", dark: "#0c0e12" }
 
 export function applyTheme(mode: ThemeMode = loadTheme()) {
   const dark = mode === "dark" || (mode === "system" && media.matches)

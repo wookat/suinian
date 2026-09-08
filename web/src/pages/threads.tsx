@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { GitBranch, ChevronLeft, RefreshCw, Network, Loader2 } from "lucide-react"
+import { motion } from "motion/react"
+import { GitBranch, ChevronLeft, ChevronRight, RefreshCw, Network, Loader2, Clock, Layers } from "lucide-react"
 import { ThreadGraphView } from "@/components/thread-graph"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Progress } from "@/components/ui/progress"
 import { NoteCard } from "@/components/note-card"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
@@ -150,36 +152,42 @@ export function ThreadsPage() {
     }
   }, [])
 
+  const jobPercent =
+    job && job.status !== "done" && job.status !== "error"
+      ? job.phase === "summarize" && job.summarize_total > 0
+        ? Math.floor((Math.min(job.summarized, job.summarize_total) / job.summarize_total) * 100)
+        : job.total > 0
+          ? Math.floor((Math.min(job.processed, job.total) / job.total) * 100)
+          : null
+      : null
+
   const jobBanner =
     job && job.status !== "done" && job.status !== "error" ? (
-      <Card className="flex items-center gap-3 p-3">
-        <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm">后台重建线索中……{PHASE_LABEL[job.phase]}</p>
-          <p className="text-xs text-muted-foreground">
-            {job.phase === "summarize" && job.summarize_total > 0
-              ? `已生成摘要 ${Math.min(job.summarized, job.summarize_total)} / ${job.summarize_total} 条线索`
-              : job.total > 0
-                ? `已处理 ${Math.min(job.processed, job.total)} / ${job.total} 条想法${rebuildEta(job.total)}`
-                : "正在统计待处理的想法……"}
-          </p>
+      <Card className="space-y-2.5 p-3.5" role="status" aria-live="polite">
+        <div className="flex items-center gap-3">
+          <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">后台重建线索中……{PHASE_LABEL[job.phase]}</p>
+            <p className="text-xs text-muted-foreground">
+              {job.phase === "summarize" && job.summarize_total > 0
+                ? `已生成摘要 ${Math.min(job.summarized, job.summarize_total)} / ${job.summarize_total} 条线索`
+                : job.total > 0
+                  ? `已处理 ${Math.min(job.processed, job.total)} / ${job.total} 条想法${rebuildEta(job.total)}`
+                  : "正在统计待处理的想法……"}
+            </p>
+          </div>
+          {jobPercent !== null && (
+            <span className="shrink-0 text-xs font-medium tabular-nums text-muted-foreground">{jobPercent}%</span>
+          )}
         </div>
-        {job.phase === "summarize" && job.summarize_total > 0 ? (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-            {Math.floor((Math.min(job.summarized, job.summarize_total) / job.summarize_total) * 100)}%
-          </span>
-        ) : job.total > 0 ? (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-            {Math.floor((Math.min(job.processed, job.total) / job.total) * 100)}%
-          </span>
-        ) : null}
+        {jobPercent !== null && <Progress value={jobPercent} aria-label="线索重建进度" className="h-1.5" />}
       </Card>
     ) : job?.status === "error" ? (
-      <Card className="p-3">
+      <Card className="border-destructive/30 bg-destructive/5 p-3.5" role="alert">
         <p className="text-sm text-destructive">线索重建失败{job.error ? `：${job.error}` : ""}</p>
       </Card>
     ) : job?.status === "done" ? (
-      <Card className="p-3">
+      <Card className="border-success/30 bg-success/5 p-3.5" role="status">
         <p className="text-sm">
           {job.summarize_total > 0
             ? `线索重建完成，共聚成 ${job.summarize_total} 条线索。`
@@ -245,19 +253,32 @@ export function ThreadsPage() {
         ) : (
           detail && (
             <>
-              <Card className="p-4">
-                <div className="flex items-center gap-2">
-                  <GitBranch className="size-4 text-muted-foreground" />
-                  <h2 className="text-base font-semibold">{detail.title}</h2>
+              <Card className="relative overflow-hidden p-5">
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute -right-16 -top-16 size-48 rounded-full bg-primary/10 blur-3xl"
+                />
+                <div className="flex items-start gap-3">
+                  <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <GitBranch className="size-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-display text-lg font-semibold sm:text-xl">{detail.title}</h2>
+                    {detail.summary && (
+                      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{detail.summary}</p>
+                    )}
+                    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <span className="inline-flex items-center gap-1">
+                        <Layers className="size-3.5" />
+                        {detail.note_count} 条碎片
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <Clock className="size-3.5" />
+                        更新于 {formatTime(detail.updated_at)}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                {detail.summary && (
-                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                    {detail.summary}
-                  </p>
-                )}
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {detail.note_count} 条碎片 · 更新于 {formatTime(detail.updated_at)}
-                </p>
               </Card>
               {detail.graph && detail.graph.entities.length > 0 && (
                 <Card className="p-4">
@@ -281,22 +302,29 @@ export function ThreadsPage() {
                   </div>
                 </Card>
               )}
-              <div className="relative space-y-3 pl-4 before:absolute before:inset-y-2 before:left-1 before:w-px before:bg-border">
+              <div className="relative space-y-3 pl-5 before:absolute before:inset-y-2 before:left-[5px] before:w-px before:bg-gradient-to-b before:from-primary/40 before:via-border before:to-transparent">
                 {detail.notes.map((n, i) => {
                   const date = timelineDate(n.created_at)
                   const prev = i > 0 ? timelineDate(detail.notes[i - 1].created_at) : null
                   const showDate = date !== prev
                   return (
-                    <div key={n.id} id={`thread-note-${n.id}`} className="relative">
+                    <motion.div
+                      key={n.id}
+                      id={`thread-note-${n.id}`}
+                      className="relative"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.25, delay: Math.min(i, 8) * 0.04, ease: [0.25, 1, 0.5, 1] }}
+                    >
                       {showDate && (
                         <p className="relative mb-2 pt-1">
-                          <span className="absolute -left-[14.5px] top-[9px] size-2.5 rounded-full border-2 border-background bg-primary/50" />
+                          <span className="absolute -left-[19.5px] top-[8px] size-3 rounded-full border-2 border-background bg-primary" />
                           <span className="inline-block rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
                             {date}
                           </span>
                         </p>
                       )}
-                      <span className="absolute -left-[13.5px] top-5 size-2 rounded-full bg-primary/60" />
+                      <span className="absolute -left-[18px] top-5 size-2 rounded-full bg-primary/50" />
                       <NoteCard
                         note={n}
                         className={
@@ -307,7 +335,7 @@ export function ThreadsPage() {
                               : undefined
                         }
                       />
-                    </div>
+                    </motion.div>
                   )
                 })}
                 {detail.notes.length === 0 && (
@@ -377,31 +405,53 @@ export function ThreadsPage() {
         )}
       </div>
       {jobBanner}
-      {threads.map((t) => (
-        <Card
+      {threads.map((t, i) => (
+        <motion.div
           key={t.id}
-          className="cursor-pointer p-4 transition-shadow hover:shadow-md"
-          onClick={() => setSelected(t.id)}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25, delay: Math.min(i, 6) * 0.04, ease: [0.25, 1, 0.5, 1] }}
         >
-          <div className="flex items-center gap-2">
-            <GitBranch className="size-4 shrink-0 text-muted-foreground" />
-            <h3 className="min-w-0 flex-1 text-[15px] font-medium">{t.title}</h3>
-            {(t.week_new_count ?? 0) > 0 && (
-              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-                本周 +{t.week_new_count}
+          <Card
+            interactive
+            role="button"
+            tabIndex={0}
+            className="group cursor-pointer p-4 sm:p-5"
+            onClick={() => setSelected(t.id)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                setSelected(t.id)
+              }
+            }}
+          >
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <GitBranch className="size-4" />
               </span>
-            )}
-          </div>
-          {t.summary && (
-            <p className="mt-1.5 line-clamp-2 text-sm text-muted-foreground">{t.summary}</p>
-          )}
-          <p className="mt-2 text-xs text-muted-foreground">
-            {t.note_count} 条碎片
-            {spanLabel(t.first_note_at, t.last_note_at) && ` · ${spanLabel(t.first_note_at, t.last_note_at)}`}
-            {" · 最近记录 "}
-            {formatTime(t.last_note_at ?? t.updated_at)}
-          </p>
-        </Card>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="min-w-0 flex-1 text-[15px] font-semibold">{t.title}</h3>
+                  {(t.week_new_count ?? 0) > 0 && (
+                    <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                      本周 +{t.week_new_count}
+                    </span>
+                  )}
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                </div>
+                {t.summary && (
+                  <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-muted-foreground">{t.summary}</p>
+                )}
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {t.note_count} 条碎片
+                  {spanLabel(t.first_note_at, t.last_note_at) && ` · ${spanLabel(t.first_note_at, t.last_note_at)}`}
+                  {" · 最近记录 "}
+                  {formatTime(t.last_note_at ?? t.updated_at)}
+                </p>
+              </div>
+            </div>
+          </Card>
+        </motion.div>
       ))}
       {threads.length <= 2 && (
         <Card className="border-dashed p-4 text-center">

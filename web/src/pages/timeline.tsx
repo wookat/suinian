@@ -1,4 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { AnimatePresence, motion } from "motion/react"
+import { toast as sonnerToast } from "sonner"
 import {
   Search,
   Sparkles,
@@ -27,6 +29,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, restoreCategories, getThreads, getStats, ApiError, NetworkError } from "@/lib/api"
 import type { BatchFilter } from "@/lib/api"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
@@ -234,16 +237,17 @@ export function TimelinePage() {
   const [batchTagInput, setBatchTagInput] = useState("")
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<"all" | "selected" | null>(null)
-  const [toast, setToast] = useState<{ message: string; undo?: () => void; undoLabel?: string } | null>(null)
-  const toastTimerRef = useRef<number | null>(null)
   // 驻留撤销条：不随 toast 自动消失，撤销/关闭/过期才走
   const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null)
   const pendingUndoTimerRef = useRef<number | null>(null)
 
+  // 轻提示走 sonner（底部居中、可带撤销动作），同一时刻只保留一条
   const showToast = useCallback((message: string, undo?: () => void, ms = 6000, undoLabel?: string) => {
-    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
-    setToast({ message, undo, undoLabel })
-    toastTimerRef.current = window.setTimeout(() => setToast(null), ms)
+    sonnerToast.dismiss()
+    sonnerToast(message, {
+      duration: ms,
+      action: undo ? { label: undoLabel ?? "撤销", onClick: undo } : undefined,
+    })
   }, [])
 
   const clearPendingUndo = useCallback(() => {
@@ -358,7 +362,6 @@ export function TimelinePage() {
 
   useEffect(() => {
     return () => {
-      if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
       if (pendingUndoTimerRef.current !== null) window.clearTimeout(pendingUndoTimerRef.current)
     }
   }, [])
@@ -620,7 +623,7 @@ export function TimelinePage() {
           void Promise.allSettled(
             previous.filter((p) => p.category).map((p) => patchNote(p.id, { category: p.category! })),
           ).then(() => void load())
-          setToast(null)
+          sonnerToast.dismiss()
         })
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e))
@@ -756,13 +759,31 @@ export function TimelinePage() {
       const params = new URLSearchParams(query)
       const t = params.get("tag")
       const d = params.get("date")
+      // 命令面板入口（⌘K）：q=搜索 / ask=预填提问 / compose=聚焦速记框
+      const q = params.get("q")
+      const ask = params.get("ask")
+      const compose = params.get("compose")
       if (t) setTag(t)
       if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
         setFromDate(d)
         setToDate(d)
         setFiltersOpen(true)
       }
-      if (t || d) history.replaceState(null, "", `${window.location.pathname}#/`)
+      if (q) {
+        setSearchInput(q)
+        setSearch(q)
+      }
+      if (ask) {
+        setAskInputPrefill(ask)
+        setAskMode(true)
+      }
+      if (compose) {
+        window.setTimeout(() => {
+          quickInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+          quickInputRef.current?.querySelector("textarea")?.focus()
+        }, 50)
+      }
+      if (t || d || q || ask || compose) history.replaceState(null, "", `${window.location.pathname}#/`)
     }
     applyHashTag()
     window.addEventListener("hashchange", applyHashTag)
@@ -881,7 +902,7 @@ export function TimelinePage() {
       showToast(
         `保存失败：${e instanceof Error ? e.message : String(e)}`,
         () => {
-          setToast(null)
+          sonnerToast.dismiss()
           void handleEdit(note, patch)
         },
         10000,
@@ -944,7 +965,7 @@ export function TimelinePage() {
       {/* 驻留撤销条：批量操作后顶部常驻（5 分钟），慢返回/刷新后仍可撤销 */}
       {pendingUndo && (
         <div className="sticky top-2 z-30">
-          <div className="flex items-center justify-between gap-3 rounded-lg border bg-popover px-4 py-2.5 text-sm shadow-md animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center justify-between gap-3 rounded-xl border bg-popover/95 px-4 py-2.5 text-sm shadow-lg backdrop-blur animate-in fade-in slide-in-from-top-2">
             <span className="min-w-0 truncate">{pendingUndo.message}</span>
             <div className="flex shrink-0 items-center gap-3">
               <button
@@ -984,7 +1005,7 @@ export function TimelinePage() {
 
       <div className="flex gap-2">
         <div className="relative flex-1">
-          <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
           <Input
             value={searchInput}
             onChange={(e) => {
@@ -1047,26 +1068,30 @@ export function TimelinePage() {
       </div>
 
       {filtersOpen && (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <select
-            value={sourceFilter}
-            onChange={(e) => setSourceFilter(e.target.value)}
-            className="h-9 rounded-md border bg-background px-2 text-sm"
-            aria-label="来源筛选"
-          >
-            {SOURCE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+        <motion.div
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex flex-wrap items-center gap-2 rounded-xl border bg-card/60 p-2.5 text-sm"
+        >
+          <Select value={sourceFilter || "__all"} onValueChange={(v) => setSourceFilter(v === "__all" ? "" : v)}>
+            <SelectTrigger aria-label="来源筛选" className="w-[9.5rem]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SOURCE_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value || "__all"}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <div className="flex items-center gap-1">
             <input
               type="date"
               value={fromDate}
               max={toDate || undefined}
               onChange={(e) => setFromDate(e.target.value)}
-              className="h-9 rounded-md border bg-background px-2 text-sm"
+              className="h-9 rounded-lg border border-input bg-card px-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25"
               aria-label="开始日期"
             />
             <span className="text-muted-foreground">→</span>
@@ -1075,7 +1100,7 @@ export function TimelinePage() {
               value={toDate}
               min={fromDate || undefined}
               onChange={(e) => setToDate(e.target.value)}
-              className="h-9 rounded-md border bg-background px-2 text-sm"
+              className="h-9 rounded-lg border border-input bg-card px-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25"
               aria-label="结束日期"
             />
           </div>
@@ -1091,7 +1116,7 @@ export function TimelinePage() {
               <X className="size-3" /> 清除筛选
             </button>
           )}
-        </div>
+        </motion.div>
       )}
 
       {askMode && (
@@ -1115,22 +1140,31 @@ export function TimelinePage() {
         </Suspense>
       )}
 
-      <div className="flex gap-1 overflow-x-auto pb-1">
-        {CATEGORY_TABS.map((t) => (
-          <button
-            key={t.value}
-            onClick={() => setCategory(t.value)}
-            aria-pressed={category === t.value}
-            className={cn(
-              "shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors",
-              category === t.value
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-secondary-foreground hover:bg-accent",
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1 [scrollbar-width:none]">
+        {CATEGORY_TABS.map((t) => {
+          const isActive = category === t.value
+          return (
+            <button
+              key={t.value}
+              onClick={() => setCategory(t.value)}
+              aria-pressed={isActive}
+              className={cn(
+                "relative shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors",
+                isActive ? "text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+              )}
+            >
+              {isActive && (
+                <motion.span
+                  layoutId="category-pill"
+                  aria-hidden
+                  className="absolute inset-0 rounded-full bg-primary shadow-sm"
+                  transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                />
+              )}
+              <span className="relative">{t.label}</span>
+            </button>
+          )
+        })}
       </div>
 
       {allTags.length > 0 && (
@@ -1179,7 +1213,7 @@ export function TimelinePage() {
       {loading ? (
         <NoteListSkeleton />
       ) : error ? (
-        <Card className="flex flex-col items-center gap-3 p-8 text-center">
+        <Card className="flex flex-col items-center gap-3 border-dashed p-8 text-center">
           {error.kind === "auth" ? (
             <>
               <p className="text-sm text-muted-foreground">
@@ -1242,11 +1276,19 @@ export function TimelinePage() {
             }}
           />
         ) : (
-          <Card className="flex flex-col items-center gap-3 p-10 text-center animate-in fade-in duration-300">
-            <span className="flex size-14 items-center justify-center rounded-full bg-accent">
-              <PenLine className="size-7 text-accent-foreground" />
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="relative flex flex-col items-center gap-3 overflow-hidden rounded-2xl border border-dashed bg-card/60 px-6 py-12 text-center"
+          >
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-[radial-gradient(60%_80%_at_50%_0%,color-mix(in_oklch,var(--color-primary)_14%,transparent),transparent)]"
+            />
+            <span className="relative flex size-14 items-center justify-center rounded-2xl border bg-background shadow-sm">
+              <PenLine className="size-6 text-primary" strokeWidth={1.75} />
             </span>
-            <h2 className="text-base font-medium">还没有碎念</h2>
+            <h2 className="relative text-base font-semibold tracking-tight">还没有碎念</h2>
             <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
               想法、待办、链接、资料，想到什么就丢进来，AI 会帮你自动分拣整理。
             </p>
@@ -1266,7 +1308,7 @@ export function TimelinePage() {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">示例会打上 #{SAMPLE_TAG} 标签，可随时一键清除</p>
-          </Card>
+          </motion.div>
         )
       ) : (
         <div className="space-y-4">
@@ -1281,19 +1323,21 @@ export function TimelinePage() {
           {grouped.map((g) => (
             <section key={g.label}>
               {/* 不做 -mx-1 负边距出血：rem 随字号档缩放，特大档会溢出主栏右缘（R218 P3-1） */}
-              <div className="sticky top-[52px] z-10 bg-background/95 py-1.5 backdrop-blur md:top-0">
-                <span className="text-xs font-medium text-muted-foreground">
-                  {g.label}
-                </span>
+              <div className="sticky top-[52px] z-10 flex items-center gap-2 bg-background/90 py-1.5 backdrop-blur md:top-0">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{g.label}</span>
+                <span aria-hidden className="h-px flex-1 bg-border" />
               </div>
               <div className="mt-1 space-y-3">
+                <AnimatePresence initial={false}>
                 {g.notes.map((n) => (
-                  <NoteCard
+                  <motion.div
                     key={n.id}
-                    className={cn(
-                      newIds.has(n.id) &&
-                        "animate-in fade-in slide-in-from-top-2 duration-300",
-                    )}
+                    initial={newIds.has(n.id) ? { opacity: 0, y: -10, scale: 0.98 } : false}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15 } }}
+                    transition={{ duration: 0.28, ease: [0.25, 1, 0.5, 1] }}
+                  >
+                  <NoteCard
                     note={n}
                     onToggleTodo={(note) => void toggleTodo(note)}
                     onTagClick={setTag}
@@ -1312,7 +1356,9 @@ export function TimelinePage() {
                       window.scrollTo({ top: 0, behavior: "smooth" })
                     }}
                   />
+                  </motion.div>
                 ))}
+                </AnimatePresence>
               </div>
             </section>
           ))}
@@ -1327,8 +1373,8 @@ export function TimelinePage() {
 
       {/* 批量操作栏 */}
       {selectMode && (
-        <div className="fixed inset-x-0 bottom-14 z-30 px-4 md:bottom-4 md:pl-56">
-          <div className="mx-auto max-w-2xl rounded-xl border bg-card p-3 shadow-lg lg:max-w-3xl">
+        <div className="fixed inset-x-0 bottom-16 z-30 px-4 md:bottom-4 md:pl-56">
+          <div className="mx-auto max-w-2xl rounded-2xl border bg-card/95 p-3 shadow-xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 lg:max-w-3xl">
             {tagPanelOpen && (
               <div className="mb-2 space-y-2">
                 {tagPanelMode === "remove" && !allMatching && selectedTags.length > 0 && (
@@ -1475,20 +1521,6 @@ export function TimelinePage() {
         onCancel={() => setConfirmDelete(null)}
       />
 
-      {/* 撤销提示 */}
-      {toast && (
-        <div className="fixed inset-x-0 bottom-28 z-40 flex justify-center px-4 md:bottom-16 md:pl-52">
-          <div className="flex items-center gap-3 rounded-full border bg-popover px-4 py-2 text-sm shadow-lg animate-in fade-in slide-in-from-bottom-2">
-            <span>{toast.message}</span>
-            {toast.undo && (
-              <button onClick={toast.undo} className="font-medium text-primary hover:underline">
-                {toast.undoLabel ?? "撤销"}
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Mobile FAB: scroll to quick input and focus it.
           问答模式下隐藏：面板内没有快速记录入口，悬浮钮只会遮挡引用卡片
           右下角（audit-r247 F-5）。 */}
@@ -1499,7 +1531,7 @@ export function TimelinePage() {
             quickInputRef.current?.querySelector("textarea")?.focus()
           }}
           aria-label="快速记录"
-          className="fixed bottom-20 right-4 z-20 flex size-13 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform active:scale-95 md:hidden"
+          className="fixed bottom-20 right-4 z-20 flex size-13 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/30 transition-transform active:scale-95 md:hidden"
         >
           <Plus className="size-6" />
         </button>

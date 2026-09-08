@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { motion } from "motion/react"
 import {
   BookmarkPlus,
   Check,
@@ -358,10 +359,13 @@ export function AskChat({
   }, [initialInput])
 
   return (
-    <Card className="flex flex-col gap-0 overflow-hidden p-0">
-      <div className="flex items-center justify-between border-b px-4 py-2.5">
-        <div className="flex items-center gap-1.5 text-sm font-medium">
-          <Sparkles className="size-4 text-primary" /> 和笔记对话
+    <Card className="flex flex-col gap-0 overflow-hidden p-0 shadow-md">
+      <div className="flex items-center justify-between border-b bg-card/80 px-4 py-2.5 backdrop-blur">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <span className="inline-flex size-6 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <Sparkles className="size-3.5" />
+          </span>
+          和笔记对话
         </div>
         <div className="flex items-center gap-1">
           {messages.length > 0 && (
@@ -389,10 +393,10 @@ export function AskChat({
 
       {/* dvh 口径（R296 P3-1）：移动端地址栏/键盘收起时 vh 会大于可视高度，
           55vh 列表 + 头部 + 输入框在 375px 小屏上溢出，输入框落到可视区外。 */}
-      <div ref={listRef} className="max-h-[45dvh] space-y-3 overflow-y-auto px-3 py-3 md:max-h-[420px]">
+      <div ref={listRef} className="max-h-[45dvh] space-y-3 overflow-y-auto bg-muted/20 px-3 py-3 md:max-h-[420px]">
         {messages.length === 0 && !asking && (
-          <div className="space-y-3 px-1 py-6 text-center">
-            <p className="text-sm text-muted-foreground">
+          <div className="space-y-3 px-1 py-8 text-center">
+            <p className="mx-auto max-w-sm text-sm leading-relaxed text-muted-foreground">
               问问你的笔记，例如「我最近在想什么」「上次记的那个点子是什么」。
               <br />
               支持多轮追问，回答中的 [n] 可点击查看引用笔记。
@@ -404,17 +408,29 @@ export function AskChat({
         )}
         {messages.map((m) =>
           m.role === "user" ? (
-            <div key={m.id} className="flex justify-end">
-              <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-primary px-3.5 py-2 text-sm leading-relaxed text-primary-foreground">
+            <motion.div
+              key={m.id}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+              className="flex justify-end"
+            >
+              <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-sm leading-relaxed text-primary-foreground shadow-sm">
                 <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{m.content}</p>
               </div>
-            </div>
+            </motion.div>
           ) : (
-            <div key={m.id} className="flex justify-start">
+            <motion.div
+              key={m.id}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+              className="flex justify-start"
+            >
               <div
                 className={cn(
-                  "max-w-[92%] space-y-2 rounded-2xl rounded-bl-sm px-3.5 py-2",
-                  m.error ? "bg-destructive/10" : "bg-accent/60",
+                  "max-w-[92%] space-y-2 rounded-2xl rounded-bl-md border px-3.5 py-2.5 shadow-xs",
+                  m.error ? "border-destructive/30 bg-destructive/10" : "border-border/70 bg-card",
                 )}
               >
                 {m.error ? (
@@ -565,12 +581,12 @@ export function AskChat({
                   </div>
                 )}
               </div>
-            </div>
+            </motion.div>
           ),
         )}
         {asking && (
           <div className="flex justify-start">
-            <div className="max-w-[92%] space-y-2 rounded-2xl rounded-bl-sm bg-accent/60 px-3.5 py-2">
+            <div className="max-w-[92%] space-y-2 rounded-2xl rounded-bl-md border border-border/70 bg-card px-3.5 py-2.5 shadow-xs">
               {streamState.text ? (
                 <p className="whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]">{streamState.text}</p>
               ) : (
@@ -597,7 +613,7 @@ export function AskChat({
         <div ref={bottomRef} />
       </div>
 
-      <div className="flex items-end gap-2 border-t px-3 py-2.5">
+      <div className="flex items-end gap-2 border-t bg-card px-3 py-2.5">
         <textarea
           ref={inputRef}
           value={input}
@@ -610,9 +626,9 @@ export function AskChat({
           }}
           rows={1}
           placeholder="继续追问，Enter 发送…"
-          className="max-h-28 min-h-9 flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="max-h-28 min-h-9 flex-1 resize-none rounded-xl border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none transition-[border-color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25"
         />
-        <Button size="icon" className="size-9 shrink-0" onClick={() => void send()} disabled={asking || !input.trim()} aria-label="发送">
+        <Button size="icon" className="size-9 shrink-0 rounded-xl" onClick={() => void send()} disabled={asking || !input.trim()} aria-label="发送">
           {asking ? <Loader2 className="animate-spin" /> : <SendHorizontal />}
         </Button>
       </div>

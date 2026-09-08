@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { BarChart3, Dices, Flame, GitBranch, Loader2, RefreshCw, StickyNote, Tag, Trophy } from "lucide-react"
+import { motion } from "motion/react"
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Tooltip, XAxis, YAxis } from "recharts"
+import { BarChart3, Dices, Flame, GitBranch, Loader2, RefreshCw, StickyNote, Tag, TrendingUp, Trophy } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { ChartContainer, ChartTooltipContent, chartColor } from "@/components/ui/chart"
 import { NoteCard } from "@/components/note-card"
 import { EmptyState } from "@/components/empty-state"
 import { getRandomNote, getStats, ApiError, NetworkError } from "@/lib/api"
@@ -39,16 +44,7 @@ const SCOPE_DAYS_OPTIONS = [
   { value: 365, label: "近 1 年" },
 ]
 
-const BAR_COLORS = [
-  "bg-sky-500",
-  "bg-violet-500",
-  "bg-emerald-500",
-  "bg-amber-500",
-  "bg-rose-500",
-  "bg-cyan-500",
-  "bg-lime-500",
-  "bg-fuchsia-500",
-]
+const TREND_DAYS = 30
 
 function localDateStr(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0")
@@ -95,10 +91,10 @@ function Heatmap({ daily }: { daily: StatsResponse["daily"] }) {
   const level = (count: number): string => {
     if (count === 0) return "fill-muted"
     const r = count / max
-    if (r <= 0.25) return "fill-emerald-300 dark:fill-emerald-900"
-    if (r <= 0.5) return "fill-emerald-400 dark:fill-emerald-700"
-    if (r <= 0.75) return "fill-emerald-500 dark:fill-emerald-600"
-    return "fill-emerald-600 dark:fill-emerald-400"
+    if (r <= 0.25) return "fill-primary/30"
+    if (r <= 0.5) return "fill-primary/55"
+    if (r <= 0.75) return "fill-primary/80"
+    return "fill-primary"
   }
 
   const CELL = 11
@@ -157,25 +153,102 @@ function StatTile({
   icon: Icon,
   label,
   value,
+  unit,
   accent,
+  index = 0,
 }: {
   icon: typeof Flame
   label: string
   value: string
+  unit?: string
   accent?: boolean
+  index?: number
 }) {
   return (
-    <Card className="flex flex-col gap-1 p-4">
-      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Icon className={cn("size-3.5", accent && "text-orange-600 dark:text-orange-500")} />
-        {label}
-      </span>
-      <span className={cn("text-2xl font-semibold tabular-nums", accent && "text-orange-600 dark:text-orange-500")}>{value}</span>
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, delay: index * 0.05, ease: [0.25, 1, 0.5, 1] }}
+    >
+      <Card className="flex h-full flex-col gap-2 p-4">
+        <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <span
+            className={cn(
+              "inline-flex size-6 items-center justify-center rounded-md bg-muted",
+              accent && "bg-warning/15 text-warning",
+            )}
+          >
+            <Icon className="size-3.5" />
+          </span>
+          {label}
+        </span>
+        <span className="flex items-baseline gap-1">
+          <span className={cn("text-display text-3xl font-semibold tabular-nums", accent && "text-warning")}>{value}</span>
+          {unit && <span className="text-sm text-muted-foreground">{unit}</span>}
+        </span>
+      </Card>
+    </motion.div>
+  )
+}
+
+/** 近 30 天每日记录趋势（面积图） */
+function TrendChart({ daily }: { daily: StatsResponse["daily"] }) {
+  const data = useMemo(() => {
+    const counts = new Map(daily.map((d) => [d.date, d.count]))
+    const today = new Date()
+    const out: { date: string; label: string; count: number }[] = []
+    for (let i = TREND_DAYS - 1; i >= 0; i--) {
+      const d = new Date(today.getTime() - i * 86400_000)
+      const iso = localDateStr(d)
+      out.push({ date: iso, label: `${d.getMonth() + 1}/${d.getDate()}`, count: counts.get(iso) ?? 0 })
+    }
+    return out
+  }, [daily])
+  const total = data.reduce((s, d) => s + d.count, 0)
+
+  return (
+    <Card className="space-y-3 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="flex items-center gap-1.5 text-sm font-medium">
+          <TrendingUp className="size-4" />
+          近 {TREND_DAYS} 天趋势
+        </h2>
+        <span className="text-xs text-muted-foreground">
+          共 <span className="font-medium text-foreground tabular-nums">{total}</span> 条
+        </span>
+      </div>
+      <ChartContainer height={180} aria-label={`近 ${TREND_DAYS} 天每日记录数趋势图`} role="img">
+        <AreaChart data={data} margin={{ top: 8, right: 4, left: -20, bottom: 0 }}>
+          <defs>
+            <linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.35} />
+              <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} strokeDasharray="3 3" />
+          <XAxis dataKey="label" tickLine={false} axisLine={false} interval={6} tickMargin={8} />
+          <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={40} />
+          <Tooltip
+            cursor={{ stroke: "var(--color-border)" }}
+            content={<ChartTooltipContent formatter={(v) => `${v} 条`} />}
+          />
+          <Area
+            type="monotone"
+            dataKey="count"
+            name="记录"
+            stroke="var(--color-primary)"
+            strokeWidth={2}
+            fill="url(#trend-fill)"
+            activeDot={{ r: 4, strokeWidth: 0 }}
+            isAnimationActive={!window.matchMedia("(prefers-reduced-motion: reduce)").matches}
+          />
+        </AreaChart>
+      </ChartContainer>
     </Card>
   )
 }
 
-/** 简洁横向条形分布（分类/来源共用） */
+/** 横向条形分布（分类/来源共用） */
 function DistBars({
   title,
   items,
@@ -185,25 +258,37 @@ function DistBars({
 }) {
   const total = items.reduce((s, i) => s + i.count, 0)
   if (total === 0) return null
+  const data = [...items].sort((a, b) => b.count - a.count)
+  const height = Math.max(120, data.length * 34 + 12)
   return (
     <Card className="space-y-3 p-4">
       <h2 className="text-sm font-medium">{title}</h2>
-      <div className="flex h-2.5 overflow-hidden rounded-full">
-        {items.map((it, i) => (
-          <div
-            key={it.key}
-            className={cn(BAR_COLORS[i % BAR_COLORS.length])}
-            style={{ width: `${(it.count / total) * 100}%` }}
-            title={`${it.label} ${it.count}`}
+      <ChartContainer height={height} aria-label={`${title}条形图`} role="img">
+        <BarChart data={data} layout="vertical" margin={{ top: 0, right: 36, left: 0, bottom: 0 }} barCategoryGap={8}>
+          <XAxis type="number" hide allowDecimals={false} />
+          <YAxis type="category" dataKey="label" width={72} tickLine={false} axisLine={false} tick={{ fill: "var(--color-foreground)" }} />
+          <Tooltip
+            cursor={{ fill: "var(--color-muted)", radius: 6 }}
+            content={<ChartTooltipContent formatter={(v) => `${v} 条 · ${Math.round((Number(v) / total) * 100)}%`} />}
           />
-        ))}
-      </div>
-      <ul className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:grid-cols-3">
-        {items.map((it, i) => (
-          <li key={it.key} className="flex items-center gap-1.5">
-            <span className={cn("size-2 shrink-0 rounded-full", BAR_COLORS[i % BAR_COLORS.length])} />
-            <span className="truncate text-muted-foreground">{it.label}</span>
-            <span className="ml-auto font-medium tabular-nums">{it.count}</span>
+          <Bar
+            dataKey="count"
+            name="数量"
+            radius={[0, 6, 6, 0]}
+            maxBarSize={22}
+            label={{ position: "right", fill: "var(--color-muted-foreground)", fontSize: 11 }}
+            isAnimationActive={!window.matchMedia("(prefers-reduced-motion: reduce)").matches}
+          >
+            {data.map((d, i) => (
+              <Cell key={d.key} fill={chartColor(i)} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ChartContainer>
+      <ul className="sr-only">
+        {data.map((it) => (
+          <li key={it.key}>
+            {it.label}：{it.count} 条
           </li>
         ))}
       </ul>
@@ -264,8 +349,15 @@ export function InsightsPage() {
 
   if (loading) {
     return (
-      <div className="flex justify-center py-16 text-muted-foreground">
-        <Loader2 className="size-6 animate-spin" />
+      <div className="space-y-5" aria-busy="true" aria-label="正在加载统计">
+        <Skeleton className="h-8 w-64" />
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-24 rounded-xl" />
+          ))}
+        </div>
+        <Skeleton className="h-56 rounded-xl" />
+        <Skeleton className="h-40 rounded-xl" />
       </div>
     )
   }
@@ -302,45 +394,47 @@ export function InsightsPage() {
 
   const scopeBar = (
     <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="insight-scope">
-      <span className="text-muted-foreground">洞察范围</span>
-      <select
-        value={scopeDays}
-        onChange={(e) => setScopeDays(Number(e.target.value))}
-        className="h-7 rounded-md border bg-background px-2"
-        aria-label="时间范围"
-      >
-        {SCOPE_DAYS_OPTIONS.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-      {allTags.length > 0 && (
-        <select
-          value={scopeTag}
-          onChange={(e) => setScopeTag(e.target.value)}
-          className="h-7 max-w-40 rounded-md border bg-background px-2"
-          aria-label="标签范围"
-        >
-          <option value="">全部标签</option>
-          {allTags.map((t) => (
-            <option key={t} value={t}>
-              #{t}
-            </option>
+      <span className="font-medium text-muted-foreground">洞察范围</span>
+      <Select value={String(scopeDays)} onValueChange={(v) => setScopeDays(Number(v))}>
+        <SelectTrigger size="sm" aria-label="时间范围">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {SCOPE_DAYS_OPTIONS.map((o) => (
+            <SelectItem key={o.value} value={String(o.value)}>
+              {o.label}
+            </SelectItem>
           ))}
-        </select>
+        </SelectContent>
+      </Select>
+      {allTags.length > 0 && (
+        <Select value={scopeTag || "__all"} onValueChange={(v) => setScopeTag(v === "__all" ? "" : v)}>
+          <SelectTrigger size="sm" aria-label="标签范围" className="max-w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all">全部标签</SelectItem>
+            {allTags.map((t) => (
+              <SelectItem key={t} value={t}>
+                #{t}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       )}
       {scoped && (
-        <button
+        <Button
           type="button"
-          className="text-muted-foreground underline-offset-2 hover:underline"
+          variant="ghost"
+          size="sm"
+          className="h-8 text-xs text-muted-foreground"
           onClick={() => {
             setScopeDays(0)
             setScopeTag("")
           }}
         >
           重置
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -359,11 +453,14 @@ export function InsightsPage() {
       {scopeBar}
       {/* 总览 */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatTile icon={Flame} label="当前连续记录" value={`${stats.streak.current} 天`} accent />
-        <StatTile icon={Trophy} label="最长连续记录" value={`${stats.streak.longest} 天`} />
-        <StatTile icon={StickyNote} label="总笔记数" value={String(stats.total_notes)} />
-        <StatTile icon={GitBranch} label="思考线索" value={String(stats.thread_count)} />
+        <StatTile icon={Flame} label="当前连续记录" value={String(stats.streak.current)} unit="天" accent index={0} />
+        <StatTile icon={Trophy} label="最长连续记录" value={String(stats.streak.longest)} unit="天" index={1} />
+        <StatTile icon={StickyNote} label="总笔记数" value={String(stats.total_notes)} unit="条" index={2} />
+        <StatTile icon={GitBranch} label="思考线索" value={String(stats.thread_count)} unit="条" index={3} />
       </div>
+
+      {/* 趋势 */}
+      <TrendChart daily={stats.daily} />
 
       {/* 热力图 */}
       <Card className="space-y-2 p-4">
@@ -432,7 +529,7 @@ export function InsightsPage() {
               <a
                 key={t.tag}
                 href={`#/?tag=${encodeURIComponent(t.tag)}`}
-                className="inline-flex items-center gap-1 rounded-full bg-secondary px-3 py-1 text-xs font-medium text-secondary-foreground transition-colors hover:bg-accent"
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-full border bg-card px-3 py-1 text-xs font-medium text-foreground shadow-xs transition-colors hover:border-primary/40 hover:bg-accent hover:text-accent-foreground"
               >
                 #{t.tag}
                 <span className="text-muted-foreground">{t.count}</span>

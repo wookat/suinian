@@ -36,35 +36,55 @@
   }
 }
 
+/* ============================================================
+   R337 设计系统 token（docs/design-system-r337.md）
+   语义 oklch token 架构不变；重调为冷中性灰阶 + 墨青品牌色，
+   所有前景/背景组合均满足 WCAG AA（文档附对比度表）。
+   ============================================================ */
 :root {
   /* 系统控件（滚动条等）跟随主题（R118 P2 暗色滚动条） */
   color-scheme: light;
-  --background: oklch(0.985 0.002 90);
-  --foreground: oklch(0.24 0.01 260);
+  --background: oklch(0.984 0.003 250);
+  --foreground: oklch(0.21 0.015 260);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.24 0.01 260);
+  --card-foreground: oklch(0.21 0.015 260);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.24 0.01 260);
-  /* L=0.48：白字对比 6.1:1；text-primary 落在 bg-primary/15 上也 ≥4.8:1（R218 P3-2） */
-  --primary: oklch(0.48 0.14 155);
+  --popover-foreground: oklch(0.21 0.015 260);
+  /* 品牌墨青 L=0.49：白字对比 6.3:1；text-primary 落在 primary/10 上仍 ≥5.5:1 */
+  --primary: oklch(0.49 0.11 172);
   --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.96 0.004 90);
-  --secondary-foreground: oklch(0.32 0.01 260);
-  --muted: oklch(0.955 0.004 90);
+  --secondary: oklch(0.962 0.004 250);
+  --secondary-foreground: oklch(0.3 0.015 260);
+  --muted: oklch(0.955 0.005 250);
   /* 在 --muted 底色上达 WCAG AA（≥4.5:1，小字徽章）——R208 P3-3 */
-  --muted-foreground: oklch(0.49 0.012 260);
-  --accent: oklch(0.95 0.02 155);
-  --accent-foreground: oklch(0.3 0.06 155);
+  --muted-foreground: oklch(0.49 0.018 255);
+  --accent: oklch(0.95 0.02 172);
+  --accent-foreground: oklch(0.29 0.06 172);
   /* L=0.55：白字与白底上的红字对比度均 ≥5.3:1 ≥ WCAG AA 4.5:1（R218 P3-2） */
   --destructive: oklch(0.55 0.2 25);
   --destructive-foreground: oklch(0.99 0 0);
-  --border: oklch(0.91 0.004 90);
-  --input: oklch(0.91 0.004 90);
-  --ring: oklch(0.55 0.14 155);
-  --radius: 0.625rem;
+  --success: oklch(0.5 0.13 155);
+  --warning: oklch(0.55 0.14 70);
+  --info: oklch(0.52 0.14 250);
+  --border: oklch(0.915 0.006 250);
+  --input: oklch(0.9 0.006 250);
+  --ring: oklch(0.55 0.11 172);
+  --radius: 0.75rem;
+  /* 层级阴影：低透明度多层叠加，Linear/Notion 质感 */
+  --shadow-xs: 0 1px 2px oklch(0.2 0.02 260 / 0.05);
+  --shadow-sm: 0 1px 2px oklch(0.2 0.02 260 / 0.06), 0 1px 3px oklch(0.2 0.02 260 / 0.04);
+  --shadow-md: 0 2px 6px oklch(0.2 0.02 260 / 0.06), 0 8px 24px -8px oklch(0.2 0.02 260 / 0.1);
+  --shadow-lg: 0 4px 12px oklch(0.2 0.02 260 / 0.08), 0 24px 48px -12px oklch(0.2 0.02 260 / 0.16);
+  --shadow-xl: 0 8px 24px oklch(0.2 0.02 260 / 0.1), 0 40px 80px -20px oklch(0.2 0.02 260 / 0.22);
+  /* 图表调色（recharts）：与分类色系同源 */
+  --chart-1: oklch(0.62 0.13 172);
+  --chart-2: oklch(0.65 0.14 250);
+  --chart-3: oklch(0.72 0.14 70);
+  --chart-4: oklch(0.65 0.15 320);
+  --chart-5: oklch(0.65 0.16 20);
   --color-graph-person: oklch(0.72 0.14 60);
   --color-graph-product: oklch(0.68 0.13 250);
-  --color-graph-project: oklch(0.65 0.14 155);
+  --color-graph-project: oklch(0.62 0.13 172);
   --color-graph-org: oklch(0.65 0.13 300);
   --color-graph-place: oklch(0.7 0.12 200);
   --color-graph-concept: oklch(0.7 0.13 20);
@@ -73,31 +93,44 @@
 
 .dark {
   color-scheme: dark;
-  --background: oklch(0.19 0.008 260);
-  --foreground: oklch(0.93 0.004 90);
-  --card: oklch(0.23 0.008 260);
-  --card-foreground: oklch(0.93 0.004 90);
-  --popover: oklch(0.23 0.008 260);
-  --popover-foreground: oklch(0.93 0.004 90);
-  --primary: oklch(0.72 0.13 155);
-  --primary-foreground: oklch(0.16 0.02 155);
-  --secondary: oklch(0.27 0.008 260);
-  --secondary-foreground: oklch(0.9 0.004 90);
-  --muted: oklch(0.27 0.008 260);
+  --background: oklch(0.165 0.008 262);
+  --foreground: oklch(0.94 0.005 250);
+  --card: oklch(0.205 0.009 262);
+  --card-foreground: oklch(0.94 0.005 250);
+  --popover: oklch(0.225 0.009 262);
+  --popover-foreground: oklch(0.94 0.005 250);
+  --primary: oklch(0.76 0.11 172);
+  --primary-foreground: oklch(0.17 0.03 172);
+  --secondary: oklch(0.255 0.009 262);
+  --secondary-foreground: oklch(0.9 0.005 250);
+  --muted: oklch(0.25 0.009 262);
   /* 在 --muted 底色上达 WCAG AA（≥4.5:1，小字徽章）——R208 P3-3 */
-  --muted-foreground: oklch(0.74 0.01 260);
-  --accent: oklch(0.3 0.03 155);
-  --accent-foreground: oklch(0.85 0.08 155);
+  --muted-foreground: oklch(0.73 0.012 255);
+  --accent: oklch(0.29 0.03 172);
+  --accent-foreground: oklch(0.86 0.08 172);
   /* 暗色 destructive 文字要在 destructive/10 错误卡底色上过 WCAG AA（≥4.5:1）
    * ——R228 P3-1（axe color-contrast serious）；实底按钮已单独压深 red-700 */
-  --destructive: oklch(0.7 0.17 25);
+  --destructive: oklch(0.72 0.17 25);
   --destructive-foreground: oklch(0.99 0 0);
-  --border: oklch(0.3 0.008 260);
-  --input: oklch(0.3 0.008 260);
-  --ring: oklch(0.72 0.13 155);
+  --success: oklch(0.75 0.13 155);
+  --warning: oklch(0.8 0.13 75);
+  --info: oklch(0.75 0.12 250);
+  --border: oklch(0.285 0.01 262);
+  --input: oklch(0.31 0.01 262);
+  --ring: oklch(0.76 0.11 172);
+  --shadow-xs: 0 1px 2px oklch(0 0 0 / 0.3);
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.35), 0 0 0 1px oklch(1 0 0 / 0.03);
+  --shadow-md: 0 2px 6px oklch(0 0 0 / 0.4), 0 8px 24px -8px oklch(0 0 0 / 0.5), 0 0 0 1px oklch(1 0 0 / 0.04);
+  --shadow-lg: 0 4px 12px oklch(0 0 0 / 0.45), 0 24px 48px -12px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.05);
+  --shadow-xl: 0 8px 24px oklch(0 0 0 / 0.5), 0 40px 80px -20px oklch(0 0 0 / 0.7), 0 0 0 1px oklch(1 0 0 / 0.06);
+  --chart-1: oklch(0.72 0.12 172);
+  --chart-2: oklch(0.72 0.12 250);
+  --chart-3: oklch(0.78 0.13 75);
+  --chart-4: oklch(0.72 0.13 320);
+  --chart-5: oklch(0.72 0.14 20);
   --color-graph-person: oklch(0.75 0.13 60);
   --color-graph-product: oklch(0.72 0.12 250);
-  --color-graph-project: oklch(0.72 0.12 155);
+  --color-graph-project: oklch(0.72 0.12 172);
   --color-graph-org: oklch(0.7 0.12 300);
   --color-graph-place: oklch(0.74 0.11 200);
   --color-graph-concept: oklch(0.73 0.12 20);
@@ -121,26 +154,83 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-xs: calc(var(--radius) - 6px);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-xl: var(--shadow-xl);
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro SC", "PingFang SC", "HarmonyOS Sans SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  @keyframes shimmer {
+    from {
+      background-position: 200% 0;
+    }
+    to {
+      background-position: -200% 0;
+    }
+  }
 }
 
 @layer base {
   * {
     border-color: var(--color-border);
   }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-      "HarmonyOS Sans SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC",
-      sans-serif;
+    font-family: var(--font-sans);
+    /* 中文排版：正文 1.65 行高、标点悬挂、按词换行 */
+    line-height: 1.65;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "kern", "liga", "calt";
+    hanging-punctuation: allow-end;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    font-feature-settings: "kern", "liga", "calt", "ss01";
+  }
+  p {
+    text-wrap: pretty;
+  }
+  ::selection {
+    background-color: color-mix(in oklch, var(--color-primary) 22%, transparent);
+  }
+  /* 细滚动条（桌面 WebKit / Firefox），与 Linear/Notion 一致 */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--color-foreground) 18%, transparent) transparent;
   }
 
   /* 触屏设备上把小控件的命中区扩到 44×44px（WCAG 2.5.5 / Apple HIG），
@@ -160,5 +250,77 @@
       position: absolute;
       inset: min(0px, calc((100% - 44px) / 2));
     }
+  }
+
+  /* 尊重系统「减少动态效果」：所有 CSS 过渡/动画压到瞬时（motion 侧由 MotionConfig reducedMotion="user" 处理） */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* 卡片表面：细边 + 低阴影 + hover 抬升，统一所有列表卡片手感 */
+  .surface {
+    background-color: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    transition:
+      box-shadow 200ms var(--ease-out-quart),
+      border-color 200ms var(--ease-out-quart),
+      transform 200ms var(--ease-out-quart);
+  }
+  .surface-hover:hover {
+    box-shadow: var(--shadow-md);
+    border-color: color-mix(in oklch, var(--color-border) 60%, var(--color-foreground) 12%);
+  }
+  /* 标题：更紧字距 + 平衡换行 */
+  .text-display {
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+  /* 数字等宽 */
+  .nums {
+    font-variant-numeric: tabular-nums;
+  }
+  /* 页面级 stagger 进场（配合 style="--i: n"） */
+  .stagger-in {
+    animation: stagger-in 420ms var(--ease-out-quart) both;
+    animation-delay: calc(var(--i, 0) * 40ms);
+  }
+  @keyframes stagger-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  /* 骨架屏微光 */
+  .skeleton-shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--color-muted) 0%,
+      color-mix(in oklch, var(--color-muted) 70%, var(--color-card)) 50%,
+      var(--color-muted) 100%
+    );
+    background-size: 200% 100%;
+    animation: var(--animate-shimmer);
+  }
+  /* 品牌渐变文字（落地页/onboarding 标题点睛） */
+  .text-brand-gradient {
+    background: linear-gradient(120deg, var(--color-primary), color-mix(in oklch, var(--color-primary) 55%, var(--color-chart-2)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
   }
 }

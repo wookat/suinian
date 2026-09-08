@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react"
+import { AnimatePresence, motion, MotionConfig } from "motion/react"
 import {
   Home,
   CheckSquare,
@@ -9,6 +10,8 @@ import {
   Info,
   WifiOff,
   X,
+  Search,
+  Command as CommandIcon,
 } from "lucide-react"
 import { TimelinePage } from "@/pages/timeline"
 import { Onboarding } from "@/components/onboarding"
@@ -16,7 +19,10 @@ import { ReloadPrompt } from "@/components/reload-prompt"
 import { PageCopyGuard } from "@/components/exec-guard"
 import { PageHeader } from "@/components/page-header"
 import { RightRail } from "@/components/right-rail"
+import { CommandPalette, openCommandPalette } from "@/components/command-palette"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Toaster } from "@/components/ui/sonner"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import { loadSettings, saveSettings, SETTINGS_CHANGED_EVENT } from "@/lib/settings"
 import { syncTimezone } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -173,6 +179,22 @@ function useOnboarded(): boolean {
   return onboarded
 }
 
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
+
+function BrandMark({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-[color-mix(in_oklch,var(--color-primary)_70%,var(--color-chart-2))] font-bold text-primary-foreground shadow-sm",
+        className,
+      )}
+    >
+      碎
+    </span>
+  )
+}
+
 export default function App() {
   const route = useHashRoute()
   const active =
@@ -196,157 +218,209 @@ export default function App() {
   }, [])
 
   return (
-    <div className="min-h-dvh">
-      {/* skip link：hash 路由下不能真跳 anchor（会改写路由），改为直接把焦点移到主内容 */}
-      <a
-        href="#main-content"
-        onClick={(e) => {
-          e.preventDefault()
-          document.getElementById("main-content")?.focus()
-        }}
-        className="sr-only z-50 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:inline-flex focus:min-h-6 focus:min-w-6 focus:items-center"
-      >
-        跳过导航，直达主要内容
-      </a>
-      {!onboarded && <Onboarding />}
-      {!online && (
-        <div
-          role="status"
-          className="flex items-center justify-center gap-2 border-b border-slate-500/30 bg-slate-500/15 px-4 py-2 text-sm text-slate-700 backdrop-blur dark:text-slate-300 md:pl-52 print:hidden"
-        >
-          <WifiOff className="size-4 shrink-0" />
-          <span>当前离线：可继续记录（会暂存本机、联网后自动补发），页面内容可能是缓存</span>
-        </div>
-      )}
-      {isMock && (
-        <div
-          role="region"
-          aria-label="演示模式提示"
-          className="flex items-center justify-center gap-2 border-b border-amber-500/30 bg-amber-500/15 px-4 py-2 text-sm text-amber-800 backdrop-blur dark:text-amber-300 md:pl-52">
-          <Info className="size-4 shrink-0" />
-          <span>
-            当前为演示数据，
-            <a href="#/settings" className="font-medium underline underline-offset-2">
-              去设置连接你的碎念 →
-            </a>
-          </span>
-          <button
-            onClick={() => {
-              saveSettings({ ...loadSettings(), useMock: false })
-              window.location.reload()
+    <MotionConfig reducedMotion="user">
+      <TooltipProvider>
+        <div className="min-h-dvh">
+          {/* skip link：hash 路由下不能真跳 anchor（会改写路由），改为直接把焦点移到主内容 */}
+          <a
+            href="#main-content"
+            onClick={(e) => {
+              e.preventDefault()
+              document.getElementById("main-content")?.focus()
             }}
-            aria-label="关闭演示模式"
-            className="ml-1 flex items-center gap-1 rounded-md border border-amber-500/40 px-2 py-0.5 text-xs font-medium transition-colors hover:bg-amber-500/20"
+            className="sr-only z-50 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:inline-flex focus:min-h-6 focus:min-w-6 focus:items-center"
           >
-            <X className="size-3" /> 关闭演示
-          </button>
-        </div>
-      )}
-      {/* Desktop sidebar */}
-      <aside
-        aria-label="导航侧栏"
-        aria-hidden={isDesktop ? undefined : true}
-        className="fixed inset-y-0 left-0 z-20 hidden w-52 flex-col border-r bg-card p-4 md:flex print:hidden"
-      >
-        <div className="mb-6 flex items-center gap-2 px-2">
-          <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
-            碎
-          </span>
-          <div>
-            <h1 className="text-sm font-semibold leading-tight">碎念</h1>
-            <p className="text-xs text-muted-foreground">AI 收件箱</p>
-          </div>
-        </div>
-        <nav aria-label="侧栏导航" className="space-y-1">
-          {ROUTES.map((r) => {
-            const Icon = r.icon
-            return (
-              <a
-                key={r.path}
-                href={`#/${r.path}`}
-                aria-current={isDesktop && active.path === r.path ? "page" : undefined}
-                className={cn(
-                  "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                  active.path === r.path
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-                )}
-              >
-                <Icon className="size-4" />
-                {r.label}
-              </a>
-            )
-          })}
-        </nav>
-      </aside>
-
-      {/* Mobile top bar */}
-      <header className="sticky top-0 z-20 flex items-center gap-2 border-b bg-background/90 px-4 py-3 backdrop-blur md:hidden print:hidden">
-        <span className="flex size-7 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-foreground">
-          碎
-        </span>
-        <h1 className="text-base font-semibold">{active.path === "" ? "碎念" : active.label}</h1>
-      </header>
-
-      <div className="md:pl-52 print:pl-0">
-        <div className="mx-auto flex max-w-2xl gap-8 px-4 pb-24 pt-4 md:pb-8 md:pt-6 lg:max-w-3xl xl:max-w-6xl">
-          <main
-            key={active.path}
-            id="main-content"
-            tabIndex={-1}
-            className="min-w-0 flex-1 space-y-5 outline-none animate-in fade-in duration-300 xl:max-w-3xl"
-          >
-            <PageHeader title={active.title} description={active.description} />
-            {/* 懒加载页面分包下载期间给出骨架占位：fallback=null 会让
-                首次进入的页面（如 #/auth 表单）空白数秒（R232 P3-4，
-                audit-r231 §9） */}
-            <Suspense
-              fallback={
-                <div aria-busy="true" aria-label="页面加载中" className="space-y-3 pt-1">
-                  <Skeleton className="h-9 w-full max-w-sm" />
-                  <Skeleton className="h-9 w-full max-w-sm" />
-                  <Skeleton className="h-24 w-full" />
-                </div>
-              }
+            跳过导航，直达主要内容
+          </a>
+          {!onboarded && <Onboarding />}
+          {!online && (
+            <div
+              role="status"
+              className="flex items-center justify-center gap-2 border-b border-border bg-muted px-4 py-2 text-sm text-muted-foreground backdrop-blur md:pl-56 print:hidden"
             >
-              <Page />
-            </Suspense>
-          </main>
-          <aside aria-label="辅助信息栏" className="hidden w-72 shrink-0 pt-1 xl:block print:hidden">
-            <div className="sticky top-6">
-              <RightRail />
+              <WifiOff className="size-4 shrink-0" />
+              <span>当前离线：可继续记录（会暂存本机、联网后自动补发），页面内容可能是缓存</span>
+            </div>
+          )}
+          {isMock && (
+            <div
+              role="region"
+              aria-label="演示模式提示"
+              className="flex items-center justify-center gap-2 border-b border-amber-500/30 bg-amber-500/12 px-4 py-2 text-sm text-amber-800 backdrop-blur dark:text-amber-300 md:pl-56"
+            >
+              <Info className="size-4 shrink-0" />
+              <span>
+                当前为演示数据，
+                <a href="#/settings" className="font-medium underline underline-offset-2">
+                  去设置连接你的碎念 →
+                </a>
+              </span>
+              <button
+                onClick={() => {
+                  saveSettings({ ...loadSettings(), useMock: false })
+                  window.location.reload()
+                }}
+                aria-label="关闭演示模式"
+                className="ml-1 flex items-center gap-1 rounded-md border border-amber-500/40 px-2 py-0.5 text-xs font-medium transition-colors hover:bg-amber-500/20"
+              >
+                <X className="size-3" /> 关闭演示
+              </button>
+            </div>
+          )}
+
+          {/* Desktop sidebar */}
+          <aside
+            aria-label="导航侧栏"
+            aria-hidden={isDesktop ? undefined : true}
+            className="fixed inset-y-0 left-0 z-20 hidden w-56 flex-col border-r bg-card/80 p-3 backdrop-blur-xl md:flex print:hidden"
+          >
+            <a href="#/" className="mb-4 flex items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-secondary">
+              <BrandMark className="size-8 text-sm" />
+              <div className="min-w-0">
+                <h1 className="text-sm font-semibold leading-tight tracking-tight">碎念</h1>
+                <p className="text-[11px] leading-tight text-muted-foreground">AI 收件箱</p>
+              </div>
+            </a>
+            <button
+              type="button"
+              onClick={openCommandPalette}
+              className="mb-3 flex h-9 items-center gap-2 rounded-lg border border-input bg-background/60 px-2.5 text-sm text-muted-foreground shadow-xs transition-colors hover:bg-background hover:text-foreground"
+            >
+              <Search className="size-4" />
+              <span className="flex-1 text-left">搜索或跳转…</span>
+              <kbd className="inline-flex h-5 items-center gap-0.5 rounded border bg-muted px-1.5 font-sans text-[10px] font-medium text-muted-foreground">
+                {isMac ? <CommandIcon className="size-2.5" /> : "Ctrl"}K
+              </kbd>
+            </button>
+            <nav aria-label="侧栏导航" className="flex flex-col gap-0.5">
+              {ROUTES.map((r) => {
+                const Icon = r.icon
+                const isActive = active.path === r.path
+                return (
+                  <a
+                    key={r.path}
+                    href={`#/${r.path}`}
+                    aria-current={isDesktop && isActive ? "page" : undefined}
+                    className={cn(
+                      "relative flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm font-medium transition-colors",
+                      isActive ? "text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                    )}
+                  >
+                    {isActive && (
+                      <motion.span
+                        layoutId="sidebar-active"
+                        aria-hidden
+                        className="absolute inset-0 rounded-lg bg-accent"
+                        transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                      />
+                    )}
+                    <Icon className={cn("relative size-4", isActive && "text-primary")} />
+                    <span className="relative">{r.label}</span>
+                  </a>
+                )
+              })}
+            </nav>
+            <div className="mt-auto px-2 pb-1 text-[11px] leading-relaxed text-muted-foreground">
+              随手一丢，AI 自动整理。
             </div>
           </aside>
-        </div>
-      </div>
 
-      {/* Mobile bottom nav */}
-      <nav
-        aria-label="底部导航"
-        aria-hidden={isDesktop ? true : undefined}
-        className="fixed inset-x-0 bottom-0 z-20 flex border-t bg-card/95 backdrop-blur md:hidden print:hidden"
-      >
-        {ROUTES.map((r) => {
-          const Icon = r.icon
-          return (
-            <a
-              key={r.path}
-              href={`#/${r.path}`}
-              aria-current={!isDesktop && active.path === r.path ? "page" : undefined}
-              className={cn(
-                "flex flex-1 flex-col items-center gap-0.5 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] text-[11px] font-medium transition-colors",
-                active.path === r.path ? "text-primary" : "text-muted-foreground",
-              )}
+          {/* Mobile top bar */}
+          <header className="sticky top-0 z-20 flex items-center gap-2.5 border-b bg-background/85 px-4 py-2.5 backdrop-blur-xl md:hidden print:hidden">
+            <BrandMark className="size-7 rounded-lg text-xs" />
+            <h1 className="flex-1 truncate text-[15px] font-semibold tracking-tight">
+              {active.path === "" ? "碎念" : active.label}
+            </h1>
+            <button
+              type="button"
+              onClick={openCommandPalette}
+              aria-label="搜索或跳转"
+              className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
             >
-              <Icon className="size-5" />
-              {r.label}
-            </a>
-          )
-        })}
-      </nav>
+              <Search className="size-[18px]" />
+            </button>
+          </header>
 
-      <ReloadPrompt />
-      <PageCopyGuard />
-    </div>
+          <div className="md:pl-56 print:pl-0">
+            <div className="mx-auto flex max-w-2xl gap-10 px-4 pb-28 pt-4 md:px-8 md:pb-10 md:pt-8 lg:max-w-3xl xl:max-w-6xl">
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.main
+                  key={active.path}
+                  id="main-content"
+                  tabIndex={-1}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.18, ease: [0.25, 1, 0.5, 1] }}
+                  className="min-w-0 flex-1 space-y-6 outline-none xl:max-w-3xl"
+                >
+                  <PageHeader title={active.title} description={active.description} />
+                  {/* 懒加载页面分包下载期间给出骨架占位：fallback=null 会让
+                首次进入的页面（如 #/auth 表单）空白数秒（R232 P3-4，
+                audit-r231 §9） */}
+                  <Suspense
+                    fallback={
+                      <div aria-busy="true" aria-label="页面加载中" className="space-y-3 pt-1">
+                        <Skeleton className="h-9 w-full max-w-sm" />
+                        <Skeleton className="h-9 w-full max-w-sm" />
+                        <Skeleton className="h-24 w-full" />
+                      </div>
+                    }
+                  >
+                    <Page />
+                  </Suspense>
+                </motion.main>
+              </AnimatePresence>
+              <aside aria-label="辅助信息栏" className="hidden w-72 shrink-0 pt-1 xl:block print:hidden">
+                <div className="sticky top-8">
+                  <RightRail />
+                </div>
+              </aside>
+            </div>
+          </div>
+
+          {/* Mobile bottom nav */}
+          <nav
+            aria-label="底部导航"
+            aria-hidden={isDesktop ? true : undefined}
+            className="fixed inset-x-0 bottom-0 z-20 flex border-t bg-card/90 px-1 backdrop-blur-xl md:hidden print:hidden"
+          >
+            {ROUTES.map((r) => {
+              const Icon = r.icon
+              const isActive = active.path === r.path
+              return (
+                <a
+                  key={r.path}
+                  href={`#/${r.path}`}
+                  aria-current={!isDesktop && isActive ? "page" : undefined}
+                  className={cn(
+                    "relative flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 pb-[env(safe-area-inset-bottom)] text-[11px] font-medium transition-colors",
+                    isActive ? "text-primary" : "text-muted-foreground active:text-foreground",
+                  )}
+                >
+                  <span className="relative flex h-7 w-12 items-center justify-center">
+                    {isActive && (
+                      <motion.span
+                        layoutId="bottomnav-active"
+                        aria-hidden
+                        className="absolute inset-0 rounded-full bg-primary/12"
+                        transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                      />
+                    )}
+                    <Icon className="relative size-[22px]" strokeWidth={isActive ? 2.25 : 1.75} />
+                  </span>
+                  {r.label}
+                </a>
+              )
+            })}
+          </nav>
+
+          <CommandPalette routes={ROUTES} />
+          <Toaster />
+          <ReloadPrompt />
+          <PageCopyGuard />
+        </div>
+      </TooltipProvider>
+    </MotionConfig>
   )
 }
