@@ -1,0 +1,65 @@
+{
+  "answer": "你去青禾牙科复诊的日期是 2026-09-12，时间是下午三点 1。",
+  "markers": 1,
+  "refs": [
+    {
+      "id": "ask-ref-9923acaa-d30a-47be-a342-682e5d7d69a7-1",
+      "text": "1\n待办\n09-12 15:00\n#牙科\n#复诊\n4 分钟前\n\n去青禾牙科复诊\n\n2026-09-12 下午三点去青禾牙科复诊。"
+    }
+  ],
+  "events": [
+    {
+      "event": "meta",
+      "time": 1788844255434,
+      "bytes": 79
+    },
+    {
+      "event": "timing",
+      "time": 1788844256932,
+      "bytes": 185
+    },
+    {
+      "event": "meta",
+      "time": 1788844256932,
+      "bytes": 164
+    },
+    {
+      "event": "delta",
+      "time": 1788844260735,
+      "bytes": 62
+    },
+    {
+      "event": "done",
+      "time": 1788844260735,
+      "bytes": 1027
+    }
+  ],
+  "states": [
+    {
+      "ms": 105,
+      "length": 8,
+      "pending": true,
+      "phase": "thinking"
+    },
+    {
+      "ms": 263,
+      "length": 12,
+      "pending": true,
+      "phase": "retrieval"
+    },
+    {
+      "ms": 1696,
+      "length": 22,
+      "pending": true,
+      "phase": "generating"
+    },
+    {
+      "ms": 5401,
+      "length": 115,
+      "pending": false,
+      "phase": "thinking"
+    }
+  ],
+  "question": "我去青禾牙科复诊的日期和时间是什么？",
+  "at": "2026-09-08T05:11:01Z"
+}

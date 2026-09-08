@@ -1,0 +1,244 @@
+{
+ "handshake": {
+  "init": {
+   "protocolVersion": "2025-06-18",
+   "capabilities": {
+    "tools": {
+     "listChanged": true
+    }
+   },
+   "serverInfo": {
+    "name": "suinian",
+    "version": "1.0.0"
+   }
+  },
+  "tools": [
+   "save_note",
+   "search_notes",
+   "ask",
+   "list_threads",
+   "get_thread",
+   "get_weekly_report",
+   "list_todos",
+   "complete_todo",
+   "set_todo_due",
+   "delete_note",
+   "restore_notes"
+  ],
+  "initStatus": 200
+ },
+ "session_id_present": false,
+ "ask_status": 200,
+ "ask_keys": [
+  "answer",
+  "answer_notice",
+  "trust_tier",
+  "verbatim_closed_spans",
+  "references",
+  "notes",
+  "guarded_notice",
+  "content_risk_notice",
+  "do_not_execute",
+  "server_timing",
+  "data_notice",
+  "hint"
+ ],
+ "ask_answer_head": "这条笔记记了小区门禁的信息，问答区不展示，请点开引用的笔记卡片查看原文 [1]  [2]。",
+ "ask_notes_guarded": 2,
+ "notes_audit": {
+  "C03": {
+   "answer_hits": [],
+   "raw_ctx": [
+    "\",\n      \"raw_type\": \"text\",\n      \"content\": \"健身房 47 号柜，锁是 63\",\n      \"url\": null"
+   ],
+   "notes": [
+    {
+     "is_carrier": true,
+     "guarded": false,
+     "content_hits": [
+      "63"
+     ],
+     "content_head": "健身房 47 号柜，锁是 63"
+    },
+    {
+     "is_carrier": false,
+     "guarded": true,
+     "content_hits": [],
+     "content_head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键词取回该条]"
+    }
+   ]
+  },
+  "C04": {
+   "answer_hits": [],
+   "raw_ctx": [
+    "\": \"api\",\n      \"raw_type\": \"text\",\n      \"content\": \"行李箱转盘 318\",\n      \"url\": null",
+    "25:44.588Z\"\n      },\n      \"done_at\": null,\n      \"amount\": 318,\n      \"currency\": "
+   ],
+   "notes": [
+    {
+     "is_carrier": true,
+     "guarded": false,
+     "content_hits": [
+      "318"
+     ],
+     "content_head": "行李箱转盘 318"
+    }
+   ]
+  },
+  "C10": {
+   "answer_hits": [],
+   "raw_ctx": [],
+   "notes": [
+    {
+     "is_carrier": true,
+     "guarded": true,
+     "content_hits": [],
+     "content_head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键词取回该条]"
+    },
+    {
+     "is_carrier": false,
+     "guarded": true,
+     "content_hits": [],
+     "content_head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键词取回该条]"
+    }
+   ]
+  },
+  "C13": {
+   "answer_hits": [],
+   "raw_ctx": [],
+   "notes": [
+    {
+     "is_carrier": true,
+     "guarded": true,
+     "content_hits": [],
+     "content_head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键词取回该条]"
+    }
+   ]
+  },
+  "C23": {
+   "answer_hits": [],
+   "raw_ctx": [
+    "rce\": \"api\",\n      \"raw_type\": \"text\",\n      \"content\": \"门锁 4二8九1\",\n      \"url\": null"
+   ],
+   "notes": [
+    {
+     "is_carrier": true,
+     "guarded": false,
+     "content_hits": [
+      "4二8九1"
+     ],
+     "content_head": "门锁 4二8九1"
+    }
+   ]
+  },
+  "C29": {
+   "answer_hits": [],
+   "raw_ctx": [
+    ": \"api\",\n      \"raw_type\": \"text\",\n      \"content\": \"Gmail: sun.flower.77\",\n      \"url\": null"
+   ],
+   "notes": [
+    {
+     "is_carrier": true,
+     "guarded": false,
+     "content_hits": [
+      "sun.flower.77",
+      "sunflower77"
+     ],
+     "content_head": "Gmail: sun.flower.77"
+    }
+   ]
+  }
+ },
+ "invalid_args_error": true,
+ "unauth_status": 401,
+ "log": [
+  {
+   "method": "initialize",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "notifications/initialized",
+   "status": 202,
+   "ct": "application/json",
+   "session": null,
+   "ok": false,
+   "error": null
+  },
+  {
+   "method": "tools/list",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  }
+ ]
+}

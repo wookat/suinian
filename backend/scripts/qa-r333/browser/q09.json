@@ -1,0 +1,71 @@
+{
+  "answer": "山茶色围巾放在衣柜第二层的白色收纳盒里 1。",
+  "markers": 1,
+  "refs": [
+    {
+      "id": "ask-ref-88788d9e-43e9-4747-9493-367d75545021-1",
+      "text": "1\n资料\n#衣柜\n#收纳\n4 分钟前\n\n山茶色围巾存放位置\n\n山茶色围巾放在衣柜第二层的白色收纳盒。"
+    }
+  ],
+  "events": [
+    {
+      "event": "meta",
+      "time": 1788844496563,
+      "bytes": 79
+    },
+    {
+      "event": "timing",
+      "time": 1788844498877,
+      "bytes": 187
+    },
+    {
+      "event": "meta",
+      "time": 1788844498877,
+      "bytes": 164
+    },
+    {
+      "event": "delta",
+      "time": 1788844500261,
+      "bytes": 50
+    },
+    {
+      "event": "done",
+      "time": 1788844500267,
+      "bytes": 990
+    }
+  ],
+  "states": [
+    {
+      "ms": 195,
+      "length": 8,
+      "pending": true,
+      "phase": "thinking"
+    },
+    {
+      "ms": 419,
+      "length": 12,
+      "pending": true,
+      "phase": "retrieval"
+    },
+    {
+      "ms": 2595,
+      "length": 22,
+      "pending": true,
+      "phase": "generating"
+    },
+    {
+      "ms": 3986,
+      "length": 24,
+      "pending": true,
+      "phase": "delta"
+    },
+    {
+      "ms": 4037,
+      "length": 89,
+      "pending": false,
+      "phase": "thinking"
+    }
+  ],
+  "question": "山茶色围巾放在哪里？",
+  "at": "2026-09-08T05:15:00Z"
+}

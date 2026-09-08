@@ -1,0 +1,65 @@
+{
+  "answer": "海鸥跑团的训练路线是沿江绿道往返六公里 1。",
+  "markers": 1,
+  "refs": [
+    {
+      "id": "ask-ref-cdde1988-a77c-4251-b33c-08b1d407092f-1",
+      "text": "1\n资料\n#跑团\n#训练\n5 分钟前\n\n海鸥跑团训练路线\n\n海鸥跑团的训练路线是沿江绿道往返六公里。"
+    }
+  ],
+  "events": [
+    {
+      "event": "meta",
+      "time": 1788844525688,
+      "bytes": 79
+    },
+    {
+      "event": "timing",
+      "time": 1788844528231,
+      "bytes": 187
+    },
+    {
+      "event": "meta",
+      "time": 1788844528231,
+      "bytes": 164
+    },
+    {
+      "event": "delta",
+      "time": 1788844530342,
+      "bytes": 50
+    },
+    {
+      "event": "done",
+      "time": 1788844530345,
+      "bytes": 990
+    }
+  ],
+  "states": [
+    {
+      "ms": 155,
+      "length": 8,
+      "pending": true,
+      "phase": "thinking"
+    },
+    {
+      "ms": 385,
+      "length": 12,
+      "pending": true,
+      "phase": "retrieval"
+    },
+    {
+      "ms": 2743,
+      "length": 22,
+      "pending": true,
+      "phase": "generating"
+    },
+    {
+      "ms": 4742,
+      "length": 89,
+      "pending": false,
+      "phase": "thinking"
+    }
+  ],
+  "question": "海鸥跑团的训练路线和距离是什么？",
+  "at": "2026-09-08T05:15:30Z"
+}

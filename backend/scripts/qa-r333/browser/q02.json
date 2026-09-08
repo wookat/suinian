@@ -1,0 +1,65 @@
+{
+  "answer": "梧桐公寓的租房押金退回了 3500 元 1。",
+  "markers": 1,
+  "refs": [
+    {
+      "id": "ask-ref-61158de2-9007-44d1-95f5-5a00e77894a8-1",
+      "text": "1\n资金往来\n⇄¥3500\n· 梧桐公寓\n#押金\n4 分钟前\n\n梧桐公寓租房押金退回\n\n梧桐公寓租房押金 3500 元已退回。"
+    }
+  ],
+  "events": [
+    {
+      "event": "meta",
+      "time": 1788844303441,
+      "bytes": 79
+    },
+    {
+      "event": "timing",
+      "time": 1788844305187,
+      "bytes": 186
+    },
+    {
+      "event": "meta",
+      "time": 1788844305187,
+      "bytes": 164
+    },
+    {
+      "event": "delta",
+      "time": 1788844307179,
+      "bytes": 50
+    },
+    {
+      "event": "done",
+      "time": 1788844307179,
+      "bytes": 1017
+    }
+  ],
+  "states": [
+    {
+      "ms": 101,
+      "length": 8,
+      "pending": true,
+      "phase": "thinking"
+    },
+    {
+      "ms": 245,
+      "length": 12,
+      "pending": true,
+      "phase": "retrieval"
+    },
+    {
+      "ms": 1919,
+      "length": 22,
+      "pending": true,
+      "phase": "generating"
+    },
+    {
+      "ms": 3811,
+      "length": 102,
+      "pending": false,
+      "phase": "thinking"
+    }
+  ],
+  "question": "梧桐公寓的租房押金退回了多少钱？",
+  "at": "2026-09-08T05:11:47Z"
+}

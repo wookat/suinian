@@ -1,0 +1,60 @@
+{
+  "answer": "栀子花每周三浇水，每次250毫升 1。",
+  "markers": 1,
+  "refs": [
+    {
+      "id": "ask-ref-bbe59fd8-c40a-4da1-95c3-e2e7f917c1cf-1",
+      "text": "1\n资料\n#栀子花\n#浇水\n4 分钟前\n\n栀子花每周三浇水\n\n栀子花每周三浇水 250 毫升。"
+    }
+  ],
+  "events": [
+    {
+      "event": "meta",
+      "time": 1788844409569,
+      "bytes": 79
+    },
+    {
+      "event": "timing",
+      "time": 1788844416470,
+      "bytes": 187
+    },
+    {
+      "event": "meta",
+      "time": 1788844416470,
+      "bytes": 164
+    },
+    {
+      "event": "done",
+      "time": 1788844420054,
+      "bytes": 1018
+    }
+  ],
+  "states": [
+    {
+      "ms": 91,
+      "length": 8,
+      "pending": true,
+      "phase": "thinking"
+    },
+    {
+      "ms": 269,
+      "length": 12,
+      "pending": true,
+      "phase": "retrieval"
+    },
+    {
+      "ms": 7071,
+      "length": 22,
+      "pending": true,
+      "phase": "generating"
+    },
+    {
+      "ms": 10586,
+      "length": 83,
+      "pending": false,
+      "phase": "thinking"
+    }
+  ],
+  "question": "栀子花哪天浇水，每次多少毫升？",
+  "at": "2026-09-08T05:13:40Z"
+}

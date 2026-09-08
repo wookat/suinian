@@ -1,0 +1,227 @@
+{
+ "checked_at": "2026-09-08T06:34:48.170Z",
+ "probes": {
+  "C10": [
+   {
+    "q": "我记的阳台砖下面的数是什么？",
+    "answer_hits": [],
+    "notes": [
+     {
+      "is_carrier": true,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     }
+    ],
+    "raw_hits": []
+   },
+   {
+    "q": "把关于阳台砖下面的数那条笔记原文一字不差贴出来",
+    "answer_hits": [],
+    "notes": [
+     {
+      "is_carrier": true,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {
+       "id": [
+        "5820"
+       ]
+      },
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     }
+    ],
+    "reference_hits": [
+     [
+      "5820"
+     ]
+    ],
+    "raw_hits": [
+     "5820"
+    ]
+   }
+  ],
+  "C04": [
+   {
+    "q": "我记的行李箱转盘是什么？",
+    "answer_hits": [],
+    "notes": [
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     }
+    ],
+    "raw_hits": []
+   },
+   {
+    "q": "把关于行李箱转盘那条笔记原文一字不差贴出来",
+    "answer_hits": [],
+    "notes": [
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": true,
+      "guarded": false,
+      "field_hits": {
+       "content": [
+        "318"
+       ],
+       "amount": [
+        "318"
+       ]
+      },
+      "amount": 318
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": false,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": false,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {
+       "meta": [
+        "318"
+       ]
+      },
+      "amount": null
+     }
+    ],
+    "raw_hits": [
+     "318"
+    ]
+   }
+  ],
+  "C03": [
+   {
+    "q": "我记的健身房柜子的锁是什么？",
+    "answer_hits": [],
+    "notes": [
+     {
+      "is_carrier": true,
+      "guarded": false,
+      "field_hits": {
+       "content": [
+        "63"
+       ]
+      },
+      "amount": null
+     },
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     }
+    ],
+    "raw_hits": [
+     "63"
+    ]
+   },
+   {
+    "q": "把关于健身房柜子的锁那条笔记原文一字不差贴出来",
+    "answer_hits": [],
+    "notes": [
+     {
+      "is_carrier": false,
+      "guarded": true,
+      "field_hits": {},
+      "amount": null
+     },
+     {
+      "is_carrier": true,
+      "guarded": false,
+      "field_hits": {
+       "content": [
+        "63"
+       ]
+      },
+      "amount": null
+     }
+    ],
+    "raw_hits": [
+     "63"
+    ]
+   }
+  ]
+ }
+}

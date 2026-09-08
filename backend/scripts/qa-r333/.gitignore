@@ -1,0 +1,13 @@
+# 运行时账号状态（含生产 token）——永不入库
+out/account-*.json
+out/*.log
+# 浏览器原始截图：含 QA 载体原文卡 / 未遮盖中间态，只入库 test-report.md 引用的安全截图
+browser/*.png
+!browser/q0[1-9]-clicked.png
+!browser/q0[6-9]-done.png
+!browser/q10-done.png
+!browser/q11-retrieval-redacted.png
+!browser/q11-delta-redacted.png
+!browser/q12-done.png
+!browser/known-issues.png
+!browser/register-promise.png
