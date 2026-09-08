@@ -18,7 +18,7 @@ export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
 import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, isSecretValueQuestion, unitTalksAboutSecret, unitHasValueCandidates, titleCarriesGuardedValue, GUARDED_TITLE_PLACEHOLDER, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
 import { modelContextNoteText, reconcileDoneAnswer } from "./ask-context";
-import { recallSensitiveNotes, sensitiveOnlyAnswer, sensitiveUncitedLine, sensitiveAnswerLeak, attributableTopicTerms, sensitiveRecallTerms, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
+import { recallSensitiveNotes, sensitiveOnlyAnswer, sensitiveUncitedLine, sensitiveAnswerLeak, attributableTopicTerms, sensitiveRecallTerms, ownTopicCards, topicHitCards, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -5009,7 +5009,17 @@ app.post("/api/ask", async (c) => {
   // R328 D：敏感召回只用问句字面词（抽取模型的同义扩展词不参与归因），非探问形态再并入朴素整句词做二元组近似召回；
   // 预言机 / 确定性探问形态不并入整句（候选值不进召回，R320 B1）。
   const sensTerms = sensitiveRecallTerms(terms, deterministicRecall || oracleProbe ? [] : extractAskTerms(recallQuestion, []), `${recallQuestion}\n${askQuestion}\n${historyText}`);
-  const sensRecall = metaQuestion ? { rows: [] as NoteRow[], plains: new Map<string, string>(), overflow: 0 } : await recallSensitiveNotes(c.env, userId, sensTerms, { topicTerms: askTopicTerms(sensTerms) });
+  // 多轮时本轮问句自己的话题词单列（不含上文轮）：上一轮的卡会多中上文话题词，主导命中若按整段对话算，
+  // 「柜台机器」之后问「西门闸机」引到的是柜台那张卡（R332 浏览器实测 S4）。
+  const ownTopicTerms: string[] = (() => {
+    if (history.length === 0) return [];
+    const own = deterministicRecall ? probeRecallTerms(askQuestion) : extractAskTerms(askQuestion, []);
+    return attributableTopicTerms(askTopicTerms(sensitiveRecallTerms(own.length > 0 ? own : extractAskTerms(askQuestion, []), [], askQuestion)));
+  })();
+  const ownTopicOwned = <T extends Pick<NoteRow, "title" | "content" | "tags">>(cards: readonly T[]): T[] => ownTopicCards(cards, ownTopicTerms);
+  const sensRecall = metaQuestion
+    ? { rows: [] as NoteRow[], plains: new Map<string, string>(), overflow: 0 }
+    : await recallSensitiveNotes(c.env, userId, sensTerms, { topicTerms: askTopicTerms(sensTerms), currentTopicTerms: ownTopicTerms });
   askMarks.push(["senskw", Date.now() - tSens]);
   const sensitiveIds = new Set(sensRecall.rows.map((n) => n.id));
   const sensitiveCardsBody = () => {
@@ -5127,7 +5137,23 @@ app.post("/api/ask", async (c) => {
     // 直接作为引用卡保留；普通候选仍按受守行 + 主题词归因收窄。
     // R332 P0-4：受守材料前提不只看受守行——取值候选面非空的未标注笔记（「机房空调面板要输 5290」）同样不进生成；
     // 候选面为空的善意笔记（BC04）不在此列，是非问照常作答。
-    const guarded = notes.filter((n, i) => !n.is_sensitive && (askNoteGuarded(i) || unitHasValueCandidates(askModelUnits[i])));
+    const guardedAll = notes.filter((n, i) => !n.is_sensitive && (askNoteGuarded(i) || unitHasValueCandidates(askModelUnits[i])));
+    // 问句的可归因话题命中了无受守笔记却没有一张未标注受守卡命中：受守卡是语义召回按相近凑来的别人的秘密
+    // （「搬家顺序是…吗」引来门禁码卡），不是问题所指——整条出候选，善意是非问照常作答（与取值闸门的 offTopic 同口径）。
+    // 话题谁都不命中时不判（短话题近似匹配不到的受守卡照旧中和，不丢）。
+    const oracleTopics = attributableTopicTerms(gateTopics);
+    const guardedIds = new Set(guardedAll.map((n) => n.id));
+    const guardedOnTopic = oracleTopics.length > 0 ? topicHitCards(guardedAll, oracleTopics) : guardedAll;
+    const plainOnTopic = oracleTopics.length > 0 ? topicHitCards(notes.filter((n) => !n.is_sensitive && !guardedIds.has(n.id)), oracleTopics) : [];
+    const guardedOffTopic = guardedAll.length > 0 && guardedOnTopic.length === 0 && plainOnTopic.length > 0;
+    if (guardedOffTopic) {
+      const drop = new Set(guardedAll.map((n) => n.id));
+      notes = notes.filter((n) => !drop.has(n.id));
+      askModelUnits = notes.map(askGuardNoteUnit);
+      askCrossGuarded = crossUnitGuardedLines(askModelUnits);
+      console.log(`ask: oracle-shaped question — ${guardedAll.length} guarded note(s) dropped from candidates (topic points elsewhere)`);
+    }
+    const guarded = guardedOffTopic ? [] : ownTopicOwned(guardedOnTopic.length > 0 ? guardedOnTopic : guardedAll);
     if (guarded.length > 0 || sensRecall.rows.length > 0) {
       const shown = oracleGateCards(guarded, sensRecall.rows, gateTopics, gateNoteText);
       const references = shown.map((n, i) => ({ index: i + 1, note_id: n.id }));
@@ -5153,7 +5179,9 @@ app.post("/api/ask", async (c) => {
     const guarded = notes.filter((n, i) => !n.is_sensitive && unitTalksAboutSecret(askModelUnits[i], askCrossGuarded));
     // 归因用话题词剥掉称谓 / 元词 / 指代词（「门口暗号」→「门口」，「那串」→ 无）；剥空时按原主题词比对（R324 现状）。
     const attribTopics = attributableTopicTerms(gateTopics);
-    const topicHits = guardedTopicHits(guarded, attribTopics.length > 0 ? attribTopics : gateTopics, gateNoteText);
+    const ownHits = guarded.length > 0 ? ownTopicOwned(guarded) : guarded;
+    const topicHits =
+      ownHits.length < guarded.length ? ownHits : guardedTopicHits(guarded, attribTopics.length > 0 ? attribTopics : gateTopics, gateNoteText);
     // 问句有可归因话题而无一张讲秘密的卡命中：这些卡不是问题所指（向量召回按语义相近凑来的别人的秘密），
     // 不得作为占位答案的引用卡（audit-r327 §5.3「门口暗号」→ 健身卡）。
     const offTopic = guarded.length > 0 && topicHits.length === 0 && attribTopics.length > 0;
@@ -5478,6 +5506,16 @@ app.post("/api/ask", async (c) => {
   // 片段里没有隔离占位时，模型不得替某条笔记宣称「记了它，问答区不展示」——
   // 那会把用户引去一张不含答案的卡片；按「笔记里没提到」处置，让敏感零召回提示接管。
   if (answer2 && askModelRedactedLines === 0 && PHANTOM_REDACTION_CLAIM_RE.test(answer2)) answer2 = "笔记里没提到。";
+  // 多条整条隔离的笔记在模型眼里是同一个占位行，模型的「记了它 [n]」归因不可信：按本轮话题词把角标改指命中的那张卡。
+  if (answer2 && askWithheldIdx.length > 1 && PHANTOM_REDACTION_CLAIM_RE.test(answer2) && answer2.replace(/\[\d+\]/g, "").trim().length <= 60) {
+    const withheld = askWithheldIdx.map((i) => notes[i]);
+    const owned = ownTopicOwned(withheld);
+    if (owned.length < withheld.length) {
+      const hit = askWithheldIdx.filter((i) => owned.includes(notes[i]));
+      console.log(`ask: redaction-claim citation retargeted to ${hit.length} withheld note(s) hit by the current turn's topic`);
+      answer2 = `这条笔记记了它，问答区不展示；请点开引用的笔记卡片查看原文 ${hit.map((i) => `[${i + 1}]`).join("")}`;
+    }
+  }
   const preGuardAnswer = answer2 ?? "";
   // R266 输出侧收口：外链零输出（回传通道）+ 资料派生 marker 剥除（执行痕迹）。
   // 与变体形态无关：不猜哪句是注入，只封死攻击必需的外带通道。
