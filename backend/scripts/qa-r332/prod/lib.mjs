@@ -2,7 +2,8 @@
 // 语料仍取 qa-r331/out/{blind,oracle}.json（`npx tsx scripts/qa-r331/export-corpus.ts` 生成），R331 语料即本轮验收基准。
 export * from "../../qa-r331/prod/lib.mjs";
 import { register as r322Register, req } from "../../qa-r322/prod/lib.mjs";
-export const QA_PREFIX = "[QA-R332]";
+// R334 起回归重跑时通过 QA_PREFIX 覆盖账号前缀（语料 / 口径不变）
+export const QA_PREFIX = process.env.QA_PREFIX ?? "[QA-R332]";
 export const OUT = new URL("../out", import.meta.url).pathname;
 
 export async function register(name) {
