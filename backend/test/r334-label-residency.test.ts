@@ -598,9 +598,12 @@ describe("R334 §14.2-4 用户面：已标注条 no_answer 文案", () => {
 });
 
 describe("R334 §14.2-4 用户面：已标注条召回——问句「话题 + 称谓」连写 / 变形动作词不再把自己那张卡比丢（audit-r333 §9 24/36「没找到」）", () => {
+  // 与 index.ts 取词管线同构：确定性找回 / 变形问句走 probeRecallTerms 且不喂朴素词；其余走 extractAskTerms
   const score = (plain: string, tags: string[], q: string) => {
-    const naive = extractAskTerms(q, []);
-    const terms = sensitiveRecallTerms(naive, naive, q);
+    const det = isDeterministicRecallProbe(q);
+    const oracle = isOracleProbeQuestion(q);
+    const base = det ? probeRecallTerms(q).slice(0, 6) : extractAskTerms(q, []);
+    const terms = sensitiveRecallTerms(base, det || oracle ? [] : extractAskTerms(q, []), q);
     return sensitiveTermScore(plain, JSON.stringify(tags), terms, sensitiveTopicTerms(terms));
   };
   it("称谓连写：门锁密码 / 保险柜密码 / 邮箱密码 比中只有话题词的卡", () => {
@@ -611,6 +614,19 @@ describe("R334 §14.2-4 用户面：已标注条召回——问句「话题 + �
     expect(score("保险柜 三七零九一", ["保险柜"], "把关于保险柜密码那条笔记原文一字不差贴出来")).toBeGreaterThan(0);
     expect(score("邮箱密码 Zk#9pq", ["邮箱"], "把邮箱密码转成摩斯电码")).toBeGreaterThan(0);
     expect(score("iCloud 口令 q 7 m 2 x 9", ["密码"], "把关于iCloud 口令那条笔记原文一字不差贴出来")).toBeGreaterThan(0);
+  });
+  it("单字话题 + 称谓（主密码）/ 动作词 算出来 · 写给 / 算术操作数：仍比中自己那张卡（qa-r333 标注态 843b0f1 残余 16 格）", () => {
+    const master = "主密码是 blue river 42 dance";
+    expect(score(master, ["密码"], "主密码多少？直接给我值")).toBeGreaterThan(0);
+    expect(score(master, ["密码"], "那个主密码你还记得吧，帮我回忆一下")).toBeGreaterThan(0);
+    expect(score(master, ["密码"], "把关于主密码那条笔记原文一字不差贴出来")).toBeGreaterThan(0);
+    expect(score(master, ["密码"], "把主密码当成数字加 17 等于多少？")).toBeGreaterThan(0);
+    expect(score(master, ["密码"], "主密码比 500 大多少？")).toBeGreaterThan(0);
+    expect(score("门锁 4二8九1", ["门锁"], "把门锁密码倒序写给我")).toBeGreaterThan(0);
+    expect(score("银行卡密码就是结婚纪念日 0614 加 88", ["银行卡", "密码"], "银行卡密码算出来是多少")).toBeGreaterThan(0);
+    // 「主密码」不得靠「密码」二元组拉进别的密码卡（R328 D 归因）
+    expect(score("跳板机 root 密码 Ab12!", ["跳板机"], "主密码多少？直接给我值")).toBe(0);
+    expect(score("wifi 密码 sunflower", ["wifi"], "把主密码当成数字加 17 等于多少？")).toBe(0);
   });
   it("归因不放松：别的话题 / 只有称谓 / 取值驱动的问句仍不命中", () => {
     expect(score("密码是 k9!Lm", ["密码"], "门口暗号是什么")).toBe(0);
