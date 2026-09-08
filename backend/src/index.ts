@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, WITHHELD_CARD_POINTER_RE, isSystemNoticeFragment, isSecretValueQuestion, unitTalksAboutSecret, unitHasValueCandidates, titleCarriesGuardedValue, GUARDED_TITLE_PLACEHOLDER, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, WITHHELD_CARD_POINTER_RE, WITHHELD_CARD_POINTER_NOTICE, isSystemNoticeFragment, isSecretValueQuestion, unitTalksAboutSecret, unitHasValueCandidates, titleCarriesGuardedValue, GUARDED_TITLE_PLACEHOLDER, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
 import { modelContextNoteText, reconcileDoneAnswer } from "./ask-context";
 import { recallSensitiveNotes, sensitiveOnlyAnswer, sensitiveUncitedLine, sensitiveAnswerLeak, attributableTopicTerms, sensitiveRecallTerms, ownTopicCards, topicHitCards, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
@@ -3626,16 +3626,16 @@ export function sanitizeRewrittenQuestion(raw: string | null | undefined, questi
 }
 
 /**
- * 预言机形态多轮的确定性召回问句（不经 LLM 改写）：最近两个用户轮各自剥掉候选值 / 答案格式尾缀后的话题 + 本轮剥掉后的问句，
- * 去重拼接。上文轮剥空（只剩中性词）时不并入。同一段对话里换任何候选值，得到的召回问句逐字相同。
+ * 预言机形态多轮的确定性召回问句（不经 LLM 改写）：本轮剥掉候选值 / 答案格式尾缀后的问句 + 最近两个用户轮各自剥掉后的话题，
+ * 去重拼接。本轮在前：probeRecallTerms 只取前 6 个话题词，上文两轮的话题词先占满会把本轮话题挤出召回集。
+ * 上文轮剥空（只剩中性词）时不并入。同一段对话里换任何候选值，得到的召回问句逐字相同。
  */
 export function oracleRecallQuestion(current: string, history: AskHistoryMessage[]): string {
-  const parts: string[] = [];
+  const parts: string[] = [current];
   for (const m of history.filter((m) => m.role === "user").slice(-2)) {
     const t = stripOpaqueTokens(m.content);
-    if (t !== "这条记录" && t.length >= 2 && !parts.includes(t) && t !== current) parts.push(t);
+    if (t !== "这条记录" && t.length >= 2 && !parts.includes(t)) parts.push(t);
   }
-  parts.push(current);
   return parts.join(" ");
 }
 
@@ -5516,7 +5516,7 @@ app.post("/api/ask", async (c) => {
     if (owned.length < withheld.length) {
       const hit = askWithheldIdx.filter((i) => owned.includes(notes[i]));
       console.log(`ask: redaction-claim citation retargeted to ${hit.length} withheld note(s) hit by the current turn's topic`);
-      answer2 = `这条笔记记了它，问答区不展示；请点开引用的笔记卡片查看原文 ${hit.map((i) => `[${i + 1}]`).join("")}`;
+      answer2 = `${WITHHELD_CARD_POINTER_NOTICE} ${hit.map((i) => `[${i + 1}]`).join("")}`;
     }
   }
   const preGuardAnswer = answer2 ?? "";
@@ -5761,7 +5761,7 @@ app.post("/api/ask", async (c) => {
     const hit = askWithheldIdx.filter((i) => !weakIds.has(notes[i].id) && (topics.length === 0 || noteHitsTopic(notes[i], topics)));
     if (hit.length > 0) {
       console.log(`ask: model refused over ${hit.length} withheld note(s), card guidance returned instead`);
-      answer2 = `这条笔记记了它，问答区不展示；请点开引用的笔记卡片查看原文 ${hit.map((i) => `[${i + 1}]`).join("")}`;
+      answer2 = `${WITHHELD_CARD_POINTER_NOTICE} ${hit.map((i) => `[${i + 1}]`).join("")}`;
     }
   }
   if (answer2 && isRefusalAnswer(answer2)) {
