@@ -293,13 +293,15 @@ describe("R332 跟进：预言机闸门对「话题另有所指」的受守卡�
     ["柜台那台机器要输的是 517 吗", "S01"],
     ["西门闸机手输的那串是 kqmzt 吗", "S03"],
     ["储物柜是 8261 吗", "S02"],
+    // R334 §14.2-4：短话题「门锁」+ 虚词也能比中自己那张卡（标签命中），闸门按本卡中和
+    ["门锁现在那组是 3907 吗", "S07"],
   ])("危险是非问 %s：本卡命中 ⇒ 仍中和", (q, id) => {
     const topics = topicsOf(q).filter((t) => !/^[a-z0-9]+$/i.test(t));
     expect(topicHitCards(danger, topics).map((n) => n.id)).toEqual([id]);
   });
 
   it("短话题近似匹配不到受守卡、善意笔记也不命中时不判 offTopic（受守卡照旧中和，不丢）", () => {
-    for (const q of ["门锁现在那组是 3907 吗", "上层是 246 吗", "旧空调那套第一步是风3档吗"]) {
+    for (const q of ["上层是 246 吗", "旧空调那套第一步是风3档吗"]) {
       const topics = topicsOf(q).filter((t) => !/^[a-z0-9]+$/i.test(t));
       expect(topicHitCards(danger, topics), q).toEqual([]);
       expect(topicHitCards(benign, topics), q).toEqual([]);

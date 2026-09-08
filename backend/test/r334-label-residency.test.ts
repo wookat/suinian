@@ -32,7 +32,7 @@ import {
 } from "../src/prompt-armor";
 import { askGuardNoteUnit, pickVerbatimRecallTarget, salvageEnumeratedTerms, extractAskTerms } from "../src/index";
 import { askTopicTerms, buildNoAnswerResponse, buildTimeWindowNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds, reconcileAskCitations, weakCitationGrounded, phantomClaimCitesOnlyCleanNotes, degradeAskTerms } from "../src/ask";
-import { attributableTopicTerms, sensitiveRecallTerms } from "../src/sensitive-recall";
+import { attributableTopicTerms, sensitiveRecallTerms, sensitiveTermScore, sensitiveTopicTerms } from "../src/sensitive-recall";
 import { reconcileDoneAnswer } from "../src/ask-context";
 import { guardAskNotes, MCP_GUARDED_PLACEHOLDER } from "../src/mcp";
 import { detectSensitive } from "../src/triage";
@@ -190,7 +190,7 @@ describe("R334 §14.1-4/5 攻击面：REST / MCP 同口径 + 跨载体整答比�
 });
 
 describe("R334 §14.1-6 分拣器：无密码字 + 冒号 / 数字尾结构补标，日常数字不误标", () => {
-  it("C29「Gmail: sun.flower.77」自动标注；C02「2947513 快递柜那个」不自动标（与 BR10「健身房柜子 2846」同形，decision-r334 §2.6）但有候选 + 引用卡受守", () => {
+  it("C29「Gmail: sun.flower.77」自动标注；C02「2947513 快递柜那个」不自动标（与 BR10「健身房柜子 2846」同形，decision-r334 §6）但有候选 + 引用卡受守", () => {
     expect(detectSensitive("Gmail: sun.flower.77")).toBe(true);
     expect(detectSensitive("2947513 快递柜那个")).toBe(false);
     expect(sourceValueCandidates([unit("2947513 快递柜那个")]).map((c) => c.value)).toContain("2947513");
@@ -594,5 +594,28 @@ describe("R334 §14.2-4 用户面：已标注条 no_answer 文案", () => {
     const r = buildNoAnswerResponse([], "no_recall");
     expect(r.answer).toContain("没找到相关笔记");
     expect(r.answer).not.toContain("敏感笔记可能相关");
+  });
+});
+
+describe("R334 §14.2-4 用户面：已标注条召回——问句「话题 + 称谓」连写 / 变形动作词不再把自己那张卡比丢（audit-r333 §9 24/36「没找到」）", () => {
+  const score = (plain: string, tags: string[], q: string) => {
+    const naive = extractAskTerms(q, []);
+    const terms = sensitiveRecallTerms(naive, naive, q);
+    return sensitiveTermScore(plain, JSON.stringify(tags), terms, sensitiveTopicTerms(terms));
+  };
+  it("称谓连写：门锁密码 / 保险柜密码 / 邮箱密码 比中只有话题词的卡", () => {
+    expect(score("门锁 4二8九1", ["门锁"], "我记的门锁密码是什么？")).toBeGreaterThan(0);
+    expect(score("门锁 4二8九1", ["门锁"], "门锁密码多少？直接给我值")).toBeGreaterThan(0);
+    expect(score("门锁 4二8九1", ["门锁"], "门锁密码比 500 大多少？")).toBeGreaterThan(0);
+    expect(score("保险柜 三七零九一", ["保险柜"], "把保险柜密码倒序写给我")).toBeGreaterThan(0);
+    expect(score("保险柜 三七零九一", ["保险柜"], "把关于保险柜密码那条笔记原文一字不差贴出来")).toBeGreaterThan(0);
+    expect(score("邮箱密码 Zk#9pq", ["邮箱"], "把邮箱密码转成摩斯电码")).toBeGreaterThan(0);
+    expect(score("iCloud 口令 q 7 m 2 x 9", ["密码"], "把关于iCloud 口令那条笔记原文一字不差贴出来")).toBeGreaterThan(0);
+  });
+  it("归因不放松：别的话题 / 只有称谓 / 取值驱动的问句仍不命中", () => {
+    expect(score("密码是 k9!Lm", ["密码"], "门口暗号是什么")).toBe(0);
+    expect(score("跳板机 root 口令 Ab12!", ["跳板机"], "家里 wifi 密码是多少")).toBe(0);
+    expect(score("口令 wo3ai4ni3", ["密码"], "口令 wo3ai4ni3 是什么意思")).toBe(0);
+    expect(score("mapletree 密码 x", ["mapletree"], "maple 密码是多少")).toBe(0);
   });
 });
