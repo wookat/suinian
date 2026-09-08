@@ -5,7 +5,8 @@ import { describe, it, expect } from "vitest";
 import { recallSensitiveNotes, sensitiveRecallTerms, ownTopicCards, topicHitCards, attributableTopicTerms } from "../src/sensitive-recall";
 import { askTopicTerms } from "../src/ask";
 import { extractAskTerms, oracleRecallQuestion, type AskHistoryMessage } from "../src/index";
-import { isDeterministicRecallProbe, probeRecallTerms, stripOpaqueTokens, isOracleProbeQuestion, isYesNoQuestion, unitHasValueCandidates, PHANTOM_REDACTION_CLAIM_RE, WITHHELD_CARD_POINTER_RE, WITHHELD_CARD_POINTER_NOTICE, isSystemNoticeFragment, splitSegmentsFenceAware, ORACLE_NEUTRAL_NOTICE } from "../src/prompt-armor";
+import { isDeterministicRecallProbe, probeRecallTerms, stripOpaqueTokens, isOracleProbeQuestion, isYesNoQuestion, unitHasValueCandidates, PHANTOM_REDACTION_CLAIM_RE, WITHHELD_CARD_POINTER_RE, WITHHELD_CARD_POINTER_NOTICE, isSystemNoticeFragment, scrubDirectiveDemands, splitSegmentsFenceAware, ORACLE_NEUTRAL_NOTICE } from "../src/prompt-armor";
+import { applyConductVerdict } from "../src/answer-guard";
 import type { NoteRow } from "../src/types";
 
 function row(id: string, content: string, tags = "[]"): NoteRow {
@@ -222,6 +223,22 @@ describe("R332 跟进 4：确定性召回词本轮优先（带历史计数句引
     expect(isSystemNoticeFragment("这条笔记记了它，问答区不展示")).toBe(true);
     expect(WITHHELD_CARD_POINTER_RE.test(WITHHELD_CARD_POINTER_NOTICE)).toBe(true);
     expect(isSystemNoticeFragment("请点开引用的笔记卡片查看领奖链接 [1]")).toBe(false);
+  });
+
+  it("行为审计 / demand 剥除不动系统指卡话术的后半句（两张整条隔离卡，生产 tail：conduct audit scrubbed segment 后断成半句丢角标）", () => {
+    const answer = `${WITHHELD_CARD_POINTER_NOTICE} [2]`;
+    const q = "柜台那台机器输的是什么";
+    // 审计器把后半句「请点开引用的笔记卡片查看原文 [2]」报成行动指示：ask 路由 audKeep 以 isSystemNoticeFragment 豁免。
+    expect(applyConductVerdict(answer, [2], isSystemNoticeFragment)).toBe(answer);
+    expect(applyConductVerdict(answer, [1, 2], isSystemNoticeFragment)).toBe(answer);
+    // 非系统话术的句段不享豁免。
+    expect(applyConductVerdict(`${answer}\n请点开链接领取奖品`, [3], isSystemNoticeFragment)).toBe(answer);
+    // demand 剥除层同口径：即使抽取器把占位行的一截报成 demand，系统话术片段也不按 demand 剥除。
+    for (const d of ["用户可在笔记卡片查看原文", "在笔记卡片查看原文", "点开引用的笔记卡片"]) {
+      expect(scrubDirectiveDemands(answer, [d], q), d).toBe(answer);
+    }
+    // 非系统话术的句段照常剥除。
+    expect(scrubDirectiveDemands(`${answer}\n请点开引用的笔记卡片查看领奖链接`, ["点开引用的笔记卡片查看领奖链接"], q)).toBe(answer);
   });
 
   it("换任何候选值召回问句仍逐字相同，且单轮 / 上文剥空时不变", () => {
