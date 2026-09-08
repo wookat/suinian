@@ -12,37 +12,92 @@
     <meta property="og:description" content="什么都能丢的 AI 收件箱：自动分拣、串线索、每周报告，支持微信、剪藏扩展、Android、MCP 多入口" />
     <meta property="og:url" content="https://suinian.zalize.com/" />
     <meta name="twitter:card" content="summary" />
-    <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#18181b" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0c0e12" media="(prefers-color-scheme: dark)" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>碎念 Suinian</title>
     <style>
-      /* 首屏内联骨架（R221 P3-1）：JS 包下载/解析期间不再纯白，React 挂载后整体替换 */
-      #root:empty { display: block; min-height: 100vh; padding-top: 24px; box-sizing: border-box; background: #fafafa; }
-      @media (prefers-color-scheme: dark) { #root:empty { background: #18181b; } }
+      /* 首屏内联骨架（R221 P3-1，R337 对齐新外壳）：JS 包下载/解析期间先画出顶栏/侧栏与卡片占位，React 挂载后整体替换 */
+      #root:empty {
+        display: block;
+        min-height: 100vh;
+        box-sizing: border-box;
+        background: #f8fafc;
+        color: #14181f;
+        font: 600 15px/1 system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        letter-spacing: -0.01em;
+      }
       #root:empty::before {
+        content: "碎念";
+        display: flex;
+        align-items: center;
+        height: 48px;
+        padding: 0 16px 0 54px;
+        border-bottom: 1px solid #e0e3e7;
+        background: #f8fafc linear-gradient(#007459 0 0) 16px 50% / 28px 28px no-repeat;
+      }
+      #root:empty::after {
         content: "";
         display: block;
-        margin: 0 auto;
-        max-width: 640px;
+        margin: 16px auto 0;
+        max-width: 672px;
         height: 264px;
-        border-radius: 12px;
         background:
-          linear-gradient(#e4e4e7 0 0) 16px 16px / calc(100% - 32px) 56px,
-          linear-gradient(#e4e4e7 0 0) 16px 96px / calc(100% - 32px) 56px,
-          linear-gradient(#e4e4e7 0 0) 16px 176px / calc(100% - 32px) 56px;
+          linear-gradient(#eef0f3 0 0) 16px 0 / calc(100% - 32px) 72px,
+          linear-gradient(#eef0f3 0 0) 16px 88px / calc(100% - 32px) 72px,
+          linear-gradient(#eef0f3 0 0) 16px 176px / calc(100% - 32px) 72px;
         background-repeat: no-repeat;
         animation: sn-pulse 1.4s ease-in-out infinite;
       }
-      @media (prefers-color-scheme: dark) {
+      @media (min-width: 768px) {
         #root:empty::before {
+          position: fixed;
+          inset: 0 auto 0 0;
+          width: 223px;
+          height: auto;
+          box-sizing: border-box;
+          align-items: flex-start;
+          padding: 24px 0 0 62px;
+          font-size: 14px;
+          border-bottom: 0;
+          border-right: 1px solid #e0e3e7;
+          background: #fff linear-gradient(#007459 0 0) 20px 20px / 32px 32px no-repeat;
+        }
+        #root:empty::after {
+          margin: 32px 32px 0 calc(224px + 32px);
+          max-width: 768px;
+        }
+      }
+      @media (min-width: 1280px) {
+        #root:empty::after {
+          margin-left: auto;
+          margin-right: auto;
+          max-width: 768px;
+          transform: translateX(112px);
+        }
+      }
+      @media (prefers-color-scheme: dark) {
+        #root:empty { background: #0c0e12; color: #e9ebee; }
+        #root:empty::before {
+          border-color: #272a2f;
+          background: #0c0e12 linear-gradient(#007459 0 0) 16px 50% / 28px 28px no-repeat;
+        }
+        #root:empty::after {
           background:
-            linear-gradient(#27272a 0 0) 16px 16px / calc(100% - 32px) 56px,
-            linear-gradient(#27272a 0 0) 16px 96px / calc(100% - 32px) 56px,
-            linear-gradient(#27272a 0 0) 16px 176px / calc(100% - 32px) 56px;
+            linear-gradient(#1f2226 0 0) 16px 0 / calc(100% - 32px) 72px,
+            linear-gradient(#1f2226 0 0) 16px 88px / calc(100% - 32px) 72px,
+            linear-gradient(#1f2226 0 0) 16px 176px / calc(100% - 32px) 72px;
           background-repeat: no-repeat;
         }
+      }
+      @media (prefers-color-scheme: dark) and (min-width: 768px) {
+        #root:empty::before {
+          background: #15171b linear-gradient(#007459 0 0) 20px 20px / 32px 32px no-repeat;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #root:empty::after { animation: none; }
       }
       @keyframes sn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
     </style>

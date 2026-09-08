@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { AnimatePresence, m } from "motion/react"
 import { CheckCircle2, ChevronDown, ListTodo } from "lucide-react"
 import { NoteCard } from "@/components/note-card"
 import type { EditResult } from "@/components/note-card"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
+import { Badge } from "@/components/ui/badge"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { EmptyState } from "@/components/empty-state"
 import { cn, parseDue, dueHasTime } from "@/lib/utils"
 import { getNotes, getNote, patchNote, deleteNote, ApiError } from "@/lib/api"
@@ -20,6 +23,14 @@ const GROUP_META: Record<DueGroup, string> = {
 }
 
 const GROUP_ORDER: DueGroup[] = ["overdue", "today", "week", "later", "none"]
+
+const GROUP_DOT: Record<DueGroup, string> = {
+  overdue: "bg-destructive",
+  today: "bg-warning",
+  week: "bg-primary",
+  later: "bg-info",
+  none: "bg-muted-foreground/50",
+}
 
 function dueGroup(due: string | null): DueGroup {
   if (!due) return "none"
@@ -153,8 +164,22 @@ export function TodosPage() {
   if (loading) return <NoteListSkeleton />
 
   return (
-    <div className="space-y-5">
-      {error && <p className="text-sm text-destructive">{error}</p>}
+    <div className="space-y-6">
+      {error && (
+        <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      {openCount > 0 && (
+        <p className="text-sm text-muted-foreground">
+          <span className="font-semibold tabular-nums text-foreground">{openCount}</span> 项待办
+          {done.length > 0 && (
+            <>
+              ，已完成 <span className="tabular-nums">{done.length}</span> 项
+            </>
+          )}
+        </p>
+      )}
       {notes.length === 0 && !error ? (
         <EmptyState
           icon={ListTodo}
@@ -173,52 +198,69 @@ export function TodosPage() {
         />
       ) : (
         openGroups.map(({ group, notes: gnotes }) => (
-          <section key={group} className="space-y-3">
-            <h2 className="text-sm font-medium text-muted-foreground">
-              {GROUP_META[group]}（{gnotes.length}）
+          <section key={group} className="space-y-3" aria-label={GROUP_META[group]}>
+            <h2 className="flex items-center gap-2 px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <span aria-hidden className={cn("size-2 rounded-full", GROUP_DOT[group])} />
+              {GROUP_META[group]}
+              <Badge variant="secondary" className="h-5 min-w-5 justify-center px-1.5 tabular-nums">
+                {gnotes.length}
+              </Badge>
             </h2>
-            {gnotes.map((n) => (
-              <NoteCard
-                key={n.id}
-                note={n}
-                onToggleTodo={(note) => void toggleTodo(note)}
-                onEdit={handleEdit}
-                onDelete={(note) => void handleDelete(note)}
-                onToggleSensitive={(note) => void handleToggleSensitive(note)}
-                sensitivePending={sensitivePendingIds.has(n.id)}
-              />
-            ))}
+            <AnimatePresence initial={false}>
+              {gnotes.map((n) => (
+                <m.div
+                  key={n.id}
+                  layout
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.98 }}
+                  transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+                >
+                  <NoteCard
+                    note={n}
+                    onToggleTodo={(note) => void toggleTodo(note)}
+                    onEdit={handleEdit}
+                    onDelete={(note) => void handleDelete(note)}
+                    onToggleSensitive={(note) => void handleToggleSensitive(note)}
+                    sensitivePending={sensitivePendingIds.has(n.id)}
+                  />
+                </m.div>
+              ))}
+            </AnimatePresence>
           </section>
         ))
       )}
       {done.length > 0 && (
-        <section className="space-y-3">
-          <button
-            onClick={() => setDoneExpanded((x) => !x)}
-            className="flex items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ChevronDown
-              className={cn(
-                "size-4 transition-transform duration-200",
-                !doneExpanded && "-rotate-90",
-              )}
-            />
-            已完成（{done.length}）
-          </button>
-          {doneExpanded &&
-            done.map((n) => (
-              <NoteCard
-                key={n.id}
-                className="animate-in fade-in slide-in-from-top-2 duration-200"
-                note={n}
-                onToggleTodo={(note) => void toggleTodo(note)}
-                onEdit={handleEdit}
-                onDelete={(note) => void handleDelete(note)}
-                onToggleSensitive={(note) => void handleToggleSensitive(note)}
-                sensitivePending={sensitivePendingIds.has(n.id)}
+        <Collapsible open={doneExpanded} onOpenChange={setDoneExpanded} asChild>
+          <section className="space-y-3">
+            <CollapsibleTrigger className="flex min-h-9 items-center gap-2 rounded-md px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+              <ChevronDown
+                className={cn(
+                  "size-4 transition-transform duration-200",
+                  !doneExpanded && "-rotate-90",
+                )}
               />
-            ))}
-        </section>
+              已完成
+              <Badge variant="secondary" className="h-5 min-w-5 justify-center px-1.5 tabular-nums">
+                {done.length}
+              </Badge>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-3 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-2">
+              {done.map((n) => (
+                <NoteCard
+                  key={n.id}
+                  className="opacity-80 transition-opacity hover:opacity-100"
+                  note={n}
+                  onToggleTodo={(note) => void toggleTodo(note)}
+                  onEdit={handleEdit}
+                  onDelete={(note) => void handleDelete(note)}
+                  onToggleSensitive={(note) => void handleToggleSensitive(note)}
+                  sensitivePending={sensitivePendingIds.has(n.id)}
+                />
+              ))}
+            </CollapsibleContent>
+          </section>
+        </Collapsible>
       )}
     </div>
   )

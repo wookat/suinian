@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react"
+import { useState } from "react"
+import { toast } from "@/lib/toast"
 import {
   Lightbulb,
   CheckSquare,
@@ -41,6 +42,13 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { downloadNoteFile, getNote, patchNote, refetchLink, retryMedia } from "@/lib/api"
 import { NoteAudio, NoteImage, isAudioAttachment, isImageAttachment } from "@/components/note-media"
 import { CopyGuardTextarea, ExecGuard, MaybeCopyGuard, type CopyGuardLevel } from "@/components/exec-guard"
@@ -392,7 +400,6 @@ export function NoteCard({
   const [refetching, setRefetching] = useState(false)
   const [retryingMedia, setRetryingMedia] = useState(false)
   const [retryMediaError, setRetryMediaError] = useState<string | null>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
 
   const fileMeta = note.raw_type === "file" && note.meta?.file_name ? note.meta : null
   // 附件原件（R144 P1-1）：取首个匹配类型的附件；遮缩态不渲染、不发媒体请求
@@ -509,22 +516,13 @@ export function NoteCard({
       ? note.meta.image_description
       : null
 
-  useEffect(() => {
-    if (!menuOpen) return
-    const close = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node))
-        setMenuOpen(false)
-    }
-    document.addEventListener("mousedown", close)
-    return () => document.removeEventListener("mousedown", close)
-  }, [menuOpen])
-
   async function writeClipboard() {
     try {
       const full = await ensureContent()
       if (!full) return
       await navigator.clipboard.writeText(full.content)
       setCopied(true)
+      toast.success("已复制到剪贴板", { duration: 1500 })
       setTimeout(() => setCopied(false), 1500)
     } catch {
       // clipboard unavailable
@@ -586,10 +584,11 @@ export function NoteCard({
 
   return (
     <Card
+      interactive
       className={cn(
-        "group p-4 transition-shadow hover:shadow-md",
+        "group p-4 sm:p-5",
         selectable && "cursor-pointer select-none",
-        selectable && selected && "border-primary ring-1 ring-primary",
+        selectable && selected && "border-primary bg-accent/40 ring-2 ring-primary/30",
         className,
       )}
       onClick={selectable ? () => onSelectToggle?.(note) : undefined}
@@ -681,65 +680,48 @@ export function NoteCard({
           </span>
           <time>{formatTime(note.created_at)}</time>
           {(onEdit || onDelete || canToggleSensitive) && (
-            <div className="relative" ref={menuRef}>
-              <button
-                onClick={() => setMenuOpen((o) => !o)}
+            <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+              <DropdownMenuTrigger
                 aria-label="更多操作"
-                className="rounded p-1 text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground md:opacity-0 md:group-hover:opacity-100 md:focus:opacity-100"
-                style={menuOpen ? { opacity: 1 } : undefined}
+                onClick={(e) => e.stopPropagation()}
+                className={cn(
+                  "-mr-1 flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[opacity,background-color,color] hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/25 data-[state=open]:bg-accent data-[state=open]:text-foreground data-[state=open]:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus:opacity-100",
+                )}
               >
                 <MoreHorizontal className="size-4" />
-              </button>
-              {menuOpen && (
-                <div className="absolute right-0 top-7 z-30 w-32 rounded-lg border bg-popover p-1 shadow-md">
-                  {onEdit && (
-                    <button
-                      onClick={() => {
-                        openEdit()
-                        setMenuOpen(false)
-                      }}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent"
-                    >
-                      <Pencil className="size-3.5" /> 编辑
-                    </button>
-                  )}
-                  <button
-                    onClick={() => void copyContent()}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent"
-                  >
-                    {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                    {copied ? "已复制" : "复制内容"}
-                  </button>
-                  {canToggleSensitive && (
-                  <button
-                    onClick={() => {
-                      setMenuOpen(false)
-                      void onToggleSensitive(note)
-                    }}
-                    disabled={sensitivePending}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent disabled:opacity-60"
-                  >
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40" onClick={(e) => e.stopPropagation()}>
+                {onEdit && (
+                  <DropdownMenuItem onSelect={() => openEdit()}>
+                    <Pencil /> 编辑
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onSelect={() => void copyContent()}>
+                  {copied ? <Check /> : <Copy />}
+                  {copied ? "已复制" : "复制内容"}
+                </DropdownMenuItem>
+                {canToggleSensitive && (
+                  <DropdownMenuItem disabled={sensitivePending} onSelect={() => void onToggleSensitive(note)}>
                     {sensitivePending ? (
-                      <Loader2 className="size-3.5 animate-spin" />
+                      <Loader2 className="animate-spin" />
                     ) : sensitive ? (
-                      <ShieldOff className="size-3.5" />
+                      <ShieldOff />
                     ) : (
-                      <ShieldAlert className="size-3.5" />
+                      <ShieldAlert />
                     )}
                     {sensitivePending ? "更新中…" : sensitive ? "取消敏感标记" : "标记为敏感"}
-                  </button>
-                  )}
-                  {onDelete && (
-                    <button
-                      onClick={handleDelete}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-destructive hover:bg-destructive/10"
-                    >
-                      <Trash2 className="size-3.5" /> 删除
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
+                  </DropdownMenuItem>
+                )}
+                {onDelete && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" onSelect={handleDelete}>
+                      <Trash2 /> 删除
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
       </div>
@@ -820,7 +802,7 @@ export function NoteCard({
                 id={`cat-${note.id}`}
                 value={editCategory}
                 onChange={(e) => setEditCategory(e.target.value as NoteCategory | "")}
-                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                className="h-8 rounded-lg border border-input bg-card px-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25"
               >
                 {!note.category && <option value="">待分拣</option>}
                 {(Object.keys(CATEGORY_META) as NoteCategory[]).map((c) => (
@@ -839,7 +821,7 @@ export function NoteCard({
                     type="datetime-local"
                     value={editDue}
                     onChange={(e) => setEditDue(e.target.value)}
-                    className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                    className="h-8 rounded-lg border border-input bg-card px-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25"
                   />
                   {editDue && (
                     <button
@@ -948,7 +930,7 @@ export function NoteCard({
             }}
             disabled={revealing}
             aria-busy={revealing || undefined}
-            className="flex min-h-7 min-w-0 flex-1 flex-wrap items-center gap-2 rounded-lg text-left disabled:opacity-70"
+            className="flex min-h-7 min-w-0 flex-1 flex-wrap items-center gap-2 rounded-xl border border-dashed bg-muted/40 p-3 text-left transition-colors hover:bg-muted/70 disabled:opacity-70"
           >
             {/* 遮罩圆点不进可访问名（R262 P3-1，audit-r261：aria-label 与可见文本
                 不一致命中 label-content-name-mismatch）：去掉 aria-label，让可见

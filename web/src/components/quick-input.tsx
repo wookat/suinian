@@ -215,7 +215,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
 
   return (
     <div
-      className="rounded-xl border bg-card p-3 shadow-sm"
+      className="rounded-2xl border bg-card p-3 shadow-sm transition-[box-shadow,border-color] duration-200 focus-within:border-ring/60 focus-within:shadow-md focus-within:ring-[3px] focus-within:ring-ring/15"
       onClick={(e) => {
         // clicks on the card's padding land in the textarea, so the first
         // keystrokes never get swallowed by a missed tap on mobile
@@ -246,7 +246,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
             ? "问答模式：回车直接向你的笔记提问"
             : "记点什么… 回车即存（Shift+回车换行）"
         }
-        className="min-h-[52px] resize-none border-0 p-1 shadow-none focus-visible:ring-0"
+        className="min-h-[56px] resize-none border-0 bg-transparent p-1.5 text-[15px] shadow-none focus-visible:border-transparent focus-visible:ring-0"
       />
       <div className="mt-1 flex items-center justify-between gap-2">
         {command?.kind === "ask" ? (

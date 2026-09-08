@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import {
   Check,
   Loader2,
@@ -22,6 +22,9 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Switch } from "@/components/ui/switch"
+import { Progress } from "@/components/ui/progress"
+import { Segmented } from "@/components/ui/segmented"
 import {
   deleteAccount,
   verifyAccountDeleted,
@@ -82,6 +85,15 @@ function buildCurlExample(apiBaseUrl: string, withToken: boolean): string {
     `  -H 'Content-Type: application/json' \\`,
     `  -d '{"content": "从 API 记一条碎念"}'`,
   ].join("\n")
+}
+
+function SettingsGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="space-y-3" aria-label={title}>
+      <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
+      {children}
+    </section>
+  )
 }
 
 const THEME_OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
@@ -218,7 +230,7 @@ function SwStatusCard() {
   // R296 P3-2（audit-r295）：SW 是默认关闭的实验性能力，设置卡收进「高级」
   // 折叠区，普通用户不被 Service Worker 细节打扰；开启过的用户默认展开。
   return (
-    <Card className="p-4">
+    <Card className="p-5">
       <details className="group" open={offlineOn}>
         <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-medium [&::-webkit-details-marker]:hidden">
           <span>高级：离线与更新（PWA）</span>
@@ -228,7 +240,7 @@ function SwStatusCard() {
       <p
         className={cn(
           "mt-2 flex items-center gap-1.5 text-sm",
-          ok && offlineOn ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground",
+          ok && offlineOn ? "text-success" : "text-muted-foreground",
         )}
       >
         {ok || !offlineOn ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
@@ -239,33 +251,33 @@ function SwStatusCard() {
           <Button size="sm" variant="outline" className="mt-2" disabled={retrying} onClick={() => void retry()}>
             {retrying ? "重试中…" : failed ? "重试安装离线缓存" : "修复离线缓存"}
           </Button>
-          {retryError && <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">{retryError}</p>}
+          {retryError && <p className="mt-2 text-xs text-warning">{retryError}</p>}
         </>
       )}
       {/* R294 P1-3（docs/decision-r294.md §4）：离线缓存改为默认关闭的可选项。
           依据：生产 sw_error_reports 直查显示 SW 从未 activated，反而弹窗骚扰并拖慢
           登录/注册；关闭后在线功能完整，想要离线的用户可在这里自行开启。 */}
       {status.supported && (
-        <label className="mt-3 flex items-start gap-2 border-t pt-3 text-sm">
-          <Checkbox
+        <div className="mt-3 flex items-start justify-between gap-4 border-t pt-3 text-sm">
+          <label htmlFor="offline-cache-switch" className="min-w-0 cursor-pointer">
+            开启离线缓存（实验性）
+            <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
+              开启后可在断网时浏览已缓存的笔记/线索/周报，并在有新版本时提示刷新。部分浏览器的 Service Worker
+              组件会卡住并拖慢登录/注册；若多次安装失败，会自动注销并回到关闭状态。
+            </span>
+          </label>
+          <Switch
+            id="offline-cache-switch"
             className="mt-0.5"
             checked={offlineOn}
-            onCheckedChange={(v) => {
-              const on = v === true
+            onCheckedChange={(on) => {
               setOfflineOn(on)
               setOfflineCacheEnabled(on)
               if (!on) void detachServiceWorker(8_000).finally(() => window.location.reload())
               else window.location.reload()
             }}
           />
-          <span>
-            开启离线缓存（实验性）
-            <span className="mt-0.5 block text-xs text-muted-foreground">
-              开启后可在断网时浏览已缓存的笔记/线索/周报，并在有新版本时提示刷新。部分浏览器的 Service Worker
-              组件会卡住并拖慢登录/注册；若多次安装失败，会自动注销并回到关闭状态。
-            </span>
-          </span>
-        </label>
+        </div>
       )}
       </details>
     </Card>
@@ -341,10 +353,10 @@ function TagManagerCard() {
   }
 
   return (
-    <Card className="space-y-3 p-4">
+    <Card className="space-y-4 p-5">
       <div>
-        <h2 className="text-sm font-medium">标签管理</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
+        <h3 className="text-[15px] font-semibold leading-snug">标签管理</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           重命名会全局替换；改名到已有标签即合并；删除仅移除标签，不删笔记
         </p>
       </div>
@@ -427,7 +439,7 @@ function TagManagerCard() {
         <p
           className={cn(
             "flex items-center gap-1.5 text-sm",
-            msg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
+            msg.ok ? "text-success" : "text-destructive",
           )}
         >
           {msg.ok ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
@@ -488,10 +500,10 @@ function BrowserNotificationsCard() {
   }
 
   return (
-    <Card className="space-y-3 p-4">
+    <Card className="space-y-4 p-5">
       <div>
-        <h2 className="text-sm font-medium">浏览器通知</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
+        <h3 className="text-[15px] font-semibold leading-snug">浏览器通知</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           开启后，待办到点提醒和每日回顾会直接推到这台设备的系统通知（支持多设备各自开启）
         </p>
       </div>
@@ -560,7 +572,7 @@ function BrowserNotificationsCard() {
         <p
           className={cn(
             "flex items-center gap-1.5 text-sm",
-            msg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
+            msg.ok ? "text-success" : "text-destructive",
           )}
         >
           {msg.ok ? <CircleCheck className="size-4 shrink-0" /> : <CircleAlert className="size-4 shrink-0" />}
@@ -641,10 +653,10 @@ function PushPreferencesCard() {
   ]
 
   return (
-    <Card className="space-y-3 p-4">
+    <Card className="space-y-4 p-5">
       <div>
-        <h2 className="text-sm font-medium">推送偏好</h2>
-        <p className="mt-1 text-xs text-muted-foreground">{`控制浏览器通知${wechatOn ? "与微信 bot" : ""}的主动推送，默认全开；关闭后当天即生效`}</p>
+        <h3 className="text-[15px] font-semibold leading-snug">推送偏好</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{`控制浏览器通知${wechatOn ? "与微信 bot" : ""}的主动推送，默认全开；关闭后当天即生效`}</p>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
       {prefs === null && !error ? (
@@ -652,20 +664,21 @@ function PushPreferencesCard() {
           <Loader2 className="size-4 animate-spin" /> 加载中…
         </p>
       ) : prefs ? (
-        <div className="space-y-2">
+        <div className="divide-y rounded-xl border">
           {OPTIONS.map((opt) => (
-            <label key={opt.key} className="flex cursor-pointer items-start gap-2.5">
-              <Checkbox
+            <div key={opt.key} className="flex items-start justify-between gap-4 px-3.5 py-3">
+              <label htmlFor={`pref-${opt.key}`} className="min-w-0 cursor-pointer">
+                <span className="block text-sm font-medium">{opt.label}</span>
+                <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">{opt.hint}</span>
+              </label>
+              <Switch
+                id={`pref-${opt.key}`}
                 checked={prefs[opt.key]}
                 disabled={busy}
                 onCheckedChange={() => void toggle(opt.key)}
                 className="mt-0.5"
               />
-              <span className="min-w-0">
-                <span className="text-sm">{opt.label}</span>
-                <span className="ml-2 text-xs text-muted-foreground">{opt.hint}</span>
-              </span>
-            </label>
+            </div>
           ))}
         </div>
       ) : null}
@@ -704,9 +717,9 @@ function WechatBindingCard() {
   // 但不挂绑定入口，不做「即将开放」承诺
   if (status && !status.configured && !status.kf_configured)
     return (
-      <Card className="p-4">
-        <h2 className="text-sm font-medium">微信绑定</h2>
-        <p className="mt-1 text-xs text-muted-foreground">微信随手记通道暂未开通，开通后可在这里绑定微信直接发消息记碎念。</p>
+      <Card className="p-5">
+        <h3 className="text-[15px] font-semibold leading-snug">微信绑定</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">微信随手记通道暂未开通，开通后可在这里绑定微信直接发消息记碎念。</p>
       </Card>
     )
   // 状态请求失败（如 token 失效）时能力未知，按未开通处理整卡隐藏（fail closed）
@@ -742,10 +755,10 @@ function WechatBindingCard() {
   }
 
   return (
-    <Card className="space-y-3 p-4">
+    <Card className="space-y-4 p-5">
       <div>
-        <h2 className="text-sm font-medium">微信绑定</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
+        <h3 className="text-[15px] font-semibold leading-snug">微信绑定</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           两条官方通道共用同一个绑定码：公众号适合随手输入（文字/链接/图片/语音）；企微微信客服还能接住微信内转发的文章链接、文件与小程序卡片（合并转发的聊天记录官方接口暂不支持）。把绑定码发给任一通道即可绑定，发「解绑」解除。
         </p>
       </div>
@@ -764,12 +777,12 @@ function WechatBindingCard() {
             <div className="space-y-2">
               {status.bindings.map((b) => (
                 <p key={b.openid_masked} className="flex items-center gap-1.5 text-sm">
-                  <CircleCheck className="size-4 text-green-700" /> 已绑定公众号微信 {b.openid_masked}（{b.created_at}）
+                  <CircleCheck className="size-4 text-success" /> 已绑定公众号微信 {b.openid_masked}（{b.created_at}）
                 </p>
               ))}
               {(status.kf_bindings ?? []).map((b) => (
                 <p key={`kf-${b.openid_masked}`} className="flex items-center gap-1.5 text-sm">
-                  <CircleCheck className="size-4 text-green-700" /> 已绑定企微客服微信 {b.openid_masked}（{b.created_at}）
+                  <CircleCheck className="size-4 text-success" /> 已绑定企微客服微信 {b.openid_masked}（{b.created_at}）
                 </p>
               ))}
               <Button variant="outline" size="sm" disabled={busy} onClick={() => void unbind()}>
@@ -1056,34 +1069,24 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <Card className="space-y-4 p-4">
+    <div className="space-y-8">
+      <SettingsGroup title="连接与账号">
+      <Card className="space-y-4 p-5">
         <div>
-          <h2 className="text-sm font-medium">数据源</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <h3 className="text-[15px] font-semibold leading-snug">数据源</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             演示模式使用本地示例数据，无需后端即可体验完整功能
           </p>
-          <div className="mt-2 flex gap-1 rounded-lg bg-secondary p-1">
-            {(
-              [
-                { value: true, label: "演示模式" },
-                { value: false, label: "真实 API" },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={String(opt.value)}
-                onClick={() => setSettings((s) => ({ ...s, useMock: opt.value }))}
-                className={cn(
-                  "flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                  settings.useMock === opt.value
-                    ? "bg-card shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            className="mt-3"
+            aria-label="数据源"
+            value={settings.useMock ? "mock" : "api"}
+            onValueChange={(v) => setSettings((s) => ({ ...s, useMock: v === "mock" }))}
+            options={[
+              { value: "mock", label: "演示模式" },
+              { value: "api", label: "真实 API" },
+            ]}
+          />
         </div>
 
         <div className="space-y-1.5">
@@ -1168,7 +1171,7 @@ export function SettingsPage() {
             className={cn(
               "flex items-center gap-1.5 text-sm",
               testResult.ok
-                ? "text-emerald-700 dark:text-emerald-400"
+                ? "text-success"
                 : "text-destructive",
             )}
           >
@@ -1182,10 +1185,10 @@ export function SettingsPage() {
         )}
       </Card>
 
-      <Card className="space-y-3 p-4">
+      <Card className="space-y-4 p-5">
         <div>
-          <h2 className="text-sm font-medium">账号</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <h3 className="text-[15px] font-semibold leading-snug">账号</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             还没有账号？支持用户名 + 密码自助注册，注册后自动配置 token
           </p>
         </div>
@@ -1258,7 +1261,7 @@ export function SettingsPage() {
           <p
             className={cn(
               "flex items-center gap-1.5 text-sm",
-              accountMsg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
+              accountMsg.ok ? "text-success" : "text-destructive",
             )}
           >
             {accountMsg.ok ? (
@@ -1270,11 +1273,21 @@ export function SettingsPage() {
           </p>
         )}
       </Card>
+      </SettingsGroup>
 
-      <Card className="space-y-3 p-4">
+      <SettingsGroup title="通知与渠道">
+      <WechatBindingCard />
+
+      <BrowserNotificationsCard />
+
+      <PushPreferencesCard />
+      </SettingsGroup>
+
+      <SettingsGroup title="数据">
+      <Card className="space-y-4 p-5">
         <div>
-          <h2 className="text-sm font-medium">导出数据</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <h3 className="text-[15px] font-semibold leading-snug">导出数据</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             导出全部笔记（含待分拣）/线索/周报。敏感笔记默认脱敏（正文打码，其语音/图片/文件原件也不打包），勾选后才会明文导出。正文为近似原文：空白/换行/零宽字符可能被归一化
           </p>
         </div>
@@ -1286,7 +1299,7 @@ export function SettingsPage() {
           包含敏感内容（明文导出密码等加密笔记，含其附件原件）
         </label>
         {includeSensitive && (
-          <p className="flex items-center gap-1.5 text-sm text-amber-700 dark:text-amber-400">
+          <p className="flex items-center gap-1.5 text-sm text-warning">
             <CircleAlert className="size-4 shrink-0" />
             注意：导出的文件将包含敏感笔记的明文（如密码），请妥善保管，不要上传到不可信的地方。恢复导入时会重新加密存储
           </p>
@@ -1353,7 +1366,7 @@ export function SettingsPage() {
           <p
             className={cn(
               "flex items-center gap-1.5 text-sm",
-              exportMsg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
+              exportMsg.ok ? "text-success" : "text-destructive",
             )}
           >
             {exportMsg.ok ? (
@@ -1366,18 +1379,12 @@ export function SettingsPage() {
         )}
       </Card>
 
-      <WechatBindingCard />
-
-      <BrowserNotificationsCard />
-
-      <PushPreferencesCard />
-
       <TagManagerCard />
 
-      <Card className="space-y-3 p-4">
+      <Card className="space-y-4 p-5">
         <div>
-          <h2 className="text-sm font-medium">最近删除</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <h3 className="text-[15px] font-semibold leading-snug">最近删除</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             删除的笔记保留 30 天，期间可恢复或立即彻底删除，到期自动清理
           </p>
         </div>
@@ -1386,33 +1393,24 @@ export function SettingsPage() {
         </Button>
       </Card>
 
-      <Card className="space-y-3 p-4">
+      <Card className="space-y-4 p-5">
         <div>
-          <h2 className="text-sm font-medium">导入数据</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <h3 className="text-[15px] font-semibold leading-snug">导入数据</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             从 Cubox / flomo / Notion / Obsidian / Apple 备忘录 / Markdown / 纯文本导出文件批量导入笔记，保留原创建时间与标签；同一时间且内容相同的条目视为重复自动跳过，可安心重复导入同一文件（单文件最大 20MB）
           </p>
         </div>
-        <div className="flex flex-wrap gap-1 rounded-lg bg-secondary p-1">
-          {IMPORT_SOURCES.map((opt) => (
-            <button
-              key={opt.value}
-              onClick={() => {
-                setImportSource(opt.value)
-                setImportMsg(null)
-                setImportFailed([])
-              }}
-              className={cn(
-                "flex-1 whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium transition-colors",
-                importSource === opt.value
-                  ? "bg-card shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          wrap
+          aria-label="导入来源"
+          value={importSource}
+          onValueChange={(v) => {
+            setImportSource(v)
+            setImportMsg(null)
+            setImportFailed([])
+          }}
+          options={IMPORT_SOURCES.map((o) => ({ value: o.value, label: o.label }))}
+        />
         <p className="text-xs text-muted-foreground">
           {IMPORT_SOURCES.find((o) => o.value === importSource)?.hint}
         </p>
@@ -1482,7 +1480,7 @@ export function SettingsPage() {
           <p
             className={cn(
               "flex items-center gap-1.5 text-sm",
-              importMsg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
+              importMsg.ok ? "text-success" : "text-destructive",
             )}
           >
             {importMsg.ok ? (
@@ -1501,12 +1499,11 @@ export function SettingsPage() {
           </p>
         )}
         {importing && importProgress && importProgress.total > 0 && (
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
-            <div
-              className="h-full rounded-full bg-primary transition-all"
-              style={{ width: `${Math.round((importProgress.done / importProgress.total) * 100)}%` }}
-            />
-          </div>
+          <Progress
+            className="h-1.5"
+            aria-label="导入进度"
+            value={Math.round((importProgress.done / importProgress.total) * 100)}
+          />
         )}
         {importFailed.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -1521,10 +1518,10 @@ export function SettingsPage() {
         )}
       </Card>
 
-      <Card className="space-y-3 p-4">
+      <Card className="space-y-4 p-5">
         <div>
-          <h2 className="text-sm font-medium">从完整备份恢复</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <h3 className="text-[15px] font-semibold leading-snug">从完整备份恢复</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             导入「下载完整备份」导出的 zip：笔记保留原时间/标签/分类，语音/图片/文件原件重新入库；已存在的同一条笔记（按备份内的笔记 ID）自动跳过，可安心重复恢复（最大 200MB）。注意：未勾选敏感内容的脱敏备份只含占位符，恢复时会跳过这些敏感笔记——迁移请用包含敏感内容的完整备份
           </p>
         </div>
@@ -1560,7 +1557,7 @@ export function SettingsPage() {
           <p
             className={cn(
               "flex items-center gap-1.5 text-sm",
-              restoreMsg.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
+              restoreMsg.ok ? "text-success" : "text-destructive",
             )}
           >
             {restoreMsg.ok ? (
@@ -1579,11 +1576,61 @@ export function SettingsPage() {
           </p>
         )}
       </Card>
+      </SettingsGroup>
 
-      <Card className="space-y-3 border-destructive/40 p-4">
+      <SettingsGroup title="外观与高级">
+      <Card className="p-5">
+        <h3 className="text-[15px] font-semibold leading-snug">外观</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">主题设置保存在本机浏览器</p>
+        <p className="mt-4 text-xs font-medium text-muted-foreground">主题</p>
+        <Segmented
+          className="mt-1.5"
+          aria-label="主题"
+          value={theme}
+          onValueChange={(v) => {
+            setTheme(v)
+            setThemeState(v)
+          }}
+          options={THEME_OPTIONS}
+        />
+        <p className="mt-4 text-xs font-medium text-muted-foreground">字号</p>
+        <Segmented
+          className="mt-1.5"
+          aria-label="字号"
+          value={fontSize}
+          onValueChange={(v) => {
+            setFontSize(v)
+            setFontSizeState(v)
+          }}
+          options={FONT_SIZE_OPTIONS}
+        />
+      </Card>
+
+      <SwStatusCard />
+
+      <Card className="p-5">
+        <h3 className="text-[15px] font-semibold leading-snug">关于</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          碎念 Suinian — 什么都能丢的 AI 收件箱。往 Web / Android /
+          剪藏扩展随手一丢，AI 帮你分拣、串线索、随时找到。
+        </p>
+        <h4 className="mt-3 text-xs font-medium">安全承诺</h4>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground" data-testid="safety-promise">
+          <SafetyPromise />
+        </p>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          <a href={KNOWN_ISSUES_URL} target="_blank" rel="noreferrer" className="underline hover:text-foreground" data-testid="known-issues-link">
+            已知问题清单（beta）
+          </a>
+        </p>
+      </Card>
+      </SettingsGroup>
+
+      <SettingsGroup title="危险操作">
+      <Card className="space-y-4 border-destructive/40 bg-destructive/[0.03] p-5">
         <div>
-          <h2 className="text-sm font-medium text-destructive">危险操作</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <h3 className="text-[15px] font-semibold leading-snug text-destructive">危险操作</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             注销会永久删除账号及全部笔记/线索/周报，不可恢复。若只想在本机退出，请使用上方「退出登录」
           </p>
         </div>
@@ -1637,75 +1684,7 @@ export function SettingsPage() {
           </Button>
         )}
       </Card>
-
-      <SwStatusCard />
-
-      <Card className="p-4">
-        <h2 className="text-sm font-medium">外观</h2>
-        <p className="mt-1 text-xs text-muted-foreground">主题设置保存在本机浏览器</p>
-        <div role="radiogroup" aria-label="主题" className="mt-2 flex gap-1 rounded-lg bg-secondary p-1">
-          {THEME_OPTIONS.map((opt) => {
-            const Icon = opt.icon
-            return (
-              <button
-                key={opt.value}
-                role="radio"
-                aria-checked={theme === opt.value}
-                onClick={() => {
-                  setTheme(opt.value)
-                  setThemeState(opt.value)
-                }}
-                className={cn(
-                  "flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium transition-colors sm:px-3",
-                  theme === opt.value
-                    ? "bg-card shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Icon className="size-3.5" />
-                {opt.label}
-              </button>
-            )
-          })}
-        </div>
-        <p className="mt-3 text-xs text-muted-foreground">字号</p>
-        <div role="radiogroup" aria-label="字号" className="mt-1 flex gap-1 rounded-lg bg-secondary p-1">
-          {FONT_SIZE_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              role="radio"
-              aria-checked={fontSize === opt.value}
-              onClick={() => {
-                setFontSize(opt.value)
-                setFontSizeState(opt.value)
-              }}
-              className={cn(
-                "flex flex-1 items-center justify-center whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium transition-colors sm:px-3",
-                fontSize === opt.value ? "bg-card shadow-sm" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      </Card>
-
-      <Card className="p-4">
-        <h2 className="text-sm font-medium">关于</h2>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          碎念 Suinian — 什么都能丢的 AI 收件箱。往 Web / Android /
-          剪藏扩展随手一丢，AI 帮你分拣、串线索、随时找到。
-        </p>
-        <h3 className="mt-3 text-xs font-medium">安全承诺</h3>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground" data-testid="safety-promise">
-          <SafetyPromise />
-        </p>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          <a href={KNOWN_ISSUES_URL} target="_blank" rel="noreferrer" className="underline hover:text-foreground" data-testid="known-issues-link">
-            已知问题清单（beta）
-          </a>
-        </p>
-      </Card>
+      </SettingsGroup>
     </div>
   )
 }

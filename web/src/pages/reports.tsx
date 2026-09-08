@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { FileText, ChevronLeft, RefreshCw, Loader2, Sparkles } from "lucide-react"
+import { m } from "motion/react"
+import { FileText, ChevronLeft, ChevronRight, RefreshCw, Loader2, Sparkles, CalendarDays } from "lucide-react"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { marked } from "marked"
 import { sanitizeGeneratedHtml } from "@/lib/safe-html"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { cn, parseServerTime } from "@/lib/utils"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { parseServerTime } from "@/lib/utils"
 import { getReports, getReport, generateReport } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
 import type { ReportPeriod, WeeklyReport } from "@/lib/types"
@@ -68,7 +70,7 @@ function ReportBody({ md }: { md: string }) {
   const html = useMemo(() => sanitizeGeneratedHtml(marked.parse(md, { async: false })), [md])
   return (
     <div
-      className="prose-report text-sm leading-relaxed [&_h1]:mb-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2.5 [&_h2]:mt-7 [&_h2]:border-b [&_h2]:pb-1.5 [&_h2]:text-base [&_h2]:font-semibold [&_h2:first-child]:mt-0 [&_h3]:mb-1.5 [&_h3]:mt-4 [&_h3]:font-medium [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
+      className="prose-report text-[15px] leading-[1.75] [&_h1]:mb-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2.5 [&_h2]:mt-7 [&_h2]:border-b [&_h2]:pb-1.5 [&_h2]:text-base [&_h2]:font-semibold [&_h2:first-child]:mt-0 [&_h3]:mb-1.5 [&_h3]:mt-4 [&_h3]:font-medium [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )
@@ -145,8 +147,16 @@ export function ReportsPage() {
         )}
       </Button>
       <p className="text-xs text-muted-foreground">同一周期重复生成会覆盖更新已有报告</p>
-      {generateError && <p className="text-sm text-destructive">{generateError}</p>}
-      {generateNotice && <p className="text-sm text-muted-foreground">{generateNotice}</p>}
+      {generateError && (
+        <p role="alert" className="text-sm text-destructive">
+          {generateError}
+        </p>
+      )}
+      {generateNotice && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {generateNotice}
+        </p>
+      )}
     </div>
   )
 
@@ -187,12 +197,17 @@ export function ReportsPage() {
           </Card>
         ) : (
           selected && (
-            <Card className="p-5">
-              <h2 className="text-lg font-semibold">{reportTitle(selected)}</h2>
-              <p className="mb-4 mt-1 text-xs font-medium text-muted-foreground">
-                覆盖 {reportRangeLabel(selected)}
-                {selected.created_at ? ` · 生成于 ${formatGeneratedAt(selected.created_at)}` : ""}
-              </p>
+            <Card className="p-5 sm:p-7">
+              <div className="mb-5 border-b pb-4">
+                <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                  <CalendarDays className="size-3" />
+                  {reportRangeLabel(selected)}
+                </span>
+                <h2 className="text-display mt-3 text-xl font-semibold sm:text-2xl">{reportTitle(selected)}</h2>
+                {selected.created_at && (
+                  <p className="mt-1.5 text-xs text-muted-foreground">生成于 {formatGeneratedAt(selected.created_at)}</p>
+                )}
+              </div>
               {selected.content_md ? (
                 <ReportBody md={stripLeadingH1(selected.content_md)} />
               ) : (
@@ -207,27 +222,12 @@ export function ReportsPage() {
   const visible = reports.filter((r) => reportPeriod(r) === periodTab)
 
   const periodTabs = (
-    <div className="flex w-fit gap-1 rounded-lg bg-muted p-1" role="tablist" aria-label="报告类型">
-      {(
-        [
-          { value: "week", label: "周报" },
-          { value: "month", label: "月报" },
-        ] as const
-      ).map((t) => (
-        <button
-          key={t.value}
-          role="tab"
-          aria-selected={periodTab === t.value}
-          onClick={() => setPeriodTab(t.value)}
-          className={cn(
-            "rounded-md px-3 py-1 text-sm font-medium transition-colors",
-            periodTab === t.value ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
+    <Tabs value={periodTab} onValueChange={(v) => setPeriodTab(v as ReportPeriod)}>
+      <TabsList aria-label="报告类型">
+        <TabsTrigger value="week">周报</TabsTrigger>
+        <TabsTrigger value="month">月报</TabsTrigger>
+      </TabsList>
+    </Tabs>
   )
 
   if (loading) return <NoteListSkeleton />
@@ -264,27 +264,53 @@ export function ReportsPage() {
     )
 
   return (
-    <div className="space-y-3">
-      {periodTabs}
-      {generateButton}
-      {visible.map((r) => (
-        <Card
-          key={r.id}
-          className="cursor-pointer p-4 transition-shadow hover:shadow-md"
-          onClick={() => setSelectedId(r.id)}
-        >
-          <div className="flex items-center gap-2">
-            <FileText className="size-4 shrink-0 text-muted-foreground" />
-            <h2 className="text-[15px] font-medium">{reportTitle(r)}</h2>
-          </div>
-          <p className="mt-1.5 text-xs text-muted-foreground">{reportRangeLabel(r)}</p>
-          {r.content_md && (
-            <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
-              {r.content_md.replace(/[#*`>\-\n]+/g, " ").trim().slice(0, 120)}
-            </p>
-          )}
-        </Card>
-      ))}
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        {periodTabs}
+        {generateButton}
+      </div>
+      <div className="space-y-3">
+        {visible.map((r, i) => (
+          <m.div
+            key={r.id}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25, delay: Math.min(i, 6) * 0.04, ease: [0.25, 1, 0.5, 1] }}
+          >
+            <Card
+              interactive
+              role="button"
+              tabIndex={0}
+              className="group cursor-pointer p-4 sm:p-5"
+              onClick={() => setSelectedId(r.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault()
+                  setSelectedId(r.id)
+                }
+              }}
+            >
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <FileText className="size-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="truncate text-[15px] font-semibold">{reportTitle(r)}</h2>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                  </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{reportRangeLabel(r)}</p>
+                  {r.content_md && (
+                    <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+                      {r.content_md.replace(/[#*`>\-\n]+/g, " ").trim().slice(0, 120)}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </Card>
+          </m.div>
+        ))}
+      </div>
     </div>
   )
 }

@@ -221,6 +221,7 @@ export async function mockGetNotes(query: NotesQuery): Promise<NotesResponse> {
   let notes = loadMockNotes()
   if (query.category) notes = notes.filter((n) => n.category === query.category)
   if (query.tag) notes = notes.filter((n) => n.tags.includes(query.tag!))
+  if (query.source) notes = notes.filter((n) => n.source === query.source)
   if (query.q) {
     const q = query.q.toLowerCase()
     notes = notes.filter(
