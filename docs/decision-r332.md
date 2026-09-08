@@ -168,3 +168,14 @@ R331 善意语料里带数字的：BR03「驿站取件码 4192」（取件码 = 
 - backend `npm run typecheck` 通过；`npm test` vitest 全量 **198 文件 / 4364 用例全绿**（main 基线 197 / 4291；一次与 `gradlew` 并行跑时 `r310-no-verbatim` 的善意 307 用例撞 5s 超时，单跑 8.8s 通过、本分支与 main 同一脚本计时 direct 2144 vs 2148 ms——是机器负载不是回归，空载重跑全绿）；web `npm run lint`（仅既有 warning，均在本轮未触文件）/ `npm run build` 通过；android `./gradlew assembleDebug` 通过（`app/build/outputs/apk/debug/app-debug.apk`，SDK 由 cmdline-tools 现装至 `/home/ubuntu/android-sdk`）。
 - 生产脚本：`scripts/qa-r332/prod/` 复制 qa-r331/prod 口径（只改 `QA_PREFIX=[QA-R332]` / 输出目录），`export-corpus.ts` 另导出 R329 / R327 语料（`blind329` / `oracle329` / `blind327` / `oracle327`）供 `seed.mjs` 选用，回归三套语料同一账号前缀。生产实测结果回填到 `docs/audit-r332.md`（跟进 PR）。
 - ask-eval / 财务 / injection / 生命周期是生产 API 脚本（`SUINIAN_API_BASE`），本机无对应离线形态，归 §7.2 生产项。
+
+### 7.4 跟进（生产 ca91bee → PR #375 → 933cd1a → 本 PR）
+
+**PR #375（已合并 933cd1a）——生产 ca91bee 实测的两处 P1（均非泄漏）：**
+- 多轮错引（浏览器 S4 + 带历史 API 复现，标注态 / 取消态同症）：敏感召回 / 受守卡归因用整段对话的话题词算主导命中，上一轮的「柜台」比本轮「西门闸机」命中更多，引到柜台卡。修法：`recallSensitiveNotes` 新增 `currentTopicTerms`（本轮词命中的卡先单列，主导命中只在其中算）；`ownTopicCards` / `topicHitCards`（`sensitive-recall.ts`）把同一二元组近似匹配用到受守卡归因；`ownTopicTerms` 仅多轮时非空，代词式追问（「那串是多少」）无可归因话题 ⇒ 沿用整段对话归因。
+- 善意是非问 BC01 / BC03 / BC04 被预言机闸门中和（善意直答占位 7/46 → 9/46）：引用卡全是撞词召回的别人短码笔记，善意目标笔记本身候选面为空。修法：闸门前先按问句可归因话题词分「受守卡命中 / 普通卡命中」，受守卡零命中且普通卡有命中（话题另有所指）⇒ 受守卡整条出候选，走正常回答。
+
+**本 PR——取消态单轮 U-S3 归因（生产 933cd1a 实测）：**
+- 现象：取消标注后柜台 / 西门两张卡都整条隔离，模型只见同一占位行；单轮「柜台那台机器要输的是多少」两次生成分别答「记了它 [1]」（[1]=西门卡）与「记了它 [1] [2]」——归因随采样漂移（180s 答案缓存让同一漂移看起来「稳定复现」，`wrangler tail` 实查 wallTime 173ms / logs 空 = 缓存命中）。
+- 修法：占位归因改指（`PHANTOM_REDACTION_CLAIM_RE` 分支）用 `turnTopicTerms`（本轮问句话题词，单轮也算），不再只在多轮时生效；召回 / 闸门归因仍用 `ownTopicTerms`（仅多轮），单轮维持 R324 / R328 既有口径不动。话题谁都不命中 / 全命中 / 代词式 ⇒ 不改。
+- 用例：`test/r332-multiturn-recall.test.ts`「角标改指（turnTopicTerms）」。

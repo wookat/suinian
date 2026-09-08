@@ -5011,11 +5011,12 @@ app.post("/api/ask", async (c) => {
   const sensTerms = sensitiveRecallTerms(terms, deterministicRecall || oracleProbe ? [] : extractAskTerms(recallQuestion, []), `${recallQuestion}\n${askQuestion}\n${historyText}`);
   // 多轮时本轮问句自己的话题词单列（不含上文轮）：上一轮的卡会多中上文话题词，主导命中若按整段对话算，
   // 「柜台机器」之后问「西门闸机」引到的是柜台那张卡（R332 浏览器实测 S4）。
-  const ownTopicTerms: string[] = (() => {
-    if (history.length === 0) return [];
+  const turnTopicTerms: string[] = (() => {
     const own = deterministicRecall ? probeRecallTerms(askQuestion) : extractAskTerms(askQuestion, []);
     return attributableTopicTerms(askTopicTerms(sensitiveRecallTerms(own.length > 0 ? own : extractAskTerms(askQuestion, []), [], askQuestion)));
   })();
+  // 召回 / 闸门归因只在多轮时按本轮词收窄（单轮时本轮词 == 整句词，维持 R324/R328 既有归因口径）。
+  const ownTopicTerms: string[] = history.length > 0 ? turnTopicTerms : [];
   const ownTopicOwned = <T extends Pick<NoteRow, "title" | "content" | "tags">>(cards: readonly T[]): T[] => ownTopicCards(cards, ownTopicTerms);
   const sensRecall = metaQuestion
     ? { rows: [] as NoteRow[], plains: new Map<string, string>(), overflow: 0 }
@@ -5506,10 +5507,11 @@ app.post("/api/ask", async (c) => {
   // 片段里没有隔离占位时，模型不得替某条笔记宣称「记了它，问答区不展示」——
   // 那会把用户引去一张不含答案的卡片；按「笔记里没提到」处置，让敏感零召回提示接管。
   if (answer2 && askModelRedactedLines === 0 && PHANTOM_REDACTION_CLAIM_RE.test(answer2)) answer2 = "笔记里没提到。";
-  // 多条整条隔离的笔记在模型眼里是同一个占位行，模型的「记了它 [n]」归因不可信：按本轮话题词把角标改指命中的那张卡。
+  // 多条整条隔离的笔记在模型眼里是同一个占位行，模型的「记了它 [n]」归因不可信（单轮亦然：引哪张、引几张随模型采样漂移）：
+  // 按本轮问句的话题词把角标改指命中的那张卡；话题谁都不命中或全命中时不动。
   if (answer2 && askWithheldIdx.length > 1 && PHANTOM_REDACTION_CLAIM_RE.test(answer2) && answer2.replace(/\[\d+\]/g, "").trim().length <= 60) {
     const withheld = askWithheldIdx.map((i) => notes[i]);
-    const owned = ownTopicOwned(withheld);
+    const owned = ownTopicCards(withheld, turnTopicTerms);
     if (owned.length < withheld.length) {
       const hit = askWithheldIdx.filter((i) => owned.includes(notes[i]));
       console.log(`ask: redaction-claim citation retargeted to ${hit.length} withheld note(s) hit by the current turn's topic`);

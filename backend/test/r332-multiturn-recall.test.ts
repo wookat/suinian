@@ -42,13 +42,17 @@ async function recallInConversation(question: string, history: AskHistoryMessage
   return r.rows.map((x) => x.id);
 }
 
-/** 与 ask 路由同一拼装：本轮问句自己的可归因话题词（仅多轮时）。 */
-function ownTopics(question: string, history: AskHistoryMessage[]): string[] {
-  if (history.length === 0) return [];
+/** 与 ask 路由同一拼装：本轮问句自己的可归因话题词（turnTopicTerms，单轮也算；角标改指用它）。 */
+function turnTopics(question: string, history: AskHistoryMessage[]): string[] {
   const historyText = history.map((m) => m.content).join("\n");
   const askQuestion = stripOpaqueTokens(question);
   const own = isDeterministicRecallProbe(question, historyText) ? probeRecallTerms(askQuestion) : extractAskTerms(askQuestion, []);
   return attributableTopicTerms(askTopicTerms(sensitiveRecallTerms(own.length > 0 ? own : extractAskTerms(askQuestion, []), [], askQuestion)));
+}
+
+/** 召回 / 闸门归因用的本轮词（ownTopicTerms）：仅多轮时收窄。 */
+function ownTopics(question: string, history: AskHistoryMessage[]): string[] {
+  return history.length === 0 ? [] : turnTopics(question, history);
 }
 
 describe("R332 多轮敏感召回：本轮话题优先于上文轮话题（浏览器 S4 错引）", () => {
@@ -113,10 +117,19 @@ describe("R332 未标注受守卡的引用归因：本轮话题优先（浏览�
     expect(ownTopicCards(gateCards, ownTopics(q, hist)).map((n) => n.id)).toEqual(["gate"]);
   });
 
-  it("单轮 / 本轮无可归因话题 / 全不命中：原样返回，不收窄", () => {
+  it("召回 / 闸门归因：单轮 / 本轮无可归因话题 / 全不命中原样返回，不收窄", () => {
     expect(ownTopicCards(gateCards, ownTopics("西门闸机手输的那串字母是什么", [])).map((n) => n.id)).toEqual(["counter", "gate"]);
     expect(ownTopicCards(gateCards, ownTopics("那串是多少", B)).map((n) => n.id)).toEqual(["counter", "gate"]);
     expect(ownTopicCards(gateCards, ["会议室"]).map((n) => n.id)).toEqual(["counter", "gate"]);
+  });
+
+  // 生产 933cd1a 取消标注单轮 U-S3：两张整条隔离卡模型只见同一占位行，「记了它 [1]」一次指西门卡、一次 [1][2]（采样漂移）。
+  // 角标改指不看有无历史，按本轮问句话题词改指柜台卡；代词式追问 / 话题全不命中时不动。
+  it("角标改指（turnTopicTerms）：单轮 U-S3 / U-S4 也按本轮问句收窄，代词式不动", () => {
+    expect(ownTopicCards(gateCards, turnTopics("柜台那台机器要输的是多少", [])).map((n) => n.id)).toEqual(["counter"]);
+    expect(ownTopicCards(gateCards, turnTopics("西门闸机手输的那串字母是什么", [])).map((n) => n.id)).toEqual(["gate"]);
+    expect(ownTopicCards(gateCards, turnTopics("那串是多少", B)).map((n) => n.id)).toEqual(["counter", "gate"]);
+    expect(ownTopicCards(gateCards, turnTopics("那串是多少", [])).map((n) => n.id)).toEqual(["counter", "gate"]);
   });
 });
 
