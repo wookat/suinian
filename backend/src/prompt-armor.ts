@@ -9360,6 +9360,31 @@ export const MODEL_REDACTED_LINE = "〔此行为口令/命令/长串编号一类
 export const PHANTOM_REDACTION_CLAIM_RE = /问答区不展示|记了它[，,]?\s*(?:问答区|不展示|请点开)|已从问答上下文隔离/u;
 
 /**
+ * 模型对着整条隔离卡给出的「指卡」短答（「这条笔记记了 X，请点开引用的笔记卡片查看原文 [n]」）——
+ * 比 PHANTOM_REDACTION_CLAIM_RE 宽：只要是把用户指去卡片的话术即算，归因改指用；不用于「幻觉占位」判定。
+ */
+export const WITHHELD_CARD_POINTER_RE =
+  /问答区不展示|已从问答上下文隔离|记了它|点开(?:引用的|下方的?)?(?:引用|笔记)?卡片/u;
+
+const SYSTEM_NOTICE_TEXTS: readonly string[] = [
+  ORACLE_NEUTRAL_NOTICE,
+  ...Object.values(DIRECT_GUARD_PLACEHOLDER),
+  VERBATIM_REDIRECT_NOTICE,
+  MODEL_REDACTED_LINE,
+];
+
+/**
+ * 句段（去角标后）是否只是某条系统占位 / 中性话术的一个片段。模型套用历史里的系统话术时，逐段闸门按「；」切开，
+ * 后半截「请点开引用的笔记卡片自行核对〕」单看像笔记内指令会被隔离扣下，done 里整条话术就断成半句且丢角标；
+ * 整答层对同一话术是放行的，这里让片段与整答同口径。
+ */
+export function isSystemNoticeFragment(segment: string): boolean {
+  const t = segment.replace(CITATION_MARK_RE, "").trim();
+  if (t.length < 4) return false;
+  return SYSTEM_NOTICE_TEXTS.some((n) => n.includes(t));
+}
+
+/**
  * R322 A（decision-r322 方案 1）：把单元里的受守行替换成占位后再喂模型。模型没见过取值就变形不出来——
  * 加空格 / 逐字念 / 移位 / 编码 / 翻译 / 首末字 / 几位 / 二分都无从下手；出口闭合从「唯一防线」退成「兜底」。
  * 只替换行级命中（own）的行：整条单元宽判据命中而本行不命中的说明行照常给模型（概括这条是什么仍要靠它们）。
