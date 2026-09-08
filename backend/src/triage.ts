@@ -1,6 +1,14 @@
 import type { Category, Env, TriageResult } from "./types";
 import { chatComplete } from "./ai";
-import { closeAggregateOutlet, normalizedGuardedLeak, secretLabelValueLine, directGuardLines, opaqueTokensOf, sourceValueCandidates } from "./prompt-armor";
+import {
+  closeAggregateOutlet,
+  normalizedGuardedLeak,
+  secretLabelValueLine,
+  directGuardLines,
+  opaqueTokensOf,
+  sourceValueCandidates,
+  structuralCredentialCarrier,
+} from "./prompt-armor";
 
 const CATEGORIES: Category[] = ["idea", "todo", "collect", "data", "expense", "income", "transfer"];
 
@@ -297,9 +305,10 @@ const ID_CARD_RE = /身份证[^\n]{0,10}\d{17}[\dXx]\b|\b\d{17}[Xx]\b/;
 // R284 F-2 fail-closed 补全：英文语境的卡号/证件号叙述同样是真实凭证值。
 const BANK_CARD_RE =
   /(银行卡|卡号|储蓄卡|信用卡|(?:bank\s*)?card\s*(?:number|no\.?|#)|account\s*number|iban)[^\n]{0,10}\d{12,19}\b/i;
-const PHONE_RE = /(手机号?码?|电话号?码?|联系方式)[^\n]{0,10}(?:\+?86[\s-]?)?1[3-9]\d{9}\b/;
+// 手机号不进定论规则：电话是联系标识符而不是钥匙（分拣提示词的负例「商家/师傅等公开
+// 联系电话」），「本人手机号+姓名组合」由模型复判；定论规则只保留证件号 / 卡号。
 
-// 数字类敏感值（卡号/证件号/手机号）的常见抄写格式是分组分隔（4-4-4-4 空格、
+// 数字类敏感值（卡号/证件号）的常见抄写格式是分组分隔（4-4-4-4 空格、
 // 连字符）或全角数字：归一化后再跑数字类正则，让分段变体与连续写法同判。
 const FULLWIDTH_DIGIT_RE = /[０-９]/g;
 const DIGIT_GROUP_SEP_RE = /(\d)[ \t\u3000\-‐‑‒–—―]{1,3}(?=\d)/g;
@@ -417,9 +426,11 @@ export function detectSensitive(content: string): boolean {
   // 暗语引号短语 + 暗语线索 / 藏头藏尾 + 明示提取。与出口层取值候选的强形态（credential）同源，弱形态（opaque）不进标注：
   // 这是已见语料回归，不宣称族级封闭；漏标时由出口层兜底。
   if (sourceValueCandidates([content]).some((c) => c.kind === "credential")) return true;
+  // R334 §14.1-6：无「密码」字样的结构载体（「服务名: 值」/「可上锁对象 + 短取值」）与出口层 unitTalksAboutSecret 同源。
+  if (structuralCredentialCarrier(content)) return true;
   // 数字类规则同时跑原文与归一化文本：空格/连字符/全角/分段变体不再绕过
   const normalized = normalizeDigitRuns(content);
-  return [ID_CARD_RE, BANK_CARD_RE, PHONE_RE].some(
+  return [ID_CARD_RE, BANK_CARD_RE].some(
     (re) => re.test(content) || re.test(normalized)
   );
 }
@@ -452,7 +463,7 @@ export function isPlainCommandNote(content: string): boolean {
 // 验证码都不要给」这类反诈忠告只出现凭证「主题词」而无任何凭证「值」，却常被
 // 模型判敏感 → 正文加密 → 从 ask() 问答面系统性消失，导致「四语防骗忠告不误
 // 伤」这一安全属性无法经真实问答路径验证。纠偏条件（全部满足才反转）：
-//   1) detectSensitive 不命中（没有任何真实凭证值/证件号/卡号/手机号）；
+//   1) detectSensitive 不命中（没有任何真实凭证值/证件号/卡号）；
 //   2) 正文含四语（中/英/日/韩）「否定式保护」措辞（不要告诉/never share/
 //      教えないで/알려주지 마 等）——与 prompt-armor 的社工判定豁免同一语义面；
 //   3) 正文含凭证主题词（验证码/密码/OTP 等），即确实在谈防骗而非泛泛而谈。

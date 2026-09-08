@@ -6,8 +6,9 @@ import { mkdirSync } from "node:fs";
 
 export const API = "https://suinian-api.zalize.com";
 export const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
-export const QA_PREFIX = "[QA-R333]";
-export const OUT = new URL("../out", import.meta.url).pathname;
+// R334 起同一语料重跑时通过 QA_PREFIX / QA_OUT 覆盖账号前缀与输出目录（语料本体不变）
+export const QA_PREFIX = process.env.QA_PREFIX ?? "[QA-R333]";
+export const OUT = process.env.QA_OUT ?? new URL("../out", import.meta.url).pathname;
 mkdirSync(OUT, { recursive: true });
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

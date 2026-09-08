@@ -1,0 +1,360 @@
+{
+ "C01": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C02": {
+  "was": false,
+  "patch": null,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": null,
+  "remarked": false
+ },
+ "C03": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C04": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C05": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C06": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C07": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C08": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C09": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C10": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C11": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 3,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C12": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 3,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C13": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C14": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 3,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C15": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 3,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C16": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 0,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C17": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C18": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C19": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C20": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C21": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C22": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C23": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C24": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C25": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C26": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C27": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C28": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C29": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C30": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C31": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 4,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C32": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C33": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C34": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C35": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "C36": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ }
+}

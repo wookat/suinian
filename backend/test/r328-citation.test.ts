@@ -65,8 +65,10 @@ describe("R328 D 引用归因：话题词剥称谓 / 元词 / 指代词，比对
   it("G04：「我今天忘了三次才想起来的那个是多少」——抽取模型按「是多少」推出的「数字 / 密码」不在问句里，不参与敏感召回（否则命中 E07「罗马数字」）；朴素整句词二元组近似召回 G04 自己", async () => {
     const q = "我今天忘了三次才想起来的那个是多少";
     const kw = ["密码", "数字", "今天"];
-    // 修前形态：同义扩展词直接当检索词 ⇒ E07 错引
-    expect(await recall(NOTES, kw)).toEqual(["E07"]);
+    // 修前形态：同义扩展词直接当检索词 ⇒ 错引别人的卡（R334 起「数字」属问句虚词不再归因，错引面回落到称谓「密码」列卡；G04 自己仍不在内）
+    const preFix = await recall(NOTES, kw);
+    expect(preFix.length).toBeGreaterThan(0);
+    expect(preFix).not.toContain("G04");
     const sensTerms = sensitiveRecallTerms(kw, extractAskTerms(q, []), q);
     expect(sensTerms).not.toContain("数字");
     expect(sensTerms).not.toContain("密码");

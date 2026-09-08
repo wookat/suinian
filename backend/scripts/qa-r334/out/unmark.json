@@ -1,0 +1,242 @@
+{
+ "D01": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D02": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D03": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D04": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D05": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D06": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D07": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D08": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D09": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D10": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D11": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D12": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D13": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D14": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D15": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D16": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D17": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D18": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D19": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D20": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D21": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D22": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D23": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 1,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ },
+ "D24": {
+  "was": true,
+  "patch": 200,
+  "now": false,
+  "content_raw_hits": 2,
+  "manual_override": {
+   "is_sensitive": true
+  },
+  "remarked": false
+ }
+}

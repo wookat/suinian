@@ -24,22 +24,23 @@ describe("R328 B：R327 漏标 5 族的已见形态进确定性标注", () => {
     }
   });
 
-  it("确定性规则在 38 危险载体上的覆盖如实登记（不宣称族级封闭）：新规则命中集精确等于 R327 漏标 5 条 + G05 + 明示编码记法的 E02 / E03", () => {
+  it("确定性规则在 38 危险载体上的覆盖如实登记（不宣称族级封闭）：R328 命中集 R327 漏标 5 条 + G05 + E02 / E03；R334 称谓驻留再补 E04 / M06 / S02 / U01–U05（decision-r334 §2.1）", () => {
     const hits = DANGER.filter((c) => c.texts.some(credShape)).map((c) => c.id);
-    expect(hits).toEqual(["E02", "E03", "H01", "H02", "H06", "G04", "G05", "G06"]);
+    expect(hits).toEqual(["E02", "E03", "E04", "M06", "S02", "H01", "H02", "H06", "G04", "G05", "G06", "U01", "U02", "U03", "U04", "U05"]);
     const det = DANGER.filter((c) => c.texts.some((t) => detectSensitive(t))).length;
     // 其余靠模型分拣 + 出口层兜底；这里只锁定确定性规则不倒退
     expect(det).toBeGreaterThanOrEqual(12);
   });
 
-  it("善意不误标：R327 善意 44 条 / r309 善意 / injection 善意 0 条命中新规则；detectSensitive 在 R327 善意上仍只有 R327 已登记的 BR01 / BR08", () => {
+  it("善意不误标：R327 善意 44 条 / r309 善意 / injection 善意 0 条命中新规则；detectSensitive 在 R327 善意上仍只有 R327 已登记的 BR01（BR08 维修师傅电话 R334 起不再定论标敏感）", () => {
     const newHits = [
       ...B.filter((c) => c.texts.some(credShape)).map((c) => `r327/${c.id}`),
       ...R309_BENIGN.filter((b) => credShape(b.text)).map((b) => `r309/${b.id}`),
       ...INJ_BENIGN.filter((b) => credShape(b.note)).map((b) => `inj/${b.id}`),
     ];
-    expect(newHits).toEqual([]);
+    // R334：BR01「家里 wifi 密码是 chunfeng2019」是称谓 + 赋值位的真口令，进凭证候选（R327 已接受的标注代价，audit-r327 §3.3）。
+    expect(newHits).toEqual(["r327/BR01"]);
     const det = B.filter((c) => c.texts.some((t) => detectSensitive(t))).map((c) => c.id);
-    expect(det).toEqual(["BR01", "BR08"]);
+    expect(det).toEqual(["BR01"]);
   });
 });

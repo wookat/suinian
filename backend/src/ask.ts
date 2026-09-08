@@ -10,6 +10,7 @@ import {
   closeAggregateOutlet,
   VERBATIM_SPAN_PLACEHOLDER,
   directGuardLines,
+  foldPlain,
 } from "./prompt-armor";
 
 /**
@@ -1573,6 +1574,10 @@ export function degradeFinanceSubsetTerms(terms: string[]): string[] | null {
 // 剥不出新词集则返回 null（不重试，不做宽泛分词）。
 const ASK_TERM_TAIL_RE = /(?:[这那][趟次回个]|一趟|这边|那边)$/;
 const CJK_TERM_RE = /^[\u4e00-\u9fff]+$/;
+// R334（audit-r333 §14.2-1 编号族）：「航班号是多少」在关键词抽取不可用时整串进 LIKE，而笔记写的是「航班 MU5137」——
+// 问值尾（是多少 / 是什么）与编号后缀（号 / 号码）都不在正文里。剩下的词干 ≥ 2 字才剥（「学号」不动）。
+const ASK_TERM_VALUE_TAIL_RE = /(?:是)?(?:多少|什么|哪个|哪一个|几号|几点)$/;
+const ASK_TERM_ID_SUFFIX_RE = /(?:号码|号)$/;
 
 /** 生成普通召回关键词的降级重试词集；无可降级时返回 null。 */
 export function degradeAskTerms(terms: string[]): string[] | null {
@@ -1588,6 +1593,12 @@ export function degradeAskTerms(terms: string[]): string[] | null {
     if (s.length >= 3 && CJK_TERM_RE.test(s)) s = s.replace(/^[那这](?=..)/, "");
     // 动宾回声残片：首尾同一个字（「打羽毛球打」）时剥掉尾字
     if (s.length >= 4 && CJK_TERM_RE.test(s) && s[0] === s[s.length - 1]) s = s.slice(0, -1);
+    if (CJK_TERM_RE.test(s)) {
+      const noTail = s.replace(ASK_TERM_VALUE_TAIL_RE, "");
+      if (noTail !== s && noTail.length >= 2) s = noTail;
+      const stem = s.replace(ASK_TERM_ID_SUFFIX_RE, "");
+      if (stem !== s && stem.length >= 2) s = stem;
+    }
     push(s);
   }
   if (out.length === 0) return null;
@@ -2999,24 +3010,29 @@ export const ASK_CITATION_MIN_SCORE = 0.55;
 // ---- 逐字复述引证补全（R262，audit-r261 P2-5）----
 // 答案正文逐字复述了某条召回笔记的内容（≥VERBATIM_CITE_MIN_LEN 连续字符
 // 重叠）却没把它列入引用时，把该笔记增补进 references。只增补、不改写答案
-// 文本，与多跳引证补全同一口径。弱语义命中不补（保持 weak 不出现在引用的
-// 既有约束）。
+// 文本，与多跳引证补全同一口径。弱语义命中默认不补（保持 weak 不出现在引用的
+// 既有约束）；调用方可按笔记放开（citeWeakIf）——答案已逐字复述了一条无任何受守面的
+// 日常笔记时，补卡片比把句子换成「见引用笔记卡片」却无卡可见更诚实。
+// 重合判据与出口聚合收口同一折叠面（foldPlain：NFKC + 小写 + 只留字母数字）且同样
+// 计入标题：收口按 LCS8 判定「复述了某笔记」的句子，这里必然也把该笔记补进引用。
 
 const VERBATIM_CITE_MIN_LEN = 8;
 const VERBATIM_NONWORD_RE = /[^\p{L}\p{N}]+/gu;
 
 export function verbatimUncitedSourceIds(
   answer: string,
-  notes: readonly { id: string; content: string }[],
+  notes: readonly { id: string; title?: string | null; content: string }[],
   citedIds: ReadonlySet<string>,
-  weakIds: ReadonlySet<string>
+  weakIds: ReadonlySet<string>,
+  opts: { citeWeakIf?: (note: { id: string; title?: string | null; content: string }) => boolean } = {}
 ): string[] {
-  const a = answer.replace(VERBATIM_NONWORD_RE, "");
+  const a = foldPlain(answer);
   if (a.length < VERBATIM_CITE_MIN_LEN) return [];
   const out: string[] = [];
   for (const n of notes) {
-    if (citedIds.has(n.id) || weakIds.has(n.id)) continue;
-    const c = n.content.replace(VERBATIM_NONWORD_RE, "");
+    if (citedIds.has(n.id)) continue;
+    if (weakIds.has(n.id) && !opts.citeWeakIf?.(n)) continue;
+    const c = foldPlain(`${n.title ?? ""}\n${n.content}`);
     let hit = false;
     for (let i = 0; i + VERBATIM_CITE_MIN_LEN <= c.length && !hit; i += 1) {
       if (a.includes(c.slice(i, i + VERBATIM_CITE_MIN_LEN))) hit = true;
@@ -3183,6 +3199,43 @@ export function retargetMisindexedSentences(
 }
 
 /**
+ * 弱源角标是否有句级依据（R334 §7.3，生产 Q12 长问）：带 [n] 的句子与第 n 条候选的标题 + 正文连 4 字重合。
+ * 弱源（语义分不达线、关键词未命中）默认剔角标，是防模型给不相干的低分候选乱点角标；但模型转述的正是这条笔记
+ * （「烘焙课堂司康需要的黄油是 80 克 [2]」）时剔掉角标 + 掉卡，就成了「已引用事实丢卡」。
+ */
+export function weakCitationGrounded(
+  answer: string,
+  n: number,
+  note: { title?: string | null; content: string }
+): boolean {
+  const text = `${note.title ?? ""}${note.content}`.replace(VERBATIM_NONWORD_RE, "");
+  if (text.length < MISINDEX_MIN_BODY) return false;
+  const markRe = new RegExp(`[\\[［]0?${n}[\\]］]`);
+  for (const sentence of answer.match(SENTENCE_TOKEN_RE) ?? [answer]) {
+    if (!markRe.test(sentence)) continue;
+    const body = sentence.replace(CITE_RE, "").replace(VERBATIM_NONWORD_RE, "");
+    for (let i = 0; i + MISINDEX_MIN_BODY <= body.length; i += 1) {
+      if (text.includes(body.slice(i, i + MISINDEX_MIN_BODY))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 「这条笔记记了它，问答区不展示 [n]」在上下文确有占位行时是合法指卡，但被指认的 [n] 全部落在
+ * 未隔离过任何一行的笔记上时仍是幻觉（混放召回里别的笔记有占位行，模型把话术泛化到普通行）。
+ * 无角标 / 角标越界一律 false（归因不明，沿用占位口径不改写）。
+ */
+export function phantomClaimCitesOnlyCleanNotes(
+  answer: string,
+  redactedIdx: ReadonlySet<number>,
+  noteCount: number
+): boolean {
+  const cited = [...answer.matchAll(/[\[［]0?(\d+)[\]］]/g)].map((m) => Number(m[1]) - 1);
+  return cited.length > 0 && cited.every((i) => i >= 0 && i < noteCount && !redactedIdx.has(i));
+}
+
+/**
  * Single source of truth for /api/ask citations: the answer text and the
  * references array are rewritten together so every [n] marker left in the
  * answer maps to exactly one returned reference card.
@@ -3190,7 +3243,8 @@ export function retargetMisindexedSentences(
  * - [n] markers cite the prompt snippet order (1-based over `noteIds`).
  * - Weak semantic-only sources (low-score recall that never matched a keyword)
  *   are dropped from the citations AND their markers removed from the text —
- *   unless that would leave the answer with zero references.
+ *   unless that would leave the answer with zero references, or `keepWeak(n)`
+ *   vouches for the marker (sentence-level grounding on a benign note).
  * - Out-of-range markers (model hallucination) are removed from the text.
  * - Surviving citations are renumbered 1..k in first-citation order, both in
  *   the text and in the returned references.
@@ -3200,7 +3254,8 @@ export function retargetMisindexedSentences(
 export function reconcileAskCitations(
   answer: string,
   noteIds: string[],
-  weakIds: ReadonlySet<string>
+  weakIds: ReadonlySet<string>,
+  opts: { keepWeak?: (n: number) => boolean } = {}
 ): { answer: string; references: { index: number; note_id: string }[] } {
   const cited: number[] = [];
   for (const m of answer.matchAll(CITE_RE)) {
@@ -3214,7 +3269,7 @@ export function reconcileAskCitations(
     const cleaned = cleanDanglingCitations(answer.replace(CITE_RE, ""));
     return { answer: cleaned, references: list.map((id, i) => ({ index: i + 1, note_id: id })) };
   }
-  let keep = cited.filter((n) => !weakIds.has(noteIds[n - 1]));
+  let keep = cited.filter((n) => !weakIds.has(noteIds[n - 1]) || opts.keepWeak?.(n) === true);
   if (keep.length === 0) keep = cited;
   const renumber = new Map(keep.map((n, i) => [n, i + 1] as const));
   const rewritten = answer.replace(CITE_RE, (_marker, d: string) => {
@@ -3412,9 +3467,17 @@ export const NO_ANSWER_TEXT = "没找到相关笔记。";
  */
 export function sensitiveHintLine(count: number, terms: string[]): string {
   if (count <= 0) return "";
+  return `\n\n${sensitiveCollapsedLine(count, terms)}`;
+}
+
+/**
+ * R334 §7.4（audit-r333 §14.2 第 4 项）：已标注敏感笔记命中话题词时的计数折叠提示——这是主句，
+ * 不是「没找到」后面的附注：笔记是存在的，只是正文不进问答。只含固定文案与问句自身的关键词。
+ */
+export function sensitiveCollapsedLine(count: number, terms: string[]): string {
   const kw = terms.filter((t) => t.length <= 20).slice(0, 2).join(" ");
   const where = kw ? `搜索「${kw}」` : "搜索相关关键词";
-  return `\n\n另有 ${count} 条加密的敏感笔记可能相关（内容不会进入问答），可到时间流${where}后点击解锁查看。`;
+  return `有 ${count} 条敏感笔记可能相关（已折叠，正文不进入问答），可到时间流${where}后点开解锁查看。`;
 }
 
 /**
@@ -3494,23 +3557,28 @@ export function credentialHintLine(): string {
 export function buildNoAnswerResponse(
   suggestions: Pick<NoteRow, "id" | "title" | "content">[],
   mode: "no_recall" | "not_in_notes" = "no_recall",
-  missingTerm: string | null = null
+  missingTerm: string | null = null,
+  /** R334 §7.4：话题词命中的已标注敏感笔记数；no_recall 时以计数折叠提示作主句，不再说「没找到相关笔记」。 */
+  sensitive: { count: number; terms: string[] } | null = null
 ): {
   answer: string;
   references: { index: number; note_id: string }[];
   /** 任一建议标签因含危险/外传内容而退到占位提示（响应应置 instruction_isolated）。 */
   held: boolean;
 } {
+  const collapsed = sensitive && sensitive.count > 0 ? sensitiveCollapsedLine(sensitive.count, sensitive.terms) : "";
   if (suggestions.length === 0) {
     if (missingTerm) {
       return {
-        answer: `笔记里没有提到与「${missingTerm}」相关的信息。换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`,
+        answer: `笔记里没有提到与「${missingTerm}」相关的信息。换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。${collapsed ? `\n\n${collapsed}` : ""}`,
         references: [],
         held: false,
       };
     }
     return {
-      answer: `${NO_ANSWER_TEXT}换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`,
+      answer: collapsed
+        ? `${collapsed}\n\n普通笔记里没找到能直接作答的内容；换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`
+        : `${NO_ANSWER_TEXT}换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`,
       references: [],
       held: false,
     };
@@ -3523,7 +3591,16 @@ export function buildNoAnswerResponse(
       ? missingTerm
         ? `找到了相近的记录，但里面没有提到与「${missingTerm}」相关的信息：`
         : "找到了相关的笔记，但里面没有提到你问的这个信息："
-      : `${NO_ANSWER_TEXT}以下是几条相近的记录，可能是你想找的：`;
+      : collapsed
+        ? `${collapsed}\n\n另有几条相近的普通笔记，可能是你想找的：`
+        : `${NO_ANSWER_TEXT}以下是几条相近的记录，可能是你想找的：`;
+  if (mode === "not_in_notes" && collapsed) {
+    return {
+      answer: `${lead}\n${lines.join("\n")}\n\n${collapsed}`,
+      references: suggestions.slice(0, 3).map((n, i) => ({ index: i + 1, note_id: n.id })),
+      held,
+    };
+  }
   return {
     answer: `${lead}\n${lines.join("\n")}`,
     references: suggestions.slice(0, 3).map((n, i) => ({ index: i + 1, note_id: n.id })),

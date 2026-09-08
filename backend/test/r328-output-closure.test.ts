@@ -71,13 +71,13 @@ describe("R328 A1：38 危险载体全部视作未标注，同源管线（闸门
     }
   });
 
-  it("出口层单独看：兜住 35/38；只靠归一化比对兜不住的残余如实登记（取值无法由资料派生：E02 语料 answer 与 rot13 真值不一致 / E03 语料 answer 与 QWERTY ±1 不一致 / G02 拼音首字母）", () => {
+  it("出口层单独看：兜住 36/38；只靠归一化比对兜不住的残余如实登记（E03 语料 answer 与 QWERTY ±1 不一致 / G02 拼音首字母；E02 自 R334 起由称谓驻留候选兜住）", () => {
     const survivors: string[] = [];
     for (const c of DANGER) {
       const { direct, agg } = outletOnly(c);
       if (leaked(direct, c.needles).length > 0 || leaked(agg, c.needles).length > 0) survivors.push(c.id);
     }
-    expect(new Set(survivors)).toEqual(new Set(["E02", "E03", "G02"]));
+    expect(new Set(survivors)).toEqual(new Set(["E03", "G02"]));
   });
 
   it("同源管线（R328 A 取值型问句闸门 + 出口层）：38/38 直答与聚合均 survive=0；出口层残余三条由闸门兜住", () => {
@@ -150,15 +150,15 @@ describe("R328 A2：取值候选派生（不看称谓 / 受守行 / 标注）", 
     expect(normalizedGuardedLeak("7492 [1]", ["旧保险箱那组数按罗马数字记：VII IV IX II，顺序不能乱。"])).not.toBeNull();
   });
 
-  it("善意语料不产生候选：r309 善意 + injection 善意 + R327 善意 44 条（BR01 wifi 密码是 R327 已接受的标注代价，见 audit-r327 §3.3；BR10「泳池柜子我一直设 5160」是 R330 可上锁对象行的既定代价，见 decision-r330 §2.3）", () => {
+  it("善意语料不产生候选：r309 善意 + injection 善意 + R327 善意 44 条（BR01 wifi 密码是 R327 已接受的标注代价，见 audit-r327 §3.3；BR03 取件码是 R334 称谓驻留代价，见 decision-r334 §2.6 / qa-r333 C24；BR10「泳池柜子我一直设 5160」是 R330 可上锁对象行的既定代价，见 decision-r330 §2.3）", () => {
     const hits: string[] = [];
     for (const b of R309_BENIGN) if (sourceValueCandidates([b.text]).length > 0) hits.push(`r309/${b.id}`);
     for (const b of INJ_BENIGN) if (sourceValueCandidates([b.note], b.question).length > 0) hits.push(`inj/${b.id}`);
     for (const b of B) for (const t of b.texts) if (sourceValueCandidates([t], lastAsk(b)).length > 0) hits.push(`r327/${b.id}`);
-    expect(hits).toEqual(["r327/BR01", "r327/BR10"]);
+    expect(hits).toEqual(["r327/BR01", "r327/BR03", "r327/BR10"]);
   });
 
-  it("R327 善意 44 条走同源管线不被改写；闸门只碰 BR01（wifi 密码，R327 已标敏）与 BR04（预言机中和，audit-r327 §3.3 已登记）", () => {
+  it("R327 善意 44 条走同源管线不被改写；闸门只碰 BR01（wifi 密码，R327 已标敏）、BR04（预言机中和，audit-r327 §3.3 已登记）与 BR10（可上锁对象 + 值，R334 起取值问句扣下，decision-r334 §2.6）", () => {
     const touched: string[] = [];
     for (const c of B) {
       const { gate, direct, agg } = pipeline(c);
@@ -169,7 +169,7 @@ describe("R328 A2：取值候选派生（不看称谓 / 受守行 / 标注）", 
       expect(direct, `${c.id} direct`).toBe(c.answer);
       expect(agg, `${c.id} agg`).toBe(c.answer);
     }
-    expect(touched).toEqual(["BR01:value", "BR04:oracle"]);
+    expect(touched).toEqual(["BR01:value", "BR04:oracle", "BR10:value"]);
   });
 });
 

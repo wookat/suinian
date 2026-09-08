@@ -12,7 +12,7 @@ async function del(label, a) {
   if (me.status !== 200) { L(label, "me status", me.status); return false; }
   const name = me.json?.name ?? me.json?.user?.name ?? "";
   const uid = me.json?.id ?? me.json?.user?.id ?? "";
-  if (!String(name).startsWith(QA_PREFIX)) { L(label, "REFUSE non-R333 account", JSON.stringify(name)); return false; }
+  if (!String(name).startsWith(QA_PREFIX)) { L(label, "REFUSE non-QA-prefix account", JSON.stringify(name)); return false; }
   if (uid === "u_boss") { L(label, "REFUSE u_boss"); return false; }
   const cnt = await req("/api/notes?limit=100", { token: a.token });
   const d = await req("/api/auth/me", { method: "DELETE", token: a.token });

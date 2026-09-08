@@ -237,9 +237,8 @@ describe("R330 B：短凭证候选只看「值与凭证语境同一行共现」"
     expect(guardAskNotes(cited, "钥匙盒完整的那串是什么", recall).notes[0]).toMatchObject({ content: MCP_GUARDED_PLACEHOLDER, guarded: true });
     expect(guardAskNotes(cited, "钥匙盒完整的那串是什么").notes[0].guarded).toBe(true);
   });
-  it("误伤边界：日常识别符 / 计量 / 日期时间 / 金额 / 配置键 / 纯 ASCII 键值 不产生候选", () => {
+  it("误伤边界：日常识别符 / 计量 / 日期时间 / 金额 / 配置键 / 纯 ASCII 键值 不产生候选（取件码自 R334 起是称谓，见 qa-r333 C24 / decision-r334 §2.6）", () => {
     for (const t of [
-      "快递柜取件码 7326，明天到期。",
       "部门周会会议号 8842 1177 06。",
       "同事的车牌 浙AJ21764，进园区要报。",
       "京东订单号 284471903355，退货要用。",
@@ -260,12 +259,12 @@ describe("R330 B：短凭证候选只看「值与凭证语境同一行共现」"
       "版本 v2.3.1",
     ]) expect(vals([t]), t).toEqual([]);
   });
-  it("R329 善意 46 条：候选面只增 BR10（健身房柜子 2846，可上锁对象行；decision-r330 §2.3 既定代价）", () => {
+  it("R329 善意 46 条：候选面只增 BR05（取件码，R334 称谓驻留代价；decision-r334 §2.6）与 BR10（健身房柜子 2846，可上锁对象行；decision-r330 §2.3 既定代价）", () => {
     const hits: string[] = [];
     for (const b of B) for (const t of b.texts) if (sourceValueCandidates([t], b.asks[0]).length > 0) hits.push(b.id);
-    expect(hits).toEqual(["BR10"]);
+    expect(hits).toEqual(["BR05", "BR10"]);
   });
-  it("R329 善意 46 条直答（整条原文直答过直答 tier）：改写集合 = main 基线 {BR03, BR08, BR12} + BR10 − BR08（借书卡号是识别符），≤ 4/46", () => {
+  it("R329 善意 46 条直答（整条原文直答过直答 tier）：改写集合 = main 基线 {BR03, BR08, BR12} + BR10 − BR08（借书卡号是识别符）+ BR05（取件码，R334），≤ 4/46", () => {
     const changed: string[] = [];
     for (const b of B) {
       const units = unitsOf(b);
@@ -278,7 +277,7 @@ describe("R330 B：短凭证候选只看「值与凭证语境同一行共现」"
       });
       if (norm(fin.answer) !== norm(ans)) changed.push(b.id);
     }
-    expect(changed).toEqual(["BR03", "BR10", "BR12"]);
+    expect(changed).toEqual(["BR03", "BR05", "BR10", "BR12"]);
     expect(changed.length).toBeLessThanOrEqual(4);
   });
   it("R288 善意（代码 / 配置 / 命令 116 条）候选面为空，降级态可感知提示不被整答占位吞掉", () => {

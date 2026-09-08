@@ -51,13 +51,14 @@ const stripCitationMarks = (t: string): string => t.replace(CITATION_MARK_RE, ""
 
 /**
  * R324 C3（audit-r323 A6：delta 扣下的句段在 done 里以明文重现）：逐段闸门因收口类原因扣下的句段，在 done 的答案里逐句复核——
- * 同一句段（去角标折叠后相等或 ≥8 字包含）若在 done 的信任域下仍过不了闸门（passesDoneGate），就从 done 里去掉；
- * 信任域相同的直接去掉（判据同源，不重跑）。整答被去空时退回原文指引 + 原角标。
+ * 同一句段（去角标折叠后相等或 ≥8 字包含）若在 done 的信任域下仍过不了闸门（passesDoneGate），就从 done 里去掉。
+ * done 闸门比逐段闸门多一项只有 done 才确定的输入（最终 references 里的同屏善意单元），所以同信任域也必须重跑，
+ * 不能按「判据同源」直接去掉。整答被去空时退回原文指引 + 原角标。
  */
 export function reconcileDoneAnswer(
   answer: string,
   heldClosed: readonly HeldSegment[],
-  doneTierKind: string,
+  _doneTierKind: string,
   passesDoneGate: (segment: string) => boolean
 ): { answer: string; dropped: number } {
   const held = heldClosed.map((h) => ({ ...h, fold: foldCompact(stripCitationMarks(h.s)) })).filter((h) => h.fold.length >= 4);
@@ -69,7 +70,7 @@ export function reconcileDoneAnswer(
     if (!f) return true;
     const hit = held.find((h) => h.fold === f || (h.fold.length >= 8 && f.includes(h.fold)) || (f.length >= 8 && h.fold.includes(f)));
     if (!hit) return true;
-    if (hit.tier !== doneTierKind && passesDoneGate(stripCitationMarks(p).trim())) return true;
+    if (passesDoneGate(stripCitationMarks(p).trim())) return true;
     dropped += 1;
     return false;
   });

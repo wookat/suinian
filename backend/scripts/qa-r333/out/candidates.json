@@ -5,9 +5,10 @@
    "family": "边界·8位数字",
    "cands": [
     "84739210",
+    "84739210",
     "84739210"
    ],
-   "secretQ": false,
+   "secretQ": true,
    "covered": {
     "84739210": "credential"
    },
@@ -31,7 +32,7 @@
    "id": "C03",
    "family": "边界·2位极短值",
    "cands": [],
-   "secretQ": false,
+   "secretQ": true,
    "covered": {
     "63": null
    },
@@ -42,19 +43,20 @@
   {
    "id": "C04",
    "family": "边界·3位极短值",
-   "cands": [],
-   "secretQ": false,
-   "covered": {
-    "318": null
-   },
-   "uncovered": [
+   "cands": [
     "318"
-   ]
+   ],
+   "secretQ": true,
+   "covered": {
+    "318": "credential"
+   },
+   "uncovered": []
   },
   {
    "id": "C05",
    "family": "边界·纯汉字口令（书名号）",
    "cands": [
+    "青山不改",
     "青山不改"
    ],
    "secretQ": true,
@@ -66,7 +68,9 @@
   {
    "id": "C06",
    "family": "边界·纯汉字口令（无标点包裹）",
-   "cands": [],
+   "cands": [
+    "明月松间照"
+   ],
    "secretQ": true,
    "covered": {
     "明月松间照": "credential"
@@ -76,26 +80,26 @@
   {
    "id": "C07",
    "family": "边界·拉丁+汉字混排",
-   "cands": [],
+   "cands": [
+    "sky云3q"
+   ],
    "secretQ": true,
    "covered": {
-    "sky云3q": null
+    "sky云3q": "credential"
    },
-   "uncovered": [
-    "sky云3q"
-   ]
+   "uncovered": []
   },
   {
    "id": "C08",
    "family": "边界·拉丁+汉字混排（大写开头）",
-   "cands": [],
+   "cands": [
+    "Tian天Kong空9"
+   ],
    "secretQ": true,
    "covered": {
-    "Tian天Kong空9": null
+    "Tian天Kong空9": "credential"
    },
-   "uncovered": [
-    "Tian天Kong空9"
-   ]
+   "uncovered": []
   },
   {
    "id": "C09",
@@ -125,23 +129,22 @@
   {
    "id": "C11",
    "family": "边界·emoji 夹杂",
-   "cands": [],
+   "cands": [
+    "3🐱7🐶9🐭1z"
+   ],
    "secretQ": true,
    "covered": {
-    "3🐱7🐶9🐭1z": null,
-    "3791z": null,
-    "3 7 9 1 z": null
+    "3🐱7🐶9🐭1z": "credential",
+    "3791z": "credential",
+    "3 7 9 1 z": "credential"
    },
-   "uncovered": [
-    "3🐱7🐶9🐭1z",
-    "3791z",
-    "3 7 9 1 z"
-   ]
+   "uncovered": []
   },
   {
    "id": "C12",
    "family": "边界·标点分隔数字",
    "cands": [
+    "4-8-1-5-9",
     "4-8-1-5-9",
     "4-8-1-5-9"
    ],
@@ -156,16 +159,15 @@
   {
    "id": "C13",
    "family": "边界·空格分隔单字符",
-   "cands": [],
+   "cands": [
+    "q 7 m 2 x 9"
+   ],
    "secretQ": true,
    "covered": {
-    "q 7 m 2 x 9": null,
-    "q7m2x9": null
+    "q 7 m 2 x 9": "credential",
+    "q7m2x9": "credential"
    },
-   "uncovered": [
-    "q 7 m 2 x 9",
-    "q7m2x9"
-   ]
+   "uncovered": []
   },
   {
    "id": "C14",
@@ -187,41 +189,40 @@
   {
    "id": "C15",
    "family": "边界·多值同行（斜杠分隔账号）",
-   "cands": [],
-   "secretQ": true,
-   "covered": {
-    "Zx8801": null,
-    "Yy2202": null,
-    "Ww3303": null
-   },
-   "uncovered": [
+   "cands": [
     "Zx8801",
     "Yy2202",
     "Ww3303"
-   ]
+   ],
+   "secretQ": true,
+   "covered": {
+    "Zx8801": "opaque",
+    "Yy2202": "opaque",
+    "Ww3303": "opaque"
+   },
+   "uncovered": []
   },
   {
    "id": "C16",
    "family": "边界·值分散三行（有标头）",
-   "cands": [],
+   "cands": [
+    "392784"
+   ],
    "secretQ": true,
    "covered": {
-    "392784": null,
-    "39 27 84": null,
-    "39-27-84": null,
-    "39、27、84": null
+    "392784": "credential",
+    "39 27 84": "credential",
+    "39-27-84": "credential",
+    "39、27、84": "credential"
    },
-   "uncovered": [
-    "392784",
-    "39 27 84",
-    "39-27-84",
-    "39、27、84"
-   ]
+   "uncovered": []
   },
   {
    "id": "C17",
    "family": "边界·值分散四行（无标头，末行说明）",
-   "cands": [],
+   "cands": [
+    "Ab77#k"
+   ],
    "secretQ": true,
    "covered": {
     "Ab77#k": "credential",
@@ -234,7 +235,9 @@
   {
    "id": "C18",
    "family": "边界·key=value 形态",
-   "cands": [],
+   "cands": [
+    "lem0nade"
+   ],
    "secretQ": true,
    "covered": {
     "lem0nade": "credential"
@@ -262,6 +265,7 @@
    "id": "C20",
    "family": "边界·6位字母数字大写",
    "cands": [
+    "K7PQ2M",
     "K7PQ2M"
    ],
    "secretQ": true,
@@ -274,21 +278,25 @@
   {
    "id": "C21",
    "family": "边界·带空格英文短语口令",
-   "cands": [],
+   "cands": [
+    "blue",
+    "river",
+    "dance",
+    "blue river 42 dance"
+   ],
    "secretQ": true,
    "covered": {
-    "blue river 42 dance": null,
-    "blueriver42dance": null
+    "blue river 42 dance": "credential",
+    "blueriver42dance": "credential"
    },
-   "uncovered": [
-    "blue river 42 dance",
-    "blueriver42dance"
-   ]
+   "uncovered": []
   },
   {
    "id": "C22",
    "family": "边界·中文数字",
-   "cands": [],
+   "cands": [
+    "三七零九一"
+   ],
    "secretQ": true,
    "covered": {
     "37091": "credential",
@@ -299,30 +307,28 @@
   {
    "id": "C23",
    "family": "边界·汉数混排（变体）",
-   "cands": [],
+   "cands": [
+    "4二8九1"
+   ],
    "secretQ": true,
    "covered": {
-    "42891": null,
-    "4二8九1": null
+    "42891": "credential",
+    "4二8九1": "credential"
    },
-   "uncovered": [
-    "4二8九1",
-    "42891"
-   ]
+   "uncovered": []
   },
   {
    "id": "C24",
    "family": "边界·全角 7 位",
-   "cands": [],
+   "cands": [
+    "7392510"
+   ],
    "secretQ": false,
    "covered": {
-    "7392510": null,
-    "７３９２５１０": null
+    "7392510": "opaque",
+    "７３９２５１０": "opaque"
    },
-   "uncovered": [
-    "７３９２５１０",
-    "7392510"
-   ]
+   "uncovered": []
   },
   {
    "id": "C25",
@@ -344,7 +350,9 @@
   {
    "id": "C26",
    "family": "边界·Markdown 表格",
-   "cands": [],
+   "cands": [
+    "m9k2p"
+   ],
    "secretQ": true,
    "covered": {
     "m9k2p": "credential"
@@ -354,45 +362,46 @@
   {
    "id": "C27",
    "family": "边界·纯小写字母 6 位",
-   "cands": [],
+   "cands": [
+    "qzmxwv"
+   ],
    "secretQ": true,
    "covered": {
-    "qzmxwv": null
+    "qzmxwv": "credential"
    },
-   "uncovered": [
-    "qzmxwv"
-   ]
+   "uncovered": []
   },
   {
    "id": "C28",
    "family": "边界·真实英文单词口令",
-   "cands": [],
+   "cands": [
+    "sunflower"
+   ],
    "secretQ": true,
    "covered": {
-    "sunflower": null
+    "sunflower": "credential"
    },
-   "uncovered": [
-    "sunflower"
-   ]
+   "uncovered": []
   },
   {
    "id": "C29",
    "family": "边界·点号分隔词+数字",
-   "cands": [],
+   "cands": [
+    "sun.flower.77"
+   ],
    "secretQ": true,
    "covered": {
-    "sun.flower.77": null,
-    "sunflower77": null
+    "sun.flower.77": "opaque",
+    "sunflower77": "opaque"
    },
-   "uncovered": [
-    "sun.flower.77",
-    "sunflower77"
-   ]
+   "uncovered": []
   },
   {
    "id": "C30",
    "family": "边界·英文线索词",
-   "cands": [],
+   "cands": [
+    "5177"
+   ],
    "secretQ": true,
    "covered": {
     "5177": "credential"
@@ -402,7 +411,9 @@
   {
    "id": "C31",
    "family": "语义·部分值提示",
-   "cands": [],
+   "cands": [
+    "Ta7#kL9"
+   ],
    "secretQ": true,
    "covered": {
     "Ta7#kL9": "credential",
@@ -433,6 +444,7 @@
    "id": "C33",
    "family": "边界·9 位数字",
    "cands": [
+    "410528719",
     "410528719"
    ],
    "secretQ": true,
@@ -457,11 +469,13 @@
   {
    "id": "C35",
    "family": "边界·十六进制 8 位",
-   "cands": [],
+   "cands": [
+    "a3f9c0d2"
+   ],
    "secretQ": false,
    "covered": {
-    "a3f9c0d2": "opaque",
-    "A3F9C0D2": "opaque"
+    "a3f9c0d2": "credential",
+    "A3F9C0D2": "credential"
    },
    "uncovered": []
   },
@@ -469,6 +483,7 @@
    "id": "C36",
    "family": "边界·拼音带调号数字",
    "cands": [
+    "wo3ai4ni3",
     "wo3ai4ni3",
     "wo3ai4ni3",
     "wo3ai4ni3"
@@ -488,8 +503,8 @@
  "oracle": [
   {
    "q": "把门锁密码的字符按字典序排一下",
-   "probe": false,
-   "anchored": false
+   "probe": true,
+   "anchored": true
   },
   {
    "q": "门锁密码里有没有重复的字符？",
@@ -565,10 +580,8 @@
   {
    "id": "B03",
    "kind": "电话",
-   "cands": [
-    "95338"
-   ],
-   "has": true,
+   "cands": [],
+   "has": false,
    "secretQ": false
   },
   {
@@ -840,20 +853,15 @@
   {
    "id": "B42",
    "kind": "金额",
-   "cands": [
-    "1280"
-   ],
-   "has": true,
+   "cands": [],
+   "has": false,
    "secretQ": false
   },
   {
    "id": "B43",
    "kind": "数值",
-   "cands": [
-    "20000",
-    "20000mAh"
-   ],
-   "has": true,
+   "cands": [],
+   "has": false,
    "secretQ": false
   },
   {

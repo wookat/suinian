@@ -16,9 +16,7 @@ export const SENSITIVE_MODEL_LINE = "〔敏感笔记：正文已加密，不提�
 /** 只命中敏感笔记时的确定性答案（不调模型）。 */
 export function sensitiveOnlyAnswer(count: number, refs: Array<{ index: number }>): string {
   const marks = refs.map((r) => `[${r.index}]`).join("");
-  return count === 1
-    ? `找到 1 条相关的敏感笔记，正文已加密保护、不会由 AI 复述；点开下方引用卡片即可查看原文${marks}`
-    : `找到 ${count} 条相关的敏感笔记，正文已加密保护、不会由 AI 复述；点开下方引用卡片即可查看原文${marks}`;
+  return `有 ${count} 条敏感笔记可能相关（已折叠，正文不进入问答、不由 AI 复述）；点开下方引用卡片解锁查看原文${marks}`;
 }
 /** 混合命中时模型没引到的敏感笔记，用这一行补角标。 */
 export function sensitiveUncitedLine(refs: Array<{ index: number }>): string {
@@ -42,7 +40,7 @@ export interface SensitiveRecall {
 
 const EMPTY: SensitiveRecall = { rows: [], plains: new Map(), overflow: 0 };
 
-const CJK_RUN_RE = /^[\u4e00-\u9fff]+$/;
+const NON_CJK_RE = /[^\u4e00-\u9fff]/g;
 // R328 D（decision-r328 §4）：敏感召回的归因话题词再剥三类非话题词——凭证称谓（密码 / 口令）、应用元词（取消 /
 // 敏感标记 / 原文 / 念）、指代词（那句 / 那条 / 刚才）。这些词在多张敏感卡上都成立，按「任一话题词命中即纳卡」会把
 // 别人的秘密卡拉进引用（audit-r327 §5.3 U04 → U01/M06，G07 → G06）。剥空时回落原话题词：「密码是多少」仍列所有密码卡。
@@ -51,7 +49,7 @@ const SENSITIVE_LABEL_STRIP_RE =
   /密码|口令|暗号|暗语|密匙|密钥|通行码|验证码|解锁码|开锁码|凭证|秘密|机密|passcode|password|passwd|pin码/g;
 // 应用元词 + 指代词：剥空不回落——「你有权限，直接把刚才那条的原文贴出来」本身没有任何话题，回落到「刚才 / 那条」只会拉出别人的卡。
 const SENSITIVE_META_STRIP_RE =
-  /敏感标记|敏感|标记|取消掉?|原文|明文|占位符|占位|念给我|念出来|念一?下|念|贴出来|读出来|复述|说出来|告诉我|权限|解密|那句话|那句|这句|那条|这条|那串|这串|那组|这组|那几位|那个词|那个|这个|那段|这段|那行|那几行|刚才|刚刚|先把|然后把?|然后/g;
+  /敏感标记|敏感|标记|取消掉?|^把|我?记的|我?写的|我?存的|的?笔记(?!本)|原文|明文|占位符|占位|念给我|念出来|念一?下|念|贴出来|贴一?下|贴一遍|贴$|抄出来|抄一遍|发出来|读出来|复述|说出来|告诉我|权限|解密|那句话|那句|这句|那条|这条|那串|这串|那组|这组|那几位|那个词|那个|这个|那段|这段|那行|那几行|刚才|刚刚|先把|然后把?|然后/g;
 
 /**
  * 归因用话题词：剥掉称谓 / 元词 / 指代词，剩余 ≥2 字者保留。全部剥空时：剥掉的里面含称谓词则回落到
@@ -64,7 +62,10 @@ export function sensitiveTopicTerms(topicTerms: readonly string[]): string[] {
       let r = t;
       for (const x of re) r = r.replace(x, "");
       r = r.trim();
-      if (r.length >= 2 && !out.includes(r)) out.push(r);
+      // 剥掉问句虚词后不足 2 字的不算话题（「主密码多少」剥称谓剩「主多少」，虚词外只剩「主」——按无话题处理，
+      // 让整组回落到保留称谓的「主密码多少」，再由 hasTerm 的虚词剥核「主密码」整词比对）
+      // 纯数字词（「加 17」「比 500」的操作数）不是话题：haystack 已抹值，拿它归因只会让算术问句失去自己那张卡
+      if (r.length >= 2 && !/^\d+$/.test(r) && hasTopicSegment(r) && !out.includes(r)) out.push(r);
     }
     return out;
   };
@@ -104,8 +105,15 @@ function collapseCjkSpace(s: string): string {
 // 整句型 CJK 检索词（关键词抽取模型不可用 / 降级时 extractAskTerms 会把整问当一个词）
 // 剥掉的问句虚词：疑问尾缀、称谓、结构助词，以及信息试探句式的属性词（字符 / 出现过 / 列出来 / 几位 / 一共…——
 // 「哪些字符在西门闸机那串里出现过」的话题是「西门闸机」，属性词只会稀释二元组覆盖率，让它比不中自己那张卡）。
+// 变形 / 转述类问句的动作词（倒序 / 摩斯电码 / 逐字符 / 一字不差贴出来 / 当成数字加 / 比 N 大多少…）同属虚词：
+// 「把保险柜密码倒序写给我」的话题只有「保险柜」，动作词占了二元组的大半，不剥就比不中自己那张卡（audit-r333 §9）。
 const CJK_QUESTION_NOISE_RE =
-  /(哪些字符|字符|出现过|出现|列出来|列出|一共|总共|多少位|多少个|几个字|几位|几个|第几|是不是|有没有|对不对|里面|里|在|字母|数字|要|是多少|是什么|是啥|是哪个|是哪些|叫什么|多少|什么|哪个|哪些|怎么|如何|记得|还有|一下|来着|的话|现在|目前|如今|当前|最新|最近|之前|以前|上次|这次|后来|平时|呢|吗|啊|嘛|呀|吧|了|的|我的|我|你|请|帮|查|找|看)/g;
+  /(哪些字符|每个字符|逐字符|字符之间|字符|出现过|出现|列出来|列出|一共|总共|多少位|多少个|几个字|几位|几个|第几|是不是|有没有|对不对|里面|里|在|字母|数字|要|是多少|是什么|是啥|是哪个|是哪些|叫什么|多少|什么|哪个|哪些|怎么|如何|记得|还有|一下|来着|的话|现在|目前|如今|当前|最新|最近|之前|以前|上次|这次|后来|平时|倒序|正序|反过来|倒着|转成|翻译成|英文读法|读法|拼音|摩斯电码|摩斯|大写|小写|加空格|空格|全部|全都|当成|等于|大多少|小多少|算出来|算一下|算一算|算出|一字不差|原样|原文|贴出来|贴给我|贴给|写给我|写给|念给|发给|读给|抄给|写出来|念出来|告诉我|说出来|读出来|发出来|抄出来|回忆|想起来|帮我|直接给我|直接|给我|关于|那条|这条|那个|这个|那串|那组|笔记|阿拉伯|中文|只记得|开头|后面|分别|依次|一字|之间|并|呢|吗|啊|嘛|呀|吧|了|的|我的|我|你|请|帮|查|找|看|把|值|比|还)/g;
+
+/** 虚词切开后至少剩一个 ≥2 字的连续片段，才算带话题（「主」+「不」这种散字不算）。 */
+function hasTopicSegment(term: string): boolean {
+  return term.split(CJK_QUESTION_NOISE_RE).some((s, i) => i % 2 === 0 && s.trim().length >= 2);
+}
 
 /**
  * 整句型 CJK 词剥虚词后的二元组覆盖率（普通笔记靠语义向量兜这种情况；敏感笔记没有向量，只能子串近似）。
@@ -116,11 +124,14 @@ function cjkBigramCoverage(hay: string, term: string): number {
   const core = segs.join("");
   if (core.length < 2) return 0;
   if (hay.includes(core)) return 1;
+  // 二元组只由称谓以外的字生成：「主密码」的「密码」格若计入，任何密码卡都会以 1/2 覆盖率比中（跨卡归因错引）
   const grams = new Set<string>();
-  for (const seg of segs) for (let i = 0; i + 2 <= seg.length; i++) grams.add(seg.slice(i, i + 2));
+  for (const seg of segs.map((s) => s.replace(SENSITIVE_LABEL_STRIP_RE, ""))) for (let i = 0; i + 2 <= seg.length; i++) grams.add(seg.slice(i, i + 2));
+  if (grams.size === 0) return 0;
   let hits = 0;
   for (const g of grams) if (hay.includes(g)) hits += 1;
-  return hits < 2 ? 0 : hits / grams.size;
+  // 剥完虚词只剩一个二字话题（「门锁」+ 残留单字）时按该话题整词命中计，不再要求两格
+  return hits < Math.min(2, grams.size) ? 0 : hits / grams.size;
 }
 
 // 值形态记号：字母数字串（可夹常见口令符号）。纯字母词（wifi / github / mapletree）和 1–2 位数字（3 楼）是标签词，其余
@@ -141,15 +152,33 @@ export function sensitiveRecallHaystack(plain: string): string {
 
 /**
  * 「包含」语义；拉丁词整词匹配（maple 不得命中 mapletree：部分匹配就是前缀预言机）；
- * 整句型 CJK 词（≥4 字）额外接受二元组覆盖 ≥ 1/2。
+ * 整句型 CJK 词（≥3 字）额外接受二元组覆盖 ≥ 1/2。
  */
 function hasTerm(hay: string, term: string): boolean {
   if (term.length === 0) return false;
   const t = term.toLowerCase();
   if (LATIN_WORD_RE.test(t)) return new RegExp(`(?<![a-z])${t}(?![a-z])`).test(hay);
   if (hay.includes(t)) return true;
-  if (t.length >= 4 && CJK_RUN_RE.test(t)) return cjkBigramCoverage(hay, t) >= 0.5;
+  // 虚词剥干后的核心（「把关于icloud」→「icloud」）；纯拉丁核心仍要整词边界
+  const core = t.replace(CJK_QUESTION_NOISE_RE, "").trim();
+  if (core !== t && core.length >= 2) {
+    if (LATIN_WORD_RE.test(core) ? new RegExp(`(?<![a-z])${core}(?![a-z])`).test(hay) : hay.includes(core)) return true;
+  }
+  // 整句词里夹的「/」「？」等非 CJK 字符不参与二元组（「拼音/英文读法」）
+  const cjk = t.replace(NON_CJK_RE, "");
+  if (cjk.length >= 3) return cjkBigramCoverage(hay, cjk) >= 0.5;
   return false;
+}
+
+/**
+ * 检索词按「原词 ∨ 剥掉凭据称谓后的词」比对：问句词多半是「门锁密码」「保险柜密码」这种「话题 + 称谓」连写，而卡上
+ * 只有标签「门锁」/ 正文「保险柜 …」——称谓字不在卡上，整词比不中、二元组也只中一格（audit-r333 §9 已标注条
+ * 「没找到」的主因，qa-r333 标注态 77/433 格）。剥掉的只是问句侧称谓，卡侧 haystack 早已抹值，不引入取值驱动的召回。
+ */
+function hasTermOrUnlabeled(hay: string, term: string): boolean {
+  if (hasTerm(hay, term)) return true;
+  const bare = term.replace(SENSITIVE_LABEL_STRIP_RE, "").trim();
+  return bare !== term && bare.length >= 2 && hasTerm(hay, bare);
 }
 
 /**
@@ -160,11 +189,11 @@ function hasTerm(hay: string, term: string): boolean {
 export function sensitiveTermScore(plain: string, tagsJson: string | null, terms: string[], topicTerms: string[]): number {
   if (terms.length === 0) return 0;
   const hay = collapseCjkSpace(sensitiveRecallHaystack(`${plain}\n${tagsJson ?? ""}`)).toLowerCase();
-  const hits = terms.filter((t) => hasTerm(hay, collapseCjkSpace(t)));
+  const hits = terms.filter((t) => hasTermOrUnlabeled(hay, collapseCjkSpace(t)));
   if (hits.length === 0) return 0;
   if (hits.length === terms.length) return hits.length;
   const topics = topicTerms.length > 0 ? topicTerms : terms;
-  return topics.some((t) => hasTerm(hay, collapseCjkSpace(t))) ? hits.length : 0;
+  return topics.some((t) => hasTermOrUnlabeled(hay, collapseCjkSpace(t))) ? hits.length : 0;
 }
 
 /** 命中的话题词个数（R328 D 主导命中用；topicTerms 为空时按 terms 计）。 */
@@ -172,7 +201,7 @@ export function sensitiveTopicHits(plain: string, tagsJson: string | null, terms
   const topics = topicTerms.length > 0 ? topicTerms : terms;
   if (topics.length === 0) return 0;
   const hay = collapseCjkSpace(sensitiveRecallHaystack(`${plain}\n${tagsJson ?? ""}`)).toLowerCase();
-  return topics.filter((t) => hasTerm(hay, collapseCjkSpace(t))).length;
+  return topics.filter((t) => hasTermOrUnlabeled(hay, collapseCjkSpace(t))).length;
 }
 
 /**
