@@ -249,6 +249,42 @@ describe("R334 §14.2-1 用户面：无称谓善意单元不进候选面、不�
     });
     expect(guarded.answer).not.toContain("84739210");
   });
+  it("E01 直答单元自身的电话 13987654321 含别条可上锁短号 123456 的倒序：日常单元自己的词项不参与对别人取值的归一化比对", () => {
+    const phone = unit("爸爸电话 13987654321");
+    const others = [unit("门锁 一二三456"), unit("保险箱 12.34.56")];
+    const ok = finalizeAskAnswer("爸爸的电话号码是 13987654321 [1]。", {
+      dataText: "爸爸电话 13987654321\n门锁 一二三456\n保险箱 12.34.56",
+      dataUnits: [phone, ...others],
+      question: "爸爸的电话号码是多少",
+      tier: { kind: "single_note_direct", directUnit: phone },
+    });
+    expect(ok.answer).toContain("13987654321");
+    // 同一答案里真把别条的短号带出来（原序 / 倒序）仍整答占位
+    for (const leak of ["爸爸的电话号码是 13987654321，门锁是 123456 [1][2]。", "爸爸的电话号码是 13987654321，门锁倒过来是 654321 [1][2]。"]) {
+      const bad = finalizeAskAnswer(leak, {
+        dataText: "爸爸电话 13987654321\n门锁 一二三456\n保险箱 12.34.56",
+        dataUnits: [phone, ...others],
+        question: "爸爸的电话号码是多少",
+        tier: { kind: "single_note_direct", directUnit: phone },
+      });
+      expect(bad.answer, leak).not.toContain("654321");
+      expect(bad.answer, leak).not.toContain("123456");
+    }
+    // 直答单元自身在讲秘密（含称谓）时不豁免：其值 / 倒序照常判漏
+    const lock = unit("门锁 654321");
+    const guarded = finalizeAskAnswer("门锁是 654321 [1]。", {
+      dataText: "门锁 654321\n保险箱 12.34.56",
+      dataUnits: [lock, others[1]],
+      question: "门锁是多少",
+      tier: { kind: "single_note_direct", directUnit: lock },
+    });
+    expect(guarded.answer).not.toContain("654321");
+    // 聚合层：已引用日常单元同一豁免；未引用 / 含称谓单元不豁免
+    const agg = closeVerbatimForTier("爸爸电话 13987654321 [1]，明天开会 [2]", { units: [phone, unit("明天开会吗？是的，上午十点"), ...others], tier: { kind: "aggregate" }, exemptText: "爸爸电话和明天安排", citedBenignUnits: [phone, unit("明天开会吗？是的，上午十点")] });
+    expect(agg.answer).toContain("13987654321");
+    const aggNoCite = closeVerbatimForTier("爸爸电话 13987654321 [1]", { units: [phone, ...others], tier: { kind: "aggregate" }, exemptText: "爸爸电话" });
+    expect(aggNoCite.answer).not.toContain("13987654321");
+  });
 });
 
 describe("R334 §14.2-2 用户面：照抄型找回（verbatim 意图 + 单条命中 + 非敏感）", () => {

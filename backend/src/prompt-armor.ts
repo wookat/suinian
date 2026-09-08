@@ -8105,7 +8105,8 @@ export function closeVerbatimForTier(
     const closed = closeAggregateVerbatim(answer, all, cited.length > 0 ? { visibleUnits: cited } : {});
     // R322 C：聚合层同样收「标签 + 取值」句与散文破坏指令句；归一化比对兜底（方案 2）。
     const labeled = closeSecretLabelSentences(closed.answer, all);
-    const leak = normalizedGuardedLeak(labeled.answer, all, opts.exemptText);
+    const crossAll = crossUnitGuardedLines(all);
+    const leak = normalizedGuardedLeak(labeled.answer, all, opts.exemptText, { plainUnits: cited.filter((u) => plainCitedUnit(u, crossAll, opts.exemptText)) });
     if (leak) return { answer: failClosedGuardAnswer(labeled.answer, leak), count: closed.count + labeled.count + 1, aggregate: closed.count + labeled.count + 1 };
     return { answer: labeled.answer, count: closed.count + labeled.count, aggregate: closed.count + labeled.count };
   }
@@ -8140,7 +8141,8 @@ export function closeVerbatimForTier(
   const closed = directFolded ? closeVerbatimOverlap(guard.answer, { units: [], broadUnits: [direct], question: opts.exemptText }) : { answer: guard.answer, count: 0 };
   // R322 A 兜底（方案 2）：归一化后再比一次——受守取值的加空格 / 拆字 / 倒序 / 全角 / 汉字数字 / base64 / hex 形态仍在答案里时整答换成类别占位（fail-closed）。
   // R328：候选面含全资料取值候选（sourceValueCandidates）——被引用单元未标注、未被认成受守行时，取值形态的重合同样 fail-closed。
-  const leak = normalizedGuardedLeak(closed.answer, [direct, ...others], opts.exemptText);
+  const directPlain = !directFolded && plainCitedUnit(direct, crossUnitGuardedLines([direct, ...others]), opts.exemptText);
+  const leak = normalizedGuardedLeak(closed.answer, [direct, ...others], opts.exemptText, directPlain ? { plainUnits: [direct] } : {});
   if (leak) return { answer: failClosedGuardAnswer(closed.answer, leak), count: strong.count + cred.count + guard.count + closed.count + 1, aggregate: strong.count };
   return { answer: closed.answer, count: strong.count + cred.count + guard.count + closed.count, aggregate: strong.count };
 }
@@ -9244,11 +9246,17 @@ export function partialCandidateLeak(v: string, norm: string): boolean {
  * R328：候选面 = 受守行候选 ∪ 全资料取值候选（sourceValueCandidates，不依赖标注 / 受守行识别）。
  * R334：归一化（NFKC + 小写 + 汉数转阿拉伯 + 去全部非字母数字）本身覆盖空格拆读 / 标点隔开 / 全角 / emoji 夹杂；倒序与 80% 片段覆盖倒写与部分值。
  */
-export function normalizedGuardedLeak(answer: string, units: string[], question?: string): DirectGuardKind | null {
+export function normalizedGuardedLeak(
+  answer: string,
+  units: string[],
+  question?: string,
+  opts: { plainUnits?: readonly string[] } = {},
+): DirectGuardKind | null {
   if (!answer) return null;
   const bare = maskSystemMarks(answer, units).masked.replace(SYSTEM_MARK_SENTINEL_RE, "").replace(CITATION_MARK_RE, "");
-  const norm = normalizeForLeakCompare(bare);
-  if (norm.length < 3) return null;
+  let norm = normalizeForLeakCompare(bare);
+  for (const tok of plainUnitTokens(opts.plainUnits ?? [])) norm = norm.split(tok).join("|");
+  if (norm.replace(/\|/g, "").length < 3) return null;
   let top: DirectGuardKind | null = null;
   const cands: SourceValueCandidate[] = [...guardedValueCandidates(units), ...sourceValueCandidates(units, question)];
   for (const c of cands) {
@@ -9278,6 +9286,27 @@ export function normalizedGuardedLeak(answer: string, units: string[], question?
     }
   }
   return top;
+}
+/**
+ * 累无任何受守面的被引用单元（无受守行 / 称谓 / 跨单元受守行 / 取值候选 / 宽判据）自己的词项（归一后 ≥ 4 位）：
+ * 答案里与它们逐字重合的片段是这条日常笔记自身的事实（电话 / 学号 / 单号），不参与对其他单元受守取值的归一化比对——
+ * 否则 `13987654321` 会因为包含另一条可上锁对象短号 `123456` 的倒序而被整答换成凭证占位。单元自身含任一受守面时不豁免。
+ */
+export function plainCitedUnit(unit: string, crossGuarded?: ReadonlySet<string>, question?: string): boolean {
+  if (!aggregateCitedBenignUnit(unit, crossGuarded)) return false;
+  if (unitCarriesGuardedValue(unit, crossGuarded)) return false;
+  // 问句侧称谓驻留（G07「门口暗号」只在问句里）使纯散文单元也产生候选：那时它不是日常单元。
+  return sourceValueCandidates([unit], question).length === 0;
+}
+function plainUnitTokens(units: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const u of units) {
+    for (const tok of u.normalize("NFKC").split(/[\s,，。？?！!、;；:：「」『』“”"'（）()…]+/)) {
+      const n = normalizeForLeakCompare(tok);
+      if (n.length >= 4) out.add(n);
+    }
+  }
+  return [...out].sort((a, b) => b.length - a.length);
 }
 /** 归一化比对命中后的整答：类别占位 + 原答案里的角标（去重）。 */
 export function failClosedGuardAnswer(answer: string, kind: DirectGuardKind): string {
