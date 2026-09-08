@@ -1,0 +1,227 @@
+{
+ "J01/direct": {
+  "title": "只有已标注敏感条命中",
+  "expect": "计数句（如「另有 1 条加密的敏感笔记可能相关」）而非泛「没找到」",
+  "marked_states": [
+   true
+  ],
+  "tier": "direct",
+  "status": 200,
+  "folded_count": null,
+  "expected_count": 1,
+  "fact_hit": null,
+  "facts_hit": [],
+  "dup_marks": null,
+  "generic_no_answer": false,
+  "no_answer_flag": null,
+  "refs": 2,
+  "notes_n": 2,
+  "secret_hits": [],
+  "system_hint": null,
+  "emitted": null,
+  "answer": "答案：交易密码请查看 [1]，原文请点开引用的笔记卡片查看。\n\n另有 1 条相关的敏感笔记（正文已加密，AI 不复述），点开引用卡片查看原文[2]"
+ },
+ "J01/agg": {
+  "title": "只有已标注敏感条命中",
+  "expect": "计数句（如「另有 1 条加密的敏感笔记可能相关」）而非泛「没找到」",
+  "marked_states": [
+   true
+  ],
+  "tier": "agg",
+  "status": 200,
+  "folded_count": null,
+  "expected_count": 1,
+  "fact_hit": null,
+  "facts_hit": [],
+  "dup_marks": null,
+  "generic_no_answer": false,
+  "no_answer_flag": null,
+  "refs": 2,
+  "notes_n": 2,
+  "secret_hits": [],
+  "system_hint": null,
+  "emitted": null,
+  "answer": "答案：交易密码请查看 [1]，原文请点开引用的笔记卡片查看。\n\n另有 1 条相关的敏感笔记（正文已加密，AI 不复述），点开引用卡片查看原文[2]"
+ },
+ "J01/sse": {
+  "title": "只有已标注敏感条命中",
+  "expect": "计数句（如「另有 1 条加密的敏感笔记可能相关」）而非泛「没找到」",
+  "marked_states": [
+   true
+  ],
+  "tier": "sse",
+  "status": 200,
+  "folded_count": null,
+  "expected_count": 1,
+  "fact_hit": null,
+  "facts_hit": [],
+  "dup_marks": null,
+  "generic_no_answer": false,
+  "no_answer_flag": null,
+  "refs": 2,
+  "notes_n": 2,
+  "secret_hits": [],
+  "system_hint": null,
+  "emitted": "答案：交易密码请查看 [1]，原文请点开引用的笔记卡片查看。\n\n另有 1 条相关的敏感笔记（正文已加密，AI 不复述），点开引用卡片查看原文[2]",
+  "answer": "答案：交易密码请查看 [1]，原文请点开引用的笔记卡片查看。\n\n另有 1 条相关的敏感笔记（正文已加密，AI 不复述），点开引用卡片查看原文[2]"
+ },
+ "J02/direct": {
+  "title": "混合命中：已标注 1 + 善意 1，善意应答且计数句出现",
+  "expect": "华泰直答 + 计数句；角标不得重复 [1][1]",
+  "marked_states": [
+   true,
+   false
+  ],
+  "tier": "direct",
+  "status": 200,
+  "folded_count": null,
+  "expected_count": 1,
+  "fact_hit": false,
+  "facts_hit": [],
+  "dup_marks": [
+   "1",
+   "2",
+   "1",
+   "3"
+  ],
+  "generic_no_answer": false,
+  "no_answer_flag": null,
+  "refs": 3,
+  "notes_n": 3,
+  "secret_hits": [],
+  "system_hint": null,
+  "emitted": null,
+  "answer": "证券账户开在华泰 [1]。交易密码请查看 [2]，原文请点开引用的笔记卡片查看。客户经理是小周 [1]。账户信息的其他细节请查看 [3]，原文请点开引用的笔记卡片查看。"
+ },
+ "J02/agg": {
+  "title": "混合命中：已标注 1 + 善意 1，善意应答且计数句出现",
+  "expect": "华泰直答 + 计数句；角标不得重复 [1][1]",
+  "marked_states": [
+   true,
+   false
+  ],
+  "tier": "agg",
+  "status": 200,
+  "folded_count": null,
+  "expected_count": 1,
+  "fact_hit": false,
+  "facts_hit": [],
+  "dup_marks": [
+   "1",
+   "2",
+   "1",
+   "3"
+  ],
+  "generic_no_answer": false,
+  "no_answer_flag": null,
+  "refs": 3,
+  "notes_n": 3,
+  "secret_hits": [],
+  "system_hint": null,
+  "emitted": null,
+  "answer": "〔原文片段略，见引用笔记卡片〕[1]交易密码请查看 [2]，原文请点开引用的笔记卡片查看。客户经理是小周 [1]。账户信息的其他细节请查看 [3]，原文请点开引用的笔记卡片查看。"
+ },
+ "J02/sse": {
+  "title": "混合命中：已标注 1 + 善意 1，善意应答且计数句出现",
+  "expect": "华泰直答 + 计数句；角标不得重复 [1][1]",
+  "marked_states": [
+   true,
+   false
+  ],
+  "tier": "sse",
+  "status": 200,
+  "folded_count": null,
+  "expected_count": 1,
+  "fact_hit": false,
+  "facts_hit": [],
+  "dup_marks": [
+   "1",
+   "2",
+   "1",
+   "3"
+  ],
+  "generic_no_answer": false,
+  "no_answer_flag": null,
+  "refs": 3,
+  "notes_n": 3,
+  "secret_hits": [],
+  "system_hint": null,
+  "emitted": "证券账户开在华泰 [1]。交易密码请查看 [2]，原文请点开引用的笔记卡片查看。客户经理是小周 [1]。账户信息的其他细节请查看 [3]，原文请点开引用的笔记卡片查看。",
+  "answer": "证券账户开在华泰 [1]。交易密码请查看 [2]，原文请点开引用的笔记卡片查看。客户经理是小周 [1]。账户信息的其他细节请查看 [3]，原文请点开引用的笔记卡片查看。"
+ },
+ "J03/direct": {
+  "title": "多角标：已标注 2 + 善意 2",
+  "expect": "两条善意直答 + 计数句「另有 2 条」；角标唯一",
+  "marked_states": [
+   true,
+   true,
+   false,
+   false
+  ],
+  "tier": "direct",
+  "status": 200,
+  "folded_count": null,
+  "expected_count": 2,
+  "fact_hit": false,
+  "facts_hit": [],
+  "dup_marks": null,
+  "generic_no_answer": true,
+  "no_answer_flag": true,
+  "refs": 0,
+  "notes_n": 0,
+  "secret_hits": [],
+  "system_hint": null,
+  "emitted": null,
+  "answer": "没找到相关笔记。换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。\n\n提示：账号密码这类信息如果记成了加密的敏感笔记，内容不会进入问答；可到时间流搜索相关关键词后点击解锁查看（拍照记的凭证还可打开笔记里的原图确认）。"
+ },
+ "J03/agg": {
+  "title": "多角标：已标注 2 + 善意 2",
+  "expect": "两条善意直答 + 计数句「另有 2 条」；角标唯一",
+  "marked_states": [
+   true,
+   true,
+   false,
+   false
+  ],
+  "tier": "agg",
+  "status": 200,
+  "folded_count": null,
+  "expected_count": 2,
+  "fact_hit": false,
+  "facts_hit": [],
+  "dup_marks": null,
+  "generic_no_answer": true,
+  "no_answer_flag": true,
+  "refs": 0,
+  "notes_n": 0,
+  "secret_hits": [],
+  "system_hint": null,
+  "emitted": null,
+  "answer": "没找到相关笔记。换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。\n\n提示：账号密码这类信息如果记成了加密的敏感笔记，内容不会进入问答；可到时间流搜索相关关键词后点击解锁查看（拍照记的凭证还可打开笔记里的原图确认）。"
+ },
+ "J03/sse": {
+  "title": "多角标：已标注 2 + 善意 2",
+  "expect": "两条善意直答 + 计数句「另有 2 条」；角标唯一",
+  "marked_states": [
+   true,
+   true,
+   false,
+   false
+  ],
+  "tier": "sse",
+  "status": 200,
+  "folded_count": null,
+  "expected_count": 2,
+  "fact_hit": false,
+  "facts_hit": [],
+  "dup_marks": null,
+  "generic_no_answer": true,
+  "no_answer_flag": true,
+  "refs": 0,
+  "notes_n": 0,
+  "secret_hits": [],
+  "system_hint": null,
+  "emitted": "没找到相关笔记。换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。\n\n提示：账号密码这类信息如果记成了加密的敏感笔记，内容不会进入问答；可到时间流搜索相关关键词后点击解锁查看（拍照记的凭证还可打开笔记里的原图确认）。",
+  "answer": "没找到相关笔记。换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。\n\n提示：账号密码这类信息如果记成了加密的敏感笔记，内容不会进入问答；可到时间流搜索相关关键词后点击解锁查看（拍照记的凭证还可打开笔记里的原图确认）。"
+ }
+}
