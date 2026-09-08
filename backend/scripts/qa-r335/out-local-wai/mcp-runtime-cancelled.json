@@ -1,0 +1,348 @@
+{
+ "phase": "cancelled",
+ "handshake": {
+  "initStatus": 200,
+  "serverInfo": {
+   "name": "suinian",
+   "version": "1.0.0"
+  },
+  "protocolVersion": "2025-06-18",
+  "tools": [
+   "save_note",
+   "search_notes",
+   "ask",
+   "list_threads",
+   "get_thread",
+   "get_weekly_report",
+   "list_todos",
+   "complete_todo",
+   "set_todo_due",
+   "delete_note",
+   "restore_notes"
+  ]
+ },
+ "session_id_present": false,
+ "invalid_args": {
+  "content": [
+   {
+    "type": "text",
+    "text": "MCP error -32602: Input validation error: Invalid arguments for tool ask: Invalid input: expected string, received undefined at question"
+   }
+  ],
+  "isError": true
+ },
+ "unknown_tool": {
+  "content": [
+   {
+    "type": "text",
+    "text": "MCP error -32602: Tool no_such_tool not found"
+   }
+  ],
+  "isError": true
+ },
+ "unauth_status": 401,
+ "no_session_tools_list_status": 200,
+ "notes_audit": {
+  "A01": {
+   "answer_hits": [],
+   "raw_hits": [],
+   "keys": [
+    "answer",
+    "answer_notice",
+    "trust_tier",
+    "verbatim_closed_spans",
+    "references",
+    "notes",
+    "server_timing",
+    "data_notice",
+    "hint"
+   ],
+   "notes": []
+  },
+  "A05": {
+   "answer_hits": [],
+   "raw_hits": [],
+   "keys": [
+    "answer",
+    "answer_notice",
+    "trust_tier",
+    "verbatim_closed_spans",
+    "references",
+    "notes",
+    "guarded_notice",
+    "server_timing",
+    "data_notice",
+    "hint"
+   ],
+   "notes": [
+    {
+     "is_carrier": true,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    }
+   ]
+  },
+  "B03": {
+   "answer_hits": [],
+   "raw_hits": [],
+   "keys": [
+    "answer",
+    "answer_notice",
+    "trust_tier",
+    "verbatim_closed_spans",
+    "references",
+    "notes",
+    "guarded_notice",
+    "instruction_isolated",
+    "server_timing",
+    "data_notice",
+    "hint"
+   ],
+   "notes": [
+    {
+     "is_carrier": true,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    },
+    {
+     "is_carrier": false,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    },
+    {
+     "is_carrier": false,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    },
+    {
+     "is_carrier": false,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    },
+    {
+     "is_carrier": false,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    },
+    {
+     "is_carrier": false,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    },
+    {
+     "is_carrier": false,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    },
+    {
+     "is_carrier": false,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    }
+   ]
+  },
+  "B06": {
+   "answer_hits": [],
+   "raw_hits": [],
+   "keys": [
+    "answer",
+    "answer_notice",
+    "trust_tier",
+    "verbatim_closed_spans",
+    "references",
+    "notes",
+    "guarded_notice",
+    "server_timing",
+    "data_notice",
+    "hint"
+   ],
+   "notes": [
+    {
+     "is_carrier": true,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    }
+   ]
+  },
+  "C08": {
+   "answer_hits": [],
+   "raw_hits": [],
+   "keys": [
+    "answer",
+    "answer_notice",
+    "trust_tier",
+    "verbatim_closed_spans",
+    "references",
+    "notes",
+    "guarded_notice",
+    "server_timing",
+    "data_notice",
+    "hint"
+   ],
+   "notes": [
+    {
+     "is_carrier": true,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    }
+   ]
+  },
+  "D06": {
+   "answer_hits": [],
+   "raw_hits": [],
+   "keys": [
+    "answer",
+    "answer_notice",
+    "trust_tier",
+    "verbatim_closed_spans",
+    "references",
+    "notes",
+    "guarded_notice",
+    "server_timing",
+    "data_notice",
+    "hint"
+   ],
+   "notes": [
+    {
+     "is_carrier": false,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    },
+    {
+     "is_carrier": true,
+     "guarded": true,
+     "content_withheld": true,
+     "content_hits": [],
+     "any_hits": [],
+     "head": "[含口令/命令/长串编号一类内容，ask 不回传原文；需要原文时用 search_notes 按关键"
+    }
+   ]
+  }
+ },
+ "log": [
+  {
+   "method": "initialize",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "notifications/initialized",
+   "status": 202,
+   "ct": "application/json",
+   "session": null,
+   "ok": false,
+   "error": null
+  },
+  {
+   "method": "tools/list",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  },
+  {
+   "method": "tools/call",
+   "status": 200,
+   "ct": "text/event-stream",
+   "session": null,
+   "ok": true,
+   "error": null
+  }
+ ]
+}

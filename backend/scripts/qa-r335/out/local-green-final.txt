@@ -1,0 +1,23 @@
+# local green final 2026-09-08T21:51:03Z HEAD=d9b1d23f6c08b8bf651fbc29790a8b45488e5f37 (product code == 1586579)
+## backend npm test
+ RUN  v4.1.11 /home/ubuntu/repos/suinian/backend
+
+
+ Test Files  200 passed (200)
+      Tests  4456 passed (4456)
+   Start at  21:51:04
+   Duration  291.93s (transform 2.68s, setup 0ms, import 29.08s, tests 246.25s, environment 13ms)
+
+## backend typecheck
+> suinian-backend@0.1.0 typecheck
+> tsc --noEmit
+
+## web lint
+src/components/quick-input.tsx:43:17: warning react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+src/pages/insights.tsx:110:5: warning react(immutability): This value cannot be modified help: Modifying a variable defined outside a component or hook is not allowed. Consider using an effect
+src/pages/insights.tsx:249:10: warning react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+## web build
+precache  22 entries (712.35 KiB)
+files generated
+  dist/sw.js
+  dist/workbox-afb9e8d1.js
