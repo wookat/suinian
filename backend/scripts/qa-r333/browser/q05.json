@@ -1,0 +1,60 @@
+{
+  "answer": "蓝鲸读书会在本周六上午十点于湖畔书店集合 1。",
+  "markers": 1,
+  "refs": [
+    {
+      "id": "ask-ref-455cb2b5-d879-4f36-9713-52f743fc4c6b-1",
+      "text": "1\n待办\n09-12 10:00\n#读书会\n3 分钟前\n\n蓝鲸读书会\n\n蓝鲸读书会在周六上午十点于湖畔书店集合。"
+    }
+  ],
+  "events": [
+    {
+      "event": "meta",
+      "time": 1788844385267,
+      "bytes": 79
+    },
+    {
+      "event": "timing",
+      "time": 1788844387408,
+      "bytes": 187
+    },
+    {
+      "event": "meta",
+      "time": 1788844387408,
+      "bytes": 164
+    },
+    {
+      "event": "done",
+      "time": 1788844389789,
+      "bytes": 1041
+    }
+  ],
+  "states": [
+    {
+      "ms": 98,
+      "length": 8,
+      "pending": true,
+      "phase": "thinking"
+    },
+    {
+      "ms": 262,
+      "length": 12,
+      "pending": true,
+      "phase": "retrieval"
+    },
+    {
+      "ms": 2312,
+      "length": 22,
+      "pending": true,
+      "phase": "generating"
+    },
+    {
+      "ms": 4621,
+      "length": 96,
+      "pending": false,
+      "phase": "thinking"
+    }
+  ],
+  "question": "蓝鲸读书会什么时候在哪里集合？",
+  "at": "2026-09-08T05:13:10Z"
+}

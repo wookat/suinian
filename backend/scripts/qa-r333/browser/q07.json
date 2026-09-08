@@ -1,0 +1,60 @@
+{
+  "answer": "星河展览预约下午两点半，入口在东门 1。",
+  "markers": 1,
+  "refs": [
+    {
+      "id": "ask-ref-c06dca07-211c-48bd-84d5-99c968afda45-1",
+      "text": "1\n资料\n#星河展览\n#预约\n4 分钟前\n\n星河展览预约场次\n\n星河展览的预约场次是下午两点半，入口在东门。"
+    }
+  ],
+  "events": [
+    {
+      "event": "meta",
+      "time": 1788844443704,
+      "bytes": 79
+    },
+    {
+      "event": "timing",
+      "time": 1788844445238,
+      "bytes": 187
+    },
+    {
+      "event": "meta",
+      "time": 1788844445238,
+      "bytes": 164
+    },
+    {
+      "event": "done",
+      "time": 1788844448116,
+      "bytes": 1034
+    }
+  ],
+  "states": [
+    {
+      "ms": 139,
+      "length": 8,
+      "pending": true,
+      "phase": "thinking"
+    },
+    {
+      "ms": 323,
+      "length": 12,
+      "pending": true,
+      "phase": "retrieval"
+    },
+    {
+      "ms": 1747,
+      "length": 22,
+      "pending": true,
+      "phase": "generating"
+    },
+    {
+      "ms": 4522,
+      "length": 91,
+      "pending": false,
+      "phase": "thinking"
+    }
+  ],
+  "question": "星河展览预约几点，走哪个入口？",
+  "at": "2026-09-08T05:14:08Z"
+}
