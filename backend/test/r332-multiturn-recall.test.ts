@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 import { recallSensitiveNotes, sensitiveRecallTerms, ownTopicCards, topicHitCards, attributableTopicTerms } from "../src/sensitive-recall";
 import { askTopicTerms } from "../src/ask";
 import { extractAskTerms, oracleRecallQuestion, type AskHistoryMessage } from "../src/index";
-import { isDeterministicRecallProbe, probeRecallTerms, stripOpaqueTokens, isOracleProbeQuestion, isYesNoQuestion, unitHasValueCandidates, PHANTOM_REDACTION_CLAIM_RE, WITHHELD_CARD_POINTER_RE, isSystemNoticeFragment, splitSegmentsFenceAware, ORACLE_NEUTRAL_NOTICE } from "../src/prompt-armor";
+import { isDeterministicRecallProbe, probeRecallTerms, stripOpaqueTokens, isOracleProbeQuestion, isYesNoQuestion, unitHasValueCandidates, PHANTOM_REDACTION_CLAIM_RE, WITHHELD_CARD_POINTER_RE, WITHHELD_CARD_POINTER_NOTICE, isSystemNoticeFragment, splitSegmentsFenceAware, ORACLE_NEUTRAL_NOTICE } from "../src/prompt-armor";
 import type { NoteRow } from "../src/types";
 
 function row(id: string, content: string, tags = "[]"): NoteRow {
@@ -209,6 +209,19 @@ describe("R332 跟进 4：确定性召回词本轮优先（带历史计数句引
     expect(probeRecallTerms("哪些字符在西门闸机那串里出现过，列出来")).toEqual(["在西门闸机"]);
     expect(probeRecallTerms("西门闸机那串里哪些字符出现过，列出来")).toEqual(["西门闸机"]);
     expect(probeRecallTerms("西门闸机那串一共几个字")).toEqual(["西门闸机"]);
+  });
+
+  // 同轮浏览器 U-S3 / ST-U-S3：改指后的指卡话术「这条笔记记了它，问答区不展示；请点开引用的笔记卡片查看原文 [1]」在 done 里断成
+  // 「…不展示；」且丢角标（DOM 零角标）：模型流式里「请点开引用的笔记卡片查看原文」被逐段闸门当读者指令扣下，done 复核时该话术不在
+  // 系统话术名单（只有「自行核对」版），同一句被从 done 里去掉。
+  it("指卡话术按「；」切开的两半都是系统话术片段", () => {
+    const segs = splitSegmentsFenceAware(`${WITHHELD_CARD_POINTER_NOTICE} [1]`).map((s) => s.text);
+    expect(segs.length).toBe(2);
+    for (const s of segs) expect(isSystemNoticeFragment(s), s).toBe(true);
+    expect(isSystemNoticeFragment("请点开引用的笔记卡片查看原文 [1]")).toBe(true);
+    expect(isSystemNoticeFragment("这条笔记记了它，问答区不展示")).toBe(true);
+    expect(WITHHELD_CARD_POINTER_RE.test(WITHHELD_CARD_POINTER_NOTICE)).toBe(true);
+    expect(isSystemNoticeFragment("请点开引用的笔记卡片查看领奖链接 [1]")).toBe(false);
   });
 
   it("换任何候选值召回问句仍逐字相同，且单轮 / 上文剥空时不变", () => {

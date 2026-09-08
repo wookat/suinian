@@ -9366,11 +9366,15 @@ export const PHANTOM_REDACTION_CLAIM_RE = /问答区不展示|记了它[，,]?\s
 export const WITHHELD_CARD_POINTER_RE =
   /问答区不展示|已从问答上下文隔离|记了它|点开(?:引用的|下方的?)?(?:引用|笔记)?卡片/u;
 
+/** 指卡归因改指后的统一话术（角标由调用方追加）；也是模型被教会对着隔离占位行作答的句式。 */
+export const WITHHELD_CARD_POINTER_NOTICE = "这条笔记记了它，问答区不展示；请点开引用的笔记卡片查看原文";
+
 const SYSTEM_NOTICE_TEXTS: readonly string[] = [
   ORACLE_NEUTRAL_NOTICE,
   ...Object.values(DIRECT_GUARD_PLACEHOLDER),
   VERBATIM_REDIRECT_NOTICE,
   MODEL_REDACTED_LINE,
+  WITHHELD_CARD_POINTER_NOTICE,
 ];
 
 /**
