@@ -26,7 +26,8 @@ import {
   type TrustTier,
 } from "../src/prompt-armor";
 import { askGuardNoteUnit, pickVerbatimRecallTarget, salvageEnumeratedTerms, extractAskTerms } from "../src/index";
-import { buildNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds, reconcileAskCitations, weakCitationGrounded } from "../src/ask";
+import { askTopicTerms, buildNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds, reconcileAskCitations, weakCitationGrounded } from "../src/ask";
+import { attributableTopicTerms, sensitiveRecallTerms } from "../src/sensitive-recall";
 import { reconcileDoneAnswer } from "../src/ask-context";
 import { guardAskNotes, MCP_GUARDED_PLACEHOLDER } from "../src/mcp";
 import { detectSensitive } from "../src/triage";
@@ -252,6 +253,15 @@ describe("R334 §14.2-2 用户面：照抄型找回（verbatim 意图 + 单条�
     expect(pickVerbatimRecallTarget(notes, units, undefined, ["不存在的话题"])).toBeNull();
     expect(pickVerbatimRecallTarget(notes, units, undefined, [])).toBeNull();
     expect(pickVerbatimRecallTarget([notes[0]], [units[0]], undefined, [])?.idx).toBe(0);
+  });
+  it("照抄找回话题词：「那条围巾的笔记原文」剥掉元词后只剩「围巾」，命中唯一那条；「笔记本」不被剥", () => {
+    const topic = (q: string) => attributableTopicTerms(askTopicTerms(sensitiveRecallTerms(extractAskTerms(q, []), [], q)));
+    expect(topic("那条围巾的笔记原文是什么")).toEqual(["围巾"]);
+    expect(topic("那条黄色围巾的笔记原文是什么")).toEqual(["黄色围巾"]);
+    expect(topic("我的笔记本电脑放哪了")).toEqual(["笔记本电脑放哪了"]);
+    const notes = [row("山茶色围巾放在衣柜第二层的白色收纳盒。", { title: "山茶色围巾存放位置" }), row("栀子花每周三浇水 250 毫升。")];
+    const units = notes.map((n) => askGuardNoteUnit(n));
+    expect(pickVerbatimRecallTarget(notes, units, undefined, topic("那条围巾的笔记原文是什么"))?.idx).toBe(0);
   });
   it("照抄路由终审：原文 + 角标原样通过，不附「不逐字转写」指引", () => {
     const u = unit("docker compose up -d 起服务");
