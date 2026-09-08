@@ -3212,6 +3212,20 @@ export function weakCitationGrounded(
 }
 
 /**
+ * 「这条笔记记了它，问答区不展示 [n]」在上下文确有占位行时是合法指卡，但被指认的 [n] 全部落在
+ * 未隔离过任何一行的笔记上时仍是幻觉（混放召回里别的笔记有占位行，模型把话术泛化到普通行）。
+ * 无角标 / 角标越界一律 false（归因不明，沿用占位口径不改写）。
+ */
+export function phantomClaimCitesOnlyCleanNotes(
+  answer: string,
+  redactedIdx: ReadonlySet<number>,
+  noteCount: number
+): boolean {
+  const cited = [...answer.matchAll(/[\[［]0?(\d+)[\]］]/g)].map((m) => Number(m[1]) - 1);
+  return cited.length > 0 && cited.every((i) => i >= 0 && i < noteCount && !redactedIdx.has(i));
+}
+
+/**
  * Single source of truth for /api/ask citations: the answer text and the
  * references array are rewritten together so every [n] marker left in the
  * answer maps to exactly one returned reference card.

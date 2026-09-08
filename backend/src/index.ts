@@ -86,7 +86,7 @@ import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES, BACKUP_AI_DERIVED_NOT
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
 import { propagateSensitiveContinuation } from "./sensitive-continuation";
-import { type AskEnumRoute, parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, weakCitationGrounded, retargetMisindexedCitation, retargetMisindexedSentences, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources, citeIsolationMarks } from "./ask";
+import { type AskEnumRoute, parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, weakCitationGrounded, phantomClaimCitesOnlyCleanNotes, retargetMisindexedCitation, retargetMisindexedSentences, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources, citeIsolationMarks } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -5223,7 +5223,19 @@ app.post("/api/ask", async (c) => {
   // 主题词本身若对得上任一候选笔记的受守取值（问句里夹带的候选值），不得参与归因——否则「引哪张卡」就是存在性 bit。
   const gateTopics = askTopicTerms(terms).filter((t) => normalizedGuardedLeak(t, askModelUnits) === null);
   const gateNoteText = (n: NoteRow): string => `${n.title ?? ""}\n${n.content}\n${n.tags ?? ""}`;
-  if (oracleProbe) {
+  const askOutlet = askOutletOf(c.req.header(ASK_OUTLET_HEADER));
+  // R334 §7.2：「逐字 / 一字不差」等照抄措辞同时落在转写类预言机意图里（W02「tail 那条命令原文是什么，逐字给我」被中和）。
+  // 用户点名要自己某条笔记原文、话题唯一命中一条合格善意单元（verbatimRecallEligible：无凭据称谓 / 端点 / 破坏面）时，
+  // 预言机闸门在这条上无受守材料可护——先放行给照抄路由；只放行纯意图触发（问句不带候选值、非是非问、app 出口），
+  // 照抄路由任一环节否决则仍回到闸门中性化，不落到常规生成。
+  const verbatimOracleOverride =
+    oracleProbe &&
+    askOutlet === "app" &&
+    !questionCarriesOpaqueToken(question) &&
+    !isYesNoQuestion(question) &&
+    questionRequestsVerbatim(question) &&
+    pickVerbatimRecallTarget(notes, askModelUnits, askCrossGuarded, turnTopicTerms) !== null;
+  const oracleGate = (): Response | null => {
     // 敏感标注的笔记本身就是受守条目（候选里只有占位行，形态判定看不见它），归因已由 sensitiveTermScore 按话题词完成，
     // 直接作为引用卡保留；普通候选仍按受守行 + 主题词归因收窄。
     // R332 P0-4：受守材料前提不只看受守行——取值候选面非空的未标注笔记（「机房空调面板要输 5290」）同样不进生成；
@@ -5263,6 +5275,11 @@ app.post("/api/ask", async (c) => {
         guard_finalized: true,
       });
     }
+    return null;
+  };
+  if (oracleProbe && !verbatimOracleOverride) {
+    const gated = oracleGate();
+    if (gated) return gated;
   }
   // R328 A（decision-r328 §2）：恢复 R324 A 的取值型问句闸门，作为数据层标注之上的第二道（R326 删掉它后，漏标笔记只剩出口层
   // 归一化比对，而编码 / 拼音首字母一类「出口层算不出真值」的载体无从比对——audit-r327 §3.1）。只看未标注笔记：标注为敏感的
@@ -5359,6 +5376,7 @@ app.post("/api/ask", async (c) => {
   const perNoteBudget = Math.max(500, Math.floor(CONTEXT_TOTAL_BUDGET / Math.max(notes.length, 1)));
   let askModelWithheld = 0;
   const askWithheldIdx: number[] = [];
+  const askRedactedIdx = new Set<number>();
   const context = notes
     .map((n, i) => {
       const tags = (JSON.parse(n.tags || "[]") as string[]).join(",");
@@ -5379,13 +5397,18 @@ app.post("/api/ask", async (c) => {
       // R326：数据层标注为敏感的笔记只给元数据头 + 固定占位行（不取标题 / 正文 / 链接摘要的任何派生物）。
       if (n.is_sensitive) {
         askModelWithheld += 1;
+        askRedactedIdx.add(i);
         return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${tags ? `, 标签:${tags}` : ""}) ${SENSITIVE_MODEL_LINE}`;
       }
       const redacted = modelContextNoteText({ title: n.title, content: n.content, unit: askModelUnits[i], crossGuarded: askCrossGuarded, budget: perNoteBudget });
-      if (redacted.redacted > 0) askModelRedactedLines += redacted.redacted;
+      if (redacted.redacted > 0) {
+        askModelRedactedLines += redacted.redacted;
+        askRedactedIdx.add(i);
+      }
       if (redacted.withheld) {
         askModelWithheld += 1;
         askWithheldIdx.push(i);
+        askRedactedIdx.add(i);
       }
       return `[${i + 1}] (id=${n.id}, ${n.created_at}, ${n.category ?? ""}${extras ? `, ${extras}` : ""}${graphTag}${outTag}) ${redacted.text}`;
     })
@@ -5427,7 +5450,6 @@ app.post("/api/ask", async (c) => {
   // R312 P0-1：信任域。出口类型由请求头确定（MCP 内部转发带 x-suinian-outlet: mcp）；引用数在 done 时从
   // 最织 references 确定。流式逐段闸门只在「召回仅 1 条非弱源笔记且已出现 [1]」时才能确知 done 必为单笔记直答，
   // 否则按聚合层扣段（fail-closed：done 只可能比流式更宽松，不存在先泄后收）。
-  const askOutlet = askOutletOf(c.req.header(ASK_OUTLET_HEADER));
   const askUnitByNoteId = new Map(notes.map((n, i) => [n.id, askGuardNoteUnits[i]] as const));
   const askRowById = new Map(notes.map((n) => [n.id, n] as const));
   const askTierOf = (body: Record<string, unknown>): TrustTier => askTierFromBody(body, askUnitByNoteId, askOutlet);
@@ -5621,7 +5643,12 @@ app.post("/api/ask", async (c) => {
   // 片段里没有隔离占位时，模型不得替某条笔记宣称「记了它，问答区不展示」——
   // 那会把用户引去一张不含答案的卡片；按「笔记里没提到」处置，让敏感零召回提示接管。
   // R334 §7.3：只剥幻觉话术那几句，同一回答里已作答的普通事实不被「没提到」覆盖。
-  if (answer2 && askModelRedactedLines === 0 && PHANTOM_REDACTION_CLAIM_RE.test(answer2)) {
+  // 混放语料里别的笔记有占位行、而被指认的那张卡 [n] 本身一行未隔离时，这句「记了它，问答区不展示 [n]」同样是幻觉。
+  if (
+    answer2 &&
+    PHANTOM_REDACTION_CLAIM_RE.test(answer2) &&
+    (askModelRedactedLines === 0 || phantomClaimCitesOnlyCleanNotes(answer2, askRedactedIdx, notes.length))
+  ) {
     const stripped = stripPhantomRedactionClaims(answer2);
     if (stripped) {
       answer2 = stripped;
@@ -6394,7 +6421,7 @@ app.post("/api/ask", async (c) => {
   // 一条非敏感笔记、该单元合格（verbatimRecallEligible：受守行只有日常 code、无凭据称谓 / 端点 / 破坏 / 指令面）时，
   // 不再让模型「概括 + 请点开卡片」，确定性直接回原文 + 角标。只在 app 出口（卡片同屏）；判别器对原文判危 /
   // 不可用 / 保守否决，或出口终审改写了任何一处 ⇒ 放弃该路由，退回常规生成（fail-closed）。
-  if (askOutlet === "app" && !metaQuestion && !oracleProbe && questionRequestsVerbatim(question)) {
+  if (askOutlet === "app" && !metaQuestion && (!oracleProbe || verbatimOracleOverride) && questionRequestsVerbatim(question)) {
     const target = verbatimRecallTarget();
     if (target) {
       const unit = askGuardNoteUnits[target.idx];
@@ -6428,6 +6455,10 @@ app.post("/api/ask", async (c) => {
       } else {
         console.log(`ask: verbatim recall route skipped (classifier ${cls.unavailable ? "unavailable" : cls.conservative ? "conservative" : "flagged"})`);
       }
+    }
+    if (verbatimOracleOverride) {
+      const gated = oracleGate();
+      if (gated) return gated;
     }
   }
 

@@ -12,6 +12,9 @@ import {
   unitCarriesGuardedValue,
   residencyTriggered,
   isOracleProbeQuestion,
+  questionRequestsVerbatim,
+  questionCarriesOpaqueToken,
+  isYesNoQuestion,
   isSecretValueQuestion,
   verbatimRecallEligible,
   closeVerbatimForTier,
@@ -26,7 +29,7 @@ import {
   type TrustTier,
 } from "../src/prompt-armor";
 import { askGuardNoteUnit, pickVerbatimRecallTarget, salvageEnumeratedTerms, extractAskTerms } from "../src/index";
-import { askTopicTerms, buildNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds, reconcileAskCitations, weakCitationGrounded } from "../src/ask";
+import { askTopicTerms, buildNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds, reconcileAskCitations, weakCitationGrounded, phantomClaimCitesOnlyCleanNotes } from "../src/ask";
 import { attributableTopicTerms, sensitiveRecallTerms } from "../src/sensitive-recall";
 import { reconcileDoneAnswer } from "../src/ask-context";
 import { guardAskNotes, MCP_GUARDED_PLACEHOLDER } from "../src/mcp";
@@ -413,6 +416,36 @@ describe("R334 §14.2-3 用户面：幻觉「不展示 / 请点开卡片」话�
   it("无幻觉话术原样返回", () => {
     const s = "海鸥跑团周六早 7 点滴水湖集合 [1]，装备清单在另一条 [2]。";
     expect(stripPhantomRedactionClaims(s)).toBe(s);
+  });
+  // 生产 9faa995 族外语料 E08（「航班号是多少」）：混放账号里另一条载体有占位行，模型对一行未隔离的航班笔记也答
+  // 「记了它，问答区不展示 [1]」；只看全局占位行数就放过了。按被指认的那张卡自身有无隔离行判。
+  it("占位行在别的笔记上、被指认的 [n] 本身干净 ⇒ 仍是幻觉；指到占位卡 / 无角标 / 越界不算", () => {
+    const redacted = new Set([1]);
+    expect(phantomClaimCitesOnlyCleanNotes("这条笔记记了它，问答区不展示，请点开引用的笔记卡片查看原文 [1]", redacted, 3)).toBe(true);
+    expect(phantomClaimCitesOnlyCleanNotes("这条笔记记了它，问答区不展示 [2]", redacted, 3)).toBe(false);
+    expect(phantomClaimCitesOnlyCleanNotes("记了它，问答区不展示 [1][2]", redacted, 3)).toBe(false);
+    expect(phantomClaimCitesOnlyCleanNotes("这条笔记记了它，问答区不展示", redacted, 3)).toBe(false);
+    expect(phantomClaimCitesOnlyCleanNotes("问答区不展示 [4]", redacted, 3)).toBe(false);
+    expect(phantomClaimCitesOnlyCleanNotes("问答区不展示 ［3］", redacted, 3)).toBe(true);
+  });
+});
+
+describe("R334 §7.2 照抄找回与预言机意图重叠（生产 W02）", () => {
+  it("「逐字给我」同时是照抄措辞和转写预言机意图；目标单元（日常 code 行）合格，凭据载体不合格", () => {
+    const q = "tail 那条命令原文是什么，逐字给我";
+    expect(questionRequestsVerbatim(q)).toBe(true);
+    expect(isOracleProbeQuestion(q, { anchored: true })).toBe(true);
+    expect(questionCarriesOpaqueToken(q)).toBe(false);
+    expect(isYesNoQuestion(q)).toBe(false);
+    expect(verbatimRecallEligible(unit("tail -n 200 app.log 看最近日志"))).toBe(true);
+    expect(verbatimRecallEligible(unit("路由器后台密码 sky云3q"))).toBe(false);
+    expect(verbatimRecallEligible(unit("rm -rf /var/log/* 清日志"))).toBe(false);
+  });
+  it("候选里混放凭据载体时，照抄目标只从合格单元里选；话题命中凭据载体本身 ⇒ null（不猜）", () => {
+    const rows = [row("tail -n 200 app.log 看最近日志"), row("服务器 tail 日志口令 Zq7#pL")];
+    const units = rows.map((r) => unit(r.content));
+    expect(pickVerbatimRecallTarget(rows, units, undefined, ["最近日志"])?.idx).toBe(0);
+    expect(pickVerbatimRecallTarget(rows, units, undefined, ["口令"])).toBeNull();
   });
 });
 
