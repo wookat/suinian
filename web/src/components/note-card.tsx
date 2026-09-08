@@ -357,6 +357,8 @@ export function NoteCard({
     pending &&
     Date.now() - parseServerTime(pendingSince).getTime() > (imported ? IMPORT_PENDING_LATE_MS : PENDING_LATE_MS)
   const sensitive = note.is_sensitive === 1
+  // R334：未标注但驻留口令 / 密钥称谓的问答引用卡只带占位体（guarded + content_withheld），与敏感卡同一条点开取回路径
+  const guardedCard = !sensitive && note.content_withheld === true
   // 敏感预检命中但尚待模型复判（R312 P0-3：R311 T2「加密卡→明文卡」的翻转就是这个状态被当成定论展示）
   const sensitiveRejudging = sensitive && note.meta?.needs_retriage === true
   // 可执行载荷折叠（R304 P0-A → R312 P0-3）：数据面标记 → strict/broad 默认折叠 + 警示，
@@ -938,7 +940,7 @@ export function NoteCard({
               </Button>
             </div>
           </div>
-        ) : sensitive && !revealed ? (
+        ) : (sensitive || guardedCard) && !revealed ? (
           <button
             onClick={(e) => {
               e.stopPropagation()
@@ -956,12 +958,14 @@ export function NoteCard({
             </span>
             <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border bg-secondary px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
               {revealing ? <Loader2 className="size-3 animate-spin" /> : <Eye className="size-3" />}
-              {revealing ? "取回原文中…" : "敏感内容，点击查看"}
+              {revealing ? "取回原文中…" : guardedCard ? "含口令 / 密钥一类内容，点击查看原文" : "敏感内容，点击查看"}
             </span>
             <span className="w-full text-xs leading-relaxed text-muted-foreground">
               {revealError
                 ? `取回原文失败：${revealError}，点击重试`
-                : sensitiveRejudging
+                : guardedCard
+                  ? "这条未标注敏感，但正文带口令 / 密钥一类称谓：问答引用卡不回传原文，点开后按登录态取回；取回后可在菜单「标记为敏感」加密保护"
+                  : sensitiveRejudging
                   ? "疑似密码/凭据类信息，已先加密保护，AI 复判中；若复判为普通内容会自动恢复明文展示"
                   : "已加密保护：搜索仍能搜到、问答仍会引用这张卡片，但 AI 只拿到占位符，原文只在你点开时显示；若属误判，可在右上角菜单「取消敏感标记」（取消后不再加密遮罩、卡片 / 详情可直接看原文——含口令密钥的行仍按惯例默认折叠、一键展开；AI 回答对其中带口令 / 操作语境的短码取值仍按出口兜底占位，无任何称谓的短值不保证）"}
             </span>

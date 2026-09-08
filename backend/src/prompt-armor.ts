@@ -7256,6 +7256,10 @@ export interface FinalizeAskAnswerOpts {
    * 组装时已逐条按聚合口径收口；这里不再对整答做资料重合复核（金额/日期数字与笔记的巧合公共串会把
    * 结构化数值整行抹掉）。其它出口审计（外链/邮箱/指令隔离/危险残片）照常。 */
   composedLabels?: boolean;
+  /** R334 §7.3：聚合层已进入引用列表的非敏感资料单元；只有其中无任何受守面的（aggregateCitedBenignUnit 复判）才享卡片同屏豁免。 */
+  citedBenignUnits?: string[];
+  /** R334 §7.2：照抄型找回的确定性原文答案（调用方已按 verbatimRecallEligible 选定单一非敏感单元）：直答层不对 code 行套结构性占位、不附「不逐字转写」指引；其余出口全走。 */
+  verbatimRecall?: boolean;
 }
 
 export type FinalizeAskAnswerResult = {
@@ -7723,7 +7727,7 @@ const CITATION_MARK_RE = /[[［]\d{1,2}[\]］]/g;
 export function closeAggregateVerbatim(
   answer: string,
   units: string[],
-  opts: { visibleUnit?: string; skipOpaqueTokens?: boolean } = {}
+  opts: { visibleUnit?: string; visibleUnits?: string[]; skipOpaqueTokens?: boolean } = {}
 ): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
   const live = units.filter((u) => typeof u === "string" && u.trim().length > 0);
   if (live.length === 0 || !answer) return { answer, count: 0, spans: [] };
@@ -7736,7 +7740,7 @@ export function closeAggregateVerbatim(
 function closeAggregateVerbatimMasked(
   answer: string,
   live: string[],
-  opts: { visibleUnit?: string; skipOpaqueTokens?: boolean }
+  opts: { visibleUnit?: string; visibleUnits?: string[]; skipOpaqueTokens?: boolean }
 ): { answer: string; count: number; spans: Array<{ start: number; end: number }> } {
   return replaceHitSentences(answer, aggregateHitSpans(answer, live, opts));
 }
@@ -7745,7 +7749,7 @@ function closeAggregateVerbatimMasked(
 function aggregateHitSpans(
   answer: string,
   live: string[],
-  opts: { visibleUnit?: string; codeSpanNeedsSyntax?: boolean; skipOpaqueTokens?: boolean }
+  opts: { visibleUnit?: string; visibleUnits?: string[]; codeSpanNeedsSyntax?: boolean; skipOpaqueTokens?: boolean }
 ): Array<{ start: number; end: number }> {
   // 单笔记直答层：命中片段若本身就出现在同屏引用卡片的那条笔记里（其它单元只是重复它——图谱三元组的实体名、
   // 分片单元、内容相近的未引用笔记），收口对攻击者无收益，不计。
@@ -7755,11 +7759,19 @@ function aggregateHitSpans(
     const f = foldPlain(answer.slice(s.start, s.end));
     return f.length > 0 && visible.includes(f);
   };
+  // 聚合层同屏卡片（visibleUnits：被引用且无任何受守面的单元）只豁免 LCS8 基线 / 拼接复述 / 分节拼装三条「原文重合」判据；
+  // 凭证取值 / 端点 / 代码 / 受守行取值 / 高熵记号等只增不减的补充判据不看它。折叠面以 `|` 相接（折叠面只含字母数字，不会跨单元拼出子串）。
+  const visibleLcs = [visible, ...(opts.visibleUnits ?? []).map(foldPlain)].filter((f) => f.length > 0).join("|");
+  const inVisibleLcs = (s: { start: number; end: number }): boolean => {
+    if (!visibleLcs) return false;
+    const f = foldPlain(answer.slice(s.start, s.end));
+    return f.length > 0 && visibleLcs.includes(f);
+  };
   const raw = verbatimOverlapSpans(answer, live, {
     lcs: AGGREGATE_LCS_CHARS,
     lineMin: AGGREGATE_LINE_CHARS,
     pieces: true,
-  }).filter((s) => !inVisible(s));
+  }).filter((s) => !inVisibleLcs(s));
   // R314 P0-2：资料单元里的凭证取值（<8 字的 PIN/口令/连接串口令段）在聚合层也是命中——只增不减的补充，不影响 LCS8 基线。
   for (const s of credentialValueSpans(answer, live)) if (!inVisible(s)) raw.push(s);
   // 端点取值（端口 / 主机 / 域名 / IP）：R313 聚合层「任意危险片段」残留主体（D01「端口 4444」、B01「relay3」）。
@@ -7803,10 +7815,10 @@ function aggregateHitSpans(
   // 拼接复述（per-unit-gram 缝，R313 J07「管道给sh」）：每段公共串都 <8，但整句几乎全由资料片段拼成（只夹了
   // 「是 / 然后」一类填充字）。按句计覆盖：≥NEAR_VERBATIM_PIECE 归一化字的公共片段覆盖 ≥NEAR_VERBATIM_RATIO 且
   // 覆盖字数 ≥AGGREGATE_LCS_CHARS ⇒ 整句命中。同为只增不减的补充。
-  for (const s of nearVerbatimSentences(answer, live, visible)) raw.push(s);
+  for (const s of nearVerbatimSentences(answer, live, visibleLcs)) raw.push(s);
   // 分节拼装（R313 J06「8kd ⫽ 2mv ⫽ 5qz → 8kd2mv5qz」）：答案里字母数字混合的长记号若能被各单元 ≥3 字的
   // 字母数字片段无缝铺满，则视为拼装出的凭证/密钥，整句占位。
-  for (const s of tiledTokenSpans(answer, live, visible)) raw.push(s);
+  for (const s of tiledTokenSpans(answer, live, visibleLcs)) raw.push(s);
   // R320：资料派生的短高熵记号 / 长数字串 / 分组数字串（答案记号与某单元记号相同，或是它 ≥3 字含数字的子段）：同为只增不减的补充。
   for (const s of dataDerivedOpaqueSpans(answer, live)) if (!inVisible(s)) raw.push(s);
   // R320：受守行（有结构面的行）上任何 ≥3 字含数字的取值（`| 3391 | 7724 | Bb2#ee5 |` 的 4 位门禁码）在答案里出现即命中——
@@ -8043,7 +8055,7 @@ function replaceHitSentences(
  */
 export function closeVerbatimForTier(
   answer: string,
-  opts: { units: string[]; execFragmentUnits?: string[]; tier?: TrustTier; exemptText?: string }
+  opts: { units: string[]; execFragmentUnits?: string[]; tier?: TrustTier; exemptText?: string; citedBenignUnits?: string[]; verbatimRecall?: boolean }
 ): { answer: string; count: number; aggregate: number } {
   const tier = opts.tier ?? AGGREGATE_TIER;
   const frag = opts.execFragmentUnits ?? [];
@@ -8053,7 +8065,10 @@ export function closeVerbatimForTier(
     // 与直答层同一条中性话术。阶前短路已覆盖常态，这里是出口兜底。
     if (opts.exemptText && isOracleProbeQuestion(opts.exemptText) && isBareVerdictAnswer(answer) && all.some((u) => directGuardLines(u).length > 0))
       return { answer: oracleNeutralAnswer(answer, all.join("\n")), count: 1, aggregate: 1 };
-    const closed = closeAggregateVerbatim(answer, all);
+    // R334 §7.3：已进入引用列表且无任何受守面的单元（aggregateCitedBenignUnit 在这里复判，不信调用方）享卡片同屏豁免：
+    // 他们的普通事实（电话 / 学号 / 快递单号 / 日期）不再整句换成〔原文片段略〕；受守 / 含称谓 / 未引用单元维持原口径。
+    const cited = (opts.citedBenignUnits ?? []).filter((u) => all.includes(u) && aggregateCitedBenignUnit(u));
+    const closed = closeAggregateVerbatim(answer, all, cited.length > 0 ? { visibleUnits: cited } : {});
     // R322 C：聚合层同样收「标签 + 取值」句与散文破坏指令句；归一化比对兜底（方案 2）。
     const labeled = closeSecretLabelSentences(closed.answer, all);
     const leak = normalizedGuardedLeak(labeled.answer, all, opts.exemptText);
@@ -8082,7 +8097,9 @@ export function closeVerbatimForTier(
   // R320 A：直答单元的结构性 fail-closed（closeDirectGuard）——含 code/命令形态/短高熵/端点面的**行**一律不逐字，
   // 判据类别只决定占位文案（概括 + 警示强度），不决定是否占位。整条默认折叠（frag / defaultFoldedReason）的单元
   // 仍叠加原有宽判据任意片段口径（只增不减）。
-  const guard = closeDirectGuard(cred.answer, direct);
+  // R334 §7.2 照抄型找回：直答单元已经 verbatimRecallEligible 复判（只有日常 code 行、无称谓 / 端点 / 破坏 / 不透明面）时，
+  // code 行的结构性占位不再套用（用户点名要自己这条笔记的原文，卡片同屏）；凭证取值 / 记号 / 归一化比对 / 破坏标记照常。
+  const guard = opts.verbatimRecall && verbatimRecallEligible(direct) ? { answer: cred.answer, count: 0 } : closeDirectGuard(cred.answer, direct);
   const directFolded = frag.includes(direct) || defaultFoldedReason(broadFoldReason(direct));
   const closed = directFolded ? closeVerbatimOverlap(guard.answer, { units: [], broadUnits: [direct], question: opts.exemptText }) : { answer: guard.answer, count: 0 };
   // R322 A 兜底（方案 2）：归一化后再比一次——受守取值的加空格 / 拆字 / 倒序 / 全角 / 汉字数字 / base64 / hex 形态仍在答案里时整答换成类别占位（fail-closed）。
@@ -8099,6 +8116,39 @@ export function closeVerbatimForTier(
 export function closeAggregateOutlet(answer: string, units: readonly string[]): { answer: string; count: number } {
   const r = closeVerbatimForTier(answer, { units: [...units], tier: AGGREGATE_TIER });
   return { answer: r.answer, count: r.count };
+}
+
+/**
+ * R334 §7.3：聚合层可享卡片同屏豁免的被引用单元——无受守行、不含凭据称谓（unitTalksAboutSecret）、无宽判据、非代码形态、
+ * 非「标签 + 跨笔记指代」。任一受守面命中即不豁免（fail-closed）；数据层已标注敏感的笔记由调用方先行排除（它们本就不进资料单元）。
+ */
+/**
+ * R334 §7.2：照抄型找回可直回原文的单元——受守行全部为日常 `code`（无凭证 / 破坏 / 不透明 / 端点行）、宽判据至多 `broad:code`，
+ * 不含凭据称谓驻留（unitCarriesSecretLabel）、无远端端点形态、无破坏命令、无读者指令 / 外传语义。任一面命中即不合格（fail-closed）；
+ * 数据层已标注敏感 / 跨笔记分片由调用方先行排除。
+ */
+export function verbatimRecallEligible(unit: string, crossGuarded?: ReadonlySet<string>): boolean {
+  if (!unit.trim()) return false;
+  if (directGuardLines(unit).some((g) => g.kind !== "code")) return false;
+  const fold = guardFoldReason(unit);
+  if (fold !== null && fold !== "broad:code") return false;
+  if (unitCarriesSecretLabel(unit, crossGuarded)) return false;
+  if (hasRemoteEndpointForm(unit, { includeEmails: false })) return false;
+  const lines = unit.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  if (lines.some((l) => isDestructiveCommandText(l) || proseDestructiveLine(l))) return false;
+  if (dataTextHasIsolatableContent(unit)) return false;
+  if (globalExecDangerReason(unit) !== null || execDegradedTraceReason(unit) !== null) return false;
+  return true;
+}
+
+export function aggregateCitedBenignUnit(unit: string, crossGuarded?: ReadonlySet<string>): boolean {
+  if (!unit.trim()) return false;
+  if (directGuardLines(unit).length > 0) return false;
+  if (unitTalksAboutSecret(unit, crossGuarded)) return false;
+  if (guardFoldReason(unit) !== null) return false;
+  if (fragmentLooksLikeCode(unit)) return false;
+  if (labelPointerUnit(unit)) return false;
+  return true;
 }
 
 /**
@@ -8244,7 +8294,8 @@ const SOURCE_LOCKABLE_OBJECT_RE =
 /** 短码称谓：管理码 / 解锁码 / 开门码 … 与「（门｜锁｜柜｜箱｜库）(子|的)?（码｜数｜数字）」。 */
 const SOURCE_SHORT_CODE_LABEL_RE = /(?:管理|解锁|开门|开锁|门|锁|箱|柜|安全|动态|提取|pin)\s*码|[门锁柜箱库](?:\s*(?:子|上的|的|那个)){0,2}\s*(?:码|数字|数)(?![字据量])/iu;
 /** 「标签 + 值」整行里纯数字值的标签若是计量 / 计数语义（步数 / 跑步 / 血压 / 金额…），值是读数不是钥匙。 */
-const SOURCE_MEASURE_LABEL_RE = /步|跑|重|压|糖|温|量|额|价|费|销|收|支|算|款|薪|资|余|存|人数|次|分|里程|公里|米|房间|房号|座|排|页|章|节|集|期|届|年|月|日/u;
+const SOURCE_MEASURE_LABEL_RE =
+  /步|跑|重|压|糖|温|量|额|价|费|销|收|支|算|款|薪|资|余|存|人数|次|分|里程|公里|米|房间|房号|座|排|页|章|节|集|期|届|年|月|日|还|付|缴|欠|借|贷|退|充|扣|花|赚|省|赔|涨|跌|降|升|电|容|功率|租|税|息|利/u;
 /** CVV 称谓：这一类且仅这一类允许 3 位数字值。 */
 const SOURCE_CVV_CUE_RE = /背后三位|背面三位|后三位|安全码|\bcvv\b|\bcvc\b/iu;
 /** 「标签 + 值」紧邻整行：≤12 字、含汉字、无数字的标签 + 可选「是 / 为 / ：」+ 单个裸值 + 可选句末标点。
@@ -8253,9 +8304,12 @@ const SOURCE_LABEL_VALUE_LINE_RE =
   /^((?=[^\d\n：:]{0,11}\p{Script=Han})[^\d\n：:]{1,12}?)\s*(?:是|为|[：:=])?\s*((?<!\d)\d(?:[ \-]?\d){3,}(?!\d)|(?=[\p{L}\p{N}_-]*\p{L})(?=[\p{L}\p{N}_-]*\d)[\p{L}\p{N}_-]{6,24})\s*[。.．！!]?\s*$/u;
 /** 日常识别符标签（R322 口径）：值紧邻这些标签之后不算凭证。 */
 const SOURCE_IDENTIFIER_LABEL_RE =
-  /(?:取件码|验证码|会议号|订单号|单号|运单|快递|车牌|卡号|账号|工号|学号|编号|序号|房号|门牌|邮编|航班|座位|电话|手机|号码|传真|后四位|末四位|尾号)号?\s*(?:是|为|[：:=])?\s*$/u;
+  /(?:取件码|验证码|会议号|订单号|单号|运单|快递|车牌|卡号|账号|工号|学号|编号|序号|房号|门牌|邮编|航班|座位|电话|手机|号码|传真|后四位|末四位|尾号|客服|热线|总机|分机|联系方式|联系|宿舍|寝室|鞋码|尺码|码数)号?\s*(?:是|为|[：:=])?\s*$/u;
 /** 日期 / 金额 / 计量 / 时间 / 序数形态：值前后紧跟这些字符不算凭证。 */
-const SOURCE_UNIT_SUFFIX_RE = /^\s*(?:年|月|日|号|元|块|万|千|亿|米|斤|克|页|楼|层|室|栋|路|线|度|%|％|点|分|秒|kg|km|cm|mm|ml|g\b)/iu;
+const SOURCE_UNIT_SUFFIX_RE =
+  /^\s*(?:年|月|日|号|元|块|万|千|亿|米|斤|克|页|楼|层|室|栋|路|线|度|%|％|点|分|秒|寸|kg|km|cm|mm|ml|g\b|(?:mah|kwh|hz|mhz|ghz|gb|mb|tb|kb|px|rpm|bpm|mbps|kbps|inch|ft|lb|oz|kcal|cal|ms|min|[wva])\b)/iu;
+/** 「数字 + 单位」整记号（`20000mAh`、`65W`、`1.5kg`）：容量 / 功率 / 重量读数，不是钥匙。 */
+const SOURCE_NUMBER_UNIT_TOKEN_RE = /^\d+(?:\.\d+)?(?:mah|kwh|hz|mhz|ghz|gb|mb|tb|kb|px|rpm|bpm|mbps|kbps|ml|kg|km|cm|mm|nm|ms|min|inch|ft|lb|oz|kcal|cal|[wvag])$/i;
 const SOURCE_UNIT_PREFIX_RE = /(?:[¥￥$€£]|第|\bv|№)\s*$/iu;
 /** 拼接线索：显式「连 / 合 / 拼起来」，或 R332 L05 的序列命名形态（「第 N 台叫 X」「…就是这个顺序」）。 */
 const SOURCE_JOIN_CUE_RE =
@@ -8304,6 +8358,7 @@ function shortValueExempt(line: string, start: number, end: number, value: strin
   const after = line.slice(end, end + 4);
   if (SOURCE_IDENTIFIER_LABEL_RE.test(before)) return true;
   if (SOURCE_UNIT_PREFIX_RE.test(before) || SOURCE_UNIT_SUFFIX_RE.test(after)) return true;
+  if (SOURCE_NUMBER_UNIT_TOKEN_RE.test(value)) return true;
   if (/^\d{4}[-_/.]\d{1,2}[-_/.]\d{1,2}/.test(value) || /^\d{1,2}[:：]\d{2}/.test(value)) return true;
   // 分片行（「前半段是 grape41」）的取值是钥匙的一段，词 + 短序号形态（iPhone15 一类）的豁免不适用。
   if (opts.fragment) return false;
@@ -8370,6 +8425,12 @@ function hanDigitTokens(line: string): string[] {
 function hanDigitCandidateLeak(v: string, norm: string): boolean {
   if (!/^(?=.*\p{Script=Han})(?=.*\d)[\p{Script=Han}\d]{2,4}$/u.test(v)) return false;
   return new RegExp(`(?<!\\d)${escapeRegExp(v)}(?!\\d)`, "u").test(norm);
+}
+
+/** 语义载体行：可上锁对象 / 短码称谓 / CVV 称谓（不含「任意汉字标签 + 数字」这种纯形态行）。 */
+function isLockableCarrierLine(line: string): boolean {
+  const t = line.trim();
+  return !!t && (SOURCE_LOCKABLE_OBJECT_RE.test(t) || SOURCE_SHORT_CODE_LABEL_RE.test(t) || SOURCE_CVV_CUE_RE.test(t));
 }
 
 /** 行是否为短凭证载体行（不含既有锁称谓行，那些由 lockLineValues 处理）。 */
@@ -8517,6 +8578,325 @@ function lockLineValues(line: string, opts: { cell?: boolean; encoded?: boolean 
   return out;
 }
 
+// ---- R334：称谓驻留（decision-r334 §2） ----
+// R333 复测 22/36 载体候选面为空：R330–R332 的候选面都是「语境 + 取值形态正则」，凡形态没枚举到（混排 / 点号 / emoji /
+// 全角 / 汉数 / 字典词 / 5 位表格单元格）就没有候选，出口比对失明。R334 起：单元里只要驻留着凭据称谓
+// （密码 / 口令 / 密钥 / pwd / key / 令牌 / 暗号 / 转盘 / 门禁 / 锁 …）或「账户服务名: 值」「表头含称谓的表格」结构，
+// 该单元内所有非称谓 token 一律入候选，不看形态。这里只扩候选面，不改受守行判据。
+/** 凭据称谓（驻留触发词）：值本身就是秘密的称谓 + 可上锁对象 / 拨盘 / 令牌 / 备用码一类。「码」「号」单字不算，「锁定 / 锁屏 / 封锁」不算。 */
+const RESIDENCY_LABEL_RE =
+  /密码|口令|暗号|暗语|密钥|秘钥|密匙|令牌|门禁|转盘|拨盘|密码盘|保险柜|保险箱|(?<![连封死])锁(?![定屏链])|开锁|解锁|开门码|进门码|(?:加密|解密|签名|授权|激活)\s*keys?(?![a-z])|登录串|开门串|取款码|提款码|提取码|取件码|备用码|恢复码|激活码|助记词|私钥|接头|放行|(?<![a-z])(?:pwd|passwd|passwords?|passphrases?|passcodes?|pins?|tokens?|secrets?|api[ -]?keys?|access[ -]?(?:keys?|codes?)|secret[ -]?keys?|private[ -]?keys?|(?:encryption|license|serial|activation|ssh|gpg|pgp|signing|master)[ -]?keys?|combination|otp|totp|kennwort|passwort|contraseña|senha|пароль|パスワード|暗証番号|비밀번호|(?:locker|cabinet|vault|gate|door|safe|unlock|login|recovery|backup)[ -]?codes?)(?![a-z])/iu;
+/** 强称谓：值区里的纯汉字 token 不需要「是 / ：」引导也算取值（「银行预留口令『青山不改』」）；弱称谓（锁 / 解锁 / 接头 / 令牌…）的纯汉字值要有引导或引号。 */
+const RESIDENCY_STRONG_LABEL_RE =
+  /密码|口令|暗号|暗语|密钥|秘钥|密匙|门禁|转盘|拨盘|保险柜|保险箱|开门码|进门码|登录串|开门串|取款码|提款码|提取码|备用码|恢复码|助记词|(?<![a-z])(?:pwd|passwd|passwords?|passphrases?|passcodes?|kennwort|passwort|contraseña|senha|пароль|パスワード|暗証番号|비밀번호)(?![a-z])/iu;
+/** 「账户服务名: 值」结构（C29「Gmail: sun.flower.77」）：服务 / 账户名词做 key 时，冒号后的值就是登录凭据。 */
+const RESIDENCY_SERVICE_KEY_RE =
+  /^(?:gmail|outlook|hotmail|yahoo|icloud|apple\s*id|github|gitlab|bitbucket|steam|epic|netflix|spotify|discord|telegram|twitter|instagram|facebook|tiktok|reddit|paypal|amazon|aws|azure|gcp|cloudflare|vercel|npm|docker\s*hub|dockerhub|wifi|wi-fi|wlan|vpn|ssh|ftp|sftp|smtp|imap|pop3|admin|root|mysql|postgres|redis|mongo|zoom|slack|notion|figma|linear|jira|qq|微信|支付宝|淘宝|京东|拼多多|美团|饿了么|滴滴|抖音|快手|小红书|知乎|微博|哔哩哔哩|b站|网易云|百度网盘|阿里云|腾讯云|华为云|钉钉|飞书|企业微信|邮箱|网盘|路由器|账号|账户|后台|登录|12306|银行|网银|手机银行|app\s*store|play\s*store|xbox|switch|psn|ps5|nintendo)\s*(?:账号|账户|登录|后台)?$/iu;
+/** 驻留候选的 token 切分：空白 / 中英标点 / 引号 / 括号 / 分隔符；`.`、`#`、`@`、`-`、`_`、`+`、`$`、`%`、`!`、`*`、`~`、`^`、`&` 留在记号内（`sun.flower.77`、`Ta7#kL9`）。 */
+const RESIDENCY_TOKEN_SPLIT_RE = /[\s,;:：；，。、！？!?（）()「」『』“”"'‘’《》〈〉【】\[\]{}<>|=/\\]+/u;
+/** 分段行（C16「第一段 39」/ C17「开头：Ab」）：段名 + 可选引导 + 单个取值。 */
+const RESIDENCY_SEGMENT_LINE_RE =
+  /^\s*(?:第\s*[一二三四五六1-6]\s*[段部分节截]|开头|中间|结尾|头|尾|前半段?|后半段?|上半|下半|前段|后段|上|下|左|右|前|后|part\s*[1-6]|first|middle|last)\s*(?:是|为|[：:=])?\s*(\S{1,24})\s*$/iu;
+/** 汉字语法 / 指代 / 计量词：驻留单元里值区的纯汉字 token 若是这些词就不是取值。 */
+const RESIDENCY_HAN_STOP = new Set([
+  "是", "为", "的", "那", "这", "那个", "这个", "就是", "叫", "记", "记得", "记住", "记一下", "别", "不要", "别外传", "别告诉", "别告诉别人", "外传",
+  "输", "要输", "按", "要按", "连起来", "拼起来", "合起来", "按顺序", "按顺序拼", "顺序", "依次", "然后", "再", "先", "还是", "或者", "和", "与", "及",
+  "了", "吗", "呢", "啊", "呀", "哦", "嗯", "我", "你", "他", "她", "它", "我们", "你们", "他们", "自己", "家里", "公司", "学校", "单位", "老", "新", "旧",
+  "上", "下", "左", "右", "前", "后", "里", "外", "中", "大", "小", "多", "少", "每", "各", "全", "都", "也", "又", "还", "很", "太", "最", "更", "不", "没",
+  "无", "非", "已", "已经", "正在", "刚", "才", "只", "仅", "就", "即", "而", "但", "不过", "因为", "所以", "如果", "那么", "这么", "怎么", "什么",
+  "哪", "哪个", "谁", "多少", "几", "第", "次", "个", "条", "台", "张", "把", "道", "门", "口", "号", "位", "块", "元", "年", "月", "日", "天", "周",
+  "点", "分", "秒", "时", "点开", "卡片", "笔记", "记录", "分三段", "分两段", "三段", "两段", "第一段", "第二段", "第三段", "开头", "中间", "结尾",
+  "倒着写", "倒着", "正着", "前八位", "后八位", "前六位", "后六位", "后四位", "前四位", "后九位", "前面", "后面", "改了", "换了", "改成", "换成",
+  "同上", "见上", "略", "备用", "旧的", "新的", "现在", "以前", "之前", "以后", "暂时", "临时", "长期", "默认", "初始", "统一", "一样", "相同",
+  "坏了", "换了新的", "忘了", "重置", "重设", "已改", "待改", "要改", "改一下", "不记得", "不知道", "没设", "未设", "没有", "取消", "关了", "开了",
+  "上一条", "下一条", "前一条", "后一条", "那条", "这条", "另一条", "上条", "下条", "上面", "下面", "上面那条", "下面那条", "前面那条", "后面那条",
+]);
+/** 日期 / 时刻 / 金额 / 百分比 / 版本 / 单位量：驻留单元里这些形态的 token 也不是取值（「2026-09-15 改的密码」）。 */
+const RESIDENCY_MEASURE_TOKEN_RE =
+  /^(?:\d{4}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?|\d{1,2}[-/.月]\d{1,2}日?|\d{1,2}[:：]\d{2}(?::\d{2})?|[¥￥$€£]\d+(?:\.\d+)?|\d+(?:\.\d+)?(?:%|％|元|块|万|千|亿|米|公里|km|kg|cm|mm|ml|g|mah|m|gb|mb|tb|寸|斤|克|度|页|楼|层|室|栋|号|天|周|年|月|日|点|分|秒|次|个|台|位|人|岁|折|倍)|v?\d+(?:\.\d+){1,3})$/iu;
+/** 拉丁语法词 / 泛用词（驻留单元里不算取值）。 */
+const RESIDENCY_LATIN_STOP = new Set([
+  "the", "a", "an", "is", "are", "was", "be", "to", "of", "in", "on", "at", "by", "or", "and", "for", "if", "it", "its", "my", "me", "we", "you",
+  "your", "our", "his", "her", "no", "not", "yes", "ok", "do", "as", "so", "up", "with", "from", "this", "that", "then", "than", "use", "see", "new",
+  "old", "all", "any", "one", "two", "via", "per", "vs", "etc", "todo", "note", "http", "https", "www", "com", "cn", "org", "net", "io", "ip", "url",
+  "api", "app", "web", "id", "ui", "ai", "qa", "but", "wifi", "ssid", "user", "username", "login", "account", "email", "mail", "name", "code",
+  "pass", "pwd", "key", "pin", "token", "secret", "don't", "dont", "forget", "remember", "keep", "never", "share", "tell", "anyone", "same",
+  "change", "changed", "reset", "set", "still", "just", "only", "also", "here", "there", "where", "when", "what", "which", "into", "over",
+]);
+
+/**
+ * R334 §14.1-6 分拣加权：无「密码」字样但结构上就是凭据载体——「账户服务名: 值」（C29「Gmail: sun.flower.77」）、
+ * 「可上锁对象 + 短取值」（C02「2947513 快递柜那个」）。供 detectSensitive 补自动标注漏标；误标代价是多点一次卡片。
+ */
+export function structuralCredentialCarrier(content: string): boolean {
+  const lines = content.normalize("NFKC").replace(URL_RUN_RE, " ").split("\n");
+  return lines.some((l) => residencyServiceKeyValue(l) !== null);
+}
+
+/** 称谓之后的赋值引导：系词 / 冒号 / 等号 / 开引号（中 / 英 / 德 / 法 / 西 / 俄）。 */
+const RESIDENCY_CONNECTOR_RE =
+  /^\s*(?:(?:的|我|你|他|她|我们|咱们|现在|目前|暂时|一直|就|都|还是|统一|全部|新的|旧的|临时){0,2}(?:是|为|叫|就是|写成|定的是|设成|设为|设置为|设置成|设的是|改成|改为|换成|定为|用的是|用的|要输的是|输的是|记的是|记作|记为|改了是)|(?:的)?(?:前|后|头|末|尾|最后|开头|结尾)\s*[\d一二两三四五六七八九十]+\s*位(?:的)?(?:数字|是|为|[：:])?|[：:=]|[「『“"'‘《]|(?:is|ist|es|est|are|lautet|это|equals?)\s+)/iu;
+/** 值区起手的否定 / 未设 / 占位：「密码还没设」「Kennwort ist noch nicht gesetzt」「密码：<你的密码>」——这一句没有在给值。 */
+const RESIDENCY_NEGATED_ZONE_RE =
+  /^\s*(?:还没|没有|没|未|尚未|不再|不是|不|别|待定|待填|待补|[<\[{（(]|你的|您的|自己的|我|你|您|他|她|咱|大家|同|跟|和|与|原来|以前|之前|老的|默认的|初始的|生日|手机|电话|身份证|工号|学号|车牌|门牌|房号|出生|结婚|纪念日|xxx|\*{3,}|•{3,}|…|\.{3}|(?:not|never|no|none|nicht|noch|kein|keine|nie|pas|non|нет|не|your|yours|tbd|todo|placeholder|redacted|hidden|omitted|required|needed|optional|mandatory|wrong|incorrect|invalid|expired|correct|same|different|case|stored|saved|shared|changed|updated|encrypted|hashed|unknown|missing|reset|set|unset|too|at|about|the|a|an|only|also|still|already|now|either|probably|usually|always|in|on|for|to|of|with|by|from|that|this|what|where|how|when|which|who)(?![\p{L}\p{N}]))/iu;
+/** 反向赋值（「4218 是工位抽屉密码」「sky云3q 就是路由器的密码」）：值 + 系词 + ≤10 字修饰 + 称谓收句。 */
+const RESIDENCY_REVERSE_RE = /^(.{1,40}?)\s*(?:是|为|就是|作为|当|做|叫|=)\s*(?:[^\s，。；,;]{0,10}?)$/u;
+
+/** 一行内称谓处于「赋值位」时的值区（正向：称谓之后到子句末；反向：系词之前的取值）；不在赋值位返回 null。 */
+interface ResidencyAssignment {
+  zone: string;
+  /** 值区有显式引导（系词 / 冒号 / 引号 / 反向赋值）：纯汉字 token 也算取值。 */
+  led: boolean;
+  /** 「密码：」收尾、值在下一行。 */
+  nextLine: boolean;
+}
+function residencyAssignment(line: string): ResidencyAssignment | null {
+  // 命令行（docker run … -e POSTGRES_PASSWORD=devlocal）走 R288 代码面口径（受守行 kind=code），不按散文赋值取候选。
+  if (commandShapeLine(line.trim()) || TOOL_COMMAND_LINE_RE.test(line.trim())) return null;
+  const re = new RegExp(RESIDENCY_LABEL_RE.source, "giu");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(line)) !== null) {
+    const label = m[0];
+    // `$PWD` / `PWD=` 是 shell 变量，不是口令称谓。
+    if (/^PWD$/.test(label)) continue;
+    let rest = line.slice(m.index + label.length);
+    // 称谓后紧跟的附加称谓（「路由器后台密码」→「密码」在末尾；「口令 Tian天」）
+    for (let guard = 0; guard < 4; guard++) {
+      const mm = RESIDENCY_LABEL_RE.exec(rest);
+      if (!mm || mm.index > 6 || !/^\s*$/u.test(rest.slice(0, mm.index))) break;
+      rest = rest.slice(mm.index + mm[0].length);
+    }
+    const clause = (s: string): string => s.split(/[，。；！？,;!?\n]/)[0] ?? "";
+    const forward = (zone: string): ResidencyAssignment | null => {
+      const body = zone.replace(RESIDENCY_CONNECTOR_RE, "").trim();
+      if (RESIDENCY_NEGATED_ZONE_RE.test(body)) return null;
+      return body === "" ? { zone: "", led: true, nextLine: true } : { zone, led: true, nextLine: false };
+    };
+    if (RESIDENCY_CONNECTOR_RE.test(rest)) {
+      const a = forward(clause(rest));
+      if (a) return a;
+      continue;
+    }
+    const latinLabel = /^[A-Za-z]/.test(label);
+    const spaced = rest.match(/^[ \t]+(\S+)/u);
+    if (spaced) {
+      const tok = (spaced[1].split(/[、，。；！？,.;!?：:]/u)[0] ?? "");
+      if (!tok) continue;
+      // 称谓 + 空格 + 数量 / 日期（「密钥 2026 年 3 月到期」「密码 6 位数」）是计量，不是取值。
+      if (/^\s*\d+(?:\.\d+)?\s*(?:年|月|日|号|点|分|秒|个|位|次|天|周|块|元|万|千|%|％|折|楼|层|寸|斤|米|公里|km|kg|g|gb|mb|到期|过期|失效|以上|以下|左右|左|右)/iu.test(rest)) continue;
+      // 拉丁称谓 + 空格 + 纯字母词是复合名词（password policy / token bucket），不是赋值；汉字称谓 + 空格 + 汉字词只认强称谓 + 纯汉字短词。
+      if (latinLabel && /^[A-Za-z][A-Za-z'-]*$/.test(tok)) continue;
+      // 弱汉字称谓（锁 / 令牌 / 接头…）+ 空格 + 纯字母词是散文（「锁 lockfile」），不是赋值。
+      if (!latinLabel && !RESIDENCY_STRONG_LABEL_RE.test(label) && /^[A-Za-z][A-Za-z'-]*$/.test(tok)) continue;
+      if (/^\p{Script=Han}/u.test(tok)) {
+        if (!RESIDENCY_STRONG_LABEL_RE.test(label) || !/^\p{Script=Han}{2,12}$/u.test(tok) || /^[的是为和或与及]/u.test(tok)) continue;
+      }
+      if (RESIDENCY_NEGATED_ZONE_RE.test(tok) || RESIDENCY_HAN_STOP.has(tok)) continue;
+      return { zone: clause(rest), led: !latinLabel && /^\p{Script=Han}/u.test(tok), nextLine: false };
+    }
+    // 称谓紧接数字 / 拉丁 / 符号串（「密码4218」「密码#7261」）——赋值；紧接汉字是修饰 / 散文（「密码策略」「密码或身份证号」「密码明天再记」）。
+    if (/^[\p{N}A-Za-z#$%@!*~^&+]/u.test(rest) && !latinLabel) return { zone: clause(rest), led: false, nextLine: false };
+    // 称谓子句没有赋值：下一子句以引导开头（「门禁密码换了，现在是 7261」）就是值区。
+    const nextClause = rest.split(/[，。；！？,;!?\n]/)[1];
+    if (nextClause !== undefined && RESIDENCY_CONNECTOR_RE.test(nextClause)) {
+      const a = forward(nextClause);
+      if (a && !a.nextLine) return a;
+    }
+    // 称谓收句：看反向赋值（「4218 是工位抽屉密码」）。
+    if (/^\s*$/u.test(rest) || /^\s*[，。；！？,;!?]/u.test(rest)) {
+      const before = line.slice(0, m.index);
+      const head = before.split(/[，。；！？,;!?\n]/).pop() ?? "";
+      const rev = head.match(RESIDENCY_REVERSE_RE);
+      if (rev && rev[1].trim() && !RESIDENCY_NEGATED_ZONE_RE.test(rev[1])) return { zone: rev[1], led: true, nextLine: false };
+    }
+  }
+  return null;
+}
+
+/** 单元的驻留触发：任一行的凭据称谓处于赋值位、任一行是「账户服务名: 值」、或 Markdown 表头带称谓。只提到「密码」的散文（防骗忠告 / 密码策略）不触发。 */
+export function residencyTriggered(unit: string): boolean {
+  const n = unit.normalize("NFKC");
+  const lines = n.replace(URL_RUN_RE, " ").split("\n");
+  if (lines.some((l) => residencyAssignment(l) !== null)) return true;
+  if (lines.some((l) => residencyServiceKeyValue(l) !== null)) return true;
+  if (lines.some((l) => RESIDENCY_LABEL_RE.test(l) && !/^PWD$/.test(RESIDENCY_LABEL_RE.exec(l)?.[0] ?? "")) && lines.filter((l) => RESIDENCY_SEGMENT_LINE_RE.test(l)).length >= 2) return true;
+  const table = lines.filter((l) => /^\s*\|/.test(l));
+  return table.length >= 2 && RESIDENCY_LABEL_RE.test(table[0]);
+}
+
+/** 「服务名: 值」行：返回值串（含 ≥2 类字符：字母 / 数字 / 符号，或 ≥6 位字母数字），否则 null。纯数字 / 日期 / 时刻 / URL / 邮箱地址不算。 */
+function residencyServiceKeyValue(line: string): string | null {
+  const vals = residencyServiceKeyValues(line);
+  return vals.length > 0 ? vals[0] : null;
+}
+/**
+ * 同一行多组「服务名 值」（C15「支付宝 Zx8801 / 微信 Yy2202 / 抖音 Ww3303」）：按 `/`、`;`、`,`、`|` 切段，每段是
+ * 「服务名 + 冒号 / 等号 / 空白 + 值」。空白分隔的一段只认无汉字的拉丁 + 数字混合值（「京东 618」「微信 群聊」不算）。
+ */
+function residencyServiceKeyValues(line: string): string[] {
+  const out: string[] = [];
+  for (const seg of line.split(/\s*[/;；,，|]\s*/u)) {
+    const m = seg.trim().match(/^([^\n：:=]{1,24}?)\s*(?:([：:=])|\s)\s*(\S{4,64})\s*$/u);
+    if (!m || !RESIDENCY_SERVICE_KEY_RE.test(m[1].trim())) continue;
+    const v = m[3];
+    if (/^\d+$/.test(v) || RESIDENCY_MEASURE_TOKEN_RE.test(v) || /^https?:/i.test(v) || /^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$/.test(v)) continue;
+    const classes = [/\p{L}/u.test(v), /\d/.test(v), /[^\p{L}\p{N}]/u.test(v)].filter(Boolean).length;
+    if (m[2] === undefined) {
+      if (/\p{Script=Han}/u.test(v) || !/\p{L}/u.test(v) || !/\d/.test(v) || v.length < 5) continue;
+      out.push(v);
+    } else if (classes >= 2 || v.length >= 6) out.push(v);
+  }
+  return out;
+}
+
+/**
+ * 单个 token 的驻留候选形态：剥掉两端标点与内嵌称谓词后，非语法词 / 非计量形态即候选；纯汉字只在值区（2–12 字，弱称谓行需引导 / 引号）。
+ * 返回清洗后的 token，不合格返回 null。
+ */
+function residencyToken(raw: string, zone: { inZone: boolean; hanOk: boolean }): string | null {
+  let t = raw.replace(/^[^\p{L}\p{N}#$%@!*~^&+]+|[^\p{L}\p{N}#$%@!*~^&+]+$/gu, "");
+  if (!t) return null;
+  if (RESIDENCY_LABEL_RE.test(t)) {
+    t = t.replace(new RegExp(RESIDENCY_LABEL_RE.source, "giu"), "").replace(/^[^\p{L}\p{N}#$%@!*~^&+]+|[^\p{L}\p{N}#$%@!*~^&+]+$/gu, "");
+    if (!t) return null;
+  }
+  if (RESIDENCY_MEASURE_TOKEN_RE.test(t)) return null;
+  const chars = [...t];
+  if (/^\p{Script=Han}+$/u.test(t)) {
+    if (!zone.inZone || chars.length < 2 || chars.length > 12 || RESIDENCY_HAN_STOP.has(t)) return null;
+    // 汉字数字连读（「三七零九一」）任何称谓行都算；其余纯汉字看强 / 弱称谓
+    return zone.hanOk || /^\d{3,}$/.test(normalizeForLeakCompare(t)) ? t : null;
+  }
+  if (/^[A-Za-z][A-Za-z'-]*$/.test(t)) {
+    if (RESIDENCY_LATIN_STOP.has(t.toLowerCase())) return null;
+    // 纯字母词至少 4 位（「VPN」「ID」一类缩写不算），全大写缩写 ≤5 位不算（POS / WIFI / HTTPS）
+    if (t.length < 4 || (/^[A-Z]+$/.test(t) && t.length <= 5)) return null;
+    return t;
+  }
+  // 数字串：≥3 位（2 位极短值在 decision-r334 §2.4 里明示不覆盖）
+  if (/^\d+$/.test(t)) return t.length >= 3 ? t : null;
+  return normalizeForLeakCompare(t).length >= 2 || /[#$%@!*~^&+]/.test(t) ? t : null;
+}
+
+/**
+ * 驻留单元的取值候选：称谓行的值区（称谓之后到子句末）取全部 token（含纯汉字），整单元（≤12 行；更长只取称谓行 ±2 行）
+ * 的非纯汉字 token 全部入候选；「服务名: 值」行取值串及其 token；表头带称谓的表格取全部数据行单元格（称谓列的单元格是值区）；
+ * 分段行（「第一段 39 / 第二段 27 / 第三段 84」「开头：Ab / 中间：77 / 结尾：#k」）按行序拼成带 parts 的候选。
+ * 称谓触发的是 credential，纯结构触发（服务名 / 表格）的是 opaque。
+ */
+function residencyCandidates(unitNfkc: string, question?: string): SourceValueCandidate[] {
+  const out = new Map<string, SourceValueCandidate>();
+  const q = question ? normalizeForLeakCompare(question) : "";
+  const add = (t: string, kind: DirectGuardKind, parts?: readonly string[]): void => {
+    const norm = normalizeForLeakCompare(t);
+    if (!norm || (q && q.includes(norm))) return;
+    const prev = out.get(t);
+    if (!prev || DIRECT_GUARD_RANK[kind] > DIRECT_GUARD_RANK[prev.kind]) out.set(t, parts ? { value: t, kind, parts } : { value: t, kind });
+  };
+  const lines = unitNfkc.replace(URL_RUN_RE, " ").split("\n");
+  const labelIdx = new Set<number>();
+  const assignments = new Map<number, ResidencyAssignment>();
+  lines.forEach((l, i) => {
+    const a = residencyAssignment(l);
+    if (a) {
+      labelIdx.add(i);
+      assignments.set(i, a);
+    }
+  });
+  const table = lines.filter((l) => /^\s*\|/.test(l));
+  const tableLabeled = table.length >= 2 && RESIDENCY_LABEL_RE.test(table[0]);
+  const labeledCols = new Set<number>();
+  if (tableLabeled) table[0].split("|").forEach((c, i) => RESIDENCY_LABEL_RE.test(c) && labeledCols.add(i));
+  const serviceLines = new Map<number, string[]>();
+  lines.forEach((l, i) => {
+    const vs = residencyServiceKeyValues(l);
+    if (vs.length > 0) serviceLines.set(i, vs);
+  });
+  // 称谓不在赋值位但单元里有分段行（C16「储物柜密码分三段 / 第一段 39 / …」、C17「…（按顺序拼，是邮箱密码）」）：分段就是值。
+  const labelAny = lines.some((l) => RESIDENCY_LABEL_RE.test(l) && !/^PWD$/.test(RESIDENCY_LABEL_RE.exec(l)?.[0] ?? ""));
+  const segmentIdx = labelAny ? lines.flatMap((l, i) => (RESIDENCY_SEGMENT_LINE_RE.test(l) ? [i] : [])) : [];
+  if (labelIdx.size === 0 && serviceLines.size === 0 && !tableLabeled && segmentIdx.length < 2) return [];
+  // 取件码是一次性短码（R322 识别符口径）：值仍进候选（R333 C24 出口比对要判漏），但只算 opaque，不触发确定性自动标注。
+  const pickupOnly = lines.every((l) => [...l.matchAll(new RegExp(RESIDENCY_LABEL_RE.source, "giu"))].every((mm) => mm[0] === "取件码"));
+  const kind: DirectGuardKind = !pickupOnly && (labelIdx.size > 0 || segmentIdx.length >= 2) ? "credential" : "opaque";
+  const near = (i: number): boolean => {
+    if (lines.length <= SOURCE_DERIVED_MAX_LINES) return true;
+    for (const li of labelIdx) if (Math.abs(li - i) <= 2) return true;
+    return serviceLines.has(i) || segmentIdx.includes(i);
+  };
+  const segments: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*\|/.test(line)) {
+      if (!tableLabeled || line === table[0] || /^\s*\|[\s|:-]*$/.test(line)) continue;
+      line.split("|").forEach((cell, ci) => {
+        const c = cell.trim();
+        if (!c) return;
+        const zone = { inZone: labeledCols.has(ci), hanOk: labeledCols.has(ci) };
+        const whole = residencyToken(c, zone);
+        if (whole) add(whole, kind);
+        for (const t of c.split(RESIDENCY_TOKEN_SPLIT_RE)) {
+          const tok = residencyToken(t, zone);
+          if (tok) add(tok, kind);
+        }
+      });
+      continue;
+    }
+    for (const service of serviceLines.get(i) ?? []) {
+      add(service, kind);
+      for (const t of service.split(RESIDENCY_TOKEN_SPLIT_RE)) {
+        const tok = residencyToken(t, { inZone: true, hanOk: true });
+        if (tok) add(tok, kind);
+      }
+    }
+    if (!near(i)) continue;
+    const seg = line.match(RESIDENCY_SEGMENT_LINE_RE);
+    if (seg && !RESIDENCY_LABEL_RE.test(seg[1])) segments.push(seg[1]);
+    // 值区：赋值位称谓之后到子句末（「密码是 sky云3q，别外传」→「是 sky云3q」）、反向赋值的系词之前，或「密码：」收尾时的下一行；
+    // 不在赋值位的行整行都不是值区（纯汉字 / 纯字母普通词不入候选）。
+    const a = assignments.get(i);
+    const valueZone = a ? (a.nextLine ? (lines[i + 1] ?? "") : a.zone) : "";
+    const hanOk = !!a && (a.led || RESIDENCY_STRONG_LABEL_RE.test(line));
+    const zoneTokens = new Set(valueZone.split(RESIDENCY_TOKEN_SPLIT_RE).map((t) => t.trim()).filter(Boolean));
+    let zoneHit = false;
+    for (const t of line.split(RESIDENCY_TOKEN_SPLIT_RE)) {
+      const raw = t.trim();
+      if (!raw) continue;
+      const inZone = zoneTokens.has(raw);
+      if (inZone && raw.replace(RESIDENCY_CONNECTOR_RE, "").trim() === "") continue;
+      const tok = residencyToken(raw, { inZone, hanOk });
+      if (!tok) continue;
+      // 值区之外的单文字纯字母词是散文（「password is required for login」的 required），不入候选；带数字 / 符号 / 混排的仍照收。
+      if (!inZone && /^\p{L}+$/u.test(tok) && !/[\p{Script=Han}]/u.test(tok) && !/(?=.*\p{Script=Latin})(?=.*[^\p{Script=Latin}])/u.test(tok)) continue;
+      if (inZone) zoneHit = true;
+      add(tok, kind);
+    }
+    if (!a) continue;
+    // 无分隔的汉字值区（C06「接头暗号是明月松间照」整行一个 token）：值区去掉引导词后单独再切一遍。
+    const zoneBody = valueZone.replace(RESIDENCY_CONNECTOR_RE, "");
+    for (const t of zoneBody.split(RESIDENCY_TOKEN_SPLIT_RE)) {
+      const raw = t.trim();
+      if (!raw) continue;
+      const tok = residencyToken(raw, { inZone: true, hanOk });
+      if (!tok) continue;
+      zoneHit = true;
+      add(tok, kind);
+    }
+    // 值区整体（「blue river 42 dance」多 token 口令）也作一个候选：单 token 都是普通词时靠整体比对；值区里没有一个合格 token（全是语法词）就不是口令。
+    const zone = zoneBody.replace(/^[\s：:=「『“"'‘]+|[」』”"'’\s]+$/gu, "").trim();
+    const bodyTokens = zoneBody.split(RESIDENCY_TOKEN_SPLIT_RE).map((t) => t.trim()).filter(Boolean);
+    // 值区全是 ≤2 字的碎片（C13「q 7 m 2 x 9」拆读）也按整体入候选。
+    const spelled = bodyTokens.length >= 3 && bodyTokens.every((t) => [...t].length <= 2);
+    if ((zoneHit || spelled) && zone && bodyTokens.length >= 2 && normalizeForLeakCompare(zone).length >= 6 && !RESIDENCY_HAN_STOP.has(zone)) add(zone, kind);
+  }
+  // 分段行 ≥2：按行序拼接（C16「392784」、C17「Ab77#k」）；单段 ≥3 归一化字的也各自入候选。
+  if (segments.length >= 2 && segments.length <= SOURCE_JOIN_MAX_UNITS) {
+    add(segments.join(""), kind, segments);
+    for (const s of segments) if (normalizeForLeakCompare(s).length >= 3) add(s, kind);
+  }
+  return [...out.values()];
+}
+
 /** 取值候选；`parts` 只有跨单元拼接候选才带（各片段按拼接顺序），供答案侧按「分段列举」形态比对。 */
 export interface SourceValueCandidate {
   value: string;
@@ -8539,6 +8919,8 @@ export function sourceValueCandidates(units: readonly string[], question?: strin
   for (const u of units) {
     const n = u.normalize("NFKC");
     const bare = n.trim();
+    // R334 称谓驻留（decision-r334 §2）：单元驻留凭据称谓 / 服务名: 值 / 称谓表头 ⇒ 单元内所有非称谓 token 入候选，不看形态。
+    for (const c of residencyCandidates(n, question)) push(c.value, c.kind, 3, c.parts);
     if ((anyCue || secretQ) && SOURCE_BARE_TOKEN_UNIT_RE.test(bare) && !SOURCE_IDENTIFIER_SHAPE_RE.test(bare)) push(bare, "opaque");
     // R332 P0-1（Z03「kq48」整条）：4–5 位小写字母数字裸记号整条，无条件候选。
     if (SOURCE_BARE_SHORT_TOKEN_UNIT_RE.test(bare)) push(bare, "opaque");
@@ -8747,9 +9129,24 @@ function hanCharsetLeak(v: string, norm: string): boolean {
   return false;
 }
 
+/** R334 出口字符级比对（decision-r334 §3）：候选归一化 ≥5 字且非纯数字时，正序 / 倒序任一 ≥80% 长度的连续片段落在答案归一文本里即命中。 */
+const PARTIAL_LEAK_RATIO = 0.8;
+const PARTIAL_LEAK_MIN_LEN = 5;
+export function partialCandidateLeak(v: string, norm: string): boolean {
+  const chars = [...v];
+  if (chars.length < PARTIAL_LEAK_MIN_LEN || /^\d+$/.test(v)) return false;
+  const need = Math.ceil(chars.length * PARTIAL_LEAK_RATIO);
+  if (need >= chars.length) return false;
+  for (const form of [chars, [...chars].reverse()]) {
+    for (let i = 0; i + need <= form.length; i++) if (norm.includes(form.slice(i, i + need).join(""))) return true;
+  }
+  return false;
+}
+
 /**
- * 答案归一后是否仍含某个受守取值（原序 / 倒序 / base64 / hex）。命中返回该取值的类别；系统标记与角标先剔除（占位文案自身不参与比对）。
+ * 答案归一后是否仍含某个受守取值（原序 / 倒序 / base64 / hex / ≥80% 连续片段）。命中返回该取值的类别；系统标记与角标先剔除（占位文案自身不参与比对）。
  * R328：候选面 = 受守行候选 ∪ 全资料取值候选（sourceValueCandidates，不依赖标注 / 受守行识别）。
+ * R334：归一化（NFKC + 小写 + 汉数转阿拉伯 + 去全部非字母数字）本身覆盖空格拆读 / 标点隔开 / 全角 / emoji 夹杂；倒序与 80% 片段覆盖倒写与部分值。
  */
 export function normalizedGuardedLeak(answer: string, units: string[], question?: string): DirectGuardKind | null {
   if (!answer) return null;
@@ -8776,6 +9173,7 @@ export function normalizedGuardedLeak(answer: string, units: string[], question?
     if (letters) forms.push(letters);
     if (
       forms.some((f) => f.length >= minLen && norm.includes(f)) ||
+      partialCandidateLeak(v, norm) ||
       (c.kind === "credential" && hanCharsetLeak(v, norm)) ||
       hanDigitCandidateLeak(v, norm) ||
       (c.parts !== undefined && jointPartsLeak(c.parts, norm))
@@ -8843,6 +9241,9 @@ const GROUPED_DIGITS_RE = /\d{4,}[ \-]\d{4,}/;
 /** 无词间空格的文字（汉字 / 假名 / 谚文 / 注音）：不参与「字母 ↔ 数字交替」计数（「买2斤苹果3个梨」是散文）。 */
 const CJK_LETTER_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}]/u;
 const CJK_LETTERS_G_RE = new RegExp(CJK_LETTER_RE.source, "gu");
+/** 中国大陆车牌记号：省简称 + 发牌机关字母 + 可选间隔点 + 5 位（普通）/ 6 位（新能源，首位 D/F/A–K 或末位 D/F）号牌。 */
+const CN_PLATE_TOKEN_RE =
+  /^[京津沪渝冀晋辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂琼川贵云藏陕甘青宁新蒙港澳台使领][A-Z][·•]?(?:[A-HJ-NP-Z0-9]{5}|[A-HJ-NP-Z0-9]{6})$/u;
 /** 记号边界：空白 / 路径分隔 / 赋值号 / 中英文标点与括号。`&` `?` `!` `#` `@` 不是边界（口令常见符号）；URL 整串先摘除。 */
 const TOKEN_BOUNDARY_CLASS = "[\\s/=;,，。、()（）<>\"'“”「」『』【】\\[\\]{}：:]";
 const TOKEN_SPLIT_RE = new RegExp(`${TOKEN_BOUNDARY_CLASS}+`);
@@ -8878,6 +9279,8 @@ function isOpaqueToken(tok: string): boolean {
     if ((tok.match(/[A-Za-z0-9]+/g) ?? []).length >= 2) return true;
   }
   if (!hasNonCjkLetter) return false;
+  // 车牌形态（「沪A·88K66」「粤B12345」「京AD12345」）：省简称 + 发牌机关字母 + 5–6 位号牌，是公开识别符不是高熵取值。
+  if (CN_PLATE_TOKEN_RE.test(tok)) return false;
   const core = tok.replace(/[._\-:]/g, "");
   // 交替 / 十六进制判据看去掉连接符后的字母数字段：`A1.B2` / `e2.e4`（单元格 / 棋谱）只有 4 个字母数字，不算
   if (core.length < 5) return false;
@@ -9362,6 +9765,31 @@ export const MODEL_REDACTED_LINE = "〔此行为口令/命令/长串编号一类
 export const PHANTOM_REDACTION_CLAIM_RE = /问答区不展示|记了它[，,]?\s*(?:问答区|不展示|请点开)|已从问答上下文隔离/u;
 
 /**
+ * R334 §7.3：上下文里没有占位行时，只剥掉带幻觉占位话术的那些句子（它们把用户指去一张不含答案的卡片），
+ * 同一回答里其余已作答的句子（电话 / 学号 / 日期等普通事实 + 角标）保留；整答只剩幻觉话术时返回空串，由调用方按「没提到」处置。
+ */
+export function stripPhantomRedactionClaims(answer: string): string {
+  if (!PHANTOM_REDACTION_CLAIM_RE.test(answer)) return answer;
+  // 幻觉话术句连同它的「请点开卡片」指卡句一起剥（指卡句单独留下仍是把用户指去空卡）。
+  const phantom = (s: string): boolean => PHANTOM_REDACTION_CLAIM_RE.test(s) || WITHHELD_CARD_POINTER_RE.test(s);
+  const lines: string[] = [];
+  for (const line of answer.split("\n")) {
+    if (!phantom(line)) {
+      lines.push(line);
+      continue;
+    }
+    const kept = sentenceBounds(line)
+      .map((b) => line.slice(b.start, b.end))
+      .filter((seg) => !phantom(seg))
+      .join("")
+      .replace(/^[\s，,；;、]+|[\s，,；;、]+$/g, "");
+    if (kept.length > 0) lines.push(kept);
+  }
+  const out = lines.join("\n").trim();
+  return placeholderFreeText(out).replace(CITATION_MARK_RE, "").trim().length < 4 ? "" : out;
+}
+
+/**
  * 模型对着整条隔离卡给出的「指卡」短答（「这条笔记记了 X，请点开引用的笔记卡片查看原文 [n]」）——
  * 比 PHANTOM_REDACTION_CLAIM_RE 宽：只要是把用户指去卡片的话术即算，归因改指用；不用于「幻觉占位」判定。
  */
@@ -9513,7 +9941,7 @@ const ORACLE_PROBE_RE =
  * 一问多 bit。带锚时与 ORACLE_PROBE_RE 同款；字符枚举形态（「哪些字符…出现」「各自出现了没有」）本身就在说某串的字符，不要锚。
  */
 const ORACLE_ENUMERATE_RE =
-  /出现过|出现了没|出现在|列出来|列一下|列举|一一列|逐个(?:列|说|答|回答)|各自(?:出现|有没有)|分别(?:出现|是几|是什么|是哪)|哪几个(?:字|字符|字母|数字)|哪些(?:字|字符|字母|数字)|按位(?:告诉|说|报|答)|逐位|几位数|等式|乘积|乘以|除以|减去|减\s*[一二三四五六七八九十百千万\d]+\s*(?:是|等于)|加\s*[一二三四五六七八九十百千万\d]+\s*(?:是|等于)|平方|开方|因数|因子|约数|余数|取模|算式|运算|which (?:of )?(?:these|the following)|list (?:them|those|the ones)|appear(?:s|ed)? in|occur(?:s|red)? in|one by one|each (?:char|letter|digit)|product of|multiplied|divided|\bminus\b|\bplus\b/iu;
+  /出现过|出现了没|出现在|列出来|列一下|列举|一一列|逐个(?:列|说|答|回答)|各自(?:出现|有没有)|分别(?:出现|是几|是什么|是哪)|哪几个(?:字|字符|字母|数字)|哪些(?:字|字符|字母|数字)|按位(?:告诉|说|报|答)|逐位|几位数|等式|乘积|乘以|除以|减去|减\s*[一二三四五六七八九十百千万\d]+\s*(?:是|等于)|加\s*[一二三四五六七八九十百千万\d]+\s*(?:是|等于)|平方|开方|因数|因子|约数|余数|取模|算式|运算|当成数字|当作数字|看成数字|看作数字|视为数字|作为数字|当数字|比[^\n]{1,14}?(?:大|小)多少|字典序|字母表顺序|字母序|最大的?数字|最小的?数字|最大的?一位|最小的?一位|最大数|最小数|各位(?:数)?(?:之|相)?(?:和|加)|数字(?:之|相)?(?:和|加)|数位和|全部加起来|转成大写|转大写|转成小写|转小写|转成拼音|转拼音|转成摩斯|转摩斯|转成数字|转数字|as a number|treat(?:ed)? as (?:a )?number|(?:sum|total) of (?:the |its )?digits|digit sum|largest digit|smallest digit|alphabetical(?:ly)? order|lexicographic|how much (?:bigger|larger|smaller|greater|less)|(?:to|in) upper ?case|(?:to|in) lower ?case|(?:to|in) pinyin|(?:to|in) morse|which (?:of )?(?:these|the following)|list (?:them|those|the ones)|appear(?:s|ed)? in|occur(?:s|red)? in|one by one|each (?:char|letter|digit)|product of|multiplied|divided|\bminus\b|\bplus\b/iu;
 /** 字符枚举形态：本身就指向某串的字符，不需要 ORACLE_ANCHOR_RE 的指代锚。 */
 const ORACLE_ENUMERATE_SELF_ANCHORED_RE =
   /哪些(?:字符|字母|数字|字)[^\n]{0,12}(?:出现|有过|在里面|含)|(?:字符|字母|数字)[^\n]{0,8}(?:各自|分别)(?:出现|有没有)|出现过的(?:列|都|有哪)|逐位(?:告诉|说|报|答|列)|按位(?:告诉|说|报|答|列)|which (?:of )?(?:these|the following) (?:char|letter|digit)/iu;
@@ -9666,10 +10094,33 @@ export function guardedTopicHits<T>(guarded: readonly T[], topics: readonly stri
  */
 export function unitTalksAboutSecret(unit: string, crossGuarded?: ReadonlySet<string>): boolean {
   if (directGuardLines(unit).length > 0) return true;
+  return unitCarriesSecretLabel(unit, crossGuarded);
+}
+
+/** unitTalksAboutSecret 去掉受守行那一项后的称谓 / 结构 / 强形态候选面（照抄找回用：日常 code 行不算在讲秘密）。 */
+export function unitCarriesSecretLabel(unit: string, crossGuarded?: ReadonlySet<string>): boolean {
   const lines = unit.split("\n");
   if (crossGuarded && lines.some((l) => crossGuarded.has(l.trim()))) return true;
   if (lines.some((l) => secretLabelLine(l) || CREDENTIAL_VALUE_LABEL_RE.test(l.normalize("NFKC")) || ORACLE_LABEL_RE.test(l.normalize("NFKC")))) return true;
+  // R334 §4：称谓驻留（含服务名: 值 / 称谓表头）与「可上锁对象 + 短取值」载体行（C02「2947513 快递柜那个」）同为在讲秘密——
+  // REST references / MCP notes[] / 出口比对 / 预言机闸门共用这一判定。
+  if (residencyTriggered(unit)) return true;
+  if (lines.some((l) => isLockableCarrierLine(l) && shortCredentialLineValues(l).length > 0)) return true;
   return sourceValueCandidates([unit]).some((c) => c.kind === "credential");
+}
+
+/**
+ * R334 §14.1-4：引用卡 / MCP notes[] 掉正文的判据——单元里真有受守取值：凭证 / 不透明串 / 破坏受守行、跨单元受守行、
+ * 称谓驻留赋值（residencyTriggered）、可上锁对象 + 短取值，或任何取值候选。日常 `code` / 端点行由 fold_reason 折叠（不在这里掩），
+ * 只提到「密码」的散文（防骗忠告 / 密码策略）不掩——它们没有可泄的值。
+ */
+export function unitCarriesGuardedValue(unit: string, crossGuarded?: ReadonlySet<string>): boolean {
+  if (directGuardLines(unit).some((g) => g.kind === "credential" || g.kind === "opaque" || g.kind === "destructive")) return true;
+  const lines = unit.split("\n");
+  if (crossGuarded && lines.some((l) => crossGuarded.has(l.trim()))) return true;
+  if (residencyTriggered(unit)) return true;
+  if (lines.some((l) => isLockableCarrierLine(l) && shortCredentialLineValues(l).length > 0)) return true;
+  return sourceValueCandidates([unit]).length > 0;
 }
 
 // 预言机问句的语法词（指向 / 核对 / 属性 / 转写 / 是非 / 答案格式）与通用虚词：剥掉后剩下的就是话题词（「跳板机口令」「对象存储 secret」）。
@@ -10110,6 +10561,8 @@ export function finalizeAskAnswer(answer: string, opts: FinalizeAskAnswerOpts): 
         execFragmentUnits: opts.execFragmentUnits,
         tier,
         exemptText: opts.verbatimExempt ?? opts.question,
+        citedBenignUnits: opts.citedBenignUnits,
+        verbatimRecall: opts.verbatimRecall,
       });
   if (closed.count === 0) {
     const suffix = `\n\n${VERBATIM_REDIRECT_NOTICE}`;
@@ -11071,6 +11524,7 @@ function finalizeAskAnswerCore(
     questionRequestsVerbatim(opts.question) &&
     opts.dataText &&
     !isolated &&
+    !opts.verbatimRecall &&
     !out.includes("笔记卡片")
   ) {
     out = `${out}\n\n${VERBATIM_REDIRECT_NOTICE}`;

@@ -22,6 +22,7 @@ import {
   normalizeForLeakCompare,
   isSecretValueQuestion,
   unitTalksAboutSecret,
+  unitCarriesGuardedValue,
   titleCarriesAnyGuardedValue,
   type BroadFoldReason,
   type DirectGuardKind,
@@ -61,9 +62,21 @@ export const MCP_GUARDED_PLACEHOLDER = "[含口令/命令/长串编号一类内�
 /** R326：数据层标注为敏感的条目在 ask 的 notes[] 里只给占位体 + id，占位体本身就是给宿主的指引（引导用户点开）。 */
 export const MCP_SENSITIVE_ASK_PLACEHOLDER = "[敏感笔记：正文已加密保护，不经 AI 回传；请引导用户在碎念 App 里按 id 打开这条笔记查看原文]";
 
-type GuardableNote = { is_sensitive?: unknown; content?: unknown; title?: unknown; tags?: unknown; url?: unknown; url_title?: unknown; url_summary?: unknown; url_titles?: unknown };
+type GuardableNote = {
+  is_sensitive?: unknown;
+  content?: unknown;
+  title?: unknown;
+  tags?: unknown;
+  url?: unknown;
+  url_title?: unknown;
+  url_summary?: unknown;
+  url_titles?: unknown;
+  content_withheld?: unknown;
+};
 /** 受守 / 敏感条目连链接字段一起清空：从正文抽出的 url / url_title 本身就是受守单元的一部分（端点、`curl … | sh` 的下载地址）。 */
 const GUARDED_LINK_FIELDS = { url: null, url_title: null, url_summary: null, url_titles: null } as const;
+/** R334 §14.1-4：受守条目的分拣元数据一并清空——「行李箱转盘 318」被当金额写进 `amount`，占位正文旁边的元数据就是取值本身。 */
+const GUARDED_META_FIELDS = { amount: null, currency: null, merchant: null, meta: null } as const;
 /** R324 C1：ask 的受守单元判据与 /api/ask 同源（标题 + 正文 + 链接标题 + 链接摘要）。 */
 export function mcpGuardUnit(n: GuardableNote): string {
   const s = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -104,11 +117,18 @@ export function guardAskNotes<T extends GuardableNote>(
   };
   const out = notes.map((n, i) => {
     // 数据层已标敏感的条目 redactNote 已换占位；这里补 guarded 标记让宿主机器可读地知道该条不是原文。
-    if (n.is_sensitive) return { ...n, ...GUARDED_LINK_FIELDS, content: MCP_SENSITIVE_ASK_PLACEHOLDER, title: null, tags: [], guarded: true, guard_kind: "sensitive" as const };
+    if (n.is_sensitive) return { ...n, ...GUARDED_LINK_FIELDS, ...GUARDED_META_FIELDS, content: MCP_SENSITIVE_ASK_PLACEHOLDER, title: null, tags: [], guarded: true, guard_kind: "sensitive" as const };
+    // /api/ask 已按 unitTalksAboutSecret 换成占位卡（content_withheld）的未标注条目：照单占位，不再对占位串重新判形。
+    if (n.content_withheld === true) {
+      return { ...n, ...GUARDED_LINK_FIELDS, ...GUARDED_META_FIELDS, content: MCP_GUARDED_PLACEHOLDER, title: MCP_GUARDED_PLACEHOLDER, tags: [], guarded: true, guard_kind: "credential" as const };
+    }
     const own = directGuardLines(units[i]).filter((g) => g.own);
     const crossHit = units[i].split("\n").some((l) => cross.has(l.trim()));
     const sourceValues = own.length === 0 && !crossHit ? [...sourceValueCandidates([units[i]], question), ...jointHit(units[i])] : [];
-    const valueTalk = own.length === 0 && !crossHit && sourceValues.length === 0 && valueProbe && unitTalksAboutSecret(units[i], cross);
+    // R334 §14.1-4：驻留受守取值的条目（unitCarriesGuardedValue，与 /api/ask 引用卡同源）不看问句形态一律占位——对 MCP 客户端 notes[] 就是那张卡；
+    // 只提到「密码」的散文仍按 R332 口径：问句是取值探问时才占位。
+    const valueTalk =
+      own.length === 0 && !crossHit && sourceValues.length === 0 && (unitCarriesGuardedValue(units[i], cross) || (valueProbe && unitTalksAboutSecret(units[i], cross)));
     // R332 P0-2：notes[].content 与 answer 同口径——这条正文若作为答案输出会被全召回面的归一化比对判泄（它复述了另一条的取值），同样整条占位。
     const echoLeak =
       own.length === 0 && !crossHit && sourceValues.length === 0 && !valueTalk
@@ -119,7 +139,7 @@ export function guardAskNotes<T extends GuardableNote>(
     const ranked =
       own.length > 0 ? own.map((g) => g.kind) : sourceValues.length > 0 ? sourceValues.map((c) => c.kind) : valueTalk ? ["credential" as const] : echoLeak !== null ? [echoLeak] : [];
     const kind: DirectGuardKind | "cross" = ranked.length > 0 ? ranked.reduce((a, k) => (rankOf(k) > rankOf(a) ? k : a), ranked[0]) : "cross";
-    return { ...n, ...GUARDED_LINK_FIELDS, content: MCP_GUARDED_PLACEHOLDER, title: MCP_GUARDED_PLACEHOLDER, tags: [], guarded: true, guard_kind: kind };
+    return { ...n, ...GUARDED_LINK_FIELDS, ...GUARDED_META_FIELDS, content: MCP_GUARDED_PLACEHOLDER, title: MCP_GUARDED_PLACEHOLDER, tags: [], guarded: true, guard_kind: kind };
   });
   return { notes: out, guardedUnits, units, face: jointFace };
 }

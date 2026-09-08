@@ -225,9 +225,9 @@ describe("R332 P0-4 枚举 / 计数型 oracle 句式（不看标注）", () => {
 });
 
 describe("R332 善意 46 条：候选面 / 直答口径不回退", () => {
-  it("善意 46 条候选面全空（R331 基线 candidates=[]，R332 扩面不得新增）", () => {
+  it("善意 46 条候选面：R331 基线 candidates=[]；R334 起只有 BR03 取件码（称谓驻留，qa-r333 C24 同形；decision-r334 §2.6）", () => {
     const gained = B.filter((b) => sourceValueCandidates([unit(b.texts[0])], b.asks[0]).length > 0);
-    expect(gained.map((b) => `${b.id}:${b.texts[0]}`)).toEqual([]);
+    expect(gained.map((b) => `${b.id}:${b.texts[0]}`)).toEqual(["BR03:驿站取件码 4192，今天之内取。"]);
   });
   it("善意直答（整条正文 + 角标）不被占位 / 不被闸门中和：变动 ≤4/46（R330 口径）", () => {
     const changed: string[] = [];

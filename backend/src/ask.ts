@@ -3412,9 +3412,17 @@ export const NO_ANSWER_TEXT = "没找到相关笔记。";
  */
 export function sensitiveHintLine(count: number, terms: string[]): string {
   if (count <= 0) return "";
+  return `\n\n${sensitiveCollapsedLine(count, terms)}`;
+}
+
+/**
+ * R334 §7.4（audit-r333 §14.2 第 4 项）：已标注敏感笔记命中话题词时的计数折叠提示——这是主句，
+ * 不是「没找到」后面的附注：笔记是存在的，只是正文不进问答。只含固定文案与问句自身的关键词。
+ */
+export function sensitiveCollapsedLine(count: number, terms: string[]): string {
   const kw = terms.filter((t) => t.length <= 20).slice(0, 2).join(" ");
   const where = kw ? `搜索「${kw}」` : "搜索相关关键词";
-  return `\n\n另有 ${count} 条加密的敏感笔记可能相关（内容不会进入问答），可到时间流${where}后点击解锁查看。`;
+  return `有 ${count} 条敏感笔记可能相关（已折叠，正文不进入问答），可到时间流${where}后点开解锁查看。`;
 }
 
 /**
@@ -3494,23 +3502,28 @@ export function credentialHintLine(): string {
 export function buildNoAnswerResponse(
   suggestions: Pick<NoteRow, "id" | "title" | "content">[],
   mode: "no_recall" | "not_in_notes" = "no_recall",
-  missingTerm: string | null = null
+  missingTerm: string | null = null,
+  /** R334 §7.4：话题词命中的已标注敏感笔记数；no_recall 时以计数折叠提示作主句，不再说「没找到相关笔记」。 */
+  sensitive: { count: number; terms: string[] } | null = null
 ): {
   answer: string;
   references: { index: number; note_id: string }[];
   /** 任一建议标签因含危险/外传内容而退到占位提示（响应应置 instruction_isolated）。 */
   held: boolean;
 } {
+  const collapsed = sensitive && sensitive.count > 0 ? sensitiveCollapsedLine(sensitive.count, sensitive.terms) : "";
   if (suggestions.length === 0) {
     if (missingTerm) {
       return {
-        answer: `笔记里没有提到与「${missingTerm}」相关的信息。换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`,
+        answer: `笔记里没有提到与「${missingTerm}」相关的信息。换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。${collapsed ? `\n\n${collapsed}` : ""}`,
         references: [],
         held: false,
       };
     }
     return {
-      answer: `${NO_ANSWER_TEXT}换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`,
+      answer: collapsed
+        ? `${collapsed}\n\n普通笔记里没找到能直接作答的内容；换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`
+        : `${NO_ANSWER_TEXT}换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。`,
       references: [],
       held: false,
     };
@@ -3523,7 +3536,16 @@ export function buildNoAnswerResponse(
       ? missingTerm
         ? `找到了相近的记录，但里面没有提到与「${missingTerm}」相关的信息：`
         : "找到了相关的笔记，但里面没有提到你问的这个信息："
-      : `${NO_ANSWER_TEXT}以下是几条相近的记录，可能是你想找的：`;
+      : collapsed
+        ? `${collapsed}\n\n另有几条相近的普通笔记，可能是你想找的：`
+        : `${NO_ANSWER_TEXT}以下是几条相近的记录，可能是你想找的：`;
+  if (mode === "not_in_notes" && collapsed) {
+    return {
+      answer: `${lead}\n${lines.join("\n")}\n\n${collapsed}`,
+      references: suggestions.slice(0, 3).map((n, i) => ({ index: i + 1, note_id: n.id })),
+      held,
+    };
+  }
   return {
     answer: `${lead}\n${lines.join("\n")}`,
     references: suggestions.slice(0, 3).map((n, i) => ({ index: i + 1, note_id: n.id })),

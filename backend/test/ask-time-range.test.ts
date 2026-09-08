@@ -285,7 +285,9 @@ describe("sensitiveHintLine", () => {
   });
   it("points to timeline search with the query keywords, exposing only a count", () => {
     const hint = sensitiveHintLine(2, ["银行卡", "密码"]);
-    expect(hint).toContain("2 条加密的敏感笔记");
+    // R334 §7.4：主句口径「有 N 条敏感笔记可能相关（已折叠）」
+    expect(hint).toContain("有 2 条敏感笔记可能相关（已折叠");
+    expect(hint).not.toContain("没找到");
     expect(hint).toContain("搜索「银行卡 密码」");
     expect(hint).toContain("解锁");
   });

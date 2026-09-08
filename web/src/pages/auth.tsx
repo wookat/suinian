@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button"
 import { createNote, fetchRegisterPolicy, login, recoverAccount, register, type RegisterPolicy } from "@/lib/api"
 import { clearDemoNotes, userDemoNotes } from "@/lib/mock"
 import { defaultApiBase, loadSettings, saveSettings } from "@/lib/settings"
-import { cn, KNOWN_ISSUES_URL, SAFETY_PROMISE } from "@/lib/utils"
+import { cn, KNOWN_ISSUES_URL } from "@/lib/utils"
+import { SafetyPromise } from "@/components/safety-promise"
 import type { Note } from "@/lib/types"
 
 type Mode = "register" | "login" | "recover"
@@ -555,7 +556,7 @@ export function AuthPage() {
         </p>
       </Card>
       <p className="px-1 text-xs leading-relaxed text-muted-foreground" data-testid="safety-promise">
-        {SAFETY_PROMISE}
+        <SafetyPromise />
       </p>
       <p className="px-1 text-xs leading-relaxed text-muted-foreground">
         当前为小范围 beta：已知问题与未覆盖的情形见{" "}
