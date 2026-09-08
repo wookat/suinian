@@ -266,14 +266,22 @@ function isLedgerComposed(body: Record<string, unknown>): boolean {
   return Object.entries(body).some(([k, v]) => v === true && LEDGER_COMPOSED_KEY_RE.test(k));
 }
 
+function askCitedNoteIds(body: Record<string, unknown>): string[] {
+  const refs = Array.isArray(body.references) ? (body.references as Array<Record<string, unknown>>) : [];
+  return [...new Set(refs.map((r) => (typeof r.note_id === "string" ? r.note_id : "")))];
+}
+
+function askBodyNoteSensitive(bodyNotes: Array<Record<string, unknown>>, id: string): boolean {
+  const n = bodyNotes.find((x) => x.id === id);
+  return !n || n.is_sensitive === true || n.content_withheld === true;
+}
+
 /**
  * R312 P0-1：Ask 信任域由最终 references（同屏卡片）的去重笔记数 + 出口类型确定：恰好 1 条且能对应到
  * 资料单元 ⇒ 单笔记直答；否则（0 条 / 多条 / MCP）聚合层。不看答案形态，不由模型决定。
  */
 function askTierFromBody(body: Record<string, unknown>, unitByNoteId: Map<string, string>, outlet: AskOutlet): TrustTier {
-  const refs = Array.isArray(body.references) ? (body.references as Array<Record<string, unknown>>) : [];
-  const ids = [...new Set(refs.map((r) => (typeof r.note_id === "string" ? r.note_id : "")))];
-  return resolveAskTrustTier(ids.map((id) => unitByNoteId.get(id) ?? ""), outlet);
+  return resolveAskTrustTier(askCitedNoteIds(body).map((id) => unitByNoteId.get(id) ?? ""), outlet);
 }
 
 app.use("/api/ask", async (c, next) => {
@@ -331,6 +339,16 @@ app.use("/api/ask", async (c, next) => {
       const detOutlet = askOutletOf(c.req.header(ASK_OUTLET_HEADER));
       const ledgerComposed = !preFinalized && isLedgerComposed(body);
       const detTier = ledgerComposed ? AGGREGATE_TIER : askTierFromBody(body, unitByNoteId, detOutlet);
+      // R334 §7.3：确定性路由（时间窗拒答 / 相近记录建议）里被引用的日常笔记（非敏感、无受守面）与生成分支同一
+      // 同屏豁免——它们的标签行是答案本体，不该换成〔原文片段略〕却卡片就在下方。
+      const detCross = crossUnitGuardedLines(noteUnits);
+      const detCitedBenign =
+        detOutlet === "mcp" || ledgerComposed
+          ? []
+          : askCitedNoteIds(body)
+              .map((id) => [id, unitByNoteId.get(id) ?? ""] as const)
+              .filter(([id, u]) => u.trim().length > 0 && !askBodyNoteSensitive(bodyNotes, id) && aggregateCitedBenignUnit(u, detCross))
+              .map(([, u]) => u);
       const fin = preFinalized
         ? { answer: body.answer, changed: false, isolated: body.instruction_isolated === true, verbatim_closed_spans: 0 }
         : finalizeAskAnswer(body.answer, {
@@ -340,6 +358,7 @@ app.use("/api/ask", async (c, next) => {
             verbatimExempt: question,
             tier: detTier,
             composedLabels: ledgerComposed,
+            citedBenignUnits: detCitedBenign,
           });
       // 记账路由：组装时 ledgerLabel 已收的标签级占位（已在 body.answer 里，不在资料单元中，出口收口不会重计）
       // 与出口整答收口的新增占位合计为出口统计。

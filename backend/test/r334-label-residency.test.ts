@@ -31,7 +31,7 @@ import {
   type TrustTier,
 } from "../src/prompt-armor";
 import { askGuardNoteUnit, pickVerbatimRecallTarget, salvageEnumeratedTerms, extractAskTerms } from "../src/index";
-import { askTopicTerms, buildNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds, reconcileAskCitations, weakCitationGrounded, phantomClaimCitesOnlyCleanNotes, degradeAskTerms } from "../src/ask";
+import { askTopicTerms, buildNoAnswerResponse, buildTimeWindowNoAnswerResponse, sensitiveCollapsedLine, sensitiveHintLine, verbatimUncitedSourceIds, reconcileAskCitations, weakCitationGrounded, phantomClaimCitesOnlyCleanNotes, degradeAskTerms } from "../src/ask";
 import { attributableTopicTerms, sensitiveRecallTerms } from "../src/sensitive-recall";
 import { reconcileDoneAnswer } from "../src/ask-context";
 import { guardAskNotes, MCP_GUARDED_PLACEHOLDER } from "../src/mcp";
@@ -248,6 +248,38 @@ describe("R334 §14.2-1 用户面：无称谓善意单元不进候选面、不�
       tier: { kind: "single_note_direct", directUnit: unit("小区门禁 84739210") },
     });
     expect(guarded.answer).not.toContain("84739210");
+  });
+  it("E26/E27 时间窗拒答的「相近记录」标签行：被引用的日常单元与生成分支同一同屏豁免，不换成〔原文片段略〕；受守单元的标签本就不转写", () => {
+    const cpi = unit("去年 CPI 上涨 0.8%");
+    const fruit = unit("买水果");
+    const tw = buildTimeWindowNoAnswerResponse(
+      { phrase: "去年", start: "2025-01-01 00:00:00", end: "2026-01-01 00:00:00" } as never,
+      [
+        { id: "a", title: null, content: "去年 CPI 上涨 0.8%", created_at: "2026-09-08 03:00:00" },
+        { id: "b", title: null, content: "买水果", created_at: "2026-09-08 03:00:00" },
+      ],
+    );
+    expect(tw.answer).toContain("去年 CPI 上涨 0.8%");
+    const base = { dataText: `${cpi}\n${fruit}`, dataUnits: [cpi, fruit], question: "去年 CPI 涨多少", verbatimExempt: "去年 CPI 涨多少", tier: AGG };
+    // 出口中间件口径：references 里的非敏感日常单元作 citedBenignUnits（与 /api/ask 生成分支同源）。
+    const fin = finalizeAskAnswer(tw.answer, { ...base, citedBenignUnits: [cpi, fruit] });
+    expect(fin.answer).toContain("0.8%");
+    expect(fin.answer).not.toContain(VERBATIM_SPAN_PLACEHOLDER);
+    // 旧口径（无 citedBenignUnits）正是生产 E26/E27 的〔原文片段略〕来源。
+    expect(finalizeAskAnswer(tw.answer, base).answer).toContain(VERBATIM_SPAN_PLACEHOLDER);
+    // 含称谓单元（门锁 654321）不是 aggregateCitedBenignUnit，中间件不会把它放进 citedBenignUnits，出口照常收口。
+    const lockU = unit("门锁 654321");
+    const lock = buildTimeWindowNoAnswerResponse(
+      { phrase: "去年", start: "2025-01-01 00:00:00", end: "2026-01-01 00:00:00" } as never,
+      [
+        { id: "c", title: null, content: "门锁 654321", created_at: "2026-09-08 03:00:00" },
+        { id: "b", title: null, content: "买水果", created_at: "2026-09-08 03:00:00" },
+      ],
+    );
+    expect(aggregateCitedBenignUnit(lockU)).toBe(false);
+    const cited = [lockU, fruit].filter((u) => aggregateCitedBenignUnit(u));
+    const lockFin = finalizeAskAnswer(lock.answer, { dataText: `${lockU}\n${fruit}`, dataUnits: [lockU, fruit], question: "去年门锁", verbatimExempt: "去年门锁", tier: AGG, citedBenignUnits: cited });
+    expect(lockFin.answer).not.toContain("654321");
   });
   it("E01 直答单元自身的电话 13987654321 含别条可上锁短号 123456 的倒序：日常单元自己的词项不参与对别人取值的归一化比对", () => {
     const phone = unit("爸爸电话 13987654321");

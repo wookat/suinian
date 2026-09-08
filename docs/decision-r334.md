@@ -196,6 +196,7 @@ R333 §9 的 15 条扣留分两类：
 1. `aggregateCitedBenignUnit` 借用了分片拼接口径 `fragmentLooksLikeCode`，而日期 `2026-09-12` / 电话 `0571-88001234` / 版本 `22.4.1` 的分隔符被当成代码残片 → 牙科 / 物业 / sharp 三条日常单元全被排除在同屏豁免外。改 `unitLooksLikeCode`（数字分隔组不计），聚合层「代码形态单元」补充判据也不再看已享豁免的 visibleUnits。
 2. SSE `reconcileDoneAnswer`：逐段闸门在 delta 时还不知道最终 references，扣段用的是无 `citedBenignUnits` 的聚合闸门；done 与 delta 同信任域时按「判据同源」直接删句，等于把 7.3 的豁免在流式出口整个绕掉（Q11 展览句 `sse_done_reclosed=1`）。改为 done 一律重跑带同屏善意单元的闸门，过闸即留。
 3. 引证补全 `verbatimUncitedSourceIds` 与聚合收口不同折叠面（`\p{L}\p{N}` 去符 vs `foldPlain` NFKC+小写）、且只比正文不比标题，弱语义命中一律不补；模型复述了 A/B 却只标 C 的引用时，A/B 进不了 references → 信任域退成 `single_note_direct`，A/B 的句子按「未引用单元」整句占位、卡片又不在屏上（Q12 `verbatim_closed_spans=2`，1 卡）。改为同折叠面 + 计入标题；弱命中仅当该笔记为非敏感且 `aggregateCitedBenignUnit`（app 出口）时补——被复述的日常事实宁可多一张卡，不能「见引用笔记卡片」却无卡。弱语义 + 含称谓 / 受守 / 敏感的笔记维持不补、整句占位。
+4. 确定性路由不经生成分支：时间窗拒答（`buildTimeWindowNoAnswerResponse`，E26 `去年 CPI 上涨 0.8%` 问「去年 CPI 涨多少」/ E27 Q4）把范围外相近笔记按 `safeSuggestionLabel` 列成 `[n]（日期）标签`，随后 `/api/ask` 出口中间件按聚合层整答收口——标签行是原文逐字，被换成 `〔原文片段略，见引用笔记卡片〕[1]`，卡片就在下方却「原文略」。改为中间件对 app 出口从 `references` 取非敏感（`is_sensitive` / `content_withheld` 均 false）且 `aggregateCitedBenignUnit` 的单元作 `citedBenignUnits`，与生成分支同一豁免；含称谓 / 受守 / 敏感 / MCP / 记账组装答案维持原口径。
 
 ### 7.4 已标注条 no_answer
 
