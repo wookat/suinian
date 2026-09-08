@@ -167,3 +167,8 @@ description: How to run browser UI / accessibility / cache-identity tests agains
 - `QA_INVITE_CODE` when production registration policy requires an invitation; supply only at runtime, never persist or print it.
 - For recorded production QA, prefer authorized script registration before recording (Chrome UA, POST `/api/auth/register`, body `{name,password,invite_code}`), then inject the returned token to log in. Generate the password in memory; if cleanup requires saved state, persist only name/token/user_id in the task's gitignored account file and never upload it.
 - If browser-console tooling cannot attach, discover the active Chrome CDP endpoint and use a read-only CDP connection for observations/screenshots; keep UI interactions native. A received SSE delta is transport evidence, not proof that intermediate text was visible before done.
+
+## Production Ask evidence
+- Check model availability with browser-context `GET /health?probe=ai`, not `/health/ai`; `ai.ok:true,degraded:true` indicates fallback availability, not a healthy primary provider. Record the actual health result separately from per-request model attribution.
+- When a live screenshot misses the pre-done interval, inspect the original recording and extract an unaltered frame with partial answer text plus the active Cancel/spinner controls. Keep raw-video timestamp and final-answer evidence; do not infer visual streaming solely from SSE event counts.
+- Verify answer facts separately from citation-card metadata: automatically assigned due dates can be present on a card even when no date exists in its note body. Report this distinction instead of attributing a card date to the generated answer.
