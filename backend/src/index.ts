@@ -4716,7 +4716,9 @@ app.post("/api/ask", async (c) => {
   // 「第 2 位是字母吗」与「第 2 位是数字吗」会召到不同笔记（生产实测 bisect T1/F1）。同一话题的所有变体统一只用
   // 稳定话题词召回，召回集就与候选值、属性词无关。
   const probeTerms = deterministicRecall ? probeRecallTerms(recallQuestion) : [];
-  if (probeTerms.length > 0) terms = probeTerms.slice(0, 6);
+  // 确定性路径没有关键词抽取器兜底：长并列话题片段（「烘焙课堂司康和海鸥跑团」）按连词拆出的短项同样是确定性产物
+  //（候选值已剥掉，对/错候选拆出同一组词），补进 LIKE 词集——否则该话题只剩语义召回一条路。
+  if (probeTerms.length > 0) terms = [...probeTerms.slice(0, 6), ...probeTerms.flatMap(salvageEnumeratedTerms)].filter((t, i, a) => a.indexOf(t) === i).slice(0, 10);
   else if (deterministicRecall) terms = terms.slice(0, 6);
   const semQuery = probeTerms.length > 0 ? probeTerms.join(" ") : recallQuestion;
   // R270 单字长尾（audit-r269 P1-1 q11：裸问「潮」0 召回）：整问剥掉标点/语气词

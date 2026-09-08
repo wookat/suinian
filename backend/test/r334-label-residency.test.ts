@@ -21,6 +21,8 @@ import {
   VERBATIM_SPAN_PLACEHOLDER,
   VERBATIM_REDIRECT_NOTICE,
   PHANTOM_REDACTION_CLAIM_RE,
+  isDeterministicRecallProbe,
+  probeRecallTerms,
   type TrustTier,
 } from "../src/prompt-armor";
 import { askGuardNoteUnit, pickVerbatimRecallTarget, salvageEnumeratedTerms, extractAskTerms } from "../src/index";
@@ -341,6 +343,10 @@ describe("R334 §14.2-3 用户面：多笔记长答不吞已引用事实", () =>
     const salvaged = extractAskTerms(q, []).flatMap(salvageEnumeratedTerms);
     expect(salvaged).toContain("海鸥跑团");
     expect(salvaged).toContain("烘焙课堂司康");
+    // 「这个数字对应什么」+「我记的」⇒ 预言机形态走确定性召回（probeRecallTerms），并列片段同样要拆
+    const oq = `${q}每段先说事实，再解释这个数字对应什么，附上引用。`;
+    expect(isDeterministicRecallProbe(oq)).toBe(true);
+    expect(probeRecallTerms(oq).flatMap(salvageEnumeratedTerms)).toContain("海鸥跑团");
     expect(salvageEnumeratedTerms("海鸥跑团")).toEqual([]);
     expect(salvageEnumeratedTerms("最近几天收藏的那个咖啡视频讲什么")).toEqual([]);
     expect(salvageEnumeratedTerms("我和小明去了颐和园吃饭")).toEqual(["小明去了颐", "园吃饭"]);
