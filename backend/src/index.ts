@@ -3626,16 +3626,16 @@ export function sanitizeRewrittenQuestion(raw: string | null | undefined, questi
 }
 
 /**
- * 预言机形态多轮的确定性召回问句（不经 LLM 改写）：最近两个用户轮各自剥掉候选值 / 答案格式尾缀后的话题 + 本轮剥掉后的问句，
- * 去重拼接。上文轮剥空（只剩中性词）时不并入。同一段对话里换任何候选值，得到的召回问句逐字相同。
+ * 预言机形态多轮的确定性召回问句（不经 LLM 改写）：本轮剥掉候选值 / 答案格式尾缀后的问句 + 最近两个用户轮各自剥掉后的话题，
+ * 去重拼接。本轮在前：probeRecallTerms 只取前 6 个话题词，上文两轮的话题词先占满会把本轮话题挤出召回集。
+ * 上文轮剥空（只剩中性词）时不并入。同一段对话里换任何候选值，得到的召回问句逐字相同。
  */
 export function oracleRecallQuestion(current: string, history: AskHistoryMessage[]): string {
-  const parts: string[] = [];
+  const parts: string[] = [current];
   for (const m of history.filter((m) => m.role === "user").slice(-2)) {
     const t = stripOpaqueTokens(m.content);
-    if (t !== "这条记录" && t.length >= 2 && !parts.includes(t) && t !== current) parts.push(t);
+    if (t !== "这条记录" && t.length >= 2 && !parts.includes(t)) parts.push(t);
   }
-  parts.push(current);
   return parts.join(" ");
 }
 
