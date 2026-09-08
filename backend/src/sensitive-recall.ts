@@ -174,6 +174,22 @@ export function sensitiveTopicHits(plain: string, tagsJson: string | null, terms
 }
 
 /**
+ * 受守卡按本轮问句自己的可归因话题词收窄：有卡命中时只留命中的，否则（本轮无话题 / 全不命中）原样返回。
+ * 多轮里整段对话的话题词会让上一轮的卡多中词（「柜台机器」之后问「西门闸机」引到柜台卡），归因优先看本轮。
+ */
+export function ownTopicCards<T extends { title: string | null; content: string; tags: string | null }>(cards: readonly T[], ownTopicTerms: readonly string[]): T[] {
+  if (ownTopicTerms.length === 0) return [...cards];
+  const hit = topicHitCards(cards, ownTopicTerms);
+  return hit.length > 0 ? hit : [...cards];
+}
+
+/** 命中任一话题词的卡（与敏感召回同一二元组近似匹配，取值令牌剥掉不参与）；无话题词 ⇒ 空。 */
+export function topicHitCards<T extends { title: string | null; content: string; tags: string | null }>(cards: readonly T[], topics: readonly string[]): T[] {
+  if (topics.length === 0) return [];
+  return cards.filter((n) => sensitiveTopicHits(`${n.title ?? ""}\n${n.content}`, n.tags, [], [...topics]) > 0);
+}
+
+/**
  * 在用户的敏感笔记里按检索词做解密内存匹配。返回行对象不解密。
  * 无加密密钥 / 明文存储回退（content_enc 为空）时按库内 content 匹配。
  */
@@ -181,7 +197,7 @@ export async function recallSensitiveNotes(
   env: { DB: D1Database; SUINIAN_ENC_KEY?: string },
   userId: string,
   terms: string[],
-  opts: { topicTerms?: string[]; limit?: number; scanLimit?: number } = {}
+  opts: { topicTerms?: string[]; currentTopicTerms?: string[]; limit?: number; scanLimit?: number } = {}
 ): Promise<SensitiveRecall> {
   const qTerms = terms.map((t) => t.trim()).filter((t) => t.length > 0);
   if (qTerms.length === 0) return EMPTY;
@@ -191,6 +207,10 @@ export async function recallSensitiveNotes(
   const topicTerms = rawTopics.length > 0 ? sensitiveTopicTerms(rawTopics) : [];
   // 话题词给了但全是元词 / 指代词（「把刚才那条的原文贴出来」）：无话题可归因，不拿相邻敏感卡凑数
   if (rawTopics.length > 0 && topicTerms.length === 0) return EMPTY;
+  // 本轮问句自己的可归因话题词（不含历史轮）。多轮召回问句把上文轮话题也拼了进来，上一轮的卡会多中几个话题词；
+  // 本轮问句能归因到某些卡时，只在这些卡里排主导——否则「柜台机器」之后问「西门闸机」引到的是柜台那张卡。
+  // 本轮没有可归因话题（「那串是多少」「第 2 位是字母吗」）时不启用，仍由整段对话归因。
+  const currentTopics = attributableTopicTerms((opts.currentTopicTerms ?? []).filter((t) => t.length > 0));
   let rows: NoteRow[];
   try {
     const { results } = await env.DB.prepare(
@@ -204,7 +224,7 @@ export async function recallSensitiveNotes(
     return EMPTY;
   }
   if (rows.length === 0) return EMPTY;
-  const scored: Array<{ row: NoteRow; plain: string; score: number; topicHits: number }> = [];
+  const scored: Array<{ row: NoteRow; plain: string; score: number; topicHits: number; currentHits: number }> = [];
   for (const row of rows) {
     let plain: string | null = null;
     if (row.content_enc && env.SUINIAN_ENC_KEY) {
@@ -216,14 +236,26 @@ export async function recallSensitiveNotes(
     }
     if (plain === null) plain = row.content ?? "";
     const score = sensitiveTermScore(plain, row.tags, qTerms, topicTerms);
-    if (score > 0) scored.push({ row, plain, score, topicHits: sensitiveTopicHits(plain, row.tags, qTerms, topicTerms) });
+    if (score > 0) {
+      scored.push({
+        row,
+        plain,
+        score,
+        topicHits: sensitiveTopicHits(plain, row.tags, qTerms, topicTerms),
+        currentHits: currentTopics.length > 0 ? sensitiveTopicHits(plain, row.tags, qTerms, currentTopics) : 0,
+      });
+    }
   }
   if (scored.length === 0) return EMPTY;
+  // 本轮话题归因到的卡优先：本轮词命中的卡只按本轮命中数排主导，历史轮的话题词不参与丢弃判定。
+  const currentOwned = scored.filter((s) => s.currentHits > 0);
+  const pool = currentOwned.length > 0 ? currentOwned : scored;
+  const hitsOf = (s: { currentHits: number; topicHits: number }): number => (currentOwned.length > 0 ? s.currentHits : s.topicHits);
   // R328 D 主导命中：有卡片命中 ≥2 个话题词时，只命中 1 词的卡片是「相邻秘密凑数」（泳池柜子 → 健身卡），丢弃；
   // 全部只命中 1 词时维持 R326 现状（找回率不回退）。
-  const maxTopicHits = Math.max(...scored.map((s) => s.topicHits));
-  const dominant = maxTopicHits >= 2 ? scored.filter((s) => s.topicHits >= 2) : scored;
-  dominant.sort((a, b) => b.topicHits - a.topicHits || b.score - a.score || (a.row.created_at < b.row.created_at ? 1 : -1));
+  const maxTopicHits = Math.max(...pool.map(hitsOf));
+  const dominant = maxTopicHits >= 2 ? pool.filter((s) => hitsOf(s) >= 2) : pool;
+  dominant.sort((a, b) => hitsOf(b) - hitsOf(a) || b.topicHits - a.topicHits || b.score - a.score || (a.row.created_at < b.row.created_at ? 1 : -1));
   const kept = dominant.slice(0, limit);
   const plains = new Map<string, string>();
   for (const k of kept) plains.set(k.row.id, k.plain);
