@@ -5,7 +5,6 @@ import App from './App.tsx'
 import { initTheme } from './lib/theme'
 import { loadSettings } from './lib/settings'
 import { scrubApiCacheForToken } from './lib/api-cache'
-import { reconcilePushSubscription } from './lib/push'
 
 initTheme()
 
@@ -21,7 +20,9 @@ if ('serviceWorker' in navigator) {
       window.location.href = data.url
     }
     // SW 在 pushsubscriptionchange 里重订阅后交给页面同步服务端（push-sw.js）
-    if (data && data.type === 'push-resubscribed') void reconcilePushSubscription()
+    // push 模块牵出 api 客户端，不进首屏入口：仅在真正收到 SW 消息时按需加载
+    if (data && data.type === 'push-resubscribed')
+      void import('./lib/push').then((mod) => mod.reconcilePushSubscription())
   })
 }
 

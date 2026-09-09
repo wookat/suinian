@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
@@ -56,11 +57,58 @@ function buildIdentity(): Plugin {
   }
 }
 
+/**
+ * 应用外壳预加载（R337 首屏体积优化）：入口分包只含 React + 欢迎页，外壳（src/app-shell.tsx）
+ * 是动态导入。为免已引导用户多等一次串行往返，构建时生成一个外链 boot 脚本（CSP 禁止内联脚本）：
+ * 读 localStorage 里的 onboarded 标记，为真则立即对外壳分包及其静态依赖注入 modulepreload，与入口并行下载；
+ * 首次访客不受影响。Vite 的 __vitePreload 会复用已存在的 <link href>，不会重复拉取。
+ */
+function shellPreload(): Plugin {
+  const SETTINGS_KEY = 'suinian.settings' // 与 src/lib/settings.ts 的 KEY 保持一致
+  const SHELL_ID = path.resolve(__dirname, 'src/app-shell.tsx')
+  let bootFile: string | null = null
+  return {
+    name: 'suinian-shell-preload',
+    apply: 'build',
+    generateBundle(_options, bundle) {
+      const shell = Object.values(bundle).find(
+        (c) => c.type === 'chunk' && c.facadeModuleId && path.resolve(c.facadeModuleId) === SHELL_ID,
+      )
+      if (!shell || shell.type !== 'chunk') return
+      const closure = (root: string, seen = new Set<string>()) => {
+        if (seen.has(root)) return seen
+        seen.add(root)
+        const chunk = bundle[root]
+        if (chunk?.type === 'chunk') chunk.imports.forEach((i) => closure(i, seen))
+        return seen
+      }
+      // 入口分包的静态依赖 index.html 已经 modulepreload，这里只补外壳独有的部分
+      const entryFiles = Object.values(bundle)
+        .filter((c) => c.type === 'chunk' && c.isEntry)
+        .flatMap((c) => [...closure(c.fileName)])
+      const files = [...closure(shell.fileName)].filter((f) => !entryFiles.includes(f)).map((f) => `/${f}`)
+      const source =
+        `(function(){try{var s=JSON.parse(localStorage.getItem(${JSON.stringify(SETTINGS_KEY)})||"{}");` +
+        `if(s.onboarded!==true)return;var h=document.head;` +
+        `${JSON.stringify(files)}.forEach(function(f){var l=document.createElement("link");l.rel="modulepreload";l.href=f;h.appendChild(l)})}catch(e){}})();`
+      const hash = crypto.createHash('sha256').update(source).digest('hex').slice(0, 8)
+      bootFile = `assets/boot-${hash}.js`
+      this.emitFile({ type: 'asset', fileName: bootFile, source })
+    },
+    transformIndexHtml: {
+      order: 'post',
+      handler: () =>
+        bootFile ? [{ tag: 'script', attrs: { src: `/${bootFile}` }, injectTo: 'head-prepend' }] : [],
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
     react(),
     knownIssuesPage(),
     buildIdentity(),
+    shellPreload(),
     tailwindcss(),
     VitePWA({
       registerType: 'prompt',

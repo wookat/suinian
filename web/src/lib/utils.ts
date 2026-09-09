@@ -15,34 +15,13 @@ export function titleEchoesContent(title: string | null | undefined, content: st
   return norm(title) === norm(content)
 }
 
-/**
- * 安全承诺首句（R334，审查人 audit-r333 §14.2 措辞逐字）：渲染时 marked / unmarked 两段加粗
- * （components/safety-promise.tsx）；纯文本口径 = SAFETY_PROMISE_LEAD_TEXT。
- */
-export const SAFETY_PROMISE_LEAD = {
-  marked: "已标注",
-  mid: "敏感的笔记正文不进入 AI 回答；",
-  unmarked: "未标注 / 已取消标注",
-  tail: "的内容视为普通笔记，可能被 AI 转述、编码或计算。",
-} as const
-
-export const SAFETY_PROMISE_LEAD_TEXT =
-  `${SAFETY_PROMISE_LEAD.marked}${SAFETY_PROMISE_LEAD.mid}${SAFETY_PROMISE_LEAD.unmarked}${SAFETY_PROMISE_LEAD.tail}`
-
-/**
- * 产品安全承诺（R312，按信任域分层）：不承诺认得出每一种危险内容（检测器只决定折叠优先级），
- * 承诺的是结构性边界：聚合/对外出口（跨笔记问答、周报回顾线索、推送、导出中的 AI 文本、工具接口）
- * 不逐字转写笔记；单笔记直答时原文只与它的笔记卡片同屏出现。
- */
-export const SAFETY_PROMISE =
-  "什么都能丢：我们不保证认得出每一种危险内容。自动标敏感是第一道闸门（模型判定，可能误标、漏标；误标可在卡片菜单「取消敏感标记」——取消后不再加密遮罩，卡片 / 详情可直接看原文，含口令密钥的行仍默认折叠、一键展开）。结构上保证的是：跨笔记聚合、推送、导出与工具接口不会整段逐字转写你的笔记（同一条里带凭据称谓——密码 / 口令 / 密钥 / 门禁 / 转盘 / key / token 等——的取值，如「工位抽屉密码 4218」「路由器后台密码 sky云3q」，按称谓驻留占位，拆空格 / 倒序 / 拼音 / 编码 / 算术改写同样不放行，不看是否标敏感；没有任何凭据称谓的普通值——电话 / 学号 / 快递单号 / 鞋码 / 宿舍号——按普通笔记直答）；你问某条自己的笔记时，原文只会连同它的笔记卡片一起出现，凡是含取回执行 / 外连 / 破坏性命令、口令密钥、长串编号、以及非书签形态地址（IP 字面 / 主机:端口 / user@host / 内网・本机地址 / 拼读或编码出来的地址）的行，问答区一律不转写、只给一句概括与占位，点开引用的卡片看原文（普通书签链接与「看端口用 ss -ltnp」一类日常命令备忘照常回答）；问「口令是不是 X」这类核对问题、以及对这些内容的是非问，问答区不确认也不否认。含远程地址/取回执行原语/编码串/口令密钥的内容默认折叠，一键展开；日常命令备忘直接展示，常见破坏性命令（rm -rf / dd / DROP TABLE 等）单独高警示。对口令折叠卡、破坏命令警示卡和标为「敏感」的卡片，复制（卡片菜单复制、展开后选中 Ctrl+C/右键复制、整页全选复制、编辑框内选中复制/剪切、问答答案区选中/右键复制）都会先提醒核对，请勿直接执行；日常命令备忘卡只在卡片菜单复制时提醒，展开后选中复制只给事后一行提示，整页全选复制与编辑框内复制/剪切不提醒；纯散文形态的破坏意图（「把库清空」这类没有命令形态的话）和判据没认出、也没标敏感的内容不折叠、不占位、不提醒。当前为小范围 beta，剩余已知问题见「已知问题清单」。"
-
-/** onboarding 首屏用的一句话版本：与 SAFETY_PROMISE 同口径（不保证识别 + 结构性边界），不展开路径清单 */
-export const SAFETY_PROMISE_SHORT =
-  `${SAFETY_PROMISE_LEAD_TEXT}我们不保证认得出每一种危险内容；保证的是跨笔记聚合、推送、导出与工具接口不整段逐字转写你的笔记，问某条自己的笔记时，含命令/口令/长串编号/地址的行只给占位，原文只连同它的笔记卡片一起出现；问「口令是不是 X」这类核对问题不确认也不否认。`
-
-/** 用户可见的已知问题清单（R318 D：beta 期在注册页 / 设置页 / onboarding 直接给链接）。同源静态页，构建时由 docs/known-issues.md 渲染（仓库私有，GitHub 链接对未登录用户 404）。 */
-export const KNOWN_ISSUES_URL = "/known-issues"
+export {
+  KNOWN_ISSUES_URL,
+  SAFETY_PROMISE,
+  SAFETY_PROMISE_LEAD,
+  SAFETY_PROMISE_LEAD_TEXT,
+  SAFETY_PROMISE_SHORT,
+} from "./copy"
 
 export const EXEC_TITLE_PLACEHOLDER = "含可执行命令的记录（已折叠）"
 export const BROAD_TITLE_PLACEHOLDER = "含端点/代码形态内容的记录（已折叠）"

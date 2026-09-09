@@ -166,7 +166,7 @@ Dark 下全部替换为高透明黑 + 1px 内描边，见 1.5。
 | Select | Radix Select | 下拉选择，Popover 层 `shadow-md` |
 | DropdownMenu | Radix | 卡片「更多」菜单；破坏性项 `text-destructive` |
 | Popover / Tooltip | Radix | Tooltip 延迟 250ms，仅补充信息不承载操作；Popover 原语已就位，页面暂未接入 |
-| Dialog | Radix Dialog | `max-w-lg rounded-2xl p-6 shadow-xl`；Onboarding / FirstRunTour 为不可关闭门禁（Esc/外点 preventDefault） |
+| Dialog | Radix Dialog | `max-w-lg rounded-2xl p-6 shadow-xl`；FirstRunTour 为不可关闭门禁（Esc/外点 preventDefault）。Onboarding 欢迎页为首次访客首屏，不走 Dialog：整页渲染同款卡片（无外壳可绕开），不依赖 Radix/motion 以保首屏体积 |
 | AlertDialog / ConfirmDialog | Radix AlertDialog | 所有破坏性操作（删除、清空回收站、注销、轮换 token）统一入口，确认键 destructive 且默认聚焦 |
 | Sheet | Radix Dialog | 侧滑面板（右侧 / 底部，含安全区）；本轮已提供原语但页面暂未接入。Vaul 抽屉评估后本轮不引入（无高频移动端抽屉场景），需要时再加 |
 | Command | cmdk | ⌘K / Ctrl+K 命令面板：路由、搜索、提问、速记、主题 |
