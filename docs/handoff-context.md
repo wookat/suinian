@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-09-09（R338；R330–R336 见 docs/decision-r330/r332/r334/r336.md 与 audit-r331/r332/r333/r335.md；R337 见 docs/decision-r337.md）
+> 最后更新：2026-09-09（R343；R330–R336 见 docs/decision-r330/r332/r334/r336.md 与 audit-r331/r332/r333/r335.md；R337–R343 见 docs/decision-r337/r338/r340/r341/r342/r343.md）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -73,6 +73,11 @@
 - web 演示模式问答（PR #399，待合并）：生产截图实测演示模式连空态示例问「我最近在想什么」都答「没找到」（`mockAsk` 按空格/标点切词，中文整句一 token）。修法 = 剥问句框架词 → 汉字二元组匹配 + 拉丁整词；框架词剥空或含「最近/想什么」且无命中 → 返回最新 3 条 idea；答案改 `[n]` 引用与真实后端一致；敏感卡只写「（敏感卡片…）」不摘原文；链接卡摘 `url_title：url_summary`。仅 `web/src/lib/mock.ts`，不影响真实后端路径；本机 Playwright 截图在 PR
 - web 报告列表摘要（PR #400，待合并）：生产截图实测报告卡摘要把 H1/小节名/正文按空格拼成一句（`content_md.replace(/[#*\`>\-\n]+/g, " ")`）。改为 `reportPreview`：去标题行与列表/强调标记、段落间「·」分隔、截 160 字；真实模式报告 markdown 结构相同，同样受益。仅 `web/src/pages/reports.tsx`
 - R339（PR #398，待合并）：**「（AI 暂不可用）」兜底答案不进 180s 答案缓存**。动机 = R338 本机复验一手证据：同问第 2–5 次 6–11ms 返回、零 provider 调用、答案仍是旧兜底——兜底是 provider 当下状态的产物而非用户资料的产物，缓存它会让模型恢复/熔断闭合后同问在 TTL 内仍拿旧兜底。修法 = `!answer2` 兜底体加服务端字段 `ai_unavailable: true`（R278 `finalizeGenerationBody` 原样外露，随 REST body / SSE `done` 下发）+ `askAnswerCacheable(body, status)`（`status===200 && body.ai_unavailable!==true`）门控 `/api/ask` 中间件的 `cache.put`；缓存键/EPOCH/TTL/命中路径不变。web：`AskChatMessage.aiUnavailable` → 兜底答案上方琥珀横幅「AI 模型暂不可用，本轮只列出了相关记录；稍后重试可获得完整回答」+「重试本轮提问」（复用 R288 `guardDegraded` 横幅结构）。本地 4543/4543 + typecheck + web lint/build；本机运行时同问两次 A2 无 `anscache;desc=hit`、横幅截图在 PR；**生产未验证（Worker 被删）**
+- R340（PR #402，待合并；设计 docs/decision-r340.md）：第三轮族外语料 60 条（`backend/scripts/qa-r340/`，与 R335/R336 均不同族）静态复测 b37b8d1：善意 15/20、安全 39/40。判定层最小修：①转盘组合值区（「保险柜转盘 左30 右15 左5」W01 漏值，ask 出口 + 行级 `secretValueFace` 两处）；②称谓+引导+计量不取值；③密码锁/密码长度概念后缀与价格问不折叠。修后 18/18 + 40/40，非 answer 出口 0/40 漏、0/18 误伤；Y02/Y11「密码是 <汉语词>」同形边界 fail-closed 保留。#401 因合成样例被 GitGuardian 逐提交命中而关闭，#402 从 main 重建单提交
+- R341（PR #403，基于 #402；设计 docs/decision-r341.md）：R335/R336/R340 三轮语料（安全 106 / 善意 137）过非 answer 出口，报告行标题 / 线程摘要 / 复盘评语的模型视图对驻留形态「宿舍柜子的锁改成了 0731」漏原值（无 own 行 ⇒ `redactGuardedLinesForModel` 行级替换放过；ask 出口早有 `normalizedGuardedLeak` 复查）。修法 = `redactGuardedViewForModel`（行级替换 + 归一化复查 fail-closed），仅 reports.ts / threads.ts / review.ts 三处调用改走；**否定**「`residencyTriggered` 接进卡片宽折叠」（静态实测会折取件码/订单号/合同号/护照号与账号注销散文）。`scripts/qa-r335/blind-corpus.d.mts` 补声明供严格 typecheck
+- R342（PR #404，基于 #403；设计 docs/decision-r342.md）：R335 善意 E13「账号：我要把微博账号注销掉」ask 出口 + 模型视图整单元扣留，根因 = `residencyServiceKeyValues` 冒号分支对纯汉字值只看长度 ≥6。修法 = 冒号后纯汉字按 R334 值区口径 6–12 字且首 1–2 字 ∉ `RESIDENCY_HAN_STOP`；四轮语料 348 条走到该分支的仅 E13，纯汉字守值全部由强称谓路径守住。r341 单测 R335 善意边界由 {E13,G17} 收为 {G17}
+- R343（PR #405，基于 #404；设计 docs/decision-r343.md）：待合并队列按序合到本机模拟树全量 vitest 唯一失败 = R337 P12「行李箱密码锁的数字和托运限重各是多少」不拆句。根因 = R340 把「锁」加进 `CONCEPT_SUFFIX_SRC` 后 `conceptualLabelFree` 把「密码锁」整词抹掉，问句失去锁具称谓、`LOCK_OBJECT_TALK_RE` 没机会判（同义「行李箱锁是几」是取值问而「行李箱密码锁是几」走普通生成）。修法 = 后缀为「锁」时只抹称谓保留「锁」（1 行）。模拟树 + 补丁全量 4698/4698。**纪律**：判定层 PR 先在本机合完待合并队列再宣本地全绿
+- 静态复测已知边界（均有意 fail-closed，未改）：R336 K07（PIN 讲座 1234/0000）/ K09（Password 简史 1961）/ L03 / L09（19 位淘宝订单号，R320 ≥12 位数字口径）；R340 Y02/Y11；R335 G17 取件码在模型视图仍占位（ask 出口按 known-issues 豁免直答）
 - 同期 UI 线（另一会话，#384–#386）：设计系统 + shadcn/Radix + motion/recharts/cmdk 重排版、首屏拆包（移动 Lighthouse Perf 99）、设置页 ConfirmDialog
 
 ## Android/Web 功能奇偶性缺口计划（R129 清单，R130 评估）
@@ -103,7 +108,7 @@
 - 【R142 归因】导入后聚类覆盖率低（R141 观察 21 条仅 1 线索）：代码路径完备——导入即 `resetThreadBackfill` 重置游标，10 分钟 cron `backfillThreadClusters` 全量回扫（frugal：embedding 预筛 + 至多一次 LLM 边界确认）。低覆盖为设计内保守行为的叠加：a) 导入笔记先经异步分拣，仅 idea/collect 参与聚类（todo/记账/资料不参与）；b) 直并阈值 SIM_JOIN=0.76 较严，0.62-0.76 需 LLM 确认（此前确认回复带前缀会解析失败而放弃——R142 已健壮化，预期边界并线索率提升）；c) frugal 路径不走 DeepSeek 兜底。属「宁散勿错并」取向，非缺陷；R142 QA 用生产 flomo 样本导入实测覆盖率，后续轮次如仍偏低再评估阈值
 
 ## 等老板事项
-- **恢复 `suinian-api`**：①Cloudflare 账户恢复 Workers Paid + 启用 R2；②运行时注入原 Worker secrets（至少 `SUINIAN_ENC_KEY`、`DEEPSEEK_API_KEY`、`REGISTRATION_INVITE_CODES`、`ADMIN_TOKEN`、`BRIDGE_TOKEN`、VAPID×3；微信/企微可后补）；③合并 #392→#393→#394→#395→#396→#397→#398→#399→#400（2026-09-09 20:50 UTC 本机 worktree 顺序合并前 8 支全部无冲突；#400 仅 reports.tsx，与其余 PR 无交集，合并态 backend typecheck + vitest 4607/4607 + web lint/build 全绿）后由负责人 deploy-sync，并补跑 R337/R338/R339 生产验证（qa-r337 矩阵、tail 核对熔断窗口、同问兜底不命中缓存）
+- **恢复 `suinian-api`**：①Cloudflare 账户恢复 Workers Paid + 启用 R2；②运行时注入原 Worker secrets（至少 `SUINIAN_ENC_KEY`、`DEEPSEEK_API_KEY`、`REGISTRATION_INVITE_CODES`、`ADMIN_TOKEN`、`BRIDGE_TOKEN`、VAPID×3；微信/企微可后补）；③合并 #392→#393→#394→#395→#396→#397→#398→#399→#400→#402→#403→#404→#405（2026-09-09 22:30 UTC 本机 worktree 按此顺序合并 13 支全部无冲突，合并态 backend typecheck 绿、全量 vitest 4698/4698）后由负责人 deploy-sync，并补跑 R337–R343 生产验证（qa-r337 矩阵、tail 核对熔断窗口、同问兜底不命中缓存、qa-r340 语料 REST/SSE/MCP 出口、R341/R342 报告/线程/复盘模型视图与 E13 直答）
 - GitHub Actions 付款问题（恢复后 CI 才会跑）
 - DeepSeek 账户充值（2026-09-09 余额 -0.35 CNY / 402）或决定主模型 provider（见已知问题【provider】）
 - 扩展是否上架 Chrome Web Store（需开发者账号 $5）
