@@ -42,7 +42,7 @@
 
 - `backend/`、`.github/` 无 diff；API 调用与契约（`web/src/lib/api.ts`）未变。
 - 敏感占位 / 折叠 / 展开取回、code 复制前确认（`COPY_CONFIRM`）、`ExecGuard`、`content_withheld` 占位体：仅换外观容器，判断逻辑与文案原样保留。
-- 破坏性操作（删除、清空回收站、注销、轮换 token、重新生成恢复码）全部经 Radix AlertDialog 确认，确认键 destructive 且默认聚焦。
+- 破坏性操作（删除、清空回收站、轮换 token、重新生成恢复码、退出登录、标签合并/删除）全部经 Radix AlertDialog 确认，确认键 destructive 且默认聚焦；注销账号保留「输入注销」内联门禁（比弹窗更强）。勘误：#384 合并时设置页这 5 处仍是 `window.confirm`（QA 走查发现），已在后续 PR 统一改为 `ConfirmDialog`。
 - 恢复码确认：`verified = confirmed || last4 匹配`，完成按钮 `disabled={!verified}`。
 - Onboarding / FirstRunTour 不可通过 Esc 或点击遮罩关闭。
 
@@ -102,8 +102,8 @@ web$ npm run build     # 通过
 
 ## 6. 未验证事项
 
-- 生产（Cloudflare Pages，brotli + HTTP/3）上的 Lighthouse 与真实设备体感——待合并部署后由 `testing_agent` 走查并补录屏。
-- 真实后端下的完整交互回归（本轮所有截图与脚本走的是 `useMock=true` 演示数据）。
+- 真实后端下的登录态交互回归（记录 / 敏感展开 / 删除 / Ask / 洞察真实数据 / token 复制）——生产注册需邀请码，QA 走查时未拿到，见 §8。
+- 真实设备体感（本轮生产 Lighthouse 为本机 headless Chrome）。
 - Android WebView / iOS Safari 的 `backdrop-filter` 与安全区表现。
 
 ## 7. 复现命令
@@ -114,3 +114,13 @@ CHROME_PATH=… npx lighthouse@12.8.2 http://localhost:4173/ --output=json      
 CHROME_PATH=… npx lighthouse@12.8.2 http://localhost:4173/ --preset=desktop --output=json
 CHROME_PATH=… npx lighthouse@12.8.2 http://localhost:4173/ --throttling-method=devtools --output=json
 ```
+
+## 8. 上线与生产走查（#384 合并后）
+
+- 部署：`bash scripts/deploy-sync.sh`，Worker 与 Pages 同为 main HEAD `3fbe6e3`（`/health` build 与 `<meta name="build">` 均核验一致；Pages 部署 `b40f86ef`）。
+- 生产走查（`testing_agent`，桌面 1280 + 移动 375，演示模式，带注解录屏）：
+  - 通过：Onboarding 门禁、8 路由两种宽度渲染且文档宽度 = 375、底栏 `aria-current`、来源筛选 Android/Web/微信 = 2/3/3 条、敏感遮罩/展开/再遮、删除 AlertDialog、命令面板、待办折叠、线索详情、报告 Tabs、洞察图表 + tooltip、主题与字号 14/16/18/20、三个登录表单校验、reduced-motion 仿真下导航可用。
+  - 生产 Lighthouse（本机 headless）：Mobile Perf 89 / A11y 100 / BP 100 / SEO 100（LCP 3.1s，CLS 0）；Desktop 100/100/100/100。移动 Perf 低于本地 preview 的 93，属同一根因（首屏 JS），仍未达「不低于现状」。
+  - 发现并修：设置页 5 处 `window.confirm`（退出登录 / 轮换 token / 重新生成恢复码 / 标签合并 / 标签删除）→ `ConfirmDialog`（本 PR）。
+  - 未测（需邀请码注册 `[QA-R337UI]` 账号）：登录态记录 / Ask / 洞察真实数据 / token 复制确认 / 注销与 D1 清理。
+  - 本地 mock 走查曾报「Android 筛选残留」，复核为 4173 预览服的旧 dist（早于 76f87e5），生产复测通过，本地报告已勘误。

@@ -25,6 +25,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Switch } from "@/components/ui/switch"
 import { Progress } from "@/components/ui/progress"
 import { Segmented } from "@/components/ui/segmented"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import {
   deleteAccount,
   verifyAccountDeleted,
@@ -85,6 +86,30 @@ function buildCurlExample(apiBaseUrl: string, withToken: boolean): string {
     `  -H 'Content-Type: application/json' \\`,
     `  -d '{"content": "从 API 记一条碎念"}'`,
   ].join("\n")
+}
+
+type PendingConfirm = { title: string; description?: string; confirmLabel: string; run: () => void }
+
+function PendingConfirmDialog({
+  pending,
+  onClose,
+}: {
+  pending: PendingConfirm | null
+  onClose: () => void
+}) {
+  return (
+    <ConfirmDialog
+      open={pending !== null}
+      title={pending?.title ?? ""}
+      description={pending?.description}
+      confirmLabel={pending?.confirmLabel}
+      onConfirm={() => {
+        onClose()
+        pending?.run()
+      }}
+      onCancel={onClose}
+    />
+  )
 }
 
 function SettingsGroup({ title, children }: { title: string; children: ReactNode }) {
@@ -292,6 +317,7 @@ function TagManagerCard() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [showLongTail, setShowLongTail] = useState(false)
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null)
   const settingsVersion = useSettingsVersion()
 
   useEffect(() => {
@@ -323,8 +349,20 @@ function TagManagerCard() {
       setEditingTag(null)
       return
     }
-    const merging = tags?.some((t) => t.tag === to)
-    if (merging && !window.confirm(`标签 #${to} 已存在，确定将 #${from} 合并进 #${to} 吗？`)) return
+    const merging = tags?.some((t) => t.tag === to) ?? false
+    if (merging) {
+      setPendingConfirm({
+        title: `合并标签 #${from} → #${to}？`,
+        description: `标签 #${to} 已存在，合并后 #${from} 将从所有笔记中替换为 #${to}。`,
+        confirmLabel: "确认合并",
+        run: () => void performRename(from, to, true),
+      })
+      return
+    }
+    await performRename(from, to, false)
+  }
+
+  async function performRename(from: string, to: string, merging: boolean) {
     setBusy(true)
     try {
       const affected = await renameTag(from, to)
@@ -338,8 +376,16 @@ function TagManagerCard() {
     }
   }
 
-  async function handleDelete(tag: string, count: number) {
-    if (!window.confirm(`确定删除标签 #${tag} 吗？将从 ${count} 条笔记中移除（笔记本身保留）`)) return
+  function handleDelete(tag: string, count: number) {
+    setPendingConfirm({
+      title: `删除标签 #${tag}？`,
+      description: `将从 ${count} 条笔记中移除该标签，笔记本身保留。`,
+      confirmLabel: "确认删除",
+      run: () => void performDelete(tag),
+    })
+  }
+
+  async function performDelete(tag: string) {
     setBusy(true)
     try {
       const affected = await deleteTag(tag)
@@ -413,7 +459,7 @@ function TagManagerCard() {
                     重命名/合并
                   </button>
                   <button
-                    onClick={() => void handleDelete(tag, count)}
+                    onClick={() => handleDelete(tag, count)}
                     disabled={busy}
                     className="text-xs font-medium text-destructive hover:underline"
                   >
@@ -446,6 +492,7 @@ function TagManagerCard() {
           {msg.text}
         </p>
       )}
+      <PendingConfirmDialog pending={pendingConfirm} onClose={() => setPendingConfirm(null)} />
     </Card>
   )
 }
@@ -835,6 +882,7 @@ export function SettingsPage() {
   const [deleting, setDeleting] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleteConfirmText, setDeleteConfirmText] = useState("")
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null)
   const [includeSensitive, setIncludeSensitive] = useState(false)
   const [exporting, setExporting] = useState<"json" | "markdown" | "backup" | null>(null)
   const [exportMsg, setExportMsg] = useState<{ ok: boolean; text: string } | null>(null)
@@ -975,9 +1023,17 @@ export function SettingsPage() {
     }
   }
 
-  async function handleRotate() {
+  function handleRotate() {
     if (rotating) return
-    if (!window.confirm("轮换后旧 token 立即失效，其它设备（微信桥 / Android）需同步更新。确定轮换？")) return
+    setPendingConfirm({
+      title: "轮换 API token？",
+      description: "轮换后旧 token 立即失效，其它设备（微信桥 / Android）需同步更新。",
+      confirmLabel: "确认轮换",
+      run: () => void performRotate(),
+    })
+  }
+
+  async function performRotate() {
     setRotating(true)
     setAccountMsg(null)
     try {
@@ -993,9 +1049,17 @@ export function SettingsPage() {
     }
   }
 
-  async function handleRegenerateRecovery() {
+  function handleRegenerateRecovery() {
     if (regenerating) return
-    if (!window.confirm("重新生成后旧恢复码立即作废，新码只显示一次。确定继续？")) return
+    setPendingConfirm({
+      title: "重新生成恢复码？",
+      description: "重新生成后旧恢复码立即作废，新码只显示一次。",
+      confirmLabel: "确认重新生成",
+      run: () => void performRegenerateRecovery(),
+    })
+  }
+
+  async function performRegenerateRecovery() {
     setRegenerating(true)
     setAccountMsg(null)
     try {
@@ -1008,12 +1072,15 @@ export function SettingsPage() {
   }
 
   function handleLogout() {
-    if (
-      !window.confirm(
-        "退出登录只会清除本机保存的 token 与设置，云端笔记/线索/周报全部保留，重新登录即可找回。确定退出？",
-      )
-    )
-      return
+    setPendingConfirm({
+      title: "退出登录？",
+      description: "只会清除本机保存的 token 与设置，云端笔记/线索/周报全部保留，重新登录即可找回。",
+      confirmLabel: "退出登录",
+      run: performLogout,
+    })
+  }
+
+  function performLogout() {
     forgetPushIntent()
     saveSettings({ apiBaseUrl: "", apiToken: "", useMock: true, onboarded: false, tourSeen: true })
     window.location.hash = "#/"
@@ -1209,7 +1276,7 @@ export function SettingsPage() {
           </Button>
           <Button
             variant="outline"
-            onClick={() => void handleRotate()}
+            onClick={handleRotate}
             disabled={rotating}
             className="w-full sm:w-auto"
           >
@@ -1225,7 +1292,7 @@ export function SettingsPage() {
           </Button>
           <Button
             variant="outline"
-            onClick={() => void handleRegenerateRecovery()}
+            onClick={handleRegenerateRecovery}
             disabled={regenerating}
             className="w-full sm:w-auto"
           >
@@ -1685,6 +1752,7 @@ export function SettingsPage() {
         )}
       </Card>
       </SettingsGroup>
+      <PendingConfirmDialog pending={pendingConfirm} onClose={() => setPendingConfirm(null)} />
     </div>
   )
 }
