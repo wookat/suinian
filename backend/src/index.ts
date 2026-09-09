@@ -3688,7 +3688,13 @@ const ASK_REWRITE_SYSTEM =
  */
 const ASK_HISTORY_SYSTEM_MARK_RE = /〔[^〕\n]{0,160}〕/g;
 const ASK_HISTORY_BOILERPLATE_LINE_RE =
-  /^(?:没找到相关笔记|提示：|找到了相关的笔记，但|以上为数据库精确列举|这个问题命中的内容几乎全是笔记原文|以下\s*\d+\s*条相近的记录)|范围内没有找到相关记录/;
+  /^(?:没找到相关笔记|[（(]?提示：|找到了相关的笔记，但|以上为数据库精确列举|这个问题命中的内容几乎全是笔记原文|以下\s*\d+\s*条相近的记录)|范围内没有找到相关记录/;
+/**
+ * 系统自产的出口指引措辞（敏感折叠计数句 / 受守占位指卡 / 零召回原文查看提示 / 隔离告示）：这些句子只由代码模板产出，
+ * 不是笔记内容也不是用户话题——助手轮里整行剥掉；改写产物带这些措辞时也判不可用。
+ */
+const ASK_HISTORY_SYSTEM_GUIDANCE_RE =
+  /条(?:敏感笔记可能相关|引用为敏感\/受守笔记)|点开(?:下方)?引用(?:的笔记)?卡片|问答区不(?:展示|转写|逐字转写)|正文(?:不进入|不会进入)问答|试图影响回答的指令|已隔离笔记内指令|安全隔离规则/;
 export function rewriteHistoryView(history: AskHistoryMessage[], opts?: { stripCandidates?: boolean }): AskHistoryMessage[] {
   return history.map((m) => {
     if (m.role === "user") return opts?.stripCandidates ? { role: m.role, content: stripOpaqueTokens(m.content) } : m;
@@ -3696,17 +3702,32 @@ export function rewriteHistoryView(history: AskHistoryMessage[], opts?: { stripC
       .replace(ASK_HISTORY_SYSTEM_MARK_RE, "")
       .split("\n")
       .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !ASK_HISTORY_BOILERPLATE_LINE_RE.test(l) && !/^(?:[[［]\d{1,2}[\]］]\s*)+$/.test(l));
+      .filter(
+        (l) =>
+          l.length > 0 &&
+          !ASK_HISTORY_BOILERPLATE_LINE_RE.test(l) &&
+          !ASK_HISTORY_SYSTEM_GUIDANCE_RE.test(l) &&
+          !/^(?:[[［]\d{1,2}[\]］]\s*)+$/.test(l)
+      );
     return { role: m.role, content: kept.length > 0 ? kept.join("\n") : "（该轮没有给出实质内容）" };
   });
 }
 
-/** 改写产物的可用性校验：系统标记 / 拒答自述 / 空产物一律不可用，回落原问题。 */
-export function sanitizeRewrittenQuestion(raw: string | null | undefined, question: string): string {
+/**
+ * 改写产物的可用性校验：系统标记 / 拒答自述 / 空产物 / 系统指引措辞一律不可用，回落原问题。
+ * 改写器还会把助手轮整行照抄回来当「改写结果」（生产实测 S03：第 1 轮敏感折叠指引原句成了第 2 问的召回问句，
+ * 航班笔记召不到）——产物逐字等于任一助手轮的某行时也回落。
+ */
+export function sanitizeRewrittenQuestion(raw: string | null | undefined, question: string, history: readonly AskHistoryMessage[] = []): string {
   const out = (raw ?? "").trim();
   if (!out || out.length > 300 || out.includes("\n")) return question;
   if (/[〔〕]/.test(out)) return question;
   if (/无法|抱歉|不能回答|作为(?:一个)?(?:助手|AI|模型)|改写后的问题|原问题/.test(out)) return question;
+  if (ASK_HISTORY_SYSTEM_GUIDANCE_RE.test(out)) return question;
+  const assistantLines = new Set(
+    history.filter((m) => m.role === "assistant").flatMap((m) => m.content.split("\n").map((l) => l.trim()))
+  );
+  if (assistantLines.has(out)) return question;
   return out;
 }
 
@@ -3742,7 +3763,7 @@ export async function rewriteAskQuestion(
     timeout_ms: 15_000,
     messages: [{ role: "system", content: ASK_REWRITE_SYSTEM }, ...rewriteHistoryView(history, opts), { role: "user", content: question }],
   });
-  return sanitizeRewrittenQuestion(rewritten, question);
+  return sanitizeRewrittenQuestion(rewritten, question, history);
 }
 
 /**
@@ -5572,7 +5593,9 @@ app.post("/api/ask", async (c) => {
       // 元问题（「我最近在想什么」等自我回顾）不带对话历史生成：这类问题
       // 自足、答案只应来自笔记片段，带历史会让模型把「在想什么」误答成
       // 「你刚才在问什么」（R176 q108）
-      ...(metaQuestion ? [] : history),
+      // 助手轮只保留实质内容：系统指引样板（零召回提示 / 敏感折叠计数句 / 占位指卡）进了生成上下文会被模型
+      // 当成可复用的答法照抄（生产实测 S03：直答问被答成「没找到相关笔记。（提示：如果这条信息记成了加密的敏感笔记…）」）。
+      ...(metaQuestion ? [] : rewriteHistoryView(history)),
       // R266：资料（nonce 定界 + 逐行前缀）与问题分属两条独立消息，结构上分离
       { role: "user", content: dataMessage },
       {

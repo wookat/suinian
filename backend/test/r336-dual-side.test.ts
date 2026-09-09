@@ -32,9 +32,9 @@ import {
   DIRECT_GUARD_PLACEHOLDER,
 } from "../src/prompt-armor";
 import { extractGraph, getThreadGraph, graphGuardUnit } from "../src/graph";
-import { askGuardNoteUnit, askGuardedRefNoteJson, askGuardedRefNotes, withFoldedRefCount, extractAskTerms, oracleRecallQuestion, type AskHistoryMessage } from "../src/index";
+import { askGuardNoteUnit, askGuardedRefNoteJson, askGuardedRefNotes, withFoldedRefCount, extractAskTerms, oracleRecallQuestion, rewriteHistoryView, sanitizeRewrittenQuestion, type AskHistoryMessage } from "../src/index";
 import { dedupeAskReferences, askTopicTerms } from "../src/ask";
-import { foldedRefCountLine, FOLDED_REF_COUNT_RE, sensitiveTermScore, sensitiveTopicTerms, recallSensitiveNotes, sensitiveRecallTerms, attributableTopicTerms, plainTopicHitCards } from "../src/sensitive-recall";
+import { foldedRefCountLine, sensitiveOnlyAnswer, FOLDED_REF_COUNT_RE, sensitiveTermScore, sensitiveTopicTerms, recallSensitiveNotes, sensitiveRecallTerms, attributableTopicTerms, plainTopicHitCards } from "../src/sensitive-recall";
 import { BENIGN, SECURITY } from "../scripts/qa-r336/corpus";
 import type { Env, NoteRow } from "../src/types";
 
@@ -493,5 +493,45 @@ describe("R336 终版 2d3ca9e 浏览器实测补修：标注态敏感卡不跟�
 
   it("本轮话题词普通笔记也不命中（无从判断另有所指）⇒ 维持整段对话归因，不丢卡", async () => {
     expect(await recall("我的航班号是多少？", H, [])).toEqual(["wifi"]);
+  });
+});
+
+describe("R336 终版 6528a74 主模型实测补修：改写器 / 生成器视图剥掉系统出口指引（history S03 第 2/3 问「没找到」）", () => {
+  const foldOnly = sensitiveOnlyAnswer(2, [{ index: 1 }, { index: 2 }]);
+  const noRecall =
+    "没找到相关笔记。换个说法（补充关键词或时间，如「上个月」「关于XX」）再试试。\n\n〔原文查看〕问答区不逐字转写笔记原文；点开下方引用的笔记卡片即可查看完整原文。\n\n提示：要找的内容如果记成了加密的敏感笔记，内容不会进入问答；可到时间流搜索相关关键词后点击解锁查看。";
+  const H: AskHistoryMessage[] = [
+    { role: "user", content: "新家 wifi 密码是什么？" },
+    { role: "assistant", content: foldOnly },
+    { role: "user", content: "我的航班号是多少？" },
+    { role: "assistant", content: noRecall },
+    { role: "assistant", content: `这条笔记记了它，问答区不展示，请点开引用的笔记卡片查看原文 [1]。\n${foldedRefCountLine([{ index: 1 }])}` },
+    { role: "assistant", content: "〔已隔离笔记内指令，未采纳；原文可在引用的笔记卡片中查看〕[1]\n没找到相关笔记。\n\n（提示：如果这条信息记成了加密的敏感笔记，正文不会进入问答；）" },
+    { role: "assistant", content: "你的航班号是 CA1832，从浦东 T2 出发 [1]。\n其中 1 条引用为敏感/受守笔记（正文已折叠，AI 不复述），点开引用卡片查看原文[2]" },
+  ];
+
+  it("敏感折叠指引 / 零召回原文查看提示 / 受守占位指卡 / 计数句 / 隔离告示整行剥掉，实质答句保留", () => {
+    const view = rewriteHistoryView(H);
+    expect(view.map((m) => m.content)).toEqual([
+      "新家 wifi 密码是什么？",
+      "（该轮没有给出实质内容）",
+      "我的航班号是多少？",
+      "（该轮没有给出实质内容）",
+      "（该轮没有给出实质内容）",
+      "（该轮没有给出实质内容）",
+      "你的航班号是 CA1832，从浦东 T2 出发 [1]。",
+    ]);
+  });
+
+  it("改写产物照抄助手轮系统指引（生产实测：「有 2 条敏感笔记可能相关…」成了第 2 问的召回问句）⇒ 回落原问", () => {
+    const q = "我的航班号是多少？";
+    expect(sanitizeRewrittenQuestion(foldOnly, q, H)).toBe(q);
+    expect(sanitizeRewrittenQuestion("问答区不逐字转写笔记原文；点开下方引用的笔记卡片即可查看完整原文。", q, H)).toBe(q);
+    expect(sanitizeRewrittenQuestion("这条笔记记了它，问答区不展示，请点开引用的笔记卡片查看原文 [1]。", q, H)).toBe(q);
+    // 逐字照抄任一助手轮的实质行也不是改写：改写器的产物必须是问句
+    expect(sanitizeRewrittenQuestion("你的航班号是 CA1832，从浦东 T2 出发 [1]。", q, H)).toBe(q);
+    // 正常改写（代词补全）照旧放行
+    expect(sanitizeRewrittenQuestion("新家 wifi 那串密码有几位", "那串有几位", H)).toBe("新家 wifi 那串密码有几位");
+    expect(sanitizeRewrittenQuestion("你的航班号是多少？", q, H)).toBe("你的航班号是多少？");
   });
 });
