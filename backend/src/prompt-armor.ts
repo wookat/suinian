@@ -8880,6 +8880,11 @@ function residencyServiceKeyValues(line: string): string[] {
     if (m[2] === undefined) {
       if (/\p{Script=Han}/u.test(v) || !/\p{L}/u.test(v) || !/\d/.test(v) || v.length < 5) continue;
       out.push(v);
+    } else if (/^\p{Script=Han}+$/u.test(v)) {
+      // 冒号后的纯汉字串：≥6 字且 ≤12 字（值区口径）；以代词 / 虚词起头的是句子（「账号：我要把微博账号注销掉」）不是值
+      const chars = [...v];
+      if (chars.length < 6 || chars.length > 12 || RESIDENCY_HAN_STOP.has(chars[0]) || RESIDENCY_HAN_STOP.has(chars.slice(0, 2).join(""))) continue;
+      out.push(v);
     } else if (classes >= 2 || v.length >= 6) out.push(v);
   }
   return out;
