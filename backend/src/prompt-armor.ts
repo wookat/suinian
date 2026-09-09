@@ -8740,6 +8740,12 @@ const RESIDENCY_NEGATED_ZONE_RE =
   /^\s*(?:还没|没有|没|未|尚未|不再|不是|不|别|待定|待填|待补|[<\[{（(]|自己的|(?:我|你|您|他|她|咱|大家|我们|咱们|你们|他们)(?:的|们的|生日|手机|电话|名字|姓名|工号|学号|车牌|身份证|老婆|老公|孩子|爸|妈|女儿|儿子)|同|跟|和|与|原来|以前|之前|老的|默认的|初始的|生日|手机|电话|身份证|工号|学号|车牌|门牌|房号|出生|结婚|纪念日|xxx|\*{3,}|•{3,}|…|\.{3}|(?:not|never|no|none|nicht|noch|kein|keine|nie|pas|non|нет|не|your|yours|tbd|todo|placeholder|redacted|hidden|omitted|required|needed|optional|mandatory|wrong|incorrect|invalid|expired|correct|same|different|case|stored|saved|shared|changed|updated|encrypted|hashed|unknown|missing|reset|set|unset|too|at|about|the|a|an|only|also|still|already|now|either|probably|usually|always|in|on|for|to|of|with|by|from|that|this|what|where|how|when|which|who)(?![\p{L}\p{N}]))/iu;
 /** 反向赋值（「4218 是工位抽屉密码」「sky云3q 就是路由器的密码」）：值 + 系词 + ≤10 字修饰 + 称谓收句。 */
 const RESIDENCY_REVERSE_RE = /^(.{1,40}?)\s*(?:是|为|就是|作为|当|做|叫|=)\s*(?:[^，。；,;]{0,16}?)$/u;
+/** 转盘组合值区（「保险柜转盘 左30 右15 左5」「safe combination R12 L34 R7」）：≥3 组方向 + 数字（或数字 + 方向）。 */
+const RESIDENCY_DIAL_SEQ_RE =
+  /^\s*(?:[左右LR]\s*\d{1,3}|\d{1,3}\s*[左右LR])(?:\s*[、，,→\-]?\s*(?:[左右LR]\s*\d{1,3}|\d{1,3}\s*[左右LR])){2,}(?![\p{L}\p{N}])/iu;
+/** 称谓 + 空格 / 引导 + 数量 / 日期（「密钥 2026 年 3 月到期」「密码 6 位数」「保险柜是 45 升的」）是计量，不是取值。 */
+const RESIDENCY_MEASURE_LEAD_RE =
+  /^\s*\d+(?:\.\d+)?\s*(?:年|月|日|号|点|分|秒|个|位|次|天|周|块|元|万|千|%|％|折|楼|层|寸|斤|升|米|公里|km|kg|g|ml|gb|mb|到期|过期|失效|以上|以下|左右|左|右)/iu;
 /** 汉数拆读值区（「保险柜密码 五、八、二、零」）：≥3 个汉数字以顿号 / 逗号 / 空白相隔。 */
 const RESIDENCY_HAN_DIGIT_SEQ_RE = /^\s*[零〇一二两三四五六七八九十]{1,2}(?:\s*[、，,]\s*|\s+)[零〇一二两三四五六七八九十]{1,2}(?:(?:\s*[、，,]\s*|\s+)[零〇一二两三四五六七八九十]{1,2})+/u;
 /** 称谓收尾的标题行（「客厅路由器密码」「车库遥控密码」）：≤16 字、无动词修饰，值在其后的裸 token 行里。 */
@@ -8795,6 +8801,7 @@ function residencyAssignment(line: string): ResidencyAssignment | null {
     const forward = (zone: string): ResidencyAssignment | null => {
       const body = zone.replace(RESIDENCY_CONNECTOR_RE, "").trim();
       if (RESIDENCY_NEGATED_ZONE_RE.test(body)) return null;
+      if (!RESIDENCY_DIAL_SEQ_RE.test(body) && RESIDENCY_MEASURE_LEAD_RE.test(body)) return null;
       return body === "" ? { zone: "", led: true, nextLine: true } : { zone, led: true, nextLine: false };
     };
     if (RESIDENCY_CONNECTOR_RE.test(rest)) {
@@ -8807,8 +8814,9 @@ function residencyAssignment(line: string): ResidencyAssignment | null {
     if (spaced) {
       const tok = (spaced[1].split(/[、，。；！？,.;!?：:]/u)[0] ?? "");
       if (!tok) continue;
-      // 称谓 + 空格 + 数量 / 日期（「密钥 2026 年 3 月到期」「密码 6 位数」）是计量，不是取值。
-      if (/^\s*\d+(?:\.\d+)?\s*(?:年|月|日|号|点|分|秒|个|位|次|天|周|块|元|万|千|%|％|折|楼|层|寸|斤|米|公里|km|kg|g|gb|mb|到期|过期|失效|以上|以下|左右|左|右)/iu.test(rest)) continue;
+      // 转盘组合（「左30 右15 左5」）整段是值区
+      if (RESIDENCY_STRONG_LABEL_RE.test(label) && RESIDENCY_DIAL_SEQ_RE.test(rest)) return { zone: clause(rest), led: true, nextLine: false };
+      if (RESIDENCY_MEASURE_LEAD_RE.test(rest)) continue;
       // 汉数拆读（「五、八、二、零」）整段是值区
       if (RESIDENCY_STRONG_LABEL_RE.test(label) && RESIDENCY_HAN_DIGIT_SEQ_RE.test(rest)) return { zone: clause(rest.replace(/、/g, " ")), led: true, nextLine: false };
       // 拉丁称谓 + 空格 + 纯字母词是复合名词（password policy / token bucket），不是赋值；汉字称谓 + 空格 + 汉字词只认强称谓 + 纯汉字短词。
@@ -9751,7 +9759,8 @@ const CJK_VALUE_LEAD_RE = /(?:是|叫|为|就是|写成|念出来是|改成|还�
 /** 无标签行（单元其他行带标签）的取值引导只认强形态：「就是 X 这几个字」「写成 X」「：X」。 */
 const CJK_STRONG_VALUE_LEAD_RE = /(?:就是|写成|念出来是|设成|设为|定的是|[：:=])\s*(?![不否什多几哪啥没未非至最需要必每别勿我你他她它])\p{Script=Han}[^，。！？；\n]{1,20}/u;
 /** 日期 / 期限 / 数量单位后缀的数字（`2026 年`、`90 天`、`12 位`、`3 月`）不是取值。 */
-const UNIT_NUMBER_RE = /\d+\s*(?:年|月|日|号|天|周|小时|分钟|秒|位|个|字|次|元|块|岁|楼|层|chars?|characters?|digits?|days?|hours?|minutes?|weeks?|months?|years?)(?![\p{L}\p{N}])/giu;
+const UNIT_NUMBER_RE =
+  /\d+\s*(?:(?:年|月|日|号|天|周|小时|分钟|秒|位|个|字|次|元|块|岁|楼|层)(?!\p{N})|(?:chars?|characters?|digits?|days?|hours?|minutes?|weeks?|months?|years?)(?![\p{L}\p{N}]))/giu;
 const QUOTED_PHRASE_RE = /[「『“"][^」』”"\n]{2,24}[」』”"]/;
 /** 拼装 / 拆段 / 藏头提示：取值分布在多行或多段，任何单行都不含完整取值。 */
 const COMPOSE_HINT_RE =
@@ -9809,9 +9818,12 @@ export function designatedPhraseValue(nfkc: string): string | null {
 const CONCEPT_LABEL_WORD_SRC =
   "(?:密码|密碼|口令|密钥|密鑰|秘钥|凭证|凭据|令牌|api[ -]?keys?|access[ -]?keys?|secret[ -]?keys?|private[ -]?keys?|passwords?|passphrases?|passcodes?|pins?|secrets?|tokens?|keys?|credentials?)";
 const CONCEPT_SUFFIX_SRC =
-  "\\s*(?:学|课|作业|讲座|论|史|原理|算法|管理|策略|规则|规范|政策|要求|轮换|泄露|泄漏|安全|强度|复杂度|生成器|文章|书|讨论|话题|培训|课程|考试|management|policy|policies|rotation|hygiene|strength|managers?|leaks?|leakage|best[ -]practices?|articles?|courses?|lectures?|theory|cryptography)";
+  "\\s*(?:学|课|作业|讲座|论|史|原理|算法|管理|策略|规则|规范|政策|要求|轮换|泄露|泄漏|安全|强度|复杂度|长度|位数|锁|箱|本|生成器|文章|书|讨论|话题|培训|课程|考试|management|policy|policies|rotation|hygiene|strength|managers?|leaks?|leakage|best[ -]practices?|articles?|courses?|lectures?|theory|cryptography)";
 const CONCEPT_LABEL_RE = new RegExp(`(?<![a-z])${CONCEPT_LABEL_WORD_SRC}${CONCEPT_SUFFIX_SRC}(?![a-z])`, "giu");
+/** 转盘组合出现在行内任意位置（「密码锁 左30 右15 左5」）：带值面，称谓不按概念后缀剥。 */
+const DIAL_SEQ_ANYWHERE_RE = new RegExp(RESIDENCY_DIAL_SEQ_RE.source.replace(/^\^\\s\*/, "(?<![\\p{L}\\p{N}])"), "iu");
 function structuralValueFace(nfkc: string): boolean {
+  if (DIAL_SEQ_ANYWHERE_RE.test(nfkc)) return true;
   const n = nfkc.replace(UNIT_NUMBER_RE, " ");
   if (/\d{4,}/.test(n)) return true;
   for (const m of n.matchAll(/[A-Za-z0-9#@!$%^&*_-]{3,}/g)) if (/\d/.test(m[0])) return true;
@@ -9863,8 +9875,9 @@ function secretValueFace(t: string, strict = false): boolean {
   if (CJK_NUMERAL_RUN_RE.test(n)) return true;
   if (QUOTED_PHRASE_RE.test(n)) return true;
   // 取值引导只看标签之后的文本：「防骗忠告：任何机构都不会索要你的…密码」的冒号在标签前，不是取值引导
-  const label = SECRET_LABEL_RE.exec(n);
-  const tail = strict || !label ? n : n.slice(label.index + label[0].length);
+  // 引导判定看未抹计量的原文：「密码是 2026 年改的」抹掉「2026 年」后会剩「是 改的」，不能拿抹后的残句当引导 + 短语
+  const label = SECRET_LABEL_RE.exec(nfkc);
+  const tail = strict || !label ? nfkc : nfkc.slice(label.index + label[0].length);
   if (cjkLeadValue(tail, strict)) return true;
   if (!strict && labelAsciiPhraseValue(n) !== null) return true;
   if (!strict && labelCjkShortValue(nfkc) !== null) return true;
@@ -10374,7 +10387,7 @@ export function isSecretValueQuestion(question: string, historyText = ""): boole
   return VALUE_ASK_RE.test(qv) || questionRequestsVerbatim(q);
 }
 const NON_VALUE_ASK_RE =
-  /什么时候|啥时候|何时|几点|哪天|哪年|哪一天|为什么|为啥|多久|多长时间|忘(?:了|记)?\s*(?:怎么办|怎么处理|该怎么|要怎么|咋办)|怎么办|怎么处理|(?:要|该|得|需要)?(?:做|带|准备|注意|办)(?:些|点)?什么|讲(?:了|的是)?什么|说(?:了|的是)?什么|(?:是)?关于什么|内容是什么|when (?:did|was|do)|why\b|how (?:often|long)|what (?:should|do) i (?:do|bring)|what (?:is|was) it about/giu;
+  /什么时候|啥时候|何时|几点|哪天|哪年|哪一天|为什么|为啥|多久|多长时间|多少钱|几块钱|多贵|什么价|价格|什么牌子|哪个牌子|什么型号|忘(?:了|记)?\s*(?:怎么办|怎么处理|该怎么|要怎么|咋办)|怎么办|怎么处理|(?:要|该|得|需要)?(?:做|带|准备|注意|办)(?:些|点)?什么|讲(?:了|的是)?什么|说(?:了|的是)?什么|(?:是)?关于什么|内容是什么|when (?:did|was|do)|why\b|how (?:often|long)|what (?:should|do) i (?:do|bring)|what (?:is|was) it about/giu;
 /** 追问形态：指代上文 / 再来一遍 / 第 N 位 / 变换写法——只有这些形态才把上一轮的称谓借给本轮问句。 */
 const HISTORY_FOLLOWUP_RE =
   /那|它|这个|上面|刚才|之前|前面|上一|再|还有|呢|一遍|一次|继续|接着|剩下|后面|其余|另外|第\s*[\d一二三四五六七八九十]+|倒着|反过来|拆|逐字|逐位|每位|每个字|大写|小写|拼音|翻译|译成|编码|换成|改写|转写|念|读|\b(?:again|it|that|those|rest|next|remaining|reverse|spell|repeat|more)\b/iu;
