@@ -378,7 +378,9 @@ app.use("/api/ask", async (c, next) => {
         const anchors = [question, ...sanitizeAskHistory(reqBody?.history).map((m) => m.content)].join("\n");
         if (isOracleProbeQuestion(question) && conversationAnchorsGuarded(anchors)) {
           const marks = [...new Set(fin.answer.match(/[[［]\d{1,2}[\]］]/g) ?? [])].join("");
-          fin.answer = `${ORACLE_NEUTRAL_NOTICE}${marks}`;
+          const bodyRefs = Array.isArray(body.references) ? (body.references as { index: number; note_id: string }[]) : [];
+          const bodyNotes = Array.isArray(body.notes) ? (body.notes as { content_withheld?: boolean }[]) : [];
+          fin.answer = withFoldedRefCount(`${ORACLE_NEUTRAL_NOTICE}${marks}`, bodyRefs, bodyNotes);
           fin.changed = true;
           console.log("ask: bare verdict on guarded-anchored probe neutralized at exit");
         }
@@ -1634,6 +1636,16 @@ export function askGuardedRefNotes(rows: NoteRow[]) {
   const units = rows.map((n) => (n.is_sensitive ? "" : askGuardNoteUnit(n)));
   const cross = crossUnitGuardedLines(units.filter((u) => u.length > 0));
   return rows.map((n, i) => askGuardedRefNoteJson(n, units[i], cross));
+}
+
+/**
+ * R336 §3.3：引用里有折叠卡（已标注敏感 / 受守占位）而答案尚无计数句时追加一句计数 + 全部折叠卡角标。
+ * 生成出口与生成前的确定性占位分支（预言机中性 / 取值扣留）共用，混合命中的普通事实保留在前。
+ */
+export function withFoldedRefCount(answer: string, references: { index: number; note_id: string }[], refNotes: { content_withheld?: boolean }[]): string {
+  const folded = refNotes.flatMap((n, i) => (n.content_withheld === true && references[i] ? [references[i]] : []));
+  if (folded.length === 0 || FOLDED_REF_COUNT_RE.test(answer)) return answer;
+  return `${answer.trimEnd()}\n\n${foldedRefCountLine(folded)}`;
 }
 
 /**
@@ -5295,7 +5307,7 @@ app.post("/api/ask", async (c) => {
       const refNotes = shown.map((n) => askGuardedRefNoteJson(n, askGuardNoteUnit(n), askCrossGuarded));
       console.log(`ask: oracle-shaped question neutralized before generation (${guarded.length} guarded, ${sensRecall.rows.length} sensitive note(s))`);
       return c.json({
-        answer: `${ORACLE_NEUTRAL_NOTICE}${references.map((r) => `[${r.index}]`).join("")}`,
+        answer: withFoldedRefCount(`${ORACLE_NEUTRAL_NOTICE}${references.map((r) => `[${r.index}]`).join("")}`, references, refNotes),
         references,
         notes: refNotes,
         oracle_neutral: true,
@@ -5352,7 +5364,7 @@ app.post("/api/ask", async (c) => {
       const kind: DirectGuardKind = kinds.includes("credential") || kinds.length === 0 ? "credential" : kinds[0];
       console.log(`ask: credential value question withheld before generation (${guarded.length} unmarked note(s) talk about a secret)`);
       return c.json({
-        answer: `${DIRECT_GUARD_PLACEHOLDER[kind]}${references.map((r) => `[${r.index}]`).join("")}`,
+        answer: withFoldedRefCount(`${DIRECT_GUARD_PLACEHOLDER[kind]}${references.map((r) => `[${r.index}]`).join("")}`, references, refNotes),
         references,
         notes: refNotes,
         value_withheld: true,
@@ -6114,10 +6126,7 @@ app.post("/api/ask", async (c) => {
   const refNotes = references.map((r) => askGuardedRefNoteJson(byId.get(r.note_id)!, askGuardNoteUnit(byId.get(r.note_id)!), askCrossGuarded));
   // R336 §3.3（audit-r335 §8.3 J01–J03 计数句 0/9）：引用里有折叠卡（已标注敏感 / 受守占位）而答案尚无计数句时，
   // 统一追加一句计数 + 全部折叠卡角标——混合命中的普通事实保留在前，用户知道还有几张卡要点开。
-  {
-    const folded = refNotes.flatMap((n, i) => (n.content_withheld === true ? [references[i]] : []));
-    if (folded.length > 0 && !FOLDED_REF_COUNT_RE.test(answerText)) answerText = `${answerText.trimEnd()}\n\n${foldedRefCountLine(folded)}`;
-  }
+  answerText = withFoldedRefCount(answerText, references, refNotes);
   // R306 P0-1：引用卡片出口打点（数据面标注随 noteToJson 走，这里只计发生率）
   recordOutletFoldMarks(
     c.env,

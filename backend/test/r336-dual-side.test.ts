@@ -26,9 +26,11 @@ import {
   finalizeAskAnswer,
   remoteEndpointForms,
   directGuardLines,
+  ORACLE_NEUTRAL_NOTICE,
+  DIRECT_GUARD_PLACEHOLDER,
 } from "../src/prompt-armor";
 import { extractGraph, getThreadGraph, graphGuardUnit } from "../src/graph";
-import { askGuardNoteUnit, askGuardedRefNoteJson, askGuardedRefNotes } from "../src/index";
+import { askGuardNoteUnit, askGuardedRefNoteJson, askGuardedRefNotes, withFoldedRefCount } from "../src/index";
 import { dedupeAskReferences, askTopicTerms } from "../src/ask";
 import { foldedRefCountLine, FOLDED_REF_COUNT_RE, sensitiveTermScore, sensitiveTopicTerms } from "../src/sensitive-recall";
 import { BENIGN, SECURITY } from "../scripts/qa-r336/corpus";
@@ -366,5 +368,32 @@ describe("R336 §2.1 出口静态口径：/api/ask 里所有 notes[] 序列化�
     const raw = ask.match(/notes:\s*[^\n]*\b(noteToJson|askRefNoteJson)\b[^\n]*/g) ?? [];
     // 唯一允许：sensRecall.rows 全是 is_sensitive=1 的行，askRefNoteJson 对其固定输出加密占位。
     expect(raw.filter((l) => !l.includes("sensRecall.rows.map(askRefNoteJson)"))).toEqual([]);
+  });
+});
+
+describe("R336 §3.3 计数句：生成前确定性占位分支也要带（终版 8b3c3de 实测 F02 预言机中性分支 2 张折叠卡 0 计数句）", () => {
+  const refs = [
+    { index: 1, note_id: "a" },
+    { index: 2, note_id: "b" },
+    { index: 3, note_id: "c" },
+  ];
+  it("预言机中性 + 角标：追加计数句，只计 content_withheld 的卡", () => {
+    const out = withFoldedRefCount(`${ORACLE_NEUTRAL_NOTICE}[1][2][3]`, refs, [{ content_withheld: true }, { content_withheld: true }, { content_withheld: false }]);
+    expect(out.startsWith(`${ORACLE_NEUTRAL_NOTICE}[1][2][3]`)).toBe(true);
+    expect(FOLDED_REF_COUNT_RE.test(out)).toBe(true);
+    expect(out.endsWith(foldedRefCountLine([refs[0], refs[1]]))).toBe(true);
+    expect(out).toContain("其中 2 条引用");
+  });
+  it("取值扣留占位 + 角标：同样追加；无折叠卡 / 已有计数句时不重复", () => {
+    const ph = `${DIRECT_GUARD_PLACEHOLDER.credential}[1]`;
+    const once = withFoldedRefCount(ph, refs.slice(0, 1), [{ content_withheld: true }]);
+    expect(once).toContain("其中 1 条引用");
+    expect(withFoldedRefCount(once, refs.slice(0, 1), [{ content_withheld: true }])).toBe(once);
+    expect(withFoldedRefCount("普通答案 [1]", refs.slice(0, 1), [{ content_withheld: false }])).toBe("普通答案 [1]");
+  });
+  it("index.ts 的 ask 处理器内，ORACLE_NEUTRAL_NOTICE / DIRECT_GUARD_PLACEHOLDER 拼角标的确定性 answer 都经 withFoldedRefCount", () => {
+    const src = readFileSync(new URL("../src/index.ts", import.meta.url).pathname, "utf8");
+    const lines = src.split("\n").filter((l) => /answer(?:Text)?\s*[:=]\s*`\$\{(ORACLE_NEUTRAL_NOTICE|DIRECT_GUARD_PLACEHOLDER\[kind\])\}\$\{(references|marks)/.test(l));
+    expect(lines).toEqual([]);
   });
 });
