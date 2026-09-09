@@ -7,7 +7,7 @@ import {
   BROAD_OUTLET_FOLD_TAG,
   AGGREGATE_TIER,
   finalizeAskAnswer,
-  redactGuardedLinesForModel,
+  redactGuardedViewForModel,
   noteRowContainsExecutableCommand,
   noteRowBroadFoldReason,
 } from "./prompt-armor";
@@ -195,8 +195,8 @@ async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind, tzOffset
         },
         {
           role: "user",
-          // R322 A：受守行不进评语模型上下文（与 /api/ask 同一套 redactGuardedLinesForModel）
-          content: `记录时间：${localReviewDate(note.created_at, tzOffsetMin)}（${KIND_LABEL[kind]}）\n内容：${redactGuardedLinesForModel(note.title || note.content, `${note.title ?? ""}\n${note.content}`).text.slice(0, 300)}`,
+          // R322 A：受守行不进评语模型上下文（与 /api/ask 同一套替换 + 归一化比对 fail-closed）
+          content: `记录时间：${localReviewDate(note.created_at, tzOffsetMin)}（${KIND_LABEL[kind]}）\n内容：${redactGuardedViewForModel(note.title || note.content, `${note.title ?? ""}\n${note.content}`).text.slice(0, 300)}`,
         },
       ],
     })

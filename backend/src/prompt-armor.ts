@@ -10116,6 +10116,19 @@ export function redactGuardedLinesForModel(text: string, unit?: string, extraGua
   return { text: out.join("\n"), redacted };
 }
 
+/**
+ * 非 ask 出口（报告行标题 / 线程摘要 / 复盘评语）喂模型的视图：行级替换后再按归一化比对复查一次，
+ * 替换后的文本仍能比对出单元里的受守取值（驻留形态没有 own 行，如「锁改成了 0731」）时整条只留占位——
+ * 与 ask 的 modelContextNoteText 同一判据、同一占位。
+ */
+export function redactGuardedViewForModel(text: string, unit: string, extraGuarded?: ReadonlySet<string>): { text: string; redacted: number; withheld: boolean } {
+  const redacted = redactGuardedLinesForModel(text, unit, extraGuarded);
+  if (redacted.text && normalizedGuardedLeak(redacted.text, [unit]) !== null) {
+    return { text: MODEL_REDACTED_LINE, redacted: redacted.redacted + 1, withheld: true };
+  }
+  return { ...redacted, withheld: false };
+}
+
 /** 跨笔记指代：标签 + 「下面那条 / 另一条 / 前半 / 后半 / 第 N 节」——取值记在别的笔记里。 */
 const XNOTE_POINTER_RE =
   /下面|下一条|下条|另一条|另外一条|那条|后面那|前半|后半|前段|后段|第[一二三四五\d]\s*(?:节|段|条)|分.{0,4}(?:条|行|段)|接着|连起来|拼起来|合起来|next note|following note|other note|second half|first half|in two notes/i;

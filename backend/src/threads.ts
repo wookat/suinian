@@ -7,7 +7,7 @@ import {
   noteContainsExecutableCommand,
   noteRowBroadFoldReason,
   closeAggregateOutlet,
-  redactGuardedLinesForModel,
+  redactGuardedViewForModel,
   broadFoldReason,
   EXEC_OUTLET_WARN_TAG,
   BROAD_OUTLET_FOLD_TAG,
@@ -164,8 +164,8 @@ export async function summarizeThread(env: Env, threadId: string, fallbackTitle?
     const digest = rows
       .map((n, i) => {
         const tag = foldOutletTag(reasons[i]);
-        // R322 A：受守行不进摘要模型上下文（与 /api/ask 同一套 redactGuardedLinesForModel）
-        const shown = redactGuardedLinesForModel(n.title || n.content, `${n.title ?? ""}\n${n.content}`).text;
+        // R322 A：受守行不进摘要模型上下文（与 /api/ask 同一套替换 + 归一化比对 fail-closed）
+        const shown = redactGuardedViewForModel(n.title || n.content, `${n.title ?? ""}\n${n.content}`).text;
         return `${i + 1}. (${n.created_at.slice(0, 10)}) ${tag ? `${tag} ` : ""}${shown.slice(0, 200)}`;
       })
       .join("\n");
