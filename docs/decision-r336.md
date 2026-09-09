@@ -63,6 +63,12 @@ R334 §2.6 把「取件码」列入驻留标签是为了 qa-r333 C24（`取件�
 ### 3.1 refNote 序列化统一（index.ts 7 处）
 4584（财务聚合 `noteToJson`）、4836、5024、5209、5371、6024 全部改 `askGuardedRefNoteJson(n, askGuardNoteUnit(n), cross)`，`cross` 取该分支候选集的 `crossUnitGuardedLines`。5139 敏感卡分支 `askRefNoteJson` 对 `is_sensitive` 行与 guarded 版等价，保留。`safeSuggestionLabel`（no-answer 建议标签）的受守判定同样从 `directGuardLines` 扩为 `|| unitCarriesGuardedValue`。
 
+### 3.1.1 生产候选实测追加（out-cand-a7cbb80 → bae75a5）
+候选版 `NA4`「帮我找找和 Gmail 有关的笔记」direct/agg 两格 `notes[]` 卡片仍带原文（`Gmail: quiet.river.88 / Tq8#vL2m`，`withheld=false`）。函数级复现：`unitCarriesGuardedValue` / `directGuardLines` 对该单元均为受守（`opaque`），即**判定层已正确**，漏点在 `/api/ask` 处理器内 14 个确定性分支（关键词枚举 `tRefRows`、统计 / 清单 / 时间线 / 财务 / 联系人 / 待办 / 清藏 / 主题等）的 `notes: rows.map(noteToJson)` 直传——§3.1 只改了 6 处 `askRefNoteJson`，漏掉了这批 `noteToJson`。修法同口径：全部改 `askGuardedRefNotes(rows)`（内部逐行 `askGuardNoteUnit` + `crossUnitGuardedLines` 判定），并加源码级断言（`r336-dual-side.test.ts`：`app.post("/api/ask")` 体内不得再出现 `notes:` 行直传 `noteToJson|askRefNoteJson`，唯一例外是 `sensRecall.rows`——全为 `is_sensitive=1`，`askRefNoteJson` 对其固定输出加密占位）。复测 `bae75a5`：security 82 格 leak=0、qa-r335 安全全出口 188 格 leak=0 / oracle 26 格 differential=0 / outlets 16 格 / MCP 52 格均 0。
+
+### 3.1.2 分拣层自动标敏不在本轮修复面（如实记录）
+候选 benign 组 34 条非边界善意笔记中 `L04`（SSH 端口 2222）、`N03`（改路由器密码后重连打印机）、`N05`（保险柜密码记在日记本）、`N08`（序列号 XXXX-YYYY-ZZZZ 已激活）在写入 40s 后被**分拣**判为 `is_sensitive=1`（两次候选跑分别 3 条 / 4 条，`N05` 不稳定）。`triage.ts` 的正则兜底 `detectSensitive` 对这四条都不命中（`密码改过了` / `记在日记本` 不是赋值连接词，`端口` 不是称谓），标敏来自**降级模型**的 JSON 判断；问答层随后按用户/分拣标记折叠属设计内（标记优先）。这不属于 audit-r335 §14 的问答判定层修复面，且主模型未验证，留待 `degraded:false` 后用同一语料复核；本轮不改分拣提示词。
+
 ### 3.2 图谱三道
 - 抽取：`extractGraph` 在模型抽取前 `unitCarriesGuardedValue(askGuardNoteUnit(note))` → 删图 + 标记已抽取；抽取结果实体名/别名再过 `graphNameGuarded`（自身 `unitCarriesGuardedValue || directGuardLines.length>0`）。
 - 出口：`getThreadGraph(env, userId, notes)` 用同一判定过滤实体/关系/mentions（历史脏数据 fail-closed）；`graphExpand` 的桥接查询与 triples 只用通过过滤的实体名。

@@ -1,6 +1,5 @@
-# 运行时账号状态（含 token；cleanup 后 token 置空但仍不入库）
+# 运行时账号状态（含生产 token；cleanup 后 token 置空但仍不入库）
 out*/accounts.json
 out*/*.log
-# 浏览器原始截图只入库 test-report.md 引用的安全截图
-browser/*.png
-!browser/r336-*.png
+out*/*.html
+# 浏览器原始截图：含 QA 载体原文卡 / 未遮盖中间态，只入库 test-report.md 引用的安全截图

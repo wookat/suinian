@@ -1,0 +1,204 @@
+{
+ "phase": "auto",
+ "checked_at": "2026-09-09T02:16:45.005Z",
+ "f_states": {
+  "F.marked": {
+   "is_sensitive": true,
+   "content_withheld": false,
+   "content_hits": [
+    "F.marked:Fm7!kQ3pLx9"
+   ]
+  },
+  "F.unmarked": {
+   "is_sensitive": false,
+   "content_withheld": false,
+   "content_hits": [
+    "F.unmarked:Gy2@nR8sMk4"
+   ]
+  },
+  "F.cancelled": {
+   "is_sensitive": false,
+   "content_withheld": false,
+   "content_hits": [
+    "F.cancelled:Wz5#tB9vCq1"
+   ]
+  }
+ },
+ "rest_search:密码": {
+  "status": 200,
+  "n": 25,
+  "hits": {
+   "marked": 0,
+   "unmarked": 0,
+   "cancelled": 0,
+   "total": 25
+  },
+  "all_hits": 25,
+  "withheld_n": 1,
+  "note": "搜索=用户自己找回原文的契约出口；只记数，未标注条原文可见不判泄，已标注条正文应为占位"
+ },
+ "rest_search:那串": {
+  "status": 200,
+  "n": 2,
+  "hits": {
+   "marked": 0,
+   "unmarked": 1,
+   "cancelled": 0,
+   "total": 2
+  },
+  "all_hits": 2,
+  "withheld_n": 0,
+  "note": "搜索=用户自己找回原文的契约出口；只记数，未标注条原文可见不判泄，已标注条正文应为占位"
+ },
+ "rest_search:锁屏": {
+  "status": 200,
+  "n": 10,
+  "hits": {
+   "marked": 0,
+   "unmarked": 0,
+   "cancelled": 1,
+   "total": 10
+  },
+  "all_hits": 10,
+  "withheld_n": 0,
+  "note": "搜索=用户自己找回原文的契约出口；只记数，未标注条原文可见不判泄，已标注条正文应为占位"
+ },
+ "mcp_handshake": {
+  "initStatus": 200,
+  "serverInfo": {
+   "name": "suinian",
+   "version": "1.0.0"
+  },
+  "protocolVersion": "2025-06-18",
+  "tools": [
+   "save_note",
+   "search_notes",
+   "ask",
+   "list_threads",
+   "get_thread",
+   "get_weekly_report",
+   "list_todos",
+   "complete_todo",
+   "set_todo_due",
+   "delete_note",
+   "restore_notes"
+  ]
+ },
+ "mcp_search:密码": {
+  "status": 200,
+  "n": 25,
+  "hits": {
+   "marked": 0,
+   "unmarked": 0,
+   "cancelled": 0,
+   "total": 25
+  },
+  "all_hits": 25,
+  "withheld_n": 1,
+  "notices": [
+   "data_notice",
+   "content_risk_notice",
+   "do_not_execute"
+  ]
+ },
+ "mcp_search:那串": {
+  "status": 200,
+  "n": 2,
+  "hits": {
+   "marked": 0,
+   "unmarked": 1,
+   "cancelled": 0,
+   "total": 2
+  },
+  "all_hits": 2,
+  "withheld_n": 0,
+  "notices": [
+   "data_notice",
+   "content_risk_notice",
+   "do_not_execute"
+  ]
+ },
+ "review": {
+  "status": 200,
+  "hits": {
+   "marked": 0,
+   "unmarked": 0,
+   "cancelled": 0,
+   "total": 0
+  },
+  "all_hits": [],
+  "keys": [
+   "date",
+   "items"
+  ]
+ },
+ "threads": {
+  "rebuild": 202,
+  "status": 200,
+  "n": 3,
+  "list_derived_hits": [],
+  "detail_derived_hits": [],
+  "detail_own_notes_hits": {
+   "marked": 0,
+   "unmarked": 0,
+   "cancelled": 0,
+   "total": 6
+  },
+  "detail_own_notes_total": 6
+ },
+ "mcp_threads": {
+  "status": 200,
+  "hits": []
+ },
+ "report_week": {
+  "status": 201,
+  "hits": [],
+  "empty": null,
+  "len": 775
+ },
+ "mcp_weekly": {
+  "status": 200,
+  "hits": []
+ },
+ "export": {
+  "json": 200,
+  "json_hits": {
+   "marked": 0,
+   "unmarked": 1,
+   "cancelled": 1,
+   "total": 36
+  },
+  "md": 200,
+  "md_hits": {
+   "marked": 0,
+   "unmarked": 1,
+   "cancelled": 1,
+   "total": 36
+  },
+  "note": "export 契约=用户原文导出；已标注条应为加密占位（看 marked 计数）"
+ },
+ "backup": {
+  "default": {
+   "status": 200,
+   "ct": "application/zip",
+   "bytes": 7985,
+   "plaintext_hits": {
+    "marked": 0,
+    "unmarked": 0,
+    "cancelled": 0,
+    "total": 0
+   }
+  },
+  "include_sensitive": {
+   "status": 403,
+   "bytes": 112,
+   "plaintext_hits": {
+    "marked": 0,
+    "unmarked": 0,
+    "cancelled": 0,
+    "total": 0
+   }
+  },
+  "note": "zip 若压缩则明文命中为 0 不代表未含；以 export 为原文契约主证据"
+ }
+}
