@@ -61,7 +61,7 @@ import { detectPushSupport, currentSubscription, enablePush, disablePush, forget
 import { detachServiceWorker, isOfflineCacheEnabled, setOfflineCacheEnabled } from "@/lib/sw-control"
 import { RecoveryCodeCard } from "@/pages/auth"
 import type { TagCount } from "@/lib/types"
-import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
+import { defaultApiBase, loadSettings, saveSettings, useSettingsVersion, type Settings } from "@/lib/settings"
 import { loadFontSize, loadTheme, setFontSize, setTheme, type FontSize, type ThemeMode } from "@/lib/theme"
 import { cn, KNOWN_ISSUES_URL } from "@/lib/utils"
 import { SafetyPromise } from "@/components/safety-promise"
@@ -76,9 +76,16 @@ const IMPORT_SOURCES: { value: ImportSource; label: string; hint: string; accept
   { value: "text", label: "纯文本", hint: "按空行拆条，每段一条笔记", accept: ".txt,.md" },
 ]
 
+const EXAMPLE_API_BASE = "https://suinian-api.example.workers.dev"
+
+/** 未填 API 地址时的默认值：托管域上是官方实例，自部署时留空由占位提示 */
+function apiBasePlaceholder(): string {
+  return defaultApiBase() || EXAMPLE_API_BASE
+}
+
 /** memos 式可复制 curl 示例；withToken=true 时把真实 token 写进剪贴板文本（不在页面展示） */
 function buildCurlExample(apiBaseUrl: string, withToken: boolean): string {
-  const base = (apiBaseUrl || "https://suinian-api.example.workers.dev").trim().replace(/\/$/, "")
+  const base = (apiBaseUrl || apiBasePlaceholder()).trim().replace(/\/$/, "")
   const token = withToken ? loadSettings().apiToken || "YOUR_API_TOKEN" : "YOUR_API_TOKEN"
   return [
     `curl -X POST '${base}/api/notes' \\`,
@@ -1115,11 +1122,19 @@ export function SettingsPage() {
     }
   }
 
+  /** 切到真实 API 但没填地址时，托管域自动补官方实例地址（与注册/登录页同一默认值） */
+  function withDefaultBase(s: Settings): Settings {
+    if (s.useMock || s.apiBaseUrl.trim()) return s
+    const base = defaultApiBase()
+    return base ? { ...s, apiBaseUrl: base } : s
+  }
+
   function save() {
+    const filled = withDefaultBase(settings)
     const next =
-      settings.useMock && settings.apiBaseUrl.trim() && settings.apiToken.trim()
-        ? { ...settings, useMock: false }
-        : settings
+      filled.useMock && filled.apiBaseUrl.trim() && filled.apiToken.trim()
+        ? { ...filled, useMock: false }
+        : filled
     setSettings(next)
     saveSettings(next)
     setSaved(true)
@@ -1128,7 +1143,9 @@ export function SettingsPage() {
 
   async function handleTest() {
     if (testing) return
-    saveSettings(settings)
+    const filled = withDefaultBase(settings)
+    setSettings(filled)
+    saveSettings(filled)
     setTesting(true)
     setTestResult(null)
     try {
@@ -1171,7 +1188,7 @@ export function SettingsPage() {
             autoCorrect="off"
             autoCapitalize="none"
             spellCheck={false}
-            placeholder="https://suinian-api.example.workers.dev"
+            placeholder={apiBasePlaceholder()}
             value={settings.apiBaseUrl}
             onChange={(e) => {
               setTestResult(null)
