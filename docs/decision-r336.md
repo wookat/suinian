@@ -93,6 +93,12 @@ F02 `fact=false`（两步验证事实未答）为预言机中性分支的既定 
 ## 4. 问题 7 的前端排除证据
 `web/src/components/ask-chat.tsx`：refs 逐消息保存在 `AskChatMessage.refs`，渲染 key 为 `m.id`（`crypto.randomUUID()`）；`askStream` 为 POST 不经 SW/HTTP 缓存；`selectAskContext` 只挑 10 分钟内非 error 消息进 history。前端无任何跨消息复用引用卡的路径 → 陈旧卡只能来自后端对 `history` 的使用。后端 `historyText` 参与 3 处：`isDeterministicRecallProbe`、`isSecretValueQuestion`、`sensitiveRecallTerms`。前两处按 §2.6 收窄；第三处 R332 已按本轮话题词收窄。复现方式：REST `history=[{user:"路由器密码是什么"},{assistant:"〔…占位…〕[1]"}]` + 问「我的航班号是多少」 → 修前判成取值型问句（函数级复现见 §2.6），召回里上一轮的受守卡重新以占位形态返回；修后直答。终版生产浏览器录屏同会话连续问验证。
 
+### 4.1 终版 2d3ca9e 生产浏览器录屏追加（主模型口径，degraded:false）
+录屏同会话不清空：Q1「新家 wifi 密码是什么？」（载体被分拣自动标注敏感 ⇒ 加密卡 + 计数句 1，口令未泄）→ Q2「我的航班号是多少？」直答 CA1832 正确，但 SSE `done.references` 仍带上一轮的加密卡 + 计数句（UI 在航班答案下渲染一张遮罩卡）；Q3「班主任办公室在几号？」同样；F5 后历史保留同样两张陈旧卡。Q4/Q5（善意密码学作业 / 路由器位置）只引本题善意卡。
+与 §4 REST history 矩阵 S01/S02 的区别：矩阵载体是**取消标注态**（受守卡走 guard，§2.6 已修），录屏载体是**标注态**（走 `recallSensitiveNotes`）。函数级复现：`sensTerms` 由 `historyText` 拼入「新家 / wifi / 密码」；本轮词 `turnTopicTerms=["航班号是"]` 一张敏感卡都不命中 ⇒ `currentOwned` 为空，回落 `pool = scored`（整段对话归因），上一轮的 wifi 卡被带进本轮。这条回落是为「那串是多少」类指代追问保的（无本轮话题时必须借上文），但它没有区分「本轮无话题」与「本轮话题另有所指」。
+修法（`recallSensitiveNotes` 新增 `currentTopicOwnsPlainCards`）：本轮有可归因话题 ∧ 该话题一张敏感卡都不命中 ∧ 该话题命中了普通召回笔记（`plainTopicHitCards(notes, ownTopicTerms)`）⇒ 敏感召回置空——本轮话题已被普通笔记认领，命中的敏感卡全是上文借来的。三条保留：本轮无话题（指代追问）照旧借上文；本轮话题也命不中任何普通笔记（可能是换说法追问同一张敏感卡）照旧回落；本轮话题命中敏感卡（同话题追问）照旧按本轮命中收窄。
+`plainTopicHitCards` 只用于普通笔记的「拥有」判定（正文可见，比对面不抹值），二元组覆盖 ≥1/2 且不要求两格（「航班号」对「周五航班 CA1832」只有「航班」一格可比）；不参与敏感卡归因，敏感卡口径（`topicHitCards` / `sensitiveTermScore`）不变。同时问句虚词表补「是」（`航班号是` → `航班号`；副作用：`上层是 246 吗` 的短话题「上层」现在整词比中自己那张卡 S10，预言机闸门按本卡中和——比之前「比不中、全部中和」更准，r332 单测相应挪组）。
+
 ## 5. 安全不回退检查面
 answer 文本、SSE delta/done、MCP ask/notes[]、oracle differential、跨载体/跨笔记、照抄找回 3/3、泛「没找到」——沿用 qa-r335 `run.mjs` 的安全组语料 + qa-r336 新增族外安全组（`corpus.ts` `SECURITY`：路由器/口令短语/储物柜/保险柜/门禁/Gmail/银行预留/跨笔记拼合等新写法）。判定层松动点（2.2/2.3）都用这些语料反向验证：任何一条 `secretHits>0` 即回退该松动。
 

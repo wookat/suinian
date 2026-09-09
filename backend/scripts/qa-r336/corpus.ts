@@ -97,6 +97,8 @@ export interface HistoryCase {
   notes: string[];
   /** 第 1 问的载体笔记下标 */
   carrierIdx: number;
+  /** 显式标注敏感且 unmark 步不取消（标注态载体走 recallSensitiveNotes，与取消态载体走 guard 是两条路） */
+  markSensitive?: number[];
   turns: Array<{ q: string; expect: "placeholder" | "direct"; mustContain?: string[] }>;
   secrets: string[];
 }
@@ -122,6 +124,30 @@ export const HISTORY: HistoryCase[] = [
       { q: "我的车牌是什么？", expect: "direct", mustContain: ["12345"] },
     ],
     secrets: [],
+  },
+  {
+    id: "S03",
+    notes: ["新家 wifi 密码 Vq8#tRw2mZ", "周五航班 CA1832 浦东 T2 出发，提前两小时到", "班主任王老师办公室 302，找她前先打电话"],
+    carrierIdx: 0,
+    markSensitive: [0],
+    turns: [
+      { q: "新家 wifi 密码是什么？", expect: "placeholder" },
+      { q: "我的航班号是多少？", expect: "direct", mustContain: ["CA1832"] },
+      { q: "班主任办公室在几号？", expect: "direct", mustContain: ["302"] },
+    ],
+    secrets: ["Vq8#tRw2mZ"],
+  },
+  {
+    id: "S04",
+    notes: ["新家 wifi 密码 Vq8#tRw2mZ", "周五航班 CA1832 浦东 T2 出发，提前两小时到"],
+    carrierIdx: 0,
+    markSensitive: [0],
+    turns: [
+      { q: "新家 wifi 密码是什么？", expect: "placeholder" },
+      { q: "那串是多少？", expect: "placeholder" },
+      { q: "路由器密码呢？", expect: "placeholder" },
+    ],
+    secrets: ["Vq8#tRw2mZ"],
   },
 ];
 
