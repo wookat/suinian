@@ -8350,9 +8350,10 @@ const SOURCE_MEASURE_LABEL_RE =
 /** CVV 称谓：这一类且仅这一类允许 3 位数字值。 */
 const SOURCE_CVV_CUE_RE = /背后三位|背面三位|后三位|安全码|\bcvv\b|\bcvc\b/iu;
 /** 「标签 + 值」紧邻整行：≤12 字、含汉字、无数字的标签 + 可选「是 / 为 / ：」+ 单个裸值 + 可选句末标点。
- *  纯 ASCII 键（YAML / 配置 `port: 8080`、`image: nginx1.25`）不算：那是代码面，由 closeDirectGuard 按结构处理。 */
+ *  纯 ASCII 键（YAML / 配置 `port: 8080`、`image: nginx1.25`）不算：那是代码面，由 closeDirectGuard 按结构处理。
+ *  混合记号值不含汉字：汉字短语尾随数字（「王老师办公室302」「会议室预订B203」）是称呼 / 地点 + 编号，不是「标签 + 值」。 */
 const SOURCE_LABEL_VALUE_LINE_RE =
-  /^((?=[^\d\n：:]{0,11}\p{Script=Han})[^\d\n：:]{1,12}?)\s*(?:是|为|[：:=])?\s*((?<!\d)\d(?:[ \-]?\d){3,}(?!\d)|(?=[\p{L}\p{N}_-]*\p{L})(?=[\p{L}\p{N}_-]*\d)[\p{L}\p{N}_-]{6,24})\s*[。.．！!]?\s*$/u;
+  /^((?=[^\d\n：:]{0,11}\p{Script=Han})[^\d\n：:]{1,12}?)\s*(?:是|为|[：:=])?\s*((?<!\d)\d(?:[ \-]?\d){3,}(?!\d)|(?=[\p{L}\p{N}_-]*\p{L})(?=[\p{L}\p{N}_-]*\d)(?:(?!\p{Script=Han})[\p{L}\p{N}_-]){6,24})\s*[。.．！!]?\s*$/u;
 /** 日常识别符标签（R322 口径）：值紧邻这些标签之后不算凭证。 */
 const SOURCE_IDENTIFIER_LABEL_RE =
   /(?:取件码|验证码|会议号|订单号|单号|运单|快递|车牌|卡号|账号|工号|学号|编号|序号|房号|门牌|邮编|航班|座位|电话|手机|号码|传真|后四位|末四位|尾号|客服|热线|总机|分机|联系方式|联系|宿舍|寝室|鞋码|尺码|码数)号?\s*(?:是|为|[：:=])?\s*$/u;
@@ -8389,8 +8390,8 @@ const SOURCE_OP_LETTER_STOP = new Set([
   "true", "false", "null", "none", "auto", "push", "pull", "merge", "main", "master", "local", "cloud", "phone", "macos", "windows", "android",
   "sudo", "bash", "shell", "python", "git", "npm", "yarn", "pnpm", "vite", "react", "todo", "item", "list", "plan", "idea", "task", "time", "date",
 ]);
-/** 操作线索行的汉字+数字混排短记号（「风3档」「眠7」，长度 2–4）；「第3」「3次」「3点」一类序数 / 计量形态豁免。 */
-const SOURCE_HAN_DIGIT_TOKEN_RE = /\p{Script=Han}?\d{1,3}\p{Script=Han}?/gu;
+/** 操作线索行的汉字+数字混排短记号（「风3档」「眠7」，长度 2–4）；「第3」「3次」「3点」一类序数 / 计量形态豁免。数字段取整（「改为2222」不切出「为222」）。 */
+const SOURCE_HAN_DIGIT_TOKEN_RE = /\p{Script=Han}?(?<!\d)\d{1,3}(?!\d)\p{Script=Han}?/gu;
 const SOURCE_HAN_DIGIT_MEASURE_RE = /^第|[次个天点分秒楼层号月日年块元人台条页米遍周岁折成倍斤克寸站路号线号度码]$/u;
 /** 4–5 位字母数字混合短记号（「72kqm」「kq48」）：「词 + 1 位序号」（web3 / h5）、「1 字母 + 3 数字」（h264）、大写型号（H265）不算。 */
 const SOURCE_SHORT_MIXED_TOKEN_RE = /(?<![\p{L}\p{N}_-])(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{4,5}(?![\p{L}\p{N}_-])/gu;
@@ -8452,12 +8453,15 @@ function shortCredentialLineValues(line: string, opts: { op?: boolean } = {}): s
     if (!shortValueExempt(plain, start, start + m[0].length, m[0])) out.push(m[0]);
   }
   for (const m of plain.matchAll(SOURCE_SCRIPT_MIXED_TOKEN_RE)) {
-    const t = m[0];
-    const start = m.index ?? 0;
-    if ((t.match(/\d/g) ?? []).length < 2 || (t.match(/\p{L}/gu) ?? []).length < 2) continue;
-    if (hyphenSegmentsHomogeneous(t) || /^[0-9a-f]{32,}$/i.test(t)) continue;
-    if (shortValueExempt(plain, start, start + t.length, t, { fragment })) continue;
-    out.push(t);
+    // 汉字是词边界：「SSH端口改为2222」是汉字短语粘连两个识别符，按汉字切开后各段再看形态。
+    for (const seg of scriptMixedSegments(m[0], m.index ?? 0)) {
+      const t = seg.token;
+      const start = seg.start;
+      if ((t.match(/\d/g) ?? []).length < 2 || (t.match(/\p{L}/gu) ?? []).length < 2) continue;
+      if (hyphenSegmentsHomogeneous(t) || /^[0-9a-f]{32,}$/i.test(t)) continue;
+      if (shortValueExempt(plain, start, start + t.length, t, { fragment })) continue;
+      out.push(t);
+    }
   }
   for (const m of plain.matchAll(SOURCE_SHORT_MIXED_TOKEN_RE)) {
     const t = m[0];
@@ -8475,6 +8479,16 @@ function shortCredentialLineValues(line: string, opts: { op?: boolean } = {}): s
       if (SOURCE_IDENTIFIER_LABEL_RE.test(plain.slice(Math.max(0, start - 12), start))) continue;
       out.push(t);
     }
+  }
+  return out;
+}
+
+/** 混合记号按汉字切段（无汉字原样返回）；每段仍须 ≥6 字才算记号。 */
+function scriptMixedSegments(token: string, start: number): { token: string; start: number }[] {
+  if (!CJK_LETTER_RE.test(token)) return [{ token, start }];
+  const out: { token: string; start: number }[] = [];
+  for (const m of token.matchAll(/(?:(?!\p{Script=Han})[\p{L}\p{N}_-])+/gu)) {
+    if (m[0].length >= 6) out.push({ token: m[0], start: start + (m.index ?? 0) });
   }
   return out;
 }
@@ -9447,11 +9461,15 @@ function isOpaqueToken(tok: string): boolean {
   if (core.length < 5) return false;
   if (hasDigit) {
     if (/^[0-9a-f]{8,}$/i.test(core)) return true;
-    // 字母 ↔ 数字交替次数
+    // 字母 ↔ 数字交替次数；汉字是词边界（「航班CA1832浦东T2」是两个识别符不是一个记号），交替计数在汉字处归零
     let flips = 0;
     let prev: "l" | "d" | null = null;
     for (const ch of core) {
-      const cls = /\p{N}/u.test(ch) ? "d" : /\p{L}/u.test(ch) && !CJK_LETTER_RE.test(ch) ? "l" : null;
+      if (CJK_LETTER_RE.test(ch)) {
+        prev = null;
+        continue;
+      }
+      const cls = /\p{N}/u.test(ch) ? "d" : /\p{L}/u.test(ch) ? "l" : null;
       if (cls === null) continue;
       if (prev !== null && cls !== prev) flips++;
       prev = cls;
