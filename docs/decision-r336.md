@@ -78,6 +78,10 @@ R334 §2.6 把「取件码」列入驻留标签是为了 qa-r333 C24（`取件�
 ### 3.3 计数句 + 角标去重
 生成出口 `refNotes` 计算完成后：`folded = refNotes.filter(n => n.content_withheld)`；若 `folded.length>0` 且答案里尚无计数句 → 追加 `其中 N 条引用为敏感/受守笔记（正文已折叠，AI 不复述），点开引用卡片查看原文[i]…`。`references` 按 `note_id` 去重（保留首个 index），答案文本里重复 `[n][n]` 折叠为一个。
 
+#### 3.3.1 终版 8b3c3de 生产实测追加（out-final-8b3c3de）
+候选 bae75a5 fold 9/9 里 F02 的第 3 条善意笔记（「两个邮箱都开了两步验证…」）被分拣层降级模型误标敏感，实际走的是 `sensitiveCardsBody`（自带计数句）；终版部署后分拣未误标，同题走 **生成前预言机中性分支**（`oracleGate` → `ORACLE_NEUTRAL_NOTICE + 角标`），2 张折叠卡 0 计数句（fold 6/9）。根因：§3.3 的追加只挂在生成出口，生成前的三个确定性占位返回（预言机中性 / 取值扣留 `DIRECT_GUARD_PLACEHOLDER[kind]` / 出口层裸是非改写）各自拼 `占位 + 角标`，没有走同一条计数句。修法：抽 `withFoldedRefCount(answer, references, refNotes)`，四处共用；`sensitiveCardsBody` 自带计数句（`FOLDED_REF_COUNT_RE` 命中不重复追加）。静态单测锁定 index.ts 内不再有 `ORACLE_NEUTRAL_NOTICE / DIRECT_GUARD_PLACEHOLDER[kind]` 直拼角标的 answer。
+F02 `fact=false`（两步验证事实未答）为预言机中性分支的既定 fail-closed 行为（问句同时是取值问 + 对含口令单元的是非问），不在本轮改。
+
 ## 4. 问题 7 的前端排除证据
 `web/src/components/ask-chat.tsx`：refs 逐消息保存在 `AskChatMessage.refs`，渲染 key 为 `m.id`（`crypto.randomUUID()`）；`askStream` 为 POST 不经 SW/HTTP 缓存；`selectAskContext` 只挑 10 分钟内非 error 消息进 history。前端无任何跨消息复用引用卡的路径 → 陈旧卡只能来自后端对 `history` 的使用。后端 `historyText` 参与 3 处：`isDeterministicRecallProbe`、`isSecretValueQuestion`、`sensitiveRecallTerms`。前两处按 §2.6 收窄；第三处 R332 已按本轮话题词收窄。复现方式：REST `history=[{user:"路由器密码是什么"},{assistant:"〔…占位…〕[1]"}]` + 问「我的航班号是多少」 → 修前判成取值型问句（函数级复现见 §2.6），召回里上一轮的受守卡重新以占位形态返回；修后直答。终版生产浏览器录屏同会话连续问验证。
 
