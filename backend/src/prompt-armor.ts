@@ -9847,7 +9847,9 @@ export function conceptualLabelFree(nfkc: string): string {
   if (!CONCEPT_LABEL_RE.test(text)) return text;
   if (structuralValueFace(text)) return text;
   CONCEPT_LABEL_RE.lastIndex = 0;
-  return text.replace(CONCEPT_LABEL_RE, " ");
+  // 「密码锁」是装着秘密的锁具而不是抽象概念：抹掉称谓词、保留「锁」，让锁具取值问（「密码锁的数字是多少」）与
+  // 「行李箱锁是几」同口径由 RESIDENCY_QUESTION_LABEL_RE + LOCK_OBJECT_TALK_RE 判；价钱 / 牌子 / 型号仍按谈论锁具排除。
+  return text.replace(CONCEPT_LABEL_RE, (m) => (/锁$/u.test(m) ? " 锁" : " "));
 }
 const TITLE_LABEL_RE = new RegExp(`《[^《》\\n]{0,12}${CONCEPT_LABEL_WORD_SRC}[^《》\\n]{0,12}》`, "giu");
 
