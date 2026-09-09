@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, stripPhantomRedactionClaims, verbatimRecallEligible, WITHHELD_CARD_POINTER_RE, WITHHELD_CARD_POINTER_NOTICE, isSystemNoticeFragment, isSecretValueQuestion, unitTalksAboutSecret, unitCarriesGuardedValue, unitHasValueCandidates, titleCarriesGuardedValue, GUARDED_TITLE_PLACEHOLDER, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, aggregateCitedBenignUnit, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, stripPhantomRedactionClaims, verbatimRecallEligible, WITHHELD_CARD_POINTER_RE, WITHHELD_CARD_POINTER_NOTICE, isSystemNoticeFragment, isSecretValueQuestion, splitCompoundQuestion, unitTalksAboutSecret, unitCarriesGuardedValue, unitHasValueCandidates, titleCarriesGuardedValue, GUARDED_TITLE_PLACEHOLDER, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, aggregateCitedBenignUnit, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
 import { modelContextNoteText, reconcileDoneAnswer } from "./ask-context";
 import { recallSensitiveNotes, sensitiveOnlyAnswer, foldedRefCountLine, FOLDED_REF_COUNT_RE, sensitiveAnswerLeak, attributableTopicTerms, sensitiveRecallTerms, ownTopicCards, topicHitCards, plainTopicHitCards, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
@@ -1646,6 +1646,146 @@ export function withFoldedRefCount(answer: string, references: { index: number; 
   const folded = refNotes.flatMap((n, i) => (n.content_withheld === true && references[i] ? [references[i]] : []));
   if (folded.length === 0 || FOLDED_REF_COUNT_RE.test(answer)) return answer;
   return `${answer.trimEnd()}\n\n${foldedRefCountLine(folded)}`;
+}
+
+/**
+ * R337（decision-r337 §4）：复合问句（普通事实子句 + 凭据取值子句）拆成两段各自走既有的 /api/ask 全链路：
+ * 凭据段落进生成前确定性闸门（预言机中性 / 取值扣留），普通段照常召回 + 生成。两段都是**已存在且经 R333–R336
+ * 矿阵验证的单子句路径**，这里只做子请求编排 + 合并，不新增任何出答案的通道。
+ * 子请求以本隔离实例随机 nonce 头自标（外部无法伪造）：跳过限频重复计数、禁止再次拆句（不递归）。
+ */
+const ASK_COMPOUND_PART_HEADER = "x-suinian-compound-part";
+// Workers 全局作用域禁止取随机数：首个请求进来时才生成，之后本实例内固定。
+let askCompoundPartNonce: string | null = null;
+function askCompoundNonce(): string {
+  if (askCompoundPartNonce === null) askCompoundPartNonce = crypto.randomUUID();
+  return askCompoundPartNonce;
+}
+/** 复合问句子请求的时限：普通段含一次生成，凭据段只有召回 + 闸门。 */
+const ASK_COMPOUND_PART_TIMEOUT_MS = 25_000;
+
+type AskCompoundPartBody = {
+  answer: string;
+  references: Array<{ index: number; note_id: string }>;
+  notes: Array<Record<string, unknown> & { id?: unknown; content_withheld?: boolean }>;
+  no_answer?: boolean;
+  value_withheld?: boolean;
+  oracle_neutral?: boolean;
+  verbatim_closed_spans?: number;
+  instruction_isolated?: boolean;
+  isolated_refs?: number[];
+  recall_units?: unknown[];
+  [k: string]: unknown;
+};
+
+function isAskCompoundPartRequest(c: Context<{ Bindings: Env; Variables: Vars }>): boolean {
+  const got = c.req.header(ASK_COMPOUND_PART_HEADER);
+  return got !== undefined && got === askCompoundNonce();
+}
+
+async function askCompoundPart(
+  c: Context<{ Bindings: Env; Variables: Vars }>,
+  question: string,
+  history: ReturnType<typeof sanitizeAskHistory>,
+  useGraph: boolean
+): Promise<AskCompoundPartBody | null> {
+  const headers = new Headers(c.req.raw.headers);
+  headers.delete("content-length");
+  headers.set("accept", "application/json");
+  headers.set("content-type", "application/json");
+  headers.set(ASK_COMPOUND_PART_HEADER, askCompoundNonce());
+  const req = new Request(new URL("/api/ask", c.req.url), {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ question, history, graph: useGraph }),
+    signal: AbortSignal.timeout(ASK_COMPOUND_PART_TIMEOUT_MS),
+  });
+  let execCtx: Parameters<typeof app.fetch>[2];
+  try {
+    execCtx = c.executionCtx;
+  } catch {
+    execCtx = undefined;
+  }
+  const res = await Promise.resolve()
+    .then(() => app.fetch(req, c.env, execCtx))
+    .catch(() => null);
+  if (!res || res.status !== 200) return null;
+  const body = (await res.json().catch(() => null)) as AskCompoundPartBody | null;
+  if (!body || typeof body.answer !== "string" || !Array.isArray(body.references) || !Array.isArray(body.notes)) return null;
+  return body;
+}
+
+const ASK_CITATION_MARK_RE = /[[［](\d{1,2})[\]］]/g;
+
+/**
+ * 合并普通段 + 凭据段：普通段引用编号不动，凭据段引用顺延（同一笔记两段都引到时复用普通段编号、不重复出卡）；
+ * 两段各自的计数句去掉后按合并引用重算一句（withFoldedRefCount）。安全字段取并（value_withheld / oracle_neutral），
+ * 两段都已各自过唯一安全出口（中间件 finalize），合并体标 guard_finalized 不再二次收口——二次收口会把合并后的
+ * 多引用当聚合层把普通段的单笔记直答再收一遍（正是 R337 要修的过度扣留）。
+ */
+export function mergeAskCompoundParts(plain: AskCompoundPartBody, guarded: AskCompoundPartBody, split: { plain: number; guarded: number }) {
+  const references = plain.references.map((r) => ({ ...r }));
+  const notes = plain.notes.slice();
+  // 引用与卡片按位对应（references[i] ↔ notes[i]，与 withFoldedRefCount 同约定）
+  const posByNoteId = new Map(references.map((r, i) => [r.note_id, i] as const));
+  let nextIndex = references.reduce((m, r) => Math.max(m, r.index), 0) + 1;
+  const remap = new Map<number, number>();
+  for (let i = 0; i < guarded.references.length; i++) {
+    const r = guarded.references[i];
+    const pos = posByNoteId.get(r.note_id);
+    if (pos !== undefined) {
+      remap.set(r.index, references[pos].index);
+      // 同一笔记两段都引到：任一段折叠即取折叠卡（fail-closed）
+      if (guarded.notes[i]?.content_withheld === true && notes[pos]?.content_withheld !== true) notes[pos] = guarded.notes[i];
+      continue;
+    }
+    const index = nextIndex++;
+    remap.set(r.index, index);
+    references.push({ ...r, index });
+    posByNoteId.set(r.note_id, references.length - 1);
+    notes.push(guarded.notes[i] ?? { content_withheld: true });
+  }
+  const stripCount = (a: string) =>
+    a
+      .split("\n")
+      .filter((line) => !FOLDED_REF_COUNT_RE.test(line))
+      .join("\n")
+      .trim();
+  const guardedText = stripCount(guarded.answer).replace(ASK_CITATION_MARK_RE, (m, d: string) => {
+    const to = remap.get(Number(d));
+    return to === undefined ? m : `[${to}]`;
+  });
+  const plainText = stripCount(plain.answer);
+  const joined = [plainText, guardedText].filter((t) => t.length > 0).join("\n\n");
+  const answer = withFoldedRefCount(joined, references, notes);
+  const recallUnits =
+    Array.isArray(plain.recall_units) || Array.isArray(guarded.recall_units)
+      ? { recall_units: [...(plain.recall_units ?? []), ...(guarded.recall_units ?? [])] }
+      : {};
+  return {
+    ...plain,
+    answer,
+    references,
+    notes,
+    ...recallUnits,
+    no_answer: plain.no_answer === true && guarded.no_answer === true,
+    ...(guarded.value_withheld === true ? { value_withheld: true } : {}),
+    ...(guarded.oracle_neutral === true ? { oracle_neutral: true } : {}),
+    ...(guarded.instruction_isolated === true ? { instruction_isolated: true } : {}),
+    ...(Array.isArray(plain.isolated_refs) || Array.isArray(guarded.isolated_refs)
+      ? {
+          isolated_refs: [
+            ...new Set([
+              ...(Array.isArray(plain.isolated_refs) ? plain.isolated_refs : []),
+              ...(Array.isArray(guarded.isolated_refs) ? guarded.isolated_refs : []).map((i) => remap.get(i) ?? i),
+            ]),
+          ],
+        }
+      : {}),
+    verbatim_closed_spans: (plain.verbatim_closed_spans ?? 0) + (guarded.verbatim_closed_spans ?? 0),
+    compound_split: split,
+    guard_finalized: true,
+  };
 }
 
 /**
@@ -3869,7 +4009,9 @@ app.post("/api/ask", async (c) => {
   const userId = c.get("userId");
   // ask is the most expensive authenticated endpoint (several LLM calls per
   // question): a per-user cap bounds cost from a leaked token or runaway client
-  if (!(await checkRateLimit(c.env.DB, "ask", [userId], ASK_RATE_LIMIT_MAX))) {
+  // （R337 复合问句的两段子请求已由外层请求计过一次，不重复计）
+  const compoundPart = isAskCompoundPartRequest(c);
+  if (!compoundPart && !(await checkRateLimit(c.env.DB, "ask", [userId], ASK_RATE_LIMIT_MAX))) {
     return c.json({ error: "提问太频繁了，请稍等一分钟再试", retryable: true }, 429);
   }
   const body = await c.req.json<{ question?: string; history?: unknown; graph?: unknown }>().catch(() => null);
@@ -3903,6 +4045,24 @@ app.post("/api/ask", async (c) => {
   // 归一器 / 关键词抽取器 / 枚举路由器 temperature 0 仍会抽动，剥后逐字相同的对/错候选问句会走出不同召回路径（有引用 / 没找到 /
   // 误入计数路由），路径差异本身就是可区分信号。只保留确定性环节：剥候选 → 剥探问语法词得话题词 + 语义向量。
   const historyText = history.map((m) => m.content).join("\n");
+  // R337（decision-r337 §4）：「普通事实 + 凭据取值」复合问句在任何 LLM 环节之前确定性拆句，两段各自走既有单子句全链路后合并；
+  // 拆不开（全普通 / 全凭据 / 带候选值 / 是非问 / 逐位试探）或任一段子请求失败 ⇒ 原样走下面的整句路径（现状，fail-closed）。
+  if (!compoundPart && !metaQuestion) {
+    const split = splitCompoundQuestion(question, history.length > 0 ? historyText : "");
+    if (split) {
+      const tSplit = Date.now();
+      const [plainPart, guardedPart] = await Promise.all([
+        askCompoundPart(c, split.plain.join("，"), history, useGraph),
+        askCompoundPart(c, split.guarded.join("，"), history, useGraph),
+      ]);
+      if (plainPart && guardedPart) {
+        console.log(`ask: compound question split (plain=${split.plain.length}, guarded=${split.guarded.length})`);
+        c.header("Server-Timing", `compound;dur=${Date.now() - tSplit}`);
+        return c.json(mergeAskCompoundParts(plainPart, guardedPart, { plain: split.plain.length, guarded: split.guarded.length }));
+      }
+      console.log("ask: compound split part failed, falling back to whole-question path");
+    }
+  }
   const deterministicRecall = !metaQuestion && isDeterministicRecallProbe(question, historyText);
   let normQuestion: string | null = null;
   const probeShaped = !metaQuestion && (questionCarriesOpaqueToken(question) || isYesNoQuestion(question) || isOracleProbeQuestion(question));
