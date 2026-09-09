@@ -2,7 +2,8 @@
 // 以及据实测补的三处判定层最小修复：
 //  §3.1 转盘组合（「保险柜转盘 左30 右15 左5」）是凭据值区；
 //  §3.2 称谓 + 引导 + 计量（「保险柜是 45 升的」）与称谓 + 空格 + 计量同口径，不是取值；
-//  §3.3 「密码锁 / 密码箱 / 密码本 / 密码长度 / 密码位数」按概念后缀剥称谓；「多少钱 / 什么牌子」是价格 / 型号问，不是取值问。
+//  §3.3 「密码锁 / 密码箱 / 密码本 / 密码长度 / 密码位数」按概念后缀剥称谓；「多少钱 / 什么牌子」是价格 / 型号问，不是取值问；
+//  §3.4 非 answer 出口（列表卡 / 报告行标题折叠、叙述模型视图占位、聚合口径闭合）与 ask 出口同口径：转盘组合是行级取值面。
 import { describe, it, expect } from "vitest";
 import {
   isSecretValueQuestion,
@@ -14,6 +15,11 @@ import {
   finalizeAskAnswer,
   stripInvisibleCarriers,
   sourceValueCandidates,
+  noteRowBroadFoldReason,
+  foldDisplayTitle,
+  redactGuardedLinesForModel,
+  closeAggregateOutlet,
+  secretLabelValueLine,
 } from "../src/prompt-armor";
 import { BENIGN, SECURITY } from "../scripts/qa-r340/corpus";
 
@@ -98,6 +104,43 @@ describe("R340 §3.1 转盘组合是凭据值区", () => {
     const r = probe("保险柜转盘 左30 右15 左5", "保险柜怎么开？");
     expect(fold(r.answer)).not.toContain(fold("左30 右15 左5"));
     expect(r.rewritten).toBe(true);
+  });
+  it("§3.4 行级：强称谓 / 凭据标签 + 转盘组合是取值行（折叠 + 模型视图占位）；行路指示不是", () => {
+    for (const line of ["保险柜转盘 左30 右15 左5", "保险柜密码 左30 右15 左5", "转盘 左30 右15 左5", "密码锁 左30 右15 左5", "safe combination R12 L34 R7"]) {
+      expect(secretLabelValueLine(line), line).toBe(true);
+      expect(noteRowBroadFoldReason({ content: line }), line).toBe("broad:credential");
+      const model = redactGuardedLinesForModel(line, line);
+      expect(model.redacted, line).toBe(1);
+      expect(fold(model.text), line).not.toContain(fold("左30"));
+      expect(fold(model.text), line).not.toContain(fold("R12"));
+    }
+    for (const line of ["出地铁左 30 米右 15 米再左 5 米到保险柜专卖店", "转盘路口左转 30 米", "保险柜是 45 升的，放得下笔记本"]) {
+      expect(secretLabelValueLine(line), line).toBe(false);
+      expect(noteRowBroadFoldReason({ content: line }), line).toBeNull();
+    }
+  });
+});
+
+describe("R340 §3.4 非 answer 出口与 ask 出口同口径", () => {
+  it("安全语料：列表 / 报告行标题、叙述模型视图、聚合闭合均不含原值", () => {
+    for (const c of SECURITY) {
+      const reason = noteRowBroadFoldReason({ content: c.note });
+      const title = reason !== null ? foldDisplayTitle({ title: null, content: c.note }, reason) : c.note;
+      const model = redactGuardedLinesForModel(c.note, c.note).text;
+      const agg = closeAggregateOutlet(`周报：${c.note}`, [c.note]).answer;
+      for (const v of c.secrets) {
+        expect(fold(title), `${c.id} title`).not.toContain(fold(v));
+        expect(fold(model), `${c.id} model`).not.toContain(fold(v));
+        expect(fold(agg), `${c.id} aggregate`).not.toContain(fold(v));
+      }
+    }
+  });
+  it("普通善意语料：列表不折叠、模型视图不占位（Y02 / Y11 边界除外）", () => {
+    for (const b of BENIGN) {
+      if (b.boundary) continue;
+      expect(noteRowBroadFoldReason({ content: b.note }), b.id).toBeNull();
+      expect(redactGuardedLinesForModel(b.note, b.note).redacted, b.id).toBe(0);
+    }
   });
 });
 

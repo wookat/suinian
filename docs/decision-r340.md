@@ -67,6 +67,12 @@ X 族的静态探针另外喂入「顺从模型会写出的派生答案」（`em
 - `CONCEPT_SUFFIX_SRC` 加 `长度 / 位数 / 锁 / 箱 / 本`；有值面（`structuralValueFace`）时不剥，所以「密码锁 4471」「密码箱密码 0-7-3」「密码本第一页：Tq8#vL2m」仍在讲秘密。
 - `NON_VALUE_ASK_RE` 加 `多少钱 / 几块钱 / 多贵 / 什么价 / 价格 / 什么牌子 / 哪个牌子 / 什么型号`：「密码锁多少钱」「那把锁什么型号」不是取值问；「行李箱锁是几」「密码锁密码多少」「那串密码多少位」仍是。
 
+### 3.4 非 answer 出口同口径（复验中发现，同 PR 补）
+- 一手证据：§3.1 修后把 R340 语料过列表 / 报告行标题（`noteRowBroadFoldReason` + `foldDisplayTitle`）、叙述模型视图（`redactGuardedLinesForModel`）、聚合闭合（`closeAggregateOutlet`）三条非 answer 出口——W01「保险柜转盘 左30 右15 左5」标题漏 1/40、模型视图漏 1/40（聚合 0/40）。根因：§3.1 只接进了驻留 / 结构值面（`unitCarriesGuardedValue`，ask 出口用），行级 `secretLabelValueLine → secretValueFace` 没有转盘分支，`左30` 只有 2 位数字不满足 `\d{3,11}`，于是折叠 / 模型视图两条路径都当它是普通行。这正是 R335 §14 说的「answer 出口守住 ≠ 其他出口守住」。
+- 修：`secretValueFace` 首行加 `DIAL_SEQ_ANYWHERE_RE`（含 strict 口径——转盘组合是强取值面）；`secretLabelValueLine` 加「强称谓（`RESIDENCY_STRONG_LABEL_RE`：转盘 / 拨盘 / 保险柜…）+ 转盘组合 ⇒ 取值行」，与驻留判定同口径（「转盘 左30 右15 左5」无 `SECRET_LABEL_RE` 标签也守）。
+- 不触发：行路指示（「出地铁左 30 米右 15 米再左 5 米」「转盘路口左转 30 米」）、计量（「保险柜是 45 升的」）——`noteRowBroadFoldReason` 为 null。
+- 探针 / 单测新增这三条出口对 40 条安全语料的零原值断言与 18 条普通善意语料的零折叠 / 零占位断言（Y02 / Y11 边界在这两条出口同样 fail-closed，见 §4）。
+
 ## 4. 已知边界（写入语料 `boundary` 字段，测试断言其 fail-closed 仍受守）
 
 - Y02「成功的密码是坚持」：「密码是 <汉语词>」与汉语口令同形；放行需要词典 / 语义判断，规则层不做——宁可占位（用户可点开引用卡看原文）。
@@ -78,9 +84,9 @@ X 族的静态探针另外喂入「顺从模型会写出的派生答案」（`em
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| R340 静态探针 | `cd backend && npx tsx scripts/qa-r340/static-probe.ts` | 善意 18/18（2 边界）、安全 40/40（含 X 族派生形态） |
+| R340 静态探针 | `cd backend && npx tsx scripts/qa-r340/static-probe.ts` | 善意 18/18（2 边界）、安全 40/40（含 X 族派生形态）；非 answer 出口安全漏值 0/40、善意折叠 / 模型视图误伤 0/18 |
 | R336 静态探针回归 | `npx tsx scripts/qa-r336/static-probe.ts` | 34/34、边界 4 条不变、18/18 |
-| vitest 全量 | `npm test` | 202 文件 / 4607 通过（新增 `test/r340-out-of-family.test.ts` 67 用例） |
+| vitest 全量 | `npm test` | 见 PR 描述（新增 `test/r340-out-of-family.test.ts` 70 用例） |
 | typecheck | `npm run typecheck` | 通过 |
 | web | `npm run lint && npm run build` | 通过（3 条既有 warning） |
 | Android | `./gradlew assembleDebug` | 见 PR 描述 |

@@ -16,6 +16,10 @@ import {
   crossUnitGuardedLines,
   finalizeAskAnswer,
   stripInvisibleCarriers,
+  noteRowBroadFoldReason,
+  foldDisplayTitle,
+  redactGuardedLinesForModel,
+  closeAggregateOutlet,
 } from "../../src/prompt-armor";
 import { BENIGN, SECURITY, type BenignCase, type SecurityCase } from "./corpus";
 
@@ -120,6 +124,34 @@ for (const r of rows) {
   );
 }
 console.log(`\n善意直答 ${benignOk}/${benignRows.length}；安全守值 ${secOk}/${secRows.length}`);
+
+// 非 answer 出口（R340 §3.4）：列表卡 / 周报行标题（noteRowBroadFoldReason + foldDisplayTitle）、叙述模型视图（redactGuardedLinesForModel）、
+// 聚合口径闭合（closeAggregateOutlet）——ask 出口守住不等于列表 / 报告 / 线程摘要也守住（W01 首跑标题 + 模型视图都漏）。
+let outletLeak = 0;
+for (const c of SECURITY) {
+  const reason = noteRowBroadFoldReason({ content: c.note });
+  const title = reason !== null ? foldDisplayTitle({ title: null, content: c.note }, reason) : c.note;
+  const model = redactGuardedLinesForModel(c.note, c.note).text;
+  const agg = closeAggregateOutlet(`周报：${c.note}`, [c.note]).answer;
+  const hit = (s: string) => c.secrets.some((v) => fold(s).includes(fold(v)));
+  const leaks = [hit(title) ? "title" : "", hit(model) ? "model" : "", hit(agg) ? "aggregate" : ""].filter(Boolean);
+  if (leaks.length > 0) {
+    outletLeak++;
+    console.log(`!! ${c.id} OUTLET LEAK ${leaks.join("+")} fold=${reason ?? "-"} | ${JSON.stringify(c.note).slice(0, 80)}`);
+  }
+}
+let outletFp = 0;
+for (const b of BENIGN) {
+  if (b.boundary) continue;
+  const reason = noteRowBroadFoldReason({ content: b.note });
+  const redacted = redactGuardedLinesForModel(b.note, b.note).redacted;
+  if (reason !== null || redacted > 0) {
+    outletFp++;
+    console.log(`!! ${b.id} OUTLET FP fold=${reason ?? "-"} modelRedacted=${redacted} | ${b.note}`);
+  }
+}
+console.log(`非 answer 出口：安全漏值 ${outletLeak}/${SECURITY.length}；善意折叠 / 模型视图误伤 ${outletFp}/${BENIGN.filter((b) => !b.boundary).length}`);
+if (outletLeak > 0) process.exitCode = 1;
 const jsonIdx = process.argv.indexOf("--json");
 if (jsonIdx > 0 && process.argv[jsonIdx + 1]) {
   writeFileSync(process.argv[jsonIdx + 1], JSON.stringify({ benign: `${benignOk}/${benignRows.length}`, security: `${secOk}/${secRows.length}`, rows }, null, 1));

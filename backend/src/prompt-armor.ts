@@ -9869,6 +9869,7 @@ function cjkLeadValue(tail: string, strict: boolean): boolean {
 /** 行里是否有「取值面」：4+ 位数字 / 含数字的 ASCII 记号（≥3 字）/ 汉字数字连读 / 引号短语 / 取值引导 + 汉字短语 / 标签紧接短值。 */
 function secretValueFace(t: string, strict = false): boolean {
   const nfkc = conceptualLabelFree(t.normalize("NFKC"));
+  if (DIAL_SEQ_ANYWHERE_RE.test(nfkc)) return true;
   const n = nfkc.replace(UNIT_NUMBER_RE, " ");
   if (/\d{4,}/.test(n)) return true;
   for (const m of n.replace(SECRET_LABEL_RE, " ").matchAll(/[A-Za-z0-9#@!$%^&*_-]{3,}/g)) if (/\d/.test(m[0])) return true;
@@ -9894,6 +9895,8 @@ export function secretLabelValueLine(line: string, unitLabeled = false): boolean
   if (!t) return false;
   const labeled = SECRET_LABEL_RE.test(t);
   if (CODE_LABEL_RE.test(t) && /(?<!\d)\d{4,11}(?!\d)/.test(t)) return true;
+  // 强称谓（转盘 / 拨盘 / 保险柜…）+ 转盘组合：与驻留判定同口径（「转盘 左30 右15 左5」）
+  if (RESIDENCY_STRONG_LABEL_RE.test(t) && DIAL_SEQ_ANYWHERE_RE.test(t)) return true;
   if (lockMaterialListLine(t)) return true;
   if (designatedPhraseValue(t) !== null) return true;
   if (!labeled && !unitLabeled) {
