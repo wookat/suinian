@@ -202,3 +202,23 @@ describe("R338 primary breaker (chatCompleteStream + aiProbe)", () => {
     expect(primaryBreakerState()).toEqual({ open: false, until: null, trips: 0 });
   });
 });
+
+describe("R338 /health?probe=ai breaker 视图", () => {
+  const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext;
+  const env = { AI_MODEL: "mock", DEEPSEEK_API_KEY: "", DEEPSEEK_BASE_URL: "", ADMIN_TOKEN: "adm-secret" };
+
+  it("admin 看到顶层 breaker 链状态；ai 探针对象形状不变（R166 契约）", async () => {
+    const { app } = await import("../src/index");
+    const res = await app.request(new Request("http://x/health?probe=ai", { headers: { authorization: "Bearer adm-secret" } }), undefined, env, ctx);
+    const body = (await res.json()) as { ai: Record<string, unknown>; breaker: unknown };
+    expect(body.ai).toEqual({ ok: true, provider: "mock", model: "mock", degraded: false });
+    expect(body.breaker).toEqual({ open: false, until: null, trips: 0 });
+  });
+
+  it("非 admin 看不到 breaker（不暴露链配置指纹）", async () => {
+    const { app } = await import("../src/index");
+    const res = await app.request(new Request("http://x/health?probe=ai"), undefined, env, ctx);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ ok: true, ai: { ok: true, degraded: false } });
+  });
+});

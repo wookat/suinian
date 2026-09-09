@@ -575,13 +575,11 @@ app.get("/health", async (c) => {
     // degraded＝主链路失败、由 fallback 层应答（R262 P2-8，audit-r261：主模型
     // 100% 失败在探针上零可见性）：布尔可观测位不泄露 provider/model 配置指纹，
     // ok 口径不变（fallback 是常态基线，外部告警仍只看 ok:false）
-    // breaker（R338）：本隔离实例是否正在跳过主模型直走 fallback。探针绕过熔断器：
-    // 探针成功即闭合，所以 breaker.open:true 只会与 degraded:true 同现；trips 为实例
-    // 生命周期内累计熔断次数（多实例各自独立）
-    return c.json(
-      { ok: true, ai: isAdmin ? { ...ai, degraded: ai.provider === "fallback", breaker: primaryBreakerState() } : { ok: ai.ok, degraded: ai.provider === "fallback" } },
-      ai.ok ? 200 : 503
-    );
+    // breaker（R338，仅 admin）：`ai` 描述本次探针结果，`breaker` 描述本隔离实例的
+    // 链状态——是否正在跳过主模型直走 fallback。探针绕过熔断器且成功即闭合，所以
+    // breaker.open:true 只会与 degraded:true 同现；trips 为实例生命周期内累计次数
+    const aiView = isAdmin ? { ...ai, degraded: ai.provider === "fallback" } : { ok: ai.ok, degraded: ai.provider === "fallback" };
+    return c.json(isAdmin ? { ok: true, ai: aiView, breaker: primaryBreakerState() } : { ok: true, ai: aiView }, ai.ok ? 200 : 503);
   }
   // ?probe=bridge reports the WeChat bridge state from its heartbeat so external
   // monitoring sees the real login state (online / waiting_scan / stale) instead
