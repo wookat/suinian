@@ -1,0 +1,6 @@
+# 运行时账号状态（含 token；cleanup 后 token 置空但仍不入库）
+out*/accounts.json
+out*/*.log
+# 浏览器原始截图只入库 test-report.md 引用的安全截图
+browser/*.png
+!browser/r336-*.png

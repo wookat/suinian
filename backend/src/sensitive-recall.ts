@@ -18,11 +18,16 @@ export function sensitiveOnlyAnswer(count: number, refs: Array<{ index: number }
   const marks = refs.map((r) => `[${r.index}]`).join("");
   return `有 ${count} 条敏感笔记可能相关（已折叠，正文不进入问答、不由 AI 复述）；点开下方引用卡片解锁查看原文${marks}`;
 }
-/** 混合命中时模型没引到的敏感笔记，用这一行补角标。 */
-export function sensitiveUncitedLine(refs: Array<{ index: number }>): string {
+/**
+ * R336 §3.3（audit-r335 §8.3 J01–J03 计数句 0/9）：生成出口引用里有折叠卡（已标注敏感 / 受守占位）时的统一计数句。
+ * 覆盖所有折叠引用（不只模型漏引的那几条），与 sensitiveOnlyAnswer 同一话术族。
+ */
+export function foldedRefCountLine(refs: Array<{ index: number }>): string {
   const marks = refs.map((r) => `[${r.index}]`).join("");
-  return `另有 ${refs.length} 条相关的敏感笔记（正文已加密，AI 不复述），点开引用卡片查看原文${marks}`;
+  return `其中 ${refs.length} 条引用为敏感/受守笔记（正文已折叠，AI 不复述），点开引用卡片查看原文${marks}`;
 }
+/** 答案里已有任一计数句（确定性敏感卡路径 / 本行）时不再追加。 */
+export const FOLDED_REF_COUNT_RE = /条(?:引用为)?敏感(?:\/受守)?笔记(?:可能相关)?[（(]/u;
 
 /** 敏感笔记扫描窗口：按创建时间倒序最多解密这么多条（WebCrypto 毫秒级）。 */
 export const SENSITIVE_SCAN_LIMIT = 300;

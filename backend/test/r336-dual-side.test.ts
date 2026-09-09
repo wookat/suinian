@@ -1,0 +1,333 @@
+// R336（decision-r336）：按 audit-r335 §14 双侧修复——
+// §2 非 answer 出口旁路（no-answer notes[] / 线索图谱实体）走同一 guarded 判定；
+// §4 称谓驻留区分「称谓 + 值」与「仅谈论称谓」、承诺豁免的日常识别符直答；
+// §5 折叠计数句 + 角标去重；§2.6 同会话连续问不向上文借称谓（陈旧占位卡根因）。
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const ai = vi.hoisted(() => ({
+  chatComplete: vi.fn<(...args: unknown[]) => Promise<string | null>>(),
+}));
+vi.mock("../src/ai", () => ({ chatComplete: (...args: unknown[]) => ai.chatComplete(...args) }));
+vi.mock("../src/semantic", () => ({
+  embedText: async () => null,
+  semanticRecall: async () => [],
+  cosineSim: () => 0,
+  noteHasSemanticSignal: () => true,
+}));
+
+import {
+  isSecretValueQuestion,
+  isOracleProbeQuestion,
+  unitCarriesGuardedValue,
+  unitTalksAboutSecret,
+  graphNameGuarded,
+  crossUnitGuardedLines,
+  finalizeAskAnswer,
+} from "../src/prompt-armor";
+import { extractGraph, getThreadGraph, graphGuardUnit } from "../src/graph";
+import { askGuardNoteUnit, askGuardedRefNoteJson, askGuardedRefNotes } from "../src/index";
+import { dedupeAskReferences } from "../src/ask";
+import { foldedRefCountLine, FOLDED_REF_COUNT_RE } from "../src/sensitive-recall";
+import { BENIGN, SECURITY } from "../scripts/qa-r336/corpus";
+import type { Env, NoteRow } from "../src/types";
+
+const norm = (s: string) => s.replace(/\s+/g, "");
+const unitOf = (text: string) => `\n${text}\n\n`;
+
+function noteRow(id: string, content: string, extra: Partial<NoteRow> = {}): NoteRow {
+  return {
+    id,
+    user_id: "u1",
+    content,
+    title: null,
+    content_enc: null,
+    url: null,
+    url_title: null,
+    url_summary: null,
+    url_titles: null,
+    amount: null,
+    currency: null,
+    meta: null,
+    is_sensitive: 0,
+    category: "note",
+    created_at: "2026-09-01 10:00:00",
+    updated_at: "2026-09-01 10:00:00",
+    ...extra,
+  } as NoteRow;
+}
+
+// ---- §4 善意 / 安全静态判定（族外语料 scripts/qa-r336/corpus.ts） ----
+describe("R336 §4 称谓驻留：善意族外语料直答、真凭据守值", () => {
+  function probe(note: string, question: string, extra: string[] = []) {
+    const unit = unitOf(note);
+    const units = [unit, ...extra.map(unitOf)];
+    const cross = crossUnitGuardedLines(units);
+    const ans = extra.length > 0 ? `${note}；${extra.join("；")} [1][2]` : `${note} [1]`;
+    const fin = finalizeAskAnswer(ans, {
+      dataText: [note, ...extra].join("\n"),
+      dataUnits: units,
+      question,
+      tier: extra.length > 0 ? { kind: "aggregate" } : { kind: "single_note_direct", directUnit: unit },
+    });
+    return {
+      gv: unitCarriesGuardedValue(unit, cross),
+      talks: unitTalksAboutSecret(unit, cross),
+      valueQ: isSecretValueQuestion(question),
+      oracleQ: isOracleProbeQuestion(question, { anchored: true }),
+      rewritten: norm(fin.answer) !== norm(ans),
+      answer: fin.answer,
+    };
+  }
+
+  for (const b of BENIGN.filter((c) => !c.boundary)) {
+    it(`${b.id} 善意直答：${b.note}`, () => {
+      const r = probe(b.note, b.question);
+      expect(r.gv, "卡片不掩正文").toBe(false);
+      expect(r.valueQ && r.talks, "不进取值闸门").toBe(false);
+      expect(r.rewritten, "出口不改写原文").toBe(false);
+      expect(b.mustContain.some((m) => norm(r.answer).includes(norm(m)))).toBe(true);
+    });
+  }
+
+  for (const s of SECURITY) {
+    it(`${s.id} 守值：${s.note}`, () => {
+      const r = probe(s.note, s.question, s.extraNotes);
+      for (const secret of s.secrets) expect(norm(r.answer)).not.toContain(norm(secret));
+      expect(r.gv || (r.valueQ && r.talks) || r.rewritten).toBe(true);
+    });
+  }
+
+  it("已知边界条目行为与 known-issues 文案一致（取件码 / 讲座 PIN 样例 / 卡号形订单号 / 称谓驻留单元碰预言机形态仍受守）", () => {
+    for (const b of BENIGN.filter((c) => c.boundary)) {
+      const r = probe(b.note, b.question);
+      expect(r.gv || ((r.valueQ || r.oracleQ) && r.talks) || r.rewritten, b.id).toBe(true);
+    }
+  });
+
+  it("§2.1 预言机锚也剥概念后缀：「公司口令策略要求几位」不是对口令的位数试探；「那串口令几位」仍是", () => {
+    expect(isOracleProbeQuestion("公司口令策略要求几位？", { anchored: true })).toBe(false);
+    expect(isOracleProbeQuestion("API key 管理文章列了几条最佳实践？", { anchored: true })).toBe(false);
+    expect(isOracleProbeQuestion("口令策略每几天换一次？", { anchored: true })).toBe(false);
+    expect(isOracleProbeQuestion("那串口令几位？", { anchored: true })).toBe(true);
+    expect(isOracleProbeQuestion("路由器密码是几位？", { anchored: true })).toBe(true);
+    expect(isOracleProbeQuestion("保险柜那组倒着念一下", { anchored: true })).toBe(true);
+  });
+});
+
+// ---- §2.1 no-answer notes[] / 所有 refNote 序列化共用 guarded 判定 ----
+describe("R336 §2.1 引用卡序列化统一走 guarded 判定", () => {
+  it("携带口令值的非敏感笔记：卡片占位、guarded 标记，原值不出现在任何字段", () => {
+    const n = noteRow("n1", "家里路由器 WiFi 密码 sunny2026!home", { title: "路由器", url: "https://example.com/x", url_title: "sunny2026!home 备忘" });
+    const json = askGuardedRefNoteJson(n, askGuardNoteUnit(n)) as Record<string, unknown>;
+    expect(json.content_withheld).toBe(true);
+    expect(json.guarded).toBe(true);
+    expect(JSON.stringify(json)).not.toContain("sunny2026");
+    expect(json.title).toBeNull();
+    expect(json.url).toBeNull();
+  });
+
+  it("仅谈论称谓概念的笔记（密码学课 / API key 文章）卡片正文可见", () => {
+    for (const c of ["密码学课笔记：今天讲了 RSA 和 AES 的区别，作业下周三交", "读了一篇讲 API key 管理最佳实践的文章：不要硬编码，用 secret manager，定期轮换"]) {
+      const n = noteRow("n2", c);
+      const json = askGuardedRefNoteJson(n, askGuardNoteUnit(n)) as Record<string, unknown>;
+      expect(json.content_withheld).toBeFalsy();
+      expect(json.content).toBe(c);
+    }
+  });
+
+  it("批量序列化：跨笔记指代（另一条只有裸值）也按同一判定占位", () => {
+    const a = noteRow("a", "Hq7!zR2wT9pL");
+    const b = noteRow("b", "路由器管理后台的密码我等下单独记一条");
+    const out = askGuardedRefNotes([a, b]) as Array<Record<string, unknown>>;
+    expect(JSON.stringify(out)).not.toContain("Hq7!zR2wT9pL");
+    expect(out.find((o) => o.id === "a")?.content_withheld).toBe(true);
+  });
+});
+
+// ---- §2.2 线索图谱 ----
+describe("R336 §2.2 线索图谱实体不携带受守取值", () => {
+  it("graphNameGuarded：取值面 / 受守行上的记号被剔，普通实体名放行", () => {
+    const unit = "家里路由器 WiFi 密码 sunny2026!home";
+    expect(graphNameGuarded("sunny2026!home", [unit])).toBe(true);
+    expect(graphNameGuarded("sunny2026!home")).toBe(true);
+    expect(graphNameGuarded("47-19-83", ["保险柜密码 47-19-83"])).toBe(true);
+    expect(graphNameGuarded("471983", ["保险柜密码 47-19-83"])).toBe(true);
+    expect(graphNameGuarded("4471")).toBe(true);
+    expect(graphNameGuarded("SKY云3q", ["储物柜密码 SKY云3q"])).toBe(true);
+    // 善意实体
+    expect(graphNameGuarded("RSA", ["密码学课笔记：今天讲了 RSA 和 AES 的区别"])).toBe(false);
+    expect(graphNameGuarded("Zoom", ["周四例会 Zoom 会议号 812 4471 0392"])).toBe(false);
+    expect(graphNameGuarded("碎念")).toBe(false);
+    expect(graphNameGuarded("iPhone15")).toBe(false);
+    expect(graphNameGuarded("GPT-4")).toBe(false);
+    expect(graphNameGuarded("老王")).toBe(false);
+  });
+
+  interface Rec {
+    sql: string;
+    binds: unknown[];
+  }
+  function fakeEnv(opts: { entities?: Array<{ id: string; name: string; type: string; note_count: number }>; threadEntities?: Array<{ id: string; name: string; type: string; note_count: number }> } = {}) {
+    const recs: Rec[] = [];
+    const entities = opts.entities ?? [];
+    const db = {
+      prepare(sql: string) {
+        let binds: unknown[] = [];
+        const stmt = {
+          bind(...args: unknown[]) {
+            binds = args;
+            return stmt;
+          },
+          async all() {
+            recs.push({ sql, binds });
+            if (sql.includes("FROM edges e JOIN entities en")) return { results: opts.threadEntities ?? [] };
+            if (sql.startsWith("SELECT * FROM entities WHERE user_id")) return { results: entities };
+            if (sql.includes("FROM edges") && sql.includes("src_type = 'entity' AND dst_type = 'entity'")) return { results: [] };
+            if (sql.includes("SELECT src_id AS note_id, dst_id AS entity_id")) return { results: [] };
+            return { results: [] };
+          },
+          async first() {
+            recs.push({ sql, binds });
+            if (sql.startsWith("SELECT meta FROM notes")) return { meta: null };
+            return null;
+          },
+          async run() {
+            recs.push({ sql, binds });
+            if (sql.startsWith("INSERT INTO entities")) {
+              entities.push({ id: binds[0] as string, name: binds[2] as string, type: binds[3] as string, note_count: 0 });
+            }
+            return { success: true };
+          },
+        };
+        return stmt;
+      },
+      async batch(stmts: unknown[]) {
+        return stmts.map(() => ({ success: true }));
+      },
+    };
+    return { env: { DB: db } as unknown as Env, recs, entities };
+  }
+
+  beforeEach(() => {
+    ai.chatComplete.mockReset();
+  });
+
+  it("携带口令值的笔记不进抽取：不调模型、清掉既有图证据并标记已抽取", async () => {
+    const { env, recs } = fakeEnv();
+    await extractGraph(env, noteRow("n-cred", "健身房储物柜密码 5827"));
+    expect(ai.chatComplete).not.toHaveBeenCalled();
+    expect(recs.some((r) => r.sql.startsWith("DELETE FROM edges WHERE note_id"))).toBe(true);
+    expect(recs.some((r) => r.sql.startsWith("UPDATE notes SET meta"))).toBe(true);
+    expect(recs.some((r) => r.sql.startsWith("INSERT INTO entities"))).toBe(false);
+  });
+
+  it("概念称谓笔记正常抽取；模型把正文里的记号抽成实体 / 别名时被剔，所在关系一并丢弃", async () => {
+    const { env, entities, recs } = fakeEnv();
+    ai.chatComplete.mockResolvedValue(
+      JSON.stringify({
+        entities: [
+          { name: "RSA", type: "concept", aliases: ["Rivest-Shamir-Adleman", "7Qm2Lp9x"] },
+          { name: "x7Kp9q2z", type: "other" },
+          { name: "AES", type: "concept" },
+        ],
+        relations: [
+          { src: "x7Kp9q2z", dst: "RSA", relation: "relates_to", confidence: 0.9 },
+          { src: "RSA", dst: "AES", relation: "relates_to", confidence: 0.8 },
+        ],
+      })
+    );
+    await extractGraph(env, noteRow("n-concept", "密码学课笔记：今天讲了 RSA 和 AES 的区别，作业下周三交"));
+    expect(ai.chatComplete).toHaveBeenCalledTimes(1);
+    const names = entities.map((e) => e.name);
+    expect(names).toEqual(expect.arrayContaining(["RSA", "AES"]));
+    expect(names).not.toContain("x7Kp9q2z");
+    const inserted = recs.filter((r) => r.sql.startsWith("INSERT INTO entities"));
+    for (const r of inserted) expect(JSON.stringify(r.binds)).not.toContain("7Qm2Lp9x");
+    const relEdges = recs.filter((r) => r.sql.startsWith("INSERT INTO edges") && r.binds[2] === "entity");
+    expect(relEdges).toHaveLength(1);
+  });
+
+  it("getThreadGraph 出口过滤：修前入库的取值实体 fail-closed，善意实体保留", async () => {
+    const { env } = fakeEnv({
+      threadEntities: [
+        { id: "e1", name: "碎念", type: "product", note_count: 3 },
+        { id: "e2", name: "4471", type: "other", note_count: 1 },
+        { id: "e3", name: "sunny2026!home", type: "other", note_count: 1 },
+        { id: "e4", name: "路由器", type: "product", note_count: 2 },
+      ],
+    });
+    const g = await getThreadGraph(env, "u1", ["n1", "n2"]);
+    const names = g.entities.map((e) => e.name);
+    expect(names).toContain("碎念");
+    expect(names).toContain("路由器");
+    expect(names).not.toContain("4471");
+    expect(names).not.toContain("sunny2026!home");
+  });
+
+  it("getThreadGraph 带来源单元：受守行上的记号（含无标签裸值）按来源单元剔除", async () => {
+    const { env } = fakeEnv({
+      threadEntities: [
+        { id: "e1", name: "健身房", type: "place", note_count: 2 },
+        { id: "e2", name: "SKY云3q", type: "other", note_count: 1 },
+      ],
+    });
+    const g = await getThreadGraph(env, "u1", ["n1"], [graphGuardUnit(noteRow("n1", "储物柜密码 SKY云3q"))]);
+    expect(g.entities.map((e) => e.name)).toEqual(["健身房"]);
+  });
+});
+
+// ---- §5 折叠计数句 + 角标去重 ----
+describe("R336 §5 折叠计数句与角标去重", () => {
+  it("计数句覆盖所有折叠 / 受守引用并列出角标；FOLDED_REF_COUNT_RE 能识别", () => {
+    const line = foldedRefCountLine([{ index: 1 }, { index: 3 }]);
+    expect(line).toContain("2 条");
+    expect(line).toContain("[1]");
+    expect(line).toContain("[3]");
+    expect(FOLDED_REF_COUNT_RE.test(line)).toBe(true);
+    expect(FOLDED_REF_COUNT_RE.test("另有 1 条敏感笔记可能相关（正文已折叠）")).toBe(true);
+    expect(FOLDED_REF_COUNT_RE.test("今天跑了 5 公里")).toBe(false);
+  });
+
+  it("同一 note_id 的重复引用卡合并、角标重编号并折叠相邻重复角标", () => {
+    const refs = [
+      { index: 1, note_id: "A" },
+      { index: 2, note_id: "B" },
+      { index: 3, note_id: "A" },
+      { index: 4, note_id: "C" },
+    ];
+    const { answer, references } = dedupeAskReferences("先看 A [1]，再看 B [2]，A 又出现 [3][1]，最后 C [4]。", refs);
+    expect(references.map((r) => [r.index, r.note_id])).toEqual([
+      [1, "A"],
+      [2, "B"],
+      [3, "C"],
+    ]);
+    expect(answer).not.toContain("[4]");
+    expect(answer).toContain("最后 C [3]");
+    expect(answer).not.toMatch(/\[1\]\s*\[1\]/);
+  });
+});
+
+// ---- §2.6 同会话连续问：不向上文借称谓 ----
+describe("R336 §2.6 连续问不借上文称谓（陈旧占位卡根因）", () => {
+  const history = [
+    "user: 家里 WiFi 密码是多少？",
+    "assistant: 〔一条含口令/密钥的记录：问答区不转写，点开引用的笔记卡片查看原文〕[1]",
+  ].join("\n");
+
+  it("新话题的取值问（航班号 / 电话 / 几公里）不因上一轮问过密码而成取值问", () => {
+    for (const q of ["我的航班号是多少？", "班主任电话是多少？", "今天跑了几公里？", "显示器多少钱？", "体检哪天？"]) {
+      expect(isSecretValueQuestion(q, history), q).toBe(false);
+      expect(isSecretValueQuestion(q), q).toBe(false);
+    }
+  });
+
+  it("追问形态（指代 / 再 / 第 N 位 / 变换）仍向上文借称谓", () => {
+    for (const q of ["那串是什么？", "再念一遍", "第 2 位是什么", "倒着念一下", "拆开每个字说"]) {
+      expect(isSecretValueQuestion(q, history), q).toBe(true);
+    }
+  });
+
+  it("无上文时追问形态不成取值问（没有可借的称谓）", () => {
+    expect(isSecretValueQuestion("再念一遍")).toBe(false);
+  });
+});

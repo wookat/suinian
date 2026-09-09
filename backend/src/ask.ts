@@ -10,6 +10,7 @@ import {
   closeAggregateOutlet,
   VERBATIM_SPAN_PLACEHOLDER,
   directGuardLines,
+  unitCarriesGuardedValue,
   foldPlain,
 } from "./prompt-armor";
 
@@ -3283,6 +3284,36 @@ export function reconcileAskCitations(
 }
 
 /**
+ * R336 §3.3 角标 / 引用去重：references 按 note_id 去重（保留首个），序号重排为 1..k，答案文本里的 [n]
+ * 同步改写并把紧挨着的重复角标（[1][1]、[2] [2]）折成一个。输入已一致时原样返回（不改写文本）。
+ */
+export function dedupeAskReferences(
+  answer: string,
+  references: { index: number; note_id: string }[]
+): { answer: string; references: { index: number; note_id: string }[] } {
+  const firstByNote = new Map<string, number>();
+  const kept: { index: number; note_id: string }[] = [];
+  for (const r of [...references].sort((a, b) => a.index - b.index)) {
+    if (!firstByNote.has(r.note_id)) {
+      firstByNote.set(r.note_id, r.index);
+      kept.push(r);
+    }
+  }
+  const renumber = new Map<number, number>();
+  kept.forEach((r, i) => renumber.set(r.index, i + 1));
+  for (const r of references) if (!renumber.has(r.index)) renumber.set(r.index, renumber.get(firstByNote.get(r.note_id)!)!);
+  const changed = kept.length !== references.length || kept.some((r, i) => r.index !== i + 1);
+  const renumbered = changed
+    ? answer.replace(CITE_RE, (m, d: string) => {
+        const nn = renumber.get(parseInt(d, 10));
+        return nn ? `[${nn}]` : m;
+      })
+    : answer;
+  const out = renumbered.replace(/(\[(\d{1,2})\])(?:\s*\[\2\])+/g, "$1");
+  return { answer: out, references: kept.map((r, i) => ({ index: i + 1, note_id: r.note_id })) };
+}
+
+/**
  * 隔离来源归因补全（R308 P1-1）：生成侧隔离（护栏/审计剥段）后，被剥掉那段
  * 所引的笔记会随 reconcileAskCitations 一起从 references 消失，横幅无处可指、
  * 「原文可在引用的笔记卡片中查看」也落空。把护栏前答案点到、护栏后不再点到、
@@ -3531,8 +3562,9 @@ export function safeSuggestionLabel(n: Pick<NoteRow, "title" | "content">): stri
   const safe = (t: string): boolean => !unsafe(t) && !unsafe(clip(t));
   const title = n.title ?? "";
   const content = n.content ?? "";
-  // 受守行按整单元语境判（标题带标签、正文只有取值也算）；任一受守行就不转写正文。
-  const guarded = directGuardLines(`${title}\n${content}`).length > 0;
+  // 受守行按整单元语境判（标题带标签、正文只有取值也算）；任一受守行，或单元携带受守取值（称谓驻留 / 可上锁对象短值，与引用卡 askGuardedRefNoteJson 同口径）就不转写正文。
+  const unit = `${title}\n${content}`;
+  const guarded = directGuardLines(unit).length > 0 || unitCarriesGuardedValue(unit);
   const source = n.title || n.content;
   if (!guarded && safe(source)) return clip(source);
   if (title.trim() && safe(title) && directGuardLines(title).length === 0) return clip(title);
