@@ -3,6 +3,7 @@
 // §4 称谓驻留区分「称谓 + 值」与「仅谈论称谓」、承诺豁免的日常识别符直答；
 // §5 折叠计数句 + 角标去重；§2.6 同会话连续问不向上文借称谓（陈旧占位卡根因）。
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
 
 const ai = vi.hoisted(() => ({
   chatComplete: vi.fn<(...args: unknown[]) => Promise<string | null>>(),
@@ -353,5 +354,17 @@ describe("R336 生产候选实测补修（out-cand-340f709）", () => {
     expect(sensitiveTermScore("个人邮箱密码 Lk2#zzQw", null, terms, topics)).toBeGreaterThan(0);
     expect(sensitiveTermScore("旧手机解锁密码 738291", null, terms, topics)).toBe(0);
     expect(sensitiveTermScore("健身房储物柜密码 4471", null, terms, topics)).toBe(0);
+  });
+});
+
+describe("R336 §2.1 出口静态口径：/api/ask 里所有 notes[] 序列化共用 guarded 判定", () => {
+  it("index.ts 的 ask 处理器内不再有 notes: rows.map(noteToJson) / askRefNoteJson 直传（NA4「找找 Gmail 笔记」枚举分支实测漏值）", () => {
+    const src = readFileSync(new URL("../src/index.ts", import.meta.url).pathname, "utf8");
+    const start = src.indexOf('app.post("/api/ask"');
+    const end = src.indexOf("\napp.", start + 10);
+    const ask = src.slice(start, end > 0 ? end : undefined);
+    const raw = ask.match(/notes:\s*[^\n]*\b(noteToJson|askRefNoteJson)\b[^\n]*/g) ?? [];
+    // 唯一允许：sensRecall.rows 全是 is_sensitive=1 的行，askRefNoteJson 对其固定输出加密占位。
+    expect(raw.filter((l) => !l.includes("sensRecall.rows.map(askRefNoteJson)"))).toEqual([]);
   });
 });

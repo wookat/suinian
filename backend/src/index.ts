@@ -3963,7 +3963,7 @@ app.post("/api/ask", async (c) => {
       return c.json({
         answer,
         references: clRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-        notes: clRows.map((n) => noteToJson(n)),
+        notes: askGuardedRefNotes(clRows),
         finance_clarify: true,
       });
     }
@@ -4061,7 +4061,7 @@ app.post("/api/ask", async (c) => {
         return c.json({
           answer: lr.answer,
           references: lrNotes.map((n, i) => ({ index: i + 1, note_id: n.id })),
-          notes: lrNotes.map((n) => noteToJson(n)),
+          notes: askGuardedRefNotes(lrNotes),
           finance_extreme: true,
           ledger_row_extreme: true,
         });
@@ -4077,7 +4077,7 @@ app.post("/api/ask", async (c) => {
       return c.json({
         answer,
         references: xRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-        notes: xRefRows.map((n) => noteToJson(n)),
+        notes: askGuardedRefNotes(xRefRows),
         finance_extreme: true,
       });
     }
@@ -4104,7 +4104,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: mRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: mRefRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(mRefRows),
       finance_compare: true,
     });
   }
@@ -4144,7 +4144,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: dRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: dRefRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(dRefRows),
       finance_compare: true,
     });
   }
@@ -4166,7 +4166,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: cRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: cRefRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(cRefRows),
       finance_compare: true,
     });
   }
@@ -4219,7 +4219,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: thRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: thRefRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(thRefRows),
       finance_threshold: true,
     });
   }
@@ -4295,7 +4295,7 @@ app.post("/api/ask", async (c) => {
         return c.json({
           answer,
           references: iRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-          notes: iRefRows.map((n) => noteToJson(n)),
+          notes: askGuardedRefNotes(iRefRows),
           finance_subset: true,
           finance_list_follow_up: true,
         });
@@ -4336,7 +4336,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: lRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: lRefRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(lRefRows),
       finance_list: true,
       ...(lrows.length === 0 ? { finance_fail_closed: true } : {}),
     });
@@ -4400,7 +4400,7 @@ app.post("/api/ask", async (c) => {
       return c.json({
         answer,
         references: sRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-        notes: sRefRows.map((n) => noteToJson(n)),
+        notes: askGuardedRefNotes(sRefRows),
         finance_subset: true,
       });
     }
@@ -4481,7 +4481,7 @@ app.post("/api/ask", async (c) => {
       return c.json({
         answer,
         references: shRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-        notes: shRefRows.map((n) => noteToJson(n)),
+        notes: askGuardedRefNotes(shRefRows),
         finance_subset: true,
         finance_short_route: true,
       });
@@ -4657,7 +4657,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: tcRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: tcRefRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(tcRefRows),
       count_aggregate: true,
       topic_count: true,
     });
@@ -4868,7 +4868,7 @@ app.post("/api/ask", async (c) => {
       return c.json({
         answer,
         references: tRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-        notes: tRefRows.map((n) => noteToJson(n)),
+        notes: askGuardedRefNotes(tRefRows),
         enum_aggregate: true,
         enum_topic: enumTopic,
       });
@@ -4906,7 +4906,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: refRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: refRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(refRows),
       enum_aggregate: true,
     });
   }
@@ -6474,7 +6474,7 @@ app.post("/api/ask", async (c) => {
           return c.json({
             answer: raw,
             references: [{ index: target.idx + 1, note_id: target.note.id }],
-            notes: [askRefNoteJson(target.note)],
+            notes: askGuardedRefNotes([target.note]),
             trust_tier: "single_note_direct",
             verbatim_closed_spans: 0,
             guard_finalized: true,
