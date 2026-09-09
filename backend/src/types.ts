@@ -10,6 +10,8 @@ export type Env = {
   AI_BASE_URL?: string;
   /** Fallback model when the primary provider fails (default: Workers AI llama-3.3-70b); "none" disables the chain. */
   AI_FALLBACK_MODEL?: string;
+  /** 主模型熔断窗口 ms（R338）：主模型慢失败（超时/网络/429/5xx）后本隔离实例在此窗口内直走 fallback；"0" 关闭（默认 60000）。 */
+  AI_BREAKER_MS?: string;
   SUINIAN_ENC_KEY?: string;
   /** "false"/"0"/"off" disables /api/auth/register (default: enabled). */
   REGISTRATION_ENABLED?: string;
