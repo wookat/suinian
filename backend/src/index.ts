@@ -18,7 +18,7 @@ export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
 import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, stripPhantomRedactionClaims, verbatimRecallEligible, WITHHELD_CARD_POINTER_RE, WITHHELD_CARD_POINTER_NOTICE, isSystemNoticeFragment, isSecretValueQuestion, unitTalksAboutSecret, unitCarriesGuardedValue, unitHasValueCandidates, titleCarriesGuardedValue, GUARDED_TITLE_PLACEHOLDER, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, aggregateCitedBenignUnit, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
 import { modelContextNoteText, reconcileDoneAnswer } from "./ask-context";
-import { recallSensitiveNotes, sensitiveOnlyAnswer, sensitiveUncitedLine, sensitiveAnswerLeak, attributableTopicTerms, sensitiveRecallTerms, ownTopicCards, topicHitCards, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
+import { recallSensitiveNotes, sensitiveOnlyAnswer, foldedRefCountLine, FOLDED_REF_COUNT_RE, sensitiveAnswerLeak, attributableTopicTerms, sensitiveRecallTerms, ownTopicCards, topicHitCards, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -86,7 +86,7 @@ import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES, BACKUP_AI_DERIVED_NOT
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
 import { propagateSensitiveContinuation } from "./sensitive-continuation";
-import { type AskEnumRoute, parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, weakCitationGrounded, phantomClaimCitesOnlyCleanNotes, retargetMisindexedCitation, retargetMisindexedSentences, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources, citeIsolationMarks } from "./ask";
+import { type AskEnumRoute, parseTimeRange, inEventTimeRange, eventTimeWindow, timeRangeDisplay, buildTimeWindowNoAnswerResponse, isRefusalAnswer, isDegenerateAnswer, isQuestionEchoAnswer, buildNoAnswerResponse, reconcileAskCitations, dedupeAskReferences, weakCitationGrounded, phantomClaimCitesOnlyCleanNotes, retargetMisindexedCitation, retargetMisindexedSentences, dedupeNotesByContent, sensitiveHintLine, financeAggIntent, buildFinanceAggAnswer, buildFinanceSubsetZeroHitAnswer, timeRangeAvgDays, FINANCE_AVG_PER_DAY_RE, enumTopicCategory, buildFinanceFailClosedAnswer, financeCompareIntent, financeMomIntent, buildFinanceCompareAnswer, financeListIntent, buildFinanceListAnswer, financeThresholdIntent, financeThresholdTopicTerms, buildFinanceThresholdAnswer, buildFinanceMomAnswer, countQueryIntent, buildCountAnswer, buildCountFailClosedAnswer, buildScopedCountAnswer, buildAvgPerDayAnswer, COUNT_SCOPE_LABELS, ENUM_TOPIC_CATEGORIES, extremeQueryIntent, buildExtremeAnswer, resolveAskEnumIntent, mediaTypeIntent, financeClarifyTerms, buildFinanceClarifyAnswer, financeCaliberAnswer, FINANCE_WORD_RE, CREDENTIAL_Q_RE, sensitiveFallbackHintLine, financeExtremeIntent, financeExtremeTopicTerms, buildFinanceExtremeAnswer, buildLedgerRowExtremeAnswer, isLedgerAggregateNote, degradeFinanceSubsetTerms, degradeAskTerms, scrubUnsourcedNegations, scrubUnsourcedAmounts, financeListFollowUpIntent, ASK_META_QUESTION_RE, ASK_PRONOUN_REF_RE, topicCountIntent, buildTopicCountAnswer, topicSummaryIntent, topicSummaryTopN, buildTopicSummaryAnswer, financeTopicTerms, financeShortTopicTerms, buildFinanceSubsetAnswer, subsetDirectHit, askTopicTerms, noteHitsTopic, hitsSingleCharTopic, tagHitsSingleCharTopic, financeDualWindowIntent, financeDualWindowTopicTerms, financeAggAnswerTerms, answerHeadTimeRange, bareTimeWindowListIntent, financeListTopicTerms, expenseFacetIntent, buildExpenseFacetAnswer, filterSingleCharTopicRows, ungroundedRelationTerm, ASK_CITATION_MIN_SCORE, ASK_SUGGESTION_MIN_SCORE, ASK_SUGGESTION_TOPIC_MIN_SCORE, MULTI_HOP_RE, BASIS_INTENT_RE, rerankBasisCandidates, verbatimUncitedSourceIds, cleanDanglingCitations, futureEventNotes, attachIsolatedSources, citeIsolationMarks } from "./ask";
 import { pushConfigured, sendPushToUser, userSubscriptions, sweepTodoReminders, sweepDailyReviewPush } from "./push";
 import {
   PIPELINE_TIMEOUT_MS,
@@ -1624,6 +1624,16 @@ export function askGuardedRefNoteJson(n: NoteRow, unit: string, cross?: Readonly
     meta: null,
   });
   return { ...json, fold: false, fold_reason: null, content_withheld: true, guarded: true };
+}
+
+/**
+ * R336 §3.1：一组引用卡的 guarded 序列化——同一响应内各单元互为跨单元语境（crossUnitGuardedLines），
+ * no-answer 建议卡 / 时间窗外相近卡 / 财务明细卡与生成出口 refNotes 共用 askGuardedRefNoteJson 判定。
+ */
+export function askGuardedRefNotes(rows: NoteRow[]) {
+  const units = rows.map((n) => (n.is_sensitive ? "" : askGuardNoteUnit(n)));
+  const cross = crossUnitGuardedLines(units.filter((u) => u.length > 0));
+  return rows.map((n, i) => askGuardedRefNoteJson(n, units[i], cross));
 }
 
 /**
@@ -3953,7 +3963,7 @@ app.post("/api/ask", async (c) => {
       return c.json({
         answer,
         references: clRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-        notes: clRows.map((n) => noteToJson(n)),
+        notes: askGuardedRefNotes(clRows),
         finance_clarify: true,
       });
     }
@@ -4051,7 +4061,7 @@ app.post("/api/ask", async (c) => {
         return c.json({
           answer: lr.answer,
           references: lrNotes.map((n, i) => ({ index: i + 1, note_id: n.id })),
-          notes: lrNotes.map((n) => noteToJson(n)),
+          notes: askGuardedRefNotes(lrNotes),
           finance_extreme: true,
           ledger_row_extreme: true,
         });
@@ -4067,7 +4077,7 @@ app.post("/api/ask", async (c) => {
       return c.json({
         answer,
         references: xRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-        notes: xRefRows.map((n) => noteToJson(n)),
+        notes: askGuardedRefNotes(xRefRows),
         finance_extreme: true,
       });
     }
@@ -4094,7 +4104,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: mRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: mRefRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(mRefRows),
       finance_compare: true,
     });
   }
@@ -4134,7 +4144,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: dRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: dRefRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(dRefRows),
       finance_compare: true,
     });
   }
@@ -4156,7 +4166,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: cRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: cRefRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(cRefRows),
       finance_compare: true,
     });
   }
@@ -4209,7 +4219,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: thRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: thRefRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(thRefRows),
       finance_threshold: true,
     });
   }
@@ -4285,7 +4295,7 @@ app.post("/api/ask", async (c) => {
         return c.json({
           answer,
           references: iRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-          notes: iRefRows.map((n) => noteToJson(n)),
+          notes: askGuardedRefNotes(iRefRows),
           finance_subset: true,
           finance_list_follow_up: true,
         });
@@ -4326,7 +4336,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: lRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: lRefRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(lRefRows),
       finance_list: true,
       ...(lrows.length === 0 ? { finance_fail_closed: true } : {}),
     });
@@ -4390,7 +4400,7 @@ app.post("/api/ask", async (c) => {
       return c.json({
         answer,
         references: sRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-        notes: sRefRows.map((n) => noteToJson(n)),
+        notes: askGuardedRefNotes(sRefRows),
         finance_subset: true,
       });
     }
@@ -4471,7 +4481,7 @@ app.post("/api/ask", async (c) => {
       return c.json({
         answer,
         references: shRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-        notes: shRefRows.map((n) => noteToJson(n)),
+        notes: askGuardedRefNotes(shRefRows),
         finance_subset: true,
         finance_short_route: true,
       });
@@ -4581,7 +4591,7 @@ app.post("/api/ask", async (c) => {
     // sensitive finance notes count toward totals (report口径) but never surface as cards
     const refRows = refPool.filter((n) => !n.is_sensitive).slice(0, 10);
     const references = refRows.map((n, i) => ({ index: i + 1, note_id: n.id }));
-    const refNotes = refRows.map((n) => noteToJson(n));
+    const refNotes = askGuardedRefNotes(refRows);
     return c.json({
       answer,
       references,
@@ -4647,7 +4657,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: tcRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: tcRefRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(tcRefRows),
       count_aggregate: true,
       topic_count: true,
     });
@@ -4833,7 +4843,7 @@ app.post("/api/ask", async (c) => {
           const tSuggestions = tRows.filter((n) => !n.is_sensitive).slice(0, 3);
           const { answer, references, held } = buildNoAnswerResponse(tSuggestions, "not_in_notes", tMissingRel);
           const tById = new Map(tSuggestions.map((n) => [n.id, n]));
-          const refNotes = references.map((r) => askRefNoteJson(tById.get(r.note_id)!));
+          const refNotes = askGuardedRefNotes(references.map((r) => tById.get(r.note_id)!));
           return c.json({
             answer,
             references,
@@ -4858,7 +4868,7 @@ app.post("/api/ask", async (c) => {
       return c.json({
         answer,
         references: tRefRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-        notes: tRefRows.map((n) => noteToJson(n)),
+        notes: askGuardedRefNotes(tRefRows),
         enum_aggregate: true,
         enum_topic: enumTopic,
       });
@@ -4896,7 +4906,7 @@ app.post("/api/ask", async (c) => {
     return c.json({
       answer,
       references: refRows.map((n, i) => ({ index: i + 1, note_id: n.id })),
-      notes: refRows.map((n) => noteToJson(n)),
+      notes: askGuardedRefNotes(refRows),
       enum_aggregate: true,
     });
   }
@@ -5021,7 +5031,7 @@ app.post("/api/ask", async (c) => {
     const { answer, references } = buildTimeWindowNoAnswerResponse(timeRange, outOfRange);
     const twHint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
     const oorById = new Map(outOfRange.map((n) => [n.id, n]));
-    const refNotes = references.map((r) => askRefNoteJson(oorById.get(r.note_id)!));
+    const refNotes = askGuardedRefNotes(references.map((r) => oorById.get(r.note_id)!));
     return c.json({ answer, references, notes: refNotes, no_answer: true, ...systemHintField(twHint) });
   }
   // 元问题保留旧的放宽行为（自我回顾类允许跨窗归纳，回答会带日期）
@@ -5206,7 +5216,7 @@ app.post("/api/ask", async (c) => {
     const zero = await sensitiveNoRecall(c.env, userId, terms, askQuestion);
     const { answer, references, held } = buildNoAnswerResponse(suggestions, "no_recall", null, zero.sensitive);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
-    const refNotes = references.map((r) => askRefNoteJson(sugById.get(r.note_id)!));
+    const refNotes = askGuardedRefNotes(references.map((r) => sugById.get(r.note_id)!));
     return c.json({
       answer,
       references,
@@ -5368,7 +5378,7 @@ app.post("/api/ask", async (c) => {
       const { answer, references, held } = buildNoAnswerResponse(relSuggestions, "not_in_notes", missingRel);
       const relHint = await sensitiveNoRecallHint(c.env, userId, terms, askQuestion);
       const relById = new Map(relSuggestions.map((n) => [n.id, n]));
-      const refNotes = references.map((r) => askRefNoteJson(relById.get(r.note_id)!));
+      const refNotes = askGuardedRefNotes(references.map((r) => relById.get(r.note_id)!));
       return c.json({
         answer,
         references,
@@ -6021,7 +6031,7 @@ app.post("/api/ask", async (c) => {
     const gen0 = await sensitiveNoRecall(c.env, userId, terms, askQuestion);
     const { answer: noAnswer, references, held } = buildNoAnswerResponse(suggestions, mode, null, gen0.sensitive);
     const sugById = new Map(suggestions.map((n) => [n.id, n]));
-    const refNotes = references.map((r) => askRefNoteJson(sugById.get(r.note_id)!));
+    const refNotes = askGuardedRefNotes(references.map((r) => sugById.get(r.note_id)!));
     return {
       answer: noAnswer,
       references,
@@ -6045,9 +6055,11 @@ app.post("/api/ask", async (c) => {
     const unit = askUnitByNoteId.get(n.id);
     return askOutlet !== "mcp" && !!row && !row.is_sensitive && !!unit && aggregateCitedBenignUnit(unit, askCrossGuarded);
   };
-  const { answer: finalAnswer, references } = reconcileAskCitations(negScrubbed, noteIds, weakIds, {
+  const reconciled = reconcileAskCitations(negScrubbed, noteIds, weakIds, {
     keepWeak: (n) => benignWeak(notes[n - 1]) && weakCitationGrounded(negScrubbed, n, notes[n - 1]),
   });
+  // R336 §3.3：同一笔记多张卡 / 紧挨的重复角标（[1][1]）在此收成一个，后续增补都以去重后的 references 为准。
+  const { answer: finalAnswer, references } = dedupeAskReferences(reconciled.answer, reconciled.references);
   // 多跳引证补全（R172 P2，q56 引证不全）：多跳问法下，二跳/图谱召回且语义分
   // 达引用线的源笔记即使没被模型在正文里点到 [序号]，也要进 references——
   // 答案说「A 和 B 是一体的」时，B 的源笔记不能从引用里消失。只增补、不改写
@@ -6095,18 +6107,17 @@ app.post("/api/ask", async (c) => {
       return sensitiveCardsBody();
     }
     const citedIds = new Set(references.map((r) => r.note_id));
-    const missing = notes.filter((n) => sensitiveIds.has(n.id) && !citedIds.has(n.id));
-    if (missing.length > 0) {
-      const added = missing.map((n) => {
-        const ref = { index: references.length + 1, note_id: n.id };
-        references.push(ref);
-        return ref;
-      });
-      answerText = `${answerText}\n\n${sensitiveUncitedLine(added)}`;
-    }
+    // 漏引的敏感笔记只补进 references；计数句由下方统一追加（覆盖已引 + 漏引的全部折叠卡，R336 §3.3）。
+    for (const n of notes.filter((n) => sensitiveIds.has(n.id) && !citedIds.has(n.id))) references.push({ index: references.length + 1, note_id: n.id });
   }
   const byId = new Map(notes.map((n) => [n.id, n]));
   const refNotes = references.map((r) => askGuardedRefNoteJson(byId.get(r.note_id)!, askGuardNoteUnit(byId.get(r.note_id)!), askCrossGuarded));
+  // R336 §3.3（audit-r335 §8.3 J01–J03 计数句 0/9）：引用里有折叠卡（已标注敏感 / 受守占位）而答案尚无计数句时，
+  // 统一追加一句计数 + 全部折叠卡角标——混合命中的普通事实保留在前，用户知道还有几张卡要点开。
+  {
+    const folded = refNotes.flatMap((n, i) => (n.content_withheld === true ? [references[i]] : []));
+    if (folded.length > 0 && !FOLDED_REF_COUNT_RE.test(answerText)) answerText = `${answerText.trimEnd()}\n\n${foldedRefCountLine(folded)}`;
+  }
   // R306 P0-1：引用卡片出口打点（数据面标注随 noteToJson 走，这里只计发生率）
   recordOutletFoldMarks(
     c.env,
@@ -6463,7 +6474,7 @@ app.post("/api/ask", async (c) => {
           return c.json({
             answer: raw,
             references: [{ index: target.idx + 1, note_id: target.note.id }],
-            notes: [askRefNoteJson(target.note)],
+            notes: askGuardedRefNotes([target.note]),
             trust_tier: "single_note_direct",
             verbatim_closed_spans: 0,
             guard_finalized: true,
@@ -6897,7 +6908,12 @@ app.get("/api/threads/:id", async (c) => {
     .bind(thread.id, userId)
     .all<NoteRow>();
   const notes = await Promise.all((results ?? []).map((n) => noteToJsonDecrypted(c.env, n)));
-  const graph = await getThreadGraph(c.env, userId, (results ?? []).map((n) => n.id));
+  const graph = await getThreadGraph(
+    c.env,
+    userId,
+    (results ?? []).map((n) => n.id),
+    (results ?? []).filter((n) => !n.is_sensitive).map((n) => askGuardNoteUnit(n))
+  );
   return c.json({ thread, notes, graph });
 });
 

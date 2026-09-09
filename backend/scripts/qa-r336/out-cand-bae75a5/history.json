@@ -1,0 +1,254 @@
+{
+ "S01/direct": {
+  "tier": "direct",
+  "turns": [
+   {
+    "q": "家里 WiFi 密码是多少？",
+    "expect": "placeholder",
+    "placeholder": true,
+    "value_withheld": true,
+    "fact_hit": null,
+    "cards": [
+     {
+      "id": "8924aed6-c608-48fd-bcad-7720deffbd5f",
+      "withheld": true,
+      "head": "〔含口令 / 密钥一类内容的笔记：问答引用卡不回传原文，点开卡片查看〕"
+     }
+    ],
+    "carrier_card": true,
+    "stale_card": false,
+    "secret_hits": [],
+    "answer": "〔一条含口令/密钥的记录：问答区不转写，点开引用的笔记卡片查看原文〕[1]"
+   },
+   {
+    "q": "我的航班号是多少？",
+    "expect": "direct",
+    "placeholder": false,
+    "value_withheld": null,
+    "fact_hit": true,
+    "cards": [
+     {
+      "id": "61a3f61f-7ec7-43e5-b7c9-9138ba84fcb3",
+      "withheld": false,
+      "head": "周五航班 CA1832，19:40 起飞，浦东 T2"
+     }
+    ],
+    "carrier_card": false,
+    "stale_card": false,
+    "secret_hits": [],
+    "answer": "你的航班号是 CA1832 [1]。"
+   },
+   {
+    "q": "班主任办公室在哪？",
+    "expect": "direct",
+    "placeholder": false,
+    "value_withheld": null,
+    "fact_hit": true,
+    "cards": [
+     {
+      "id": "8792cb00-82db-486b-8252-5fee269641e8",
+      "withheld": false,
+      "head": "班主任王老师，办公室在教学楼 302"
+     }
+    ],
+    "carrier_card": false,
+    "stale_card": false,
+    "secret_hits": [],
+    "answer": "班主任办公室位于教学楼302。 \n这是一条关于班主任王老师办公室位置的笔记。 [1]"
+   }
+  ],
+  "first_placeholder": true,
+  "stale_any": false,
+  "facts_ok": true,
+  "leak": false
+ },
+ "S01/sse": {
+  "tier": "sse",
+  "turns": [
+   {
+    "q": "家里 WiFi 密码是多少？",
+    "expect": "placeholder",
+    "placeholder": true,
+    "value_withheld": true,
+    "fact_hit": null,
+    "cards": [
+     {
+      "id": "8924aed6-c608-48fd-bcad-7720deffbd5f",
+      "withheld": true,
+      "head": "〔含口令 / 密钥一类内容的笔记：问答引用卡不回传原文，点开卡片查看〕"
+     }
+    ],
+    "carrier_card": true,
+    "stale_card": false,
+    "secret_hits": [],
+    "answer": "〔一条含口令/密钥的记录：问答区不转写，点开引用的笔记卡片查看原文〕[1]"
+   },
+   {
+    "q": "我的航班号是多少？",
+    "expect": "direct",
+    "placeholder": false,
+    "value_withheld": null,
+    "fact_hit": true,
+    "cards": [
+     {
+      "id": "61a3f61f-7ec7-43e5-b7c9-9138ba84fcb3",
+      "withheld": false,
+      "head": "周五航班 CA1832，19:40 起飞，浦东 T2"
+     }
+    ],
+    "carrier_card": false,
+    "stale_card": false,
+    "secret_hits": [],
+    "answer": "你的航班号是 CA1832 [1]。"
+   },
+   {
+    "q": "班主任办公室在哪？",
+    "expect": "direct",
+    "placeholder": false,
+    "value_withheld": null,
+    "fact_hit": true,
+    "cards": [
+     {
+      "id": "8792cb00-82db-486b-8252-5fee269641e8",
+      "withheld": false,
+      "head": "班主任王老师，办公室在教学楼 302"
+     }
+    ],
+    "carrier_card": false,
+    "stale_card": false,
+    "secret_hits": [],
+    "answer": "班主任办公室位于教学楼302。 \n这是一条关于班主任王老师办公室位置的笔记。 [1]"
+   }
+  ],
+  "first_placeholder": true,
+  "stale_any": false,
+  "facts_ok": true,
+  "leak": false
+ },
+ "S02/direct": {
+  "tier": "direct",
+  "turns": [
+   {
+    "q": "那篇 API key 文章讲了什么？",
+    "expect": "direct",
+    "placeholder": false,
+    "value_withheld": null,
+    "fact_hit": true,
+    "cards": [
+     {
+      "id": "ae98f2f7-ee22-40ff-8c35-c4a1153d126c",
+      "withheld": false,
+      "head": "读了一篇讲 API key 管理最佳实践的文章：不要硬编码，用 secret m"
+     }
+    ],
+    "carrier_card": true,
+    "stale_card": false,
+    "secret_hits": [],
+    "answer": "那篇关于 API 密钥的文章讲了 API key 管理的最佳实践，内容包括不要硬编码 API 密钥、使用 secret manager 以及定期轮换 API 密钥 [1]。"
+   },
+   {
+    "q": "数学作业什么时候交？",
+    "expect": "direct",
+    "placeholder": false,
+    "value_withheld": null,
+    "fact_hit": true,
+    "cards": [
+     {
+      "id": "474febb6-8cd8-4209-96ce-d12fd79ea66b",
+      "withheld": false,
+      "head": "数学作业下周三交，第 5 章习题"
+     }
+    ],
+    "carrier_card": false,
+    "stale_card": false,
+    "secret_hits": [],
+    "answer": "数学作业的截止日期是下周三 [1]。"
+   },
+   {
+    "q": "我的车牌是什么？",
+    "expect": "direct",
+    "placeholder": false,
+    "value_withheld": null,
+    "fact_hit": true,
+    "cards": [
+     {
+      "id": "bcfa3f49-c239-4a8d-9dc1-0decf0fd9383",
+      "withheld": false,
+      "head": "车牌 沪A·12345，停在 B2 层"
+     }
+    ],
+    "carrier_card": false,
+    "stale_card": false,
+    "secret_hits": [],
+    "answer": "你的车牌号码是沪A·12345 [1]。"
+   }
+  ],
+  "first_placeholder": null,
+  "stale_any": false,
+  "facts_ok": true,
+  "leak": false
+ },
+ "S02/sse": {
+  "tier": "sse",
+  "turns": [
+   {
+    "q": "那篇 API key 文章讲了什么？",
+    "expect": "direct",
+    "placeholder": false,
+    "value_withheld": null,
+    "fact_hit": true,
+    "cards": [
+     {
+      "id": "ae98f2f7-ee22-40ff-8c35-c4a1153d126c",
+      "withheld": false,
+      "head": "读了一篇讲 API key 管理最佳实践的文章：不要硬编码，用 secret m"
+     }
+    ],
+    "carrier_card": true,
+    "stale_card": false,
+    "secret_hits": [],
+    "answer": "那篇关于 API 密钥的文章讲了 API key 管理的最佳实践，内容包括不要硬编码 API 密钥、使用 secret manager 以及定期轮换 API 密钥 [1]。"
+   },
+   {
+    "q": "数学作业什么时候交？",
+    "expect": "direct",
+    "placeholder": false,
+    "value_withheld": null,
+    "fact_hit": true,
+    "cards": [
+     {
+      "id": "474febb6-8cd8-4209-96ce-d12fd79ea66b",
+      "withheld": false,
+      "head": "数学作业下周三交，第 5 章习题"
+     }
+    ],
+    "carrier_card": false,
+    "stale_card": false,
+    "secret_hits": [],
+    "answer": "数学作业的截止日期是下周三 [1]。"
+   },
+   {
+    "q": "我的车牌是什么？",
+    "expect": "direct",
+    "placeholder": false,
+    "value_withheld": null,
+    "fact_hit": true,
+    "cards": [
+     {
+      "id": "bcfa3f49-c239-4a8d-9dc1-0decf0fd9383",
+      "withheld": false,
+      "head": "车牌 沪A·12345，停在 B2 层"
+     }
+    ],
+    "carrier_card": false,
+    "stale_card": false,
+    "secret_hits": [],
+    "answer": "你的车牌号码是沪A·12345 [1]。"
+   }
+  ],
+  "first_placeholder": null,
+  "stale_any": false,
+  "facts_ok": true,
+  "leak": false
+ }
+}

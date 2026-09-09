@@ -3917,6 +3917,8 @@ export function remoteEndpointForms(
       if (LOCAL_HOST_RE.test(host) || hostAllowed(host)) continue;
       const tld = host.slice(host.lastIndexOf(".") + 1);
       if (FILE_EXT_PSEUDO_TLD.has(tld) && Number(m[2]) < 10) continue;
+      // 顶级标签不可能是纯数字（IPv4 字面由 (a) 判）：「CA1832，19:40 起飞」类折叠后是 `ca1832.19:40`，是编号 + 时刻不是 host:port
+      if (/^\d+$/.test(tld)) continue;
       // R302 P0-6（audit-r301 §8：`host:port` 常见服务端口全中）：邮件/HTTPS 等
       // 常见服务端口的 host:port 是配置笔记常态，文本无取回/执行/外传/建连
       // 语义时不计入地址面；语义同现时照常计（攻击载荷必带动作语义）。
@@ -8401,14 +8403,35 @@ const SOURCE_PURE_VALUE_LINE_RE = /^[（(「]?((?<!\d)\d(?:[ \-]?\d){2,7}(?!\d)|
 /** 短单元里一行操作线索点亮整个单元（S10「上层 246 / 下层 803 / （两台机器要分开输）」）的行数上界。 */
 const SOURCE_OP_UNIT_MAX_LINES = 6;
 
+/**
+ * R336 §2.3：日常识别符词（车牌 / 订单号 / 端口 / 会议号…）**支配**紧随其后的取值（词与值之间最多 4 个字的引导：「车牌 沪A·12345」
+ * 「SSH 端口改成了 2222」），且窗口内没有凭证 / 驻留称谓 ⇒ 取值是编号 / 端口不是钥匙。「银行卡号 6222…」因「银行卡」是凭证称谓不豁免；
+ * 「快递柜我常用的那组是 6144」「旧手机锁屏图案的数字版是 940271」里识别符词只是句子主语的一部分、离值太远，不豁免（R331 L08 / U03）。
+ * 取件码不在此列：它是一次性短码，按 R334 称谓驻留走候选（decision-r334 §2.6），行为见 known-issues。
+ */
+const SOURCE_IDENTIFIER_WORD_SRC =
+  "(?:验证码|会议号|订单号|单号|运单|快递(?!柜)|车牌|卡号|账号|工号|学号|编号|序号|房号|门牌|邮编|航班|座位|电话|手机(?!锁)|号码|传真|尾号|客服|热线|总机|分机|宿舍|寝室|鞋码|尺码|码数|端口|(?<![a-z])ports?(?![a-z]))";
+const SOURCE_IDENTIFIER_NEAR_RE = new RegExp(`${SOURCE_IDENTIFIER_WORD_SRC}号?[^\\n\\d]{0,4}\\s*$`, "iu");
+function identifierContextWindow(before: string): boolean {
+  return SOURCE_IDENTIFIER_NEAR_RE.test(before) && !SECRET_LABEL_RE.test(before) && !RESIDENCY_LABEL_RE.test(before);
+}
+
+/** 数字串前后紧跟单位 / 货币 / 序数，或本身是日期 / 时刻 / 数字 + 单位整记号：读数不是取值。 */
+function measureDigitRun(line: string, start: number, end: number, value: string): boolean {
+  const before = line.slice(Math.max(0, start - 12), start);
+  const after = line.slice(end, end + 4);
+  if (SOURCE_UNIT_PREFIX_RE.test(before) || SOURCE_UNIT_SUFFIX_RE.test(after)) return true;
+  if (SOURCE_NUMBER_UNIT_TOKEN_RE.test(value)) return true;
+  return /^\d{4}[-_/.]\d{1,2}[-_/.]\d{1,2}/.test(value) || /^\d{1,2}[:：]\d{2}/.test(value);
+}
+
 /** 载体行内一个取值是否被日常识别符标签 / 计量形态豁免（只对 R330 新增语境的行生效，锁称谓行维持既有行为）。 */
 function shortValueExempt(line: string, start: number, end: number, value: string, opts: { fragment?: boolean } = {}): boolean {
   const before = line.slice(Math.max(0, start - 12), start);
   const after = line.slice(end, end + 4);
   if (SOURCE_IDENTIFIER_LABEL_RE.test(before)) return true;
-  if (SOURCE_UNIT_PREFIX_RE.test(before) || SOURCE_UNIT_SUFFIX_RE.test(after)) return true;
-  if (SOURCE_NUMBER_UNIT_TOKEN_RE.test(value)) return true;
-  if (/^\d{4}[-_/.]\d{1,2}[-_/.]\d{1,2}/.test(value) || /^\d{1,2}[:：]\d{2}/.test(value)) return true;
+  if (identifierContextWindow(before)) return true;
+  if (measureDigitRun(line, start, end, value)) return true;
   // 分片行（「前半段是 grape41」）的取值是钥匙的一段，词 + 短序号形态（iPhone15 一类）的豁免不适用。
   if (opts.fragment) return false;
   return SOURCE_IDENTIFIER_SHAPE_RE.test(value.replace(/[ \-]/g, "")) && !/^\d+$/.test(value.replace(/[ \-]/g, ""));
@@ -8543,7 +8566,15 @@ export function directUnitValueTokens(unit: string): string[] {
   // 纯数字取值不做记号级占位：数字串的算式 / 拆位 / 汉字数字转写形态由归一化比对整答 fail-closed（R322 A），
   // 先换掉记号会让后面的归一化比对失去比对面（「315000+900+26」）。
   for (const c of sourceValueCandidates([n])) if (/^(?=.*[A-Za-z])[A-Za-z0-9_@#$%!-]+$/.test(c.value)) out.add(c.value);
-  for (const line of n.replace(URL_RUN_RE, " ").split("\n")) for (const t of sourceMixedTokens(line, 3)) out.add(t);
+  // R336 §2.3：日常识别符标签紧邻的混合记号（「酒店订单号 HT20260912A8」）不是取值；行内另有凭证 / 驻留称谓时不豁免。
+  for (const line of n.replace(URL_RUN_RE, " ").split("\n")) {
+    const plainLine = !SECRET_LABEL_RE.test(line) && !RESIDENCY_LABEL_RE.test(line);
+    for (const t of sourceMixedTokens(line, 3)) {
+      const at = line.indexOf(t);
+      if (plainLine && at > 0 && identifierContextWindow(line.slice(Math.max(0, at - 12), at))) continue;
+      out.add(t);
+    }
+  }
   return [...out];
 }
 
@@ -8610,7 +8641,12 @@ function base64Decoded(t: string): string | null {
 function lockLineValues(line: string, opts: { cell?: boolean; encoded?: boolean } = {}): string[] {
   const plain = line.replace(/[\uFE0F\u20E3]/g, "");
   const out: string[] = [];
-  for (const m of plain.matchAll(SOURCE_SHORT_DIGIT_RUN_RE)) out.push(m[0]);
+  for (const m of plain.matchAll(SOURCE_SHORT_DIGIT_RUN_RE)) {
+    // 计量 / 日期 / 金额读数（「口令出现在 1961 年」「密码盘 ¥299」）不是钥匙；表格单元格 / 明示编码记法行不豁免。
+    const start = m.index ?? 0;
+    if (!opts.cell && !opts.encoded && measureDigitRun(plain, start, start + m[0].length, m[0])) continue;
+    out.push(m[0]);
+  }
   for (const m of plain.matchAll(SOURCE_SCRIPT_MIXED_TOKEN_RE)) {
     const t = m[0];
     const digits = (t.match(/\d/g) ?? []).length;
@@ -9444,6 +9480,21 @@ function lineCarriesOpaqueToken(line: string): boolean {
 }
 
 /**
+ * R336 §2.3（资料侧受守行判据专用，不用于答案侧）：行内的高熵记号全部紧随日常识别符词（「酒店订单号 HT20260912A8」）
+ * 且行内没有凭证 / 驻留称谓、没有受守的长数字面 ⇒ 记号是编号不是取值。
+ */
+function identifierOnlyOpaqueLine(line: string): boolean {
+  const n = line.normalize("NFKC");
+  if (SECRET_LABEL_RE.test(n) || RESIDENCY_LABEL_RE.test(n) || longDigitFaceGuarded(n)) return false;
+  const toks = opaqueTokensOf(n);
+  if (toks.length === 0) return false;
+  return toks.every((tok) => {
+    const i = n.indexOf(tok);
+    return i > 0 && identifierContextWindow(n.slice(Math.max(0, i - 12), i));
+  });
+}
+
+/**
  * 答案里的短高熵记号 / 长数字串 / 分组数字串区间（原面下标）。NFKC 改变长度时无法对齐：含高熵面则整答一个区间（fail-closed）。
  * `source`：直答单元原文——答案句自身无标签时（「812 3456 7890」），数字串按它在原文里所在行的标签面判；原文里找不到的数字串（拆段拼回 / 跨笔记）仍受守。
  */
@@ -9458,10 +9509,16 @@ function opaqueTokenSpans(answer: string, source?: string): Array<{ start: numbe
   const inUrl = (start: number, end: number): boolean => urls.some((u) => u.start < end && start < u.end);
   // 无受守行的直答单元里的书签 URL：其路径段（`BV1xx411c7mD`）是公开地址的一部分，答案单提这一段（「视频编号是 …」）
   // 不是高熵取值回显（与 opaqueRunPool 的「善意单元 URL 不入池」同口径）；单元有任何受守行时不豁免（fail-closed）。
+  // 同口径（R336 §2.3）：善意单元里紧跟日常识别符标签（订单号 / 运单 / 车牌 / 会议号…）的记号（`HT20260912A8`）也不是取值回显。
   const benignUrlTokens = new Set<string>();
   if (source && directGuardLines(source).length === 0) {
-    for (const u of source.normalize("NFKC").match(URL_RUN_RE) ?? [])
+    const srcN = source.normalize("NFKC");
+    for (const u of srcN.match(URL_RUN_RE) ?? [])
       for (const seg of u.split(/[/?#&=.:]+/)) if (seg.length >= 5) benignUrlTokens.add(seg.toLowerCase());
+    for (const line of srcN.split("\n")) {
+      if (!identifierOnlyOpaqueLine(line)) continue;
+      for (const tok of opaqueTokensOf(line)) benignUrlTokens.add(tok.toLowerCase());
+    }
   }
   for (const m of nfkc.matchAll(TOKEN_RUN_RE)) {
     if (inUrl(m.index, m.index + m[0].length)) continue;
@@ -9598,7 +9655,8 @@ export function directGuardKindOfLine(line: string, ctx?: { unitLabeled?: boolea
   const cmd =
     reason === "strict" || reason === "broad:fetch" || reason === "broad:code" || commandShapeLine(t) || TOOL_COMMAND_LINE_RE.test(t) || PROSE_TOOL_COMMAND_RE.test(t) || pathishTokenLine(t);
   const destructive = reason === "broad:destructive" || isDestructiveCommandText(t) || proseDestructiveLine(t);
-  const opaque = reason === "broad:opaque" || reason === "broad:obfuscated" || reason === "broad:error" || lineCarriesOpaqueToken(t);
+  const opaque =
+    reason === "broad:opaque" || reason === "broad:obfuscated" || reason === "broad:error" || (lineCarriesOpaqueToken(t) && !identifierOnlyOpaqueLine(t));
   if (reason === "broad:credential" || (credentialValueTokens(t).length > 0 && (cmd || destructive || opaque || reason !== null)))
     return "credential";
   if (secretLabelValueLine(t, ctx?.unitLabeled === true)) return "credential";
@@ -9629,7 +9687,7 @@ const LOCK_OBJECT_RE = /柜|锁|门禁|保险|金[庫库]|机房|仓库|车库|�
 const WEAK_SECRET_LABEL_RE = /\b(?:phrases?|combinations?|code ?words?|magic words?|Losung|Parole|фраза|frase)\b|那句话?|这句话?|几个字|那几个字|组合/iu;
 /** 行内是否有凭证标签（强标签，或弱标签 + 锁具对象同现）。 */
 export function secretLabelLine(text: string): boolean {
-  const n = text.normalize("NFKC");
+  const n = conceptualLabelFree(text.normalize("NFKC"));
   return SECRET_LABEL_RE.test(n) || (WEAK_SECRET_LABEL_RE.test(n) && LOCK_OBJECT_RE.test(n));
 }
 /** 纯数字类一次性码 / 编号标签（只配数字取值）。 */
@@ -9726,9 +9784,62 @@ export function designatedPhraseValue(nfkc: string): string | null {
   return null;
 }
 
+// ---- R336 §2.1：称谓概念词（decision-r336） ----
+// 「密码学课笔记」「API key 管理最佳实践」「密钥轮换策略」是在谈论一个概念，不是在记某个值：称谓紧跟学科 / 课程 / 策略 /
+// 管理 / 文章类后缀，且本行没有结构取值面（≥4 位数字 / 含数字 ASCII 记号 / 汉字数字连读 / 引号短语）时，把「称谓 + 后缀」
+// 整体从行内抹掉再做称谓判定。有结构取值面时不剥离——「密码重置成 Xk9!p2」仍是称谓 + 值。
+const CONCEPT_LABEL_WORD_SRC =
+  "(?:密码|密碼|口令|密钥|密鑰|秘钥|凭证|凭据|令牌|api[ -]?keys?|access[ -]?keys?|secret[ -]?keys?|private[ -]?keys?|passwords?|passphrases?|passcodes?|pins?|secrets?|tokens?|keys?|credentials?)";
+const CONCEPT_SUFFIX_SRC =
+  "\\s*(?:学|课|作业|讲座|论|史|原理|算法|管理|策略|规则|规范|政策|要求|轮换|泄露|泄漏|安全|强度|复杂度|生成器|文章|书|讨论|话题|培训|课程|考试|management|policy|policies|rotation|hygiene|strength|managers?|leaks?|leakage|best[ -]practices?|articles?|courses?|lectures?|theory|cryptography)";
+const CONCEPT_LABEL_RE = new RegExp(`(?<![a-z])${CONCEPT_LABEL_WORD_SRC}${CONCEPT_SUFFIX_SRC}(?![a-z])`, "giu");
+function structuralValueFace(nfkc: string): boolean {
+  const n = nfkc.replace(UNIT_NUMBER_RE, " ");
+  if (/\d{4,}/.test(n)) return true;
+  for (const m of n.matchAll(/[A-Za-z0-9#@!$%^&*_-]{3,}/g)) if (/\d/.test(m[0])) return true;
+  return CJK_NUMERAL_RUN_RE.test(n) || QUOTED_PHRASE_RE.test(n);
+}
+/** 无结构取值面的行 / 问句里，抹掉「称谓 + 概念后缀」（返回改写后的文本；不满足条件时原样返回）。 */
+export function conceptualLabelFree(nfkc: string): string {
+  // 书名号里的作品名（《密码朋克》《Password 简史》）：称谓词是标题的一部分；标题里没有数字 / 长 ASCII 记号才算。
+  let text = nfkc;
+  TITLE_LABEL_RE.lastIndex = 0;
+  if (TITLE_LABEL_RE.test(text)) {
+    TITLE_LABEL_RE.lastIndex = 0;
+    text = text.replace(TITLE_LABEL_RE, (m) => (/\d|[A-Za-z0-9#@!$%^&*_-]{6,}/.test(m) ? m : " "));
+  }
+  CONCEPT_LABEL_RE.lastIndex = 0;
+  if (!CONCEPT_LABEL_RE.test(text)) return text;
+  if (structuralValueFace(text)) return text;
+  CONCEPT_LABEL_RE.lastIndex = 0;
+  return text.replace(CONCEPT_LABEL_RE, " ");
+}
+const TITLE_LABEL_RE = new RegExp(`《[^《》\\n]{0,12}${CONCEPT_LABEL_WORD_SRC}[^《》\\n]{0,12}》`, "giu");
+
+// ---- R336 §2.2：取值引导排除散文 ----
+// 「密码是 木石田」是取值；「储物柜的密码今天忘带了，还是跑了 3 公里」「密码学课笔记：今天讲了 RSA」的「是 / ：」后面是散文。
+// 引导出的汉字串含时态 / 连词 / 副词 / 时间 / 计量标记时不算取值面；真口令短语（明月松间照 / 天王盖地虎 / 青山绿水）不含这些标记。
+const CJK_LEAD_PROSE_RE =
+  /[了着过吗呢吧]|和|与|或|但|而|就|都|也|很|会|要|讲|说|等|比|得|因为|所以|然后|时候|需要|可以|应该|已经|今天|明天|昨天|上周|下周|这周|本周|每|次|公里|小时|分钟/u;
+const CJK_LEAD_HEAD_RE = /^(?:是|叫|为|就是|写成|念出来是|改成|还是|设成|设为|定的是|[：:=])\s*/u;
+function cjkLeadValue(tail: string, strict: boolean): boolean {
+  const re = new RegExp((strict ? CJK_STRONG_VALUE_LEAD_RE : CJK_VALUE_LEAD_RE).source, "gu");
+  for (const m of tail.matchAll(re)) {
+    const pre = tail.slice(Math.max(0, m.index - 1), m.index);
+    // 「或是 / 要是 / 不是 / 若是 / 才是 / 也是 / 倒是」的「是」不是取值引导
+    if (/^是/.test(m[0]) && /^[或要不若才也倒]$/.test(pre)) continue;
+    // 「改成了 青山绿水」：前导「了」是引导的一部分，先剥再判
+    const value = m[0].replace(CJK_LEAD_HEAD_RE, "").replace(/^了\s*/, "");
+    if (value.length === 0 || CJK_LEAD_PROSE_RE.test(value)) continue;
+    return true;
+  }
+  return false;
+}
+
 /** 行里是否有「取值面」：4+ 位数字 / 含数字的 ASCII 记号（≥3 字）/ 汉字数字连读 / 引号短语 / 取值引导 + 汉字短语 / 标签紧接短值。 */
 function secretValueFace(t: string, strict = false): boolean {
-  const n = t.normalize("NFKC").replace(UNIT_NUMBER_RE, " ");
+  const nfkc = conceptualLabelFree(t.normalize("NFKC"));
+  const n = nfkc.replace(UNIT_NUMBER_RE, " ");
   if (/\d{4,}/.test(n)) return true;
   for (const m of n.replace(SECRET_LABEL_RE, " ").matchAll(/[A-Za-z0-9#@!$%^&*_-]{3,}/g)) if (/\d/.test(m[0])) return true;
   if (CJK_NUMERAL_RUN_RE.test(n)) return true;
@@ -9736,9 +9847,9 @@ function secretValueFace(t: string, strict = false): boolean {
   // 取值引导只看标签之后的文本：「防骗忠告：任何机构都不会索要你的…密码」的冒号在标签前，不是取值引导
   const label = SECRET_LABEL_RE.exec(n);
   const tail = strict || !label ? n : n.slice(label.index + label[0].length);
-  if ((strict ? CJK_STRONG_VALUE_LEAD_RE : CJK_VALUE_LEAD_RE).test(tail)) return true;
+  if (cjkLeadValue(tail, strict)) return true;
   if (!strict && labelAsciiPhraseValue(n) !== null) return true;
-  if (!strict && labelCjkShortValue(t.normalize("NFKC")) !== null) return true;
+  if (!strict && labelCjkShortValue(nfkc) !== null) return true;
   return false;
 }
 
@@ -9748,7 +9859,7 @@ function secretValueFace(t: string, strict = false): boolean {
  * `unitLabeled`：同一单元的其他行已带标签（「证件号分三行记」+ 三行数字），本行只需取值面。
  */
 export function secretLabelValueLine(line: string, unitLabeled = false): boolean {
-  const t = line.normalize("NFKC").trim();
+  const t = conceptualLabelFree(line.normalize("NFKC")).trim();
   if (!t) return false;
   const labeled = SECRET_LABEL_RE.test(t);
   if (CODE_LABEL_RE.test(t) && /(?<!\d)\d{4,11}(?!\d)/.test(t)) return true;
@@ -9865,7 +9976,8 @@ function computeDirectGuardLines(unit: string): Array<{ line: string; kind: Dire
   const whole = guardFoldReason(unit);
   const nfkc = unit.normalize("NFKC");
   // R322：单元里出现凭证标签 ⇒ 其他行只需取值面即受守；标签 + 拼装提示（藏头 / 拆段 / 前半后半）⇒ 整条每行都受守（own）
-  const unitLabeled = SECRET_LABEL_RE.test(nfkc);
+  // R336 §2.1：只谈论称谓概念的单元（「密钥轮换 SOP 读后感」）不算称谓驻留；有结构化取值面时 conceptualLabelFree 原样返回。
+  const unitLabeled = nfkc.split("\n").some((l) => SECRET_LABEL_RE.test(conceptualLabelFree(l)));
   const composed = unitLabeled && COMPOSE_HINT_RE.test(nfkc);
   const wholeKind: DirectGuardKind | null =
     whole === null ? null
@@ -10034,6 +10146,45 @@ export function crossUnitGuardedLines(units: readonly string[]): Set<string> {
 }
 
 const TRIPLE_ARROW_RE = /\s*[—–-]+[^→]*→\s*/u;
+
+/** 实体名自身的取值面：纯数字 ≥4 位（含空格 / 连字符分组），或 ≥6 位、字母数字各 ≥2 且非识别符形态（iPhone15 / GPT-4 / v1.2.3）的混合记号。 */
+const GRAPH_NAME_DIGIT_FACE_RE = /^\d(?:[ \-]?\d){3,}$/;
+const GRAPH_NAME_MIXED_TOKEN_RE = /[A-Za-z0-9_@#$%!-]{6,}/g;
+function graphNameValueFace(n: string): boolean {
+  if (GRAPH_NAME_DIGIT_FACE_RE.test(n)) return true;
+  for (const m of n.matchAll(GRAPH_NAME_MIXED_TOKEN_RE)) {
+    const t = m[0];
+    if ((t.match(/[A-Za-z]/g) ?? []).length < 2 || (t.match(/\d/g) ?? []).length < 2) continue;
+    if (SOURCE_IDENTIFIER_SHAPE_RE.test(t) || hyphenSegmentsHomogeneous(t)) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * R336 §3.2：线索图谱实体名 / 别名是否携带受守取值——抽取入库前与出口（threads 详情 / graphExpand 桥接查询 / 三元组）共用。
+ * 单独看名字：自身是受守单元（「柜子密码 4471」）、是取值面（「4471」「x7Kp9q2z」）；给了来源单元时再比：名字含任一候选取值 / 受守行含名字 /
+ * 归一化比对命中受守取值。无来源单元的历史脏数据按名字自身 fail-closed。
+ */
+export function graphNameGuarded(name: string, units?: readonly string[]): boolean {
+  const n = name.normalize("NFKC").trim();
+  if (!n) return false;
+  if (directGuardLines(n).length > 0 || unitCarriesGuardedValue(n) || graphNameValueFace(n)) return true;
+  if (!units || units.length === 0) return false;
+  const key = normalizeForLeakCompare(n);
+  if (key.length >= 3) {
+    for (const c of sourceValueCandidates([...units])) {
+      const ck = normalizeForLeakCompare(c.value);
+      if (ck.length >= 3 && (key.includes(ck) || ck.includes(key))) return true;
+    }
+    const guarded: string[] = [];
+    for (const u of units) for (const g of directGuardLines(u)) guarded.push(normalizeForLeakCompare(g.line));
+    for (const l of crossUnitGuardedLines([...units])) guarded.push(normalizeForLeakCompare(l));
+    if (guarded.some((g) => g.includes(key))) return true;
+  }
+  return normalizedGuardedLeak(n, [...units]) !== null;
+}
+
 /**
  * R322 A：图谱三元组是笔记正文的抽取物，受守行里的取值会以「4471 —属于→ 柜门」这种形态绕过行级隔离进入模型上下文。
  * 与受守行（行级命中 + 跨笔记指代）共享任一 ≥3 字实体面、或按归一化比对命中受守取值的三元组整条剔除。
@@ -10079,7 +10230,8 @@ const ORACLE_ANCHOR_RE = /那串|那条|这条|那个|那组|那段|那句|记�
 const ORACLE_LABEL_RE =
   /(?<![a-z])(?:secrets?|tokens?|api[ -]?keys?|access[ -]?keys?|secret[ -]?keys?|private[ -]?keys?|credentials?|passwd)(?![a-z])|私钥|公钥|凭证|凭据|令牌|口令|密码|密钥/iu;
 function guardedLabelAnchor(text: string): boolean {
-  return SECRET_LABEL_RE.test(text) || CODE_LABEL_RE.test(text) || ORACLE_LABEL_RE.test(text);
+  const t = conceptualLabelFree(text.normalize("NFKC"));
+  return SECRET_LABEL_RE.test(t) || CODE_LABEL_RE.test(t) || ORACLE_LABEL_RE.test(t);
 }
 /**
  * `anchored`（召回前的整体短路用）：纯属性 / 转写形态还须带指向锚，避免「8000 以上的支出」这类普通问法只因召回里
@@ -10090,7 +10242,8 @@ export function isOracleProbeQuestion(question: string, opts?: { anchored?: bool
   if (questionCarriesOpaqueToken(q) || isYesNoQuestion(q)) return true;
   if (ORACLE_ENUMERATE_SELF_ANCHORED_RE.test(q)) return true;
   if (!ORACLE_PROBE_RE.test(q) && !ORACLE_ENUMERATE_RE.test(q)) return false;
-  return opts?.anchored ? ORACLE_ANCHOR_RE.test(q) || guardedLabelAnchor(q) : true;
+  // 锚词里的称谓（口令 / 密码）同样先剥概念后缀：「公司口令策略要求几位」问的是策略条款，不是某个口令的位数。
+  return opts?.anchored ? ORACLE_ANCHOR_RE.test(conceptualLabelFree(q)) || guardedLabelAnchor(q) : true;
 }
 
 /**
@@ -10151,7 +10304,7 @@ const LENGTH_CANDIDATE_RE = /[\d零〇一二两三四五六七八九十百]+\s*(
  * 「能列一下吗」）仍走常规召回：它们的答案不是固定中性指引，召回质量直接影响答案。
  */
 export function isDeterministicRecallProbe(question: string, historyText = ""): boolean {
-  const q = question.normalize("NFKC").trim();
+  const q = conceptualLabelFree(question.normalize("NFKC").trim());
   if (questionCarriesOpaqueToken(q)) return true;
   if (SECRET_LABEL_RE.test(q) || CODE_LABEL_RE.test(q)) return true;
   const probeShape = ORACLE_PROBE_RE.test(q) || LENGTH_CANDIDATE_RE.test(q);
@@ -10183,23 +10336,30 @@ const VALUE_ASK_RE =
  * 直答一律走「占位 + 点开卡片」，不进生成。是非 / 属性形态另走预言机中和（isOracleProbeQuestion）。
  */
 export function isSecretValueQuestion(question: string, historyText = ""): boolean {
-  const q = question.normalize("NFKC").trim();
+  const q = conceptualLabelFree(question.normalize("NFKC").trim());
   if (!q) return false;
   // 多轮里标签可能只在上一轮（「保险柜那串先念 1、3、5 位」→「再念 2、4、6 位」）：历史非空时锚从整段对话里找。
+  // R336 §2.6：只在本轮是追问形态（指代 / 再 / 第 N 位 / 变换…）时才向上文借称谓——否则上一轮问过密码后，
+  // 同会话任何带「什么 / 多少」的新话题（「我的航班号是多少」）都会被判成取值问，把上一轮的受守卡重新拉成占位卡（R335 §11）。
   const labeled =
     CREDENTIAL_VALUE_LABEL_RE.test(q) ||
     ORACLE_LABEL_RE.test(q) ||
     VALUE_ANAPHORA_RE.test(q) ||
     WEAK_SECRET_LABEL_RE.test(q) ||
     (RESIDENCY_QUESTION_LABEL_RE.test(q) && !LOCK_OBJECT_TALK_RE.test(q)) ||
-    (historyText.length > 0 && (conversationAnchorsGuarded(historyText) || CREDENTIAL_VALUE_LABEL_RE.test(historyText.normalize("NFKC"))));
+    (historyText.length > 0 &&
+      HISTORY_FOLLOWUP_RE.test(q) &&
+      (conversationAnchorsGuarded(historyText) || CREDENTIAL_VALUE_LABEL_RE.test(historyText.normalize("NFKC"))));
   if (!labeled) return false;
   // 「什么时候改的密码 / why did I change it」问的是时间 / 原因，不是取值：剥掉时间 / 原因问法后再判。
   const qv = q.replace(NON_VALUE_ASK_RE, " ");
   return VALUE_ASK_RE.test(qv) || questionRequestsVerbatim(q);
 }
 const NON_VALUE_ASK_RE =
-  /什么时候|啥时候|何时|几点|哪天|哪年|哪一天|为什么|为啥|多久|多长时间|when (?:did|was|do)|why\b|how (?:often|long)/giu;
+  /什么时候|啥时候|何时|几点|哪天|哪年|哪一天|为什么|为啥|多久|多长时间|忘(?:了|记)?\s*(?:怎么办|怎么处理|该怎么|要怎么|咋办)|怎么办|怎么处理|(?:要|该|得|需要)?(?:做|带|准备|注意|办)(?:些|点)?什么|讲(?:了|的是)?什么|说(?:了|的是)?什么|(?:是)?关于什么|内容是什么|when (?:did|was|do)|why\b|how (?:often|long)|what (?:should|do) i (?:do|bring)|what (?:is|was) it about/giu;
+/** 追问形态：指代上文 / 再来一遍 / 第 N 位 / 变换写法——只有这些形态才把上一轮的称谓借给本轮问句。 */
+const HISTORY_FOLLOWUP_RE =
+  /那|它|这个|上面|刚才|之前|前面|上一|再|还有|呢|一遍|一次|继续|接着|剩下|后面|其余|另外|第\s*[\d一二三四五六七八九十]+|倒着|反过来|拆|逐字|逐位|每位|每个字|大写|小写|拼音|翻译|译成|编码|换成|改写|转写|念|读|\b(?:again|it|that|those|rest|next|remaining|reverse|spell|repeat|more)\b/iu;
 const SECRET_LABEL_ALL_RE = new RegExp(SECRET_LABEL_RE.source, "giu");
 /**
  * 取值 / 预言机闸门的引用归因（R324 E1，audit-r323 U2「跳板机→财务」错引）：问题主题词剥掉凭证称谓词
@@ -10235,7 +10395,13 @@ export function unitTalksAboutSecret(unit: string, crossGuarded?: ReadonlySet<st
 export function unitCarriesSecretLabel(unit: string, crossGuarded?: ReadonlySet<string>): boolean {
   const lines = unit.split("\n");
   if (crossGuarded && lines.some((l) => crossGuarded.has(l.trim()))) return true;
-  if (lines.some((l) => secretLabelLine(l) || CREDENTIAL_VALUE_LABEL_RE.test(l.normalize("NFKC")) || ORACLE_LABEL_RE.test(l.normalize("NFKC")))) return true;
+  if (
+    lines.some((l) => {
+      const n = conceptualLabelFree(l.normalize("NFKC"));
+      return secretLabelLine(n) || CREDENTIAL_VALUE_LABEL_RE.test(n) || ORACLE_LABEL_RE.test(n);
+    })
+  )
+    return true;
   // R334 §4：称谓驻留（含服务名: 值 / 称谓表头）与「可上锁对象 + 短取值」载体行（C02「2947513 快递柜那个」）同为在讲秘密——
   // REST references / MCP notes[] / 出口比对 / 预言机闸门共用这一判定。
   if (residencyTriggered(unit)) return true;

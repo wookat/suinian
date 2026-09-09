@@ -1,0 +1,614 @@
+{
+ "ben/K01": {
+  "sensitive": false,
+  "title": "密码学课笔记",
+  "tags": [
+   "密码学",
+   "作业"
+  ],
+  "derived_hits": []
+ },
+ "ben/K02": {
+  "sensitive": false,
+  "title": "API key 管理最佳实践",
+  "tags": [
+   "API",
+   "安全"
+  ],
+  "derived_hits": []
+ },
+ "ben/K03": {
+  "sensitive": false,
+  "title": "公司口令策略更新",
+  "tags": [
+   "公司",
+   "口令"
+  ],
+  "derived_hits": []
+ },
+ "ben/K04": {
+  "sensitive": false,
+  "title": "看完《密码朋克》纪录片",
+  "tags": [
+   "密码学",
+   "纪录片"
+  ],
+  "derived_hits": []
+ },
+ "ben/K05": {
+  "sensitive": false,
+  "title": "面试题复习：对称密钥和非对称密钥的区别，以及 TLS 握手流程",
+  "tags": [
+   "密码学"
+  ],
+  "derived_hits": []
+ },
+ "ben/K06": {
+  "sensitive": false,
+  "title": "安全培训要点",
+  "tags": [
+   "安全培训"
+  ],
+  "derived_hits": []
+ },
+ "ben/K07": {
+  "sensitive": false,
+  "title": null,
+  "tags": [
+   "密码安全"
+  ],
+  "derived_hits": []
+ },
+ "ben/K08": {
+  "sensitive": false,
+  "title": "密钥轮换 SOP 读后感",
+  "tags": [
+   "密钥轮换",
+   "SOP"
+  ],
+  "derived_hits": []
+ },
+ "ben/K09": {
+  "sensitive": false,
+  "title": "《Password 简史》读书笔记",
+  "tags": [
+   "密码学",
+   "读书笔记"
+  ],
+  "derived_hits": []
+ },
+ "ben/K10": {
+  "sensitive": false,
+  "title": "会议 key takeaway",
+  "tags": [
+   "会议"
+  ],
+  "derived_hits": []
+ },
+ "ben/L01": {
+  "sensitive": false,
+  "title": "车牌停在 B2 层",
+  "tags": [
+   "停车"
+  ],
+  "derived_hits": []
+ },
+ "ben/L02": {
+  "sensitive": false,
+  "title": "酒店订单号 HT20260912A8，9 月 12 日入住",
+  "tags": [
+   "酒店",
+   "订单"
+  ],
+  "derived_hits": []
+ },
+ "ben/L03": {
+  "sensitive": false,
+  "title": "快递柜取件",
+  "tags": [
+   "快递"
+  ],
+  "derived_hits": []
+ },
+ "ben/L04": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "SSH"
+  ],
+  "derived_hits": []
+ },
+ "ben/L05": {
+  "sensitive": false,
+  "title": "周四例会 Zoom 会议号",
+  "tags": [
+   "会议"
+  ],
+  "derived_hits": []
+ },
+ "ben/L06": {
+  "sensitive": false,
+  "title": "健身卡续费",
+  "tags": [
+   "健身"
+  ],
+  "derived_hits": []
+ },
+ "ben/L07": {
+  "sensitive": false,
+  "title": "顺丰运单 SF1428837761234 已发出",
+  "tags": [
+   "快递"
+  ],
+  "derived_hits": []
+ },
+ "ben/L08": {
+  "sensitive": false,
+  "title": "新车牌粤B·7Q3K9",
+  "tags": [
+   "车辆"
+  ],
+  "derived_hits": []
+ },
+ "ben/L09": {
+  "sensitive": false,
+  "title": null,
+  "tags": [
+   "淘宝",
+   "退款"
+  ],
+  "derived_hits": []
+ },
+ "ben/L10": {
+  "sensitive": false,
+  "title": "项目代号 Falcon",
+  "tags": [
+   "项目"
+  ],
+  "derived_hits": []
+ },
+ "ben/L11": {
+  "sensitive": false,
+  "title": "宿舍房号",
+  "tags": [
+   "宿舍"
+  ],
+  "derived_hits": []
+ },
+ "ben/L12": {
+  "sensitive": false,
+  "title": "登录用户名",
+  "tags": [
+   "登录"
+  ],
+  "derived_hits": []
+ },
+ "ben/L13": {
+  "sensitive": false,
+  "title": "本地开发 Postgres 端口",
+  "tags": [
+   "Postgres"
+  ],
+  "derived_hits": []
+ },
+ "ben/L14": {
+  "sensitive": false,
+  "title": "机票 CA1832 座位 23A",
+  "tags": [
+   "交通",
+   "机票"
+  ],
+  "derived_hits": []
+ },
+ "ben/M01": {
+  "sensitive": false,
+  "title": "跑步 5.2 公里",
+  "tags": [
+   "健身"
+  ],
+  "derived_hits": []
+ },
+ "ben/M02": {
+  "sensitive": false,
+  "title": "买了显示器",
+  "tags": [
+   "显示器"
+  ],
+  "derived_hits": []
+ },
+ "ben/M03": {
+  "sensitive": false,
+  "title": "体检预约",
+  "tags": [
+   "体检"
+  ],
+  "derived_hits": []
+ },
+ "ben/M04": {
+  "sensitive": false,
+  "title": "步数 12480",
+  "tags": [
+   "健身"
+  ],
+  "derived_hits": []
+ },
+ "ben/M05": {
+  "sensitive": false,
+  "title": "9 月房租",
+  "tags": [
+   "房租"
+  ],
+  "derived_hits": []
+ },
+ "ben/M06": {
+  "sensitive": false,
+  "title": "血压和心率",
+  "tags": [
+   "健康"
+  ],
+  "derived_hits": []
+ },
+ "ben/N01": {
+  "sensitive": false,
+  "title": "健身房储物柜密码忘带了",
+  "tags": [
+   "健身"
+  ],
+  "derived_hits": []
+ },
+ "ben/N02": {
+  "sensitive": false,
+  "title": "银行不会电话问你密码",
+  "tags": [
+   "安全",
+   "银行"
+  ],
+  "derived_hits": []
+ },
+ "ben/N03": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "路由器",
+   "打印机"
+  ],
+  "derived_hits": []
+ },
+ "ben/N04": {
+  "sensitive": false,
+  "title": "找 IT 重置公司 VPN 口令",
+  "tags": [
+   "VPN",
+   "IT"
+  ],
+  "derived_hits": []
+ },
+ "ben/N05": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "保险柜",
+   "密码"
+  ],
+  "derived_hits": []
+ },
+ "ben/N06": {
+  "sensitive": false,
+  "title": "门禁卡丢了",
+  "tags": [
+   "门禁",
+   "补办"
+  ],
+  "derived_hits": []
+ },
+ "ben/N07": {
+  "sensitive": false,
+  "title": "GitHub token 泄露事故复盘",
+  "tags": [
+   "安全",
+   "GitHub"
+  ],
+  "derived_hits": []
+ },
+ "ben/N08": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "软件"
+  ],
+  "derived_hits": []
+ },
+ "sec/P01": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "WiFi"
+  ],
+  "derived_hits": []
+ },
+ "sec/P02": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "保险柜"
+  ],
+  "derived_hits": []
+ },
+ "sec/P03": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "健身房"
+  ],
+  "derived_hits": []
+ },
+ "sec/P04": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "门禁"
+  ],
+  "derived_hits": []
+ },
+ "sec/P05": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "邮箱"
+  ],
+  "derived_hits": []
+ },
+ "sec/P06": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "银行"
+  ],
+  "derived_hits": []
+ },
+ "sec/P07": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "邮箱"
+  ],
+  "derived_hits": []
+ },
+ "sec/P08": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "支付宝"
+  ],
+  "derived_hits": []
+ },
+ "sec/P09": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "AWS"
+  ],
+  "derived_hits": []
+ },
+ "sec/P10": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "身份证"
+  ],
+  "derived_hits": []
+ },
+ "sec/P11": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "银行"
+  ],
+  "derived_hits": []
+ },
+ "sec/P12": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "门禁"
+  ],
+  "derived_hits": []
+ },
+ "sec/R01": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "密码学"
+  ],
+  "derived_hits": []
+ },
+ "sec/R02": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "API"
+  ],
+  "derived_hits": []
+ },
+ "sec/R03": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "口令",
+   "门禁"
+  ],
+  "derived_hits": []
+ },
+ "sec/R04": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "密码"
+  ],
+  "derived_hits": []
+ },
+ "sec/Q01": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "保险柜"
+  ],
+  "derived_hits": []
+ },
+ "sec/Q01#x0": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "保险柜"
+  ],
+  "derived_hits": []
+ },
+ "sec/Q02": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "密码"
+  ],
+  "derived_hits": []
+ },
+ "sec/Q02#x0": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "路由器"
+  ],
+  "derived_hits": []
+ },
+ "fold/F01#0": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "手机"
+  ],
+  "derived_hits": []
+ },
+ "fold/F01#1": {
+  "sensitive": false,
+  "title": "旧手机存放位置",
+  "tags": [
+   "手机",
+   "书房"
+  ],
+  "derived_hits": []
+ },
+ "fold/F02#0": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "公司邮箱"
+  ],
+  "derived_hits": []
+ },
+ "fold/F02#1": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "邮箱"
+  ],
+  "derived_hits": []
+ },
+ "fold/F02#2": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "邮箱",
+   "安全"
+  ],
+  "derived_hits": []
+ },
+ "fold/F03#0": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "健身房"
+  ],
+  "derived_hits": []
+ },
+ "fold/F03#1": {
+  "sensitive": false,
+  "title": "储物柜位置",
+  "tags": [
+   "健身房",
+   "储物柜"
+  ],
+  "derived_hits": []
+ },
+ "hist/S01#0": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "WiFi"
+  ],
+  "derived_hits": []
+ },
+ "hist/S01#1": {
+  "sensitive": false,
+  "title": "周五航班 CA1832",
+  "tags": [
+   "航班"
+  ],
+  "derived_hits": []
+ },
+ "hist/S01#2": {
+  "sensitive": false,
+  "title": "班主任王老师办公室",
+  "tags": [
+   "联系方式"
+  ],
+  "derived_hits": []
+ },
+ "hist/S02#0": {
+  "sensitive": false,
+  "title": "API key 管理最佳实践",
+  "tags": [
+   "API",
+   "安全"
+  ],
+  "derived_hits": []
+ },
+ "hist/S02#1": {
+  "sensitive": false,
+  "title": "数学作业下周三交",
+  "tags": [
+   "数学"
+  ],
+  "derived_hits": []
+ },
+ "hist/S02#2": {
+  "sensitive": false,
+  "title": "车牌停车信息",
+  "tags": [
+   "停车"
+  ],
+  "derived_hits": []
+ },
+ "graph/carrier": {
+  "sensitive": true,
+  "title": null,
+  "tags": [
+   "wifi"
+  ],
+  "derived_hits": []
+ },
+ "graph/mate": {
+  "sensitive": false,
+  "title": "新家 wifi 装好了",
+  "tags": [
+   "wifi"
+  ],
+  "derived_hits": []
+ },
+ "graph/concept": {
+  "sensitive": false,
+  "title": "密码学课笔记",
+  "tags": [
+   "密码学"
+  ],
+  "derived_hits": []
+ }
+}

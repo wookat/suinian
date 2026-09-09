@@ -1,7 +1,7 @@
 import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
 import { embedText, semanticRecall, cosineSim, noteHasSemanticSignal } from "./semantic";
-import { segmentIsReaderDirective } from "./prompt-armor";
+import { segmentIsReaderDirective, unitCarriesGuardedValue, graphNameGuarded } from "./prompt-armor";
 
 /** Cosine similarity between entity-name embeddings above which two names are the same entity. */
 const ENTITY_MERGE_SIM = 0.92;
@@ -217,6 +217,11 @@ async function markGraphExtracted(env: Env, noteId: string): Promise<void> {
   }
 }
 
+/** 图谱侧的受守判定单元：与 index.ts askGuardNoteUnit 同一口径（标题 / 正文 / 链接标题 / 链接摘要）。 */
+export function graphGuardUnit(n: Pick<NoteRow, "title" | "content" | "url_title" | "url_summary">): string {
+  return `${n.title ?? ""}\n${n.content}\n${n.url_title ?? ""}\n${n.url_summary ?? ""}`;
+}
+
 /**
  * Extract entities/relations from a note into the graph. Sensitive notes never
  * enter the graph (same principle as the vector store). Never throws.
@@ -241,6 +246,15 @@ export async function extractGraph(env: Env, note: NoteRow): Promise<void> {
         .split("\n")
         .filter((l) => !segmentIsReaderDirective(l))
         .join("\n");
+    // R336 §3.2：携带受守取值的单元（口令 / 短码 / 长串编号，与 answer / notes[] 同一判定）不进图谱——否则取值会被抽成实体名
+    // 经 threads.graph / graphExpand 桅接查询绕开 answer 层的占位（R335 §14 攻击面 2）。仅谈论称谓概念的笔记（「密码学课笔记」）不受影响。
+    const guardUnit = graphGuardUnit(note);
+    if (unitCarriesGuardedValue(guardUnit)) {
+      await deleteNoteGraph(env, note.id);
+      await markGraphExtracted(env, note.id);
+      console.log(`graph: skipped guarded note=${note.id}`);
+      return;
+    }
     const text = [note.title, stripDirectiveLines(note.content.slice(0, 1500)), note.url_title, note.url_summary]
       .filter(Boolean)
       .join("\n");
@@ -264,23 +278,36 @@ export async function extractGraph(env: Env, note: NoteRow): Promise<void> {
       await markGraphExtracted(env, note.id);
       return;
     }
+    // 模型抽出的实体名 / 别名再过一道取值面（模型可能把正文里的短码抽成“实体”）；被剔的实体所在关系一并丢弃。
+    const dropped = new Set<string>();
+    const entities = parsed.entities
+      .filter((ent) => {
+        if (graphNameGuarded(ent.name, [guardUnit])) {
+          dropped.add(ent.name.toLowerCase());
+          return false;
+        }
+        return true;
+      })
+      .map((ent) => ({ ...ent, aliases: (ent.aliases ?? []).filter((a) => !graphNameGuarded(a, [guardUnit])) }));
+    const relations = parsed.relations.filter((r) => !dropped.has(r.src.toLowerCase()) && !dropped.has(r.dst.toLowerCase()));
+    if (dropped.size > 0) console.log(`graph: dropped ${dropped.size} guarded entities note=${note.id}`);
     // re-extraction (edited note): drop old evidence first
     await deleteNoteGraph(env, note.id);
     const idByName = new Map<string, string>();
-    for (const ent of parsed.entities) {
+    for (const ent of entities) {
       const id = await resolveEntity(env, note.user_id, ent);
       idByName.set(ent.name.toLowerCase(), id);
       await addEdge(env, note.user_id, { type: "note", id: note.id }, { type: "entity", id }, "mentions", 1, note.id);
       await refreshEntityNoteCount(env, id);
     }
-    for (const rel of parsed.relations) {
+    for (const rel of relations) {
       const src = idByName.get(rel.src.toLowerCase());
       const dst = idByName.get(rel.dst.toLowerCase());
       if (!src || !dst || src === dst) continue;
       await addEdge(env, note.user_id, { type: "entity", id: src }, { type: "entity", id: dst }, rel.relation, rel.confidence ?? 0.5, note.id);
     }
     await markGraphExtracted(env, note.id);
-    console.log(`graph: extracted note=${note.id} entities=${parsed.entities.length} relations=${parsed.relations.length}`);
+    console.log(`graph: extracted note=${note.id} entities=${entities.length} relations=${relations.length}`);
   } catch (err) {
     console.error(`graph: extract failed for note=${note.id}`, err);
   }
@@ -431,7 +458,7 @@ function chunked<T>(xs: T[], size: number): T[][] {
   return out;
 }
 
-export async function getThreadGraph(env: Env, userId: string, noteIds: string[]): Promise<ThreadGraph> {
+export async function getThreadGraph(env: Env, userId: string, noteIds: string[], sourceUnits: readonly string[] = []): Promise<ThreadGraph> {
   if (noteIds.length === 0) return { entities: [], relations: [], mentions: [] };
   const entityCount = new Map<string, { id: string; name: string; type: string; note_count: number }>();
   for (const chunk of chunked(noteIds, D1_IN_CHUNK)) {
@@ -450,7 +477,9 @@ export async function getThreadGraph(env: Env, userId: string, noteIds: string[]
       else entityCount.set(e.id, { ...e });
     }
   }
+  // R336 §3.2 出口过滤：修前已入库的取值实体（史料脏数据）按同一判定 fail-closed，实体 / 关系 / mentions 一并不出。
   const entities = [...entityCount.values()]
+    .filter((e) => !graphNameGuarded(e.name, sourceUnits))
     .sort((a, b) => b.note_count - a.note_count || a.name.localeCompare(b.name))
     .slice(0, 30);
   if (entities.length === 0) return { entities: [], relations: [], mentions: [] };
@@ -596,7 +625,8 @@ export async function graphExpand(
       )
         .bind(userId, ...entityIds)
         .all<{ name: string }>();
-      const names = (seedRows ?? []).map((r) => r.name);
+      // R336 §3.2：取值面的实体名不进语义桅接查询（否则受守值作为查询串参与召回，并可被日志 / 调试面带出）
+      const names = (seedRows ?? []).map((r) => r.name).filter((n) => !graphNameGuarded(n));
       if (names.length > 0) {
         const bridgeQuery = [hintQuery, ...names].filter(Boolean).join(" ");
         const semHits = await semanticRecall(env, userId, bridgeQuery, limit * 2, 0.45);
@@ -616,7 +646,10 @@ export async function graphExpand(
     )
       .bind(userId, ...allEntityIds, ...allEntityIds)
       .all<{ src: string; relation: string; dst: string }>();
-    const triples = (rels ?? []).map((r) => `${r.src} —${RELATION_LABEL[r.relation] ?? r.relation}→ ${r.dst}`);
+    // 三元组两端任一为取值面实体整条不出（调用方再按召回单元 redactGraphTriplesForModel）
+    const triples = (rels ?? [])
+      .filter((r) => !graphNameGuarded(r.src) && !graphNameGuarded(r.dst))
+      .map((r) => `${r.src} —${RELATION_LABEL[r.relation] ?? r.relation}→ ${r.dst}`);
     return { note_ids: extra, triples };
   } catch (err) {
     console.error("graph: expand failed", err);
