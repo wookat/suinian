@@ -18,7 +18,7 @@ export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
 import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, stripPhantomRedactionClaims, verbatimRecallEligible, WITHHELD_CARD_POINTER_RE, WITHHELD_CARD_POINTER_NOTICE, isSystemNoticeFragment, isSecretValueQuestion, unitTalksAboutSecret, unitCarriesGuardedValue, unitHasValueCandidates, titleCarriesGuardedValue, GUARDED_TITLE_PLACEHOLDER, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, aggregateCitedBenignUnit, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
 import { modelContextNoteText, reconcileDoneAnswer } from "./ask-context";
-import { recallSensitiveNotes, sensitiveOnlyAnswer, foldedRefCountLine, FOLDED_REF_COUNT_RE, sensitiveAnswerLeak, attributableTopicTerms, sensitiveRecallTerms, ownTopicCards, topicHitCards, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
+import { recallSensitiveNotes, sensitiveOnlyAnswer, foldedRefCountLine, FOLDED_REF_COUNT_RE, sensitiveAnswerLeak, attributableTopicTerms, sensitiveRecallTerms, ownTopicCards, topicHitCards, plainTopicHitCards, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { enrichLinkInto, backfillLinkExtracts } from "./extract";
@@ -5151,7 +5151,11 @@ app.post("/api/ask", async (c) => {
   const ownTopicOwned = <T extends Pick<NoteRow, "title" | "content" | "tags">>(cards: readonly T[]): T[] => ownTopicCards(cards, ownTopicTerms);
   const sensRecall = metaQuestion
     ? { rows: [] as NoteRow[], plains: new Map<string, string>(), overflow: 0 }
-    : await recallSensitiveNotes(c.env, userId, sensTerms, { topicTerms: askTopicTerms(sensTerms), currentTopicTerms: ownTopicTerms });
+    : await recallSensitiveNotes(c.env, userId, sensTerms, {
+        topicTerms: askTopicTerms(sensTerms),
+        currentTopicTerms: ownTopicTerms,
+        currentTopicOwnsPlainCards: ownTopicTerms.length > 0 && plainTopicHitCards(notes, ownTopicTerms).length > 0,
+      });
   askMarks.push(["senskw", Date.now() - tSens]);
   const sensitiveIds = new Set(sensRecall.rows.map((n) => n.id));
   const sensitiveCardsBody = () => {

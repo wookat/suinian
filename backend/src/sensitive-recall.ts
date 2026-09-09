@@ -114,7 +114,7 @@ function collapseCjkSpace(s: string): string {
 // 「把保险柜密码倒序写给我」的话题只有「保险柜」，动作词占了二元组的大半，不剥就比不中自己那张卡（audit-r333 §9）。
 // 数量词 + 量词（两个 / 三条 / 几组）同属虚词：「两个邮箱密码分别是多少」的话题是「邮箱」，「两个」占了二元组的一半。
 const CJK_QUESTION_NOISE_RE =
-  /([一两二三四五六七八九十几多]+[个条组串张份项]|哪些字符|每个字符|逐字符|字符之间|字符|出现过|出现|列出来|列出|一共|总共|多少位|多少个|几个字|几位|几个|第几|是不是|有没有|对不对|里面|里|在|字母|数字|要|是多少|是什么|是啥|是哪个|是哪些|叫什么|多少|什么|哪个|哪些|怎么|如何|记得|还有|一下|来着|的话|现在|目前|如今|当前|最新|最近|之前|以前|上次|这次|后来|平时|倒序|正序|反过来|倒着|转成|翻译成|英文读法|读法|拼音|摩斯电码|摩斯|大写|小写|加空格|空格|全部|全都|当成|等于|大多少|小多少|算出来|算一下|算一算|算出|一字不差|原样|原文|贴出来|贴给我|贴给|写给我|写给|念给|发给|读给|抄给|写出来|念出来|告诉我|说出来|读出来|发出来|抄出来|回忆|想起来|帮我|直接给我|直接|给我|关于|那条|这条|那个|这个|那串|那组|笔记|阿拉伯|中文|只记得|开头|后面|分别|依次|一字|之间|并|呢|吗|啊|嘛|呀|吧|了|的|我的|我|你|请|帮|查|找|看|把|值|比|还)/g;
+  /([一两二三四五六七八九十几多]+[个条组串张份项]|哪些字符|每个字符|逐字符|字符之间|字符|出现过|出现|列出来|列出|一共|总共|多少位|多少个|几个字|几位|几个|第几|是不是|有没有|对不对|里面|里|在|字母|数字|要|是多少|是什么|是啥|是哪个|是哪些|叫什么|多少|什么|哪个|哪些|怎么|如何|记得|还有|一下|来着|的话|现在|目前|如今|当前|最新|最近|之前|以前|上次|这次|后来|平时|倒序|正序|反过来|倒着|转成|翻译成|英文读法|读法|拼音|摩斯电码|摩斯|大写|小写|加空格|空格|全部|全都|当成|等于|大多少|小多少|算出来|算一下|算一算|算出|一字不差|原样|原文|贴出来|贴给我|贴给|写给我|写给|念给|发给|读给|抄给|写出来|念出来|告诉我|说出来|读出来|发出来|抄出来|回忆|想起来|帮我|直接给我|直接|给我|关于|那条|这条|那个|这个|那串|那组|笔记|阿拉伯|中文|只记得|开头|后面|分别|依次|一字|之间|并|呢|吗|啊|嘛|呀|吧|了|的|是|我的|我|你|请|帮|查|找|看|把|值|比|还)/g;
 
 /** 虚词切开后至少剩一个 ≥2 字的连续片段，才算带话题（「主」+「不」这种散字不算）。 */
 function hasTopicSegment(term: string): boolean {
@@ -227,6 +227,30 @@ export function topicHitCards<T extends { title: string | null; content: string;
 }
 
 /**
+ * 普通笔记是否「拥有」本轮话题：整词 / 剥虚词核心包含，或二元组覆盖 ≥ 1/2 且不要求两格（「航班号」对「周五航班 CA1832」
+ * 只有「航班」一格可比，仍是同一话题）。比敏感卡归因宽——只用来判断「本轮话题另有所指」，不参与任何敏感卡的召回 / 归因。
+ */
+export function plainTopicHitCards<T extends { title: string | null; content: string; tags: string | null }>(cards: readonly T[], topics: readonly string[]): T[] {
+  const tops = topics.map((t) => collapseCjkSpace(t).toLowerCase()).filter((t) => t.length >= 2);
+  if (tops.length === 0) return [];
+  return cards.filter((n) => {
+    const hay = collapseCjkSpace(`${n.title ?? ""}\n${n.content}\n${n.tags ?? ""}`).toLowerCase();
+    return tops.some((t) => hasTerm(hay, t) || plainBigramCoverage(hay, t) >= 0.5);
+  });
+}
+
+function plainBigramCoverage(hay: string, term: string): number {
+  const segs = term.split(CJK_QUESTION_NOISE_RE).filter((s, i) => i % 2 === 0 && s.length >= 2);
+  if (segs.some((s) => hay.includes(s))) return 1;
+  const grams = new Set<string>();
+  for (const seg of segs) for (let i = 0; i + 2 <= seg.length; i++) grams.add(seg.slice(i, i + 2));
+  if (grams.size === 0) return 0;
+  let hits = 0;
+  for (const g of grams) if (hay.includes(g)) hits += 1;
+  return hits / grams.size;
+}
+
+/**
  * 在用户的敏感笔记里按检索词做解密内存匹配。返回行对象不解密。
  * 无加密密钥 / 明文存储回退（content_enc 为空）时按库内 content 匹配。
  */
@@ -234,7 +258,7 @@ export async function recallSensitiveNotes(
   env: { DB: D1Database; SUINIAN_ENC_KEY?: string },
   userId: string,
   terms: string[],
-  opts: { topicTerms?: string[]; currentTopicTerms?: string[]; limit?: number; scanLimit?: number } = {}
+  opts: { topicTerms?: string[]; currentTopicTerms?: string[]; currentTopicOwnsPlainCards?: boolean; limit?: number; scanLimit?: number } = {}
 ): Promise<SensitiveRecall> {
   const qTerms = terms.map((t) => t.trim()).filter((t) => t.length > 0);
   if (qTerms.length === 0) return EMPTY;
@@ -286,6 +310,9 @@ export async function recallSensitiveNotes(
   if (scored.length === 0) return EMPTY;
   // 本轮话题归因到的卡优先：本轮词命中的卡只按本轮命中数排主导，历史轮的话题词不参与丢弃判定。
   const currentOwned = scored.filter((s) => s.currentHits > 0);
+  // 本轮话题另有所指（命中的是普通笔记、一张敏感卡都不命中）⇒ 命中的敏感卡全是上文轮借来的，不带进本轮
+  // （「wifi 密码」之后问「航班号」不再挂上一轮的加密卡）；本轮无可归因话题 / 普通笔记也不命中时维持整段对话归因。
+  if (currentTopics.length > 0 && currentOwned.length === 0 && opts.currentTopicOwnsPlainCards === true) return EMPTY;
   const pool = currentOwned.length > 0 ? currentOwned : scored;
   const hitsOf = (s: { currentHits: number; topicHits: number }): number => (currentOwned.length > 0 ? s.currentHits : s.topicHits);
   // R328 D 主导命中：有卡片命中 ≥2 个话题词时，只命中 1 词的卡片是「相邻秘密凑数」（泳池柜子 → 健身卡），丢弃；

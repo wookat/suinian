@@ -27,13 +27,14 @@ import {
   remoteEndpointForms,
   directGuardLines,
   sourceValueCandidates,
+  stripOpaqueTokens,
   ORACLE_NEUTRAL_NOTICE,
   DIRECT_GUARD_PLACEHOLDER,
 } from "../src/prompt-armor";
 import { extractGraph, getThreadGraph, graphGuardUnit } from "../src/graph";
-import { askGuardNoteUnit, askGuardedRefNoteJson, askGuardedRefNotes, withFoldedRefCount } from "../src/index";
+import { askGuardNoteUnit, askGuardedRefNoteJson, askGuardedRefNotes, withFoldedRefCount, extractAskTerms, oracleRecallQuestion, type AskHistoryMessage } from "../src/index";
 import { dedupeAskReferences, askTopicTerms } from "../src/ask";
-import { foldedRefCountLine, FOLDED_REF_COUNT_RE, sensitiveTermScore, sensitiveTopicTerms } from "../src/sensitive-recall";
+import { foldedRefCountLine, FOLDED_REF_COUNT_RE, sensitiveTermScore, sensitiveTopicTerms, recallSensitiveNotes, sensitiveRecallTerms, attributableTopicTerms, plainTopicHitCards } from "../src/sensitive-recall";
 import { BENIGN, SECURITY } from "../scripts/qa-r336/corpus";
 import type { Env, NoteRow } from "../src/types";
 
@@ -432,5 +433,65 @@ describe("R336 §3.3 计数句：生成前确定性占位分支也要带（终�
     const src = readFileSync(new URL("../src/index.ts", import.meta.url).pathname, "utf8");
     const lines = src.split("\n").filter((l) => /answer(?:Text)?\s*[:=]\s*`\$\{(ORACLE_NEUTRAL_NOTICE|DIRECT_GUARD_PLACEHOLDER\[kind\])\}\$\{(references|marks)/.test(l));
     expect(lines).toEqual([]);
+  });
+});
+
+// 终版 2d3ca9e 生产浏览器录屏（主模型口径，不清空对话）：「新家 wifi 密码是什么？」（载体已自动标注敏感、加密卡）之后问
+// 「我的航班号是多少？」——答案直答 CA1832 正确，但 done 的 references 仍带上一轮的加密卡 + 计数句 1（UI 在航班答案下渲染一张遮罩卡）。
+// R336 REST history 矩阵 S01 是取消标注态（受守卡走 guard），这条是标注态走 recallSensitiveNotes：召回词把 historyText 里的
+// 「wifi / 密码 / 新家」拼进来，本轮词「航班号」一张敏感卡都不命中 ⇒ currentOwned 为空回落到整段对话归因，上一轮的卡被带进本轮。
+describe("R336 终版 2d3ca9e 浏览器实测补修：标注态敏感卡不跟着历史轮进无关的下一问", () => {
+  const srow = (id: string, content: string, tags: string, is_sensitive: 0 | 1): NoteRow =>
+    ({
+      id, user_id: "u1", source: "api", raw_type: "text", category: "data", tags, title: null, url: null, url_title: null,
+      url_summary: null, url_titles: null, meta: null, is_sensitive, todo_due: null, todo_done: 0, done_at: null, thread_id: null,
+      content, content_enc: null, amount: null, currency: null, created_at: "2026-09-09 00:00:00", updated_at: "2026-09-09 00:00:00", deleted_at: null,
+    }) as unknown as NoteRow;
+  const wifi = srow("wifi", "新家 wifi 密码 Sn!2026-qaZx，别忘了改", '["wifi","新家"]', 1);
+  const plain = [
+    srow("flight", "周五航班 CA1832 浦东 T2 出发，提前两小时到", '["航班","出行"]', 0),
+    srow("router", "新家 wifi 装好了，路由器放客厅电视柜上，信号覆盖全屋", '["wifi","新家"]', 0),
+  ];
+  const env = { DB: { prepare: () => ({ bind: () => ({ all: async () => ({ results: [wifi] }) }) }) } as unknown as D1Database };
+  const CARD = "[1] 笔记的正文已加密，无法查看。原文请点开引用的笔记卡片查看 [1]。";
+
+  /** 与 /api/ask 同一拼装（敏感召回词含 historyText；本轮词 = ownTopicTerms；本轮词命中普通召回笔记 ⇒ currentTopicOwnsPlainCards）。 */
+  async function recall(question: string, history: AskHistoryMessage[], recalledPlain: NoteRow[]) {
+    const historyText = history.map((m) => m.content).join("\n");
+    const askQuestion = stripOpaqueTokens(question);
+    const recallQuestion = history.length > 0 ? oracleRecallQuestion(askQuestion, history) : askQuestion;
+    const terms = extractAskTerms(recallQuestion, history);
+    const sensTerms = sensitiveRecallTerms(terms, extractAskTerms(recallQuestion, []), `${recallQuestion}\n${askQuestion}\n${historyText}`);
+    const own = extractAskTerms(askQuestion, []);
+    const turn = attributableTopicTerms(askTopicTerms(sensitiveRecallTerms(own.length > 0 ? own : extractAskTerms(askQuestion, []), [], askQuestion)));
+    const ownTopicTerms = history.length > 0 ? turn : [];
+    const r = await recallSensitiveNotes(env, "u1", sensTerms, {
+      topicTerms: askTopicTerms(sensTerms),
+      currentTopicTerms: ownTopicTerms,
+      currentTopicOwnsPlainCards: ownTopicTerms.length > 0 && plainTopicHitCards(recalledPlain, ownTopicTerms).length > 0,
+    });
+    return r.rows.map((x) => x.id);
+  }
+  const H = [{ role: "user" as const, content: "新家 wifi 密码是什么？" }, { role: "assistant" as const, content: CARD }];
+
+  it("单轮：wifi 密码问句召回加密卡；航班号问句不召回", async () => {
+    expect(await recall("新家 wifi 密码是什么？", [], plain)).toEqual(["wifi"]);
+    expect(await recall("我的航班号是多少？", [], plain)).toEqual([]);
+  });
+
+  it("wifi 密码之后问航班号 / 办公室：本轮话题命中的是普通笔记 ⇒ 不带上一轮的加密卡", async () => {
+    expect(await recall("我的航班号是多少？", H, plain)).toEqual([]);
+    expect(await recall("班主任办公室在几号？", H, [srow("teacher", "班主任王老师办公室在 302，找她要先打电话", '["班主任"]', 0)])).toEqual([]);
+  });
+
+  it("wifi 密码之后的指代追问（无可归因话题）/ 同话题追问 仍召回加密卡", async () => {
+    expect(await recall("那串是多少？", H, plain)).toEqual(["wifi"]);
+    expect(await recall("新家 wifi 那串有几位？", H, plain)).toEqual(["wifi"]);
+    // 路由器问句：本轮词「路由器 / 新家 wifi」也比中加密卡（同话题）⇒ 加密卡保留（折叠 + 计数句）
+    expect(await recall("新家 wifi 路由器放在哪？", H, plain)).toEqual(["wifi"]);
+  });
+
+  it("本轮话题词普通笔记也不命中（无从判断另有所指）⇒ 维持整段对话归因，不丢卡", async () => {
+    expect(await recall("我的航班号是多少？", H, [])).toEqual(["wifi"]);
   });
 });

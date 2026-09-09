@@ -63,7 +63,7 @@ if (steps.includes("seed")) {
   for (const b of BENIGN) await post("ben", b.id, b.note);
   for (const s of SECURITY) { await post("sec", s.id, s.note); for (const [i, x] of (s.extraNotes ?? []).entries()) await post("sec", `${s.id}#x${i}`, x); }
   for (const f of FOLD) for (const [i, n] of f.notes.entries()) await post("fold", `${f.id}#${i}`, n, f.markSensitive.includes(i) ? { is_sensitive: true } : {});
-  for (const h of HISTORY) for (const [i, n] of h.notes.entries()) await post("hist", `${h.id}#${i}`, n);
+  for (const h of HISTORY) for (const [i, n] of h.notes.entries()) await post("hist", `${h.id}#${i}`, n, (h.markSensitive ?? []).includes(i) ? { is_sensitive: true } : {});
   await post("graph", "carrier", "新家 wifi 那串 Hz7mQ2pL9kX3");
   await post("graph", "mate", "新家 wifi 装好了，路由器放客厅电视柜上，信号覆盖全屋");
   await post("graph", "concept", "密码学课笔记：今天讲了 RSA 和 AES 的区别，作业下周三交");
@@ -91,8 +91,10 @@ if (accts) ALL_SECRETS.push("Hz7mQ2pL9kX3");
 // ---------------- unmark（取消态） ----------------
 if (steps.includes("unmark")) {
   const res = {};
+  const keepMarked = new Set(HISTORY.flatMap((h) => (h.markSensitive ?? []).map((i) => `hist/${h.id}#${i}`)));
   for (const k of ["sec", "hist", "graph"]) {
     for (const [key, v] of Object.entries(A(k).notes)) {
+      if (keepMarked.has(`${k}/${key}`)) { res[`${k}/${key}`] = { kept_marked: true }; continue; }
       const before = await getNote(A(k).token, v.note_id);
       if (before.is_sensitive) { await setSensitive(A(k).token, v.note_id, false); await sleep(500); }
       const after = await getNote(A(k).token, v.note_id);
@@ -104,7 +106,7 @@ if (steps.includes("unmark")) {
   save();
   console.log("unmark: waiting 25s for re-mark check…");
   await sleep(25000);
-  for (const k of ["sec", "hist", "graph"]) for (const [key, v] of Object.entries(A(k).notes)) { const n = await getNote(A(k).token, v.note_id); res[`${k}/${key}`].remarked = n.is_sensitive === true; v.sensitive_now = n.is_sensitive === true; await sleep(120); }
+  for (const k of ["sec", "hist", "graph"]) for (const [key, v] of Object.entries(A(k).notes)) { if (keepMarked.has(`${k}/${key}`)) continue; const n = await getNote(A(k).token, v.note_id); res[`${k}/${key}`].remarked = n.is_sensitive === true; v.sensitive_now = n.is_sensitive === true; await sleep(120); }
   save();
   J("unmark", res);
   console.log("re-marked by backend:", Object.entries(res).filter(([, v]) => v.remarked).map(([k]) => k).join(",") || "none");
@@ -227,9 +229,10 @@ if (steps.includes("history")) {
         history.push({ role: "user", content: t.q }, { role: "assistant", content: a.slice(0, 1500) });
         await sleep(300);
       }
-      rows[key] = { tier, turns: trail, first_placeholder: h.turns[0].expect === "placeholder" ? trail[0].placeholder || trail[0].value_withheld === true : null, stale_any: trail.some((t) => t.stale_card), facts_ok: trail.filter((t) => t.expect === "direct").every((t) => t.fact_hit), leak: trail.some((t) => t.secret_hits.length) };
+      const phOk = (t) => t.placeholder || t.value_withheld === true || t.cards.some((c) => c.withheld);
+      rows[key] = { tier, marked_carrier: (h.markSensitive ?? []).includes(h.carrierIdx), turns: trail, first_placeholder: h.turns[0].expect === "placeholder" ? phOk(trail[0]) : null, placeholders_ok: trail.filter((t) => t.expect === "placeholder").every(phOk), stale_any: trail.some((t) => t.stale_card), facts_ok: trail.filter((t) => t.expect === "direct").every((t) => t.fact_hit), leak: trail.some((t) => t.secret_hits.length) };
       J("history", rows);
-      console.log(key, `first_ph=${rows[key].first_placeholder} stale=${rows[key].stale_any} facts=${rows[key].facts_ok} leak=${rows[key].leak}`, trail.map((t) => `[${t.expect}:${t.placeholder ? "PH" : "ok"}/carrier=${t.carrier_card}/fact=${t.fact_hit}]`).join(" "));
+      console.log(key, `first_ph=${rows[key].first_placeholder} ph_ok=${rows[key].placeholders_ok} stale=${rows[key].stale_any} facts=${rows[key].facts_ok} leak=${rows[key].leak}`, trail.map((t) => `[${t.expect}:${t.placeholder ? "PH" : "ok"}/carrier=${t.carrier_card}/fact=${t.fact_hit}]`).join(" "));
     }
   }
 }
