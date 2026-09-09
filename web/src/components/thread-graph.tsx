@@ -347,7 +347,7 @@ export function ThreadGraphView({
     <div>
       <div
         ref={containerRef}
-        className="relative touch-none select-none overflow-hidden rounded-lg border bg-muted/30"
+        className="relative touch-none select-none overflow-hidden rounded-xl border bg-[radial-gradient(var(--color-border)_1px,transparent_1px)] bg-[size:18px_18px] bg-muted/20"
         style={{ height: size.h }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -438,7 +438,7 @@ export function ThreadGraphView({
             onPointerDown={(e) => e.stopPropagation()}
             aria-label="重置视图"
             title="重置视图"
-            className="rounded-md border bg-card p-1.5 text-muted-foreground shadow-sm hover:text-foreground"
+            className="inline-flex size-8 items-center justify-center rounded-lg border bg-card/90 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent hover:text-foreground"
           >
             <RotateCcw className="size-3.5" />
           </button>
@@ -450,7 +450,7 @@ export function ThreadGraphView({
             onPointerDown={(e) => e.stopPropagation()}
             aria-label="重新布局"
             title="重新布局"
-            className="rounded-md border bg-card p-1.5 text-muted-foreground shadow-sm hover:text-foreground"
+            className="inline-flex size-8 items-center justify-center rounded-lg border bg-card/90 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent hover:text-foreground"
           >
             <Maximize2 className="size-3.5" />
           </button>
@@ -473,7 +473,7 @@ export function ThreadGraphView({
         <span className="ml-auto sm:hidden">点实体可高亮相关碎片</span>
       </div>
       {selectedEntity && (
-        <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-accent/60 px-2.5 py-1.5 text-xs text-accent-foreground">
+        <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-primary/20 bg-accent/60 px-3 py-2 text-xs text-accent-foreground">
           <span>
             已高亮「{nodes.find((n) => n.id === selectedEntity)?.label ?? "实体"}」相关的 {highlightedNoteIds.size} 条碎片
           </span>

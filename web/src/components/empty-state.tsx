@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react"
+import { m } from "motion/react"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 
 export function EmptyState({
   icon: Icon,
@@ -23,15 +23,26 @@ export function EmptyState({
   tertiaryActionLabel?: string
   onTertiaryAction?: () => void
 }) {
+  const hasActions =
+    (actionLabel && onAction) || (secondaryActionLabel && onSecondaryAction) || (tertiaryActionLabel && onTertiaryAction)
   return (
-    <Card className="flex flex-col items-center gap-3 p-10 text-center animate-in fade-in duration-300">
-      <span className="flex size-14 items-center justify-center rounded-full bg-accent">
-        <Icon className="size-7 text-accent-foreground" />
+    <m.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.28, ease: [0.25, 1, 0.5, 1] }}
+      className="relative flex flex-col items-center gap-3 overflow-hidden rounded-2xl border border-dashed bg-card/60 px-6 py-12 text-center"
+    >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-[radial-gradient(60%_80%_at_50%_0%,color-mix(in_oklch,var(--color-primary)_14%,transparent),transparent)]"
+      />
+      <span className="relative flex size-14 items-center justify-center rounded-2xl border bg-background shadow-sm">
+        <Icon className="size-6 text-primary" strokeWidth={1.75} />
       </span>
-      <h2 className="text-base font-medium">{title}</h2>
-      <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">{description}</p>
-      {((actionLabel && onAction) || (secondaryActionLabel && onSecondaryAction) || (tertiaryActionLabel && onTertiaryAction)) && (
-        <div className="mt-1 flex flex-wrap justify-center gap-2">
+      <h2 className="relative text-base font-semibold tracking-tight">{title}</h2>
+      <p className="relative max-w-sm text-sm leading-relaxed text-muted-foreground">{description}</p>
+      {hasActions && (
+        <div className="relative mt-2 flex flex-wrap justify-center gap-2">
           {actionLabel && onAction && (
             <Button size="sm" variant="outline" onClick={onAction}>
               {actionLabel}
@@ -49,6 +60,6 @@ export function EmptyState({
           )}
         </div>
       )}
-    </Card>
+    </m.div>
   )
 }

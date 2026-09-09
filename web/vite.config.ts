@@ -105,8 +105,8 @@ export default defineConfig({
         name: '碎念 Suinian',
         short_name: '碎念',
         description: '什么都能丢的 AI 收件箱',
-        theme_color: '#18181b',
-        background_color: '#fafafa',
+        theme_color: '#0c0e12',
+        background_color: '#f8fafc',
         display: 'standalone',
         start_url: '/',
         icons: [

@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react"
-import { ArrowLeft, Loader2, RotateCcw, Trash2 } from "lucide-react"
+import { AnimatePresence, m } from "motion/react"
+import { ArrowLeft, Clock, Loader2, RotateCcw, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { NoteCard } from "@/components/note-card"
 import { EmptyState } from "@/components/empty-state"
 import { emptyTrash, getTrash, purgeNotes, restoreNotes, ApiError, NetworkError } from "@/lib/api"
@@ -112,40 +116,58 @@ export function TrashPage() {
     }
   }, [])
 
+  const purgeTarget = confirmPurgeId ? notes.find((n) => n.id === confirmPurgeId) : undefined
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
         <Button variant="ghost" size="sm" onClick={() => (window.location.hash = "#/settings")}>
           <ArrowLeft className="size-4" /> 返回设置
         </Button>
-        {notes.length > 0 &&
-          (confirmEmpty ? (
-            <span className="flex items-center gap-2 text-sm">
-              确认清空？不可恢复
-              <Button variant="destructive" size="sm" disabled={emptying} onClick={() => void handleEmpty()}>
-                {emptying ? <Loader2 className="size-4 animate-spin" /> : "确认清空"}
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setConfirmEmpty(false)}>
-                取消
-              </Button>
-            </span>
-          ) : (
-            <Button variant="outline" size="sm" onClick={() => setConfirmEmpty(true)}>
-              <Trash2 className="size-4" /> 全部彻底删除
-            </Button>
-          ))}
+        {notes.length > 0 && (
+          <Button variant="outline" size="sm" disabled={emptying} onClick={() => setConfirmEmpty(true)}>
+            {emptying ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />} 全部彻底删除
+          </Button>
+        )}
       </div>
 
-      <p className="text-xs text-muted-foreground">
+      <ConfirmDialog
+        open={confirmEmpty}
+        title="确认清空？不可恢复"
+        description={`将彻底删除最近删除中的 ${notes.length} 条笔记，清空后无法找回。`}
+        confirmLabel="确认清空"
+        onConfirm={() => {
+          setConfirmEmpty(false)
+          void handleEmpty()
+        }}
+        onCancel={() => setConfirmEmpty(false)}
+      />
+
+      <ConfirmDialog
+        open={purgeTarget !== undefined}
+        title="彻底删除这条笔记？"
+        description="彻底删除后无法恢复。"
+        confirmLabel="确认彻底删除"
+        onConfirm={() => {
+          if (purgeTarget) handlePurge(purgeTarget)
+          setConfirmPurgeId(null)
+        }}
+        onCancel={() => setConfirmPurgeId(null)}
+      />
+
+      <p className="flex items-start gap-2 rounded-lg bg-muted/60 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+        <Clock className="mt-0.5 size-3.5 shrink-0" />
         删除的笔记会在这里保留 {retentionDays} 天，到期自动彻底清理；也可以随时恢复或立即彻底删除。
       </p>
 
-      {msg && <p className="text-sm text-muted-foreground">{msg}</p>}
+      {msg && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {msg}
+        </p>
+      )}
 
       {loading ? (
-        <div className="flex justify-center py-16 text-muted-foreground">
-          <Loader2 className="size-6 animate-spin" />
-        </div>
+        <NoteListSkeleton />
       ) : error ? (
         <EmptyState icon={Trash2} title="加载最近删除失败" description={error} actionLabel="重试" onAction={() => void load()} />
       ) : notes.length === 0 ? (
@@ -156,35 +178,48 @@ export function TrashPage() {
         />
       ) : (
         <div className="space-y-3">
-          {notes.map((note) => {
-            const busy = busyIds.has(note.id)
-            return (
-              <Card key={note.id} className="space-y-2 p-3" data-testid="trash-item">
-                <NoteCard note={note} />
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="mr-auto text-xs text-muted-foreground">{remainingLabel(note.purge_at)}</span>
-                  <Button variant="outline" size="sm" disabled={busy} onClick={() => handleRestore(note)}>
-                    {busy ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
-                    恢复
-                  </Button>
-                  {confirmPurgeId === note.id ? (
-                    <>
-                      <Button variant="destructive" size="sm" disabled={busy} onClick={() => handlePurge(note)}>
-                        确认彻底删除
+          <AnimatePresence initial={false}>
+            {notes.map((note) => {
+              const busy = busyIds.has(note.id)
+              const remaining = remainingLabel(note.purge_at)
+              return (
+                <m.div
+                  key={note.id}
+                  layout
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.98 }}
+                  transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+                >
+                  <Card className="overflow-hidden" data-testid="trash-item">
+                    <div className="p-2">
+                      <NoteCard note={note} className="border-0 bg-transparent shadow-none" />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 border-t bg-muted/40 px-3 py-2">
+                      {remaining && (
+                        <Badge variant={remaining === "即将清理" ? "destructive" : "outline"} className="mr-auto">
+                          <Clock /> {remaining}
+                        </Badge>
+                      )}
+                      <Button variant="outline" size="sm" disabled={busy} onClick={() => handleRestore(note)}>
+                        {busy ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+                        恢复
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => setConfirmPurgeId(null)}>
-                        取消
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy}
+                        className="text-destructive hover:bg-destructive-soft hover:text-destructive"
+                        onClick={() => setConfirmPurgeId(note.id)}
+                      >
+                        <Trash2 className="size-4" /> 彻底删除
                       </Button>
-                    </>
-                  ) : (
-                    <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirmPurgeId(note.id)}>
-                      <Trash2 className="size-4" /> 彻底删除
-                    </Button>
-                  )}
-                </div>
-              </Card>
-            )
-          })}
+                    </div>
+                  </Card>
+                </m.div>
+              )
+            })}
+          </AnimatePresence>
         </div>
       )}
     </div>
