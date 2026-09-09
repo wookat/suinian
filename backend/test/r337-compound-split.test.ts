@@ -11,7 +11,7 @@ vi.mock("../src/semantic", () => ({
   noteHasSemanticSignal: () => true,
 }));
 
-import { splitCompoundQuestion, isSecretValueQuestion, isOracleProbeQuestion, ORACLE_NEUTRAL_NOTICE } from "../src/prompt-armor";
+import { splitCompoundQuestion, isSecretValueQuestion, isOracleProbeQuestion, ORACLE_NEUTRAL_NOTICE, INSTRUCTION_ISOLATED_MARK } from "../src/prompt-armor";
 import { mergeAskCompoundParts, GUARDED_CARD_PLACEHOLDER } from "../src/index";
 import { FOLDED_REF_COUNT_RE, foldedRefCountLine, sensitiveOnlyAnswer, SENSITIVE_CARD_PLACEHOLDER } from "../src/sensitive-recall";
 import { COMPOUND } from "../scripts/qa-r337/corpus";
@@ -190,6 +190,25 @@ describe("R337 §4 mergeAskCompoundParts", () => {
     const none = mergeAskCompoundParts(plainPart(), guardedPart(), { plain: 1, guarded: 1 });
     expect(none.instruction_isolated).toBeUndefined();
     expect(none.isolated_refs).toBeUndefined();
+  });
+
+  it("两段各自出口都插了隔离标记时只保留一枚在答首（本机 mock 审计不可用复现：E05 双横幅）", () => {
+    const plain = plainPart();
+    plain.answer = `${INSTRUCTION_ISOLATED_MARK}\n相关笔记中包含试图影响回答的指令，本次只提供来源引用：[1]`;
+    plain.instruction_isolated = true;
+    const guarded = guardedPart();
+    guarded.answer = `${INSTRUCTION_ISOLATED_MARK}\n相关笔记中包含试图影响回答的指令，本次只提供来源引用：[1]`;
+    guarded.instruction_isolated = true;
+    const out = mergeAskCompoundParts(plain, guarded, { plain: 1, guarded: 1 });
+    expect(out.answer.split(INSTRUCTION_ISOLATED_MARK).length - 1).toBe(1);
+    expect(out.answer.startsWith(`${INSTRUCTION_ISOLATED_MARK}\n`)).toBe(true);
+    expect(out.answer).toContain("来源引用：[1]");
+    expect(out.answer).toContain("来源引用：[2]");
+    expect(out.instruction_isolated).toBe(true);
+    // 只有凭据段隔离：标记同样提到答首，普通段直答紧随其后
+    const onlyGuarded = mergeAskCompoundParts(plainPart(), guarded, { plain: 1, guarded: 1 });
+    expect(onlyGuarded.answer.startsWith(`${INSTRUCTION_ISOLATED_MARK}\n航班号是 CA1831`)).toBe(true);
+    expect(onlyGuarded.answer.split(INSTRUCTION_ISOLATED_MARK).length - 1).toBe(1);
   });
 
   it("合并不把凭据段的占位卡原文替换成普通段任何内容（notes[] 折叠卡不回传原文）", () => {

@@ -1756,8 +1756,14 @@ export function mergeAskCompoundParts(plain: AskCompoundPartBody, guarded: AskCo
     return to === undefined ? m : `[${to}]`;
   });
   const plainText = stripCount(plain.answer);
-  const joined = [plainText, guardedText].filter((t) => t.length > 0).join("\n\n");
-  const answer = withFoldedRefCount(joined, references, notes);
+  // 两段各自出口插的隔离标记只保留一枚在答首（同一答案不重复挂横幅）
+  const isolatedMarked = plainText.includes(INSTRUCTION_ISOLATED_MARK) || guardedText.includes(INSTRUCTION_ISOLATED_MARK);
+  const stripMark = (t: string) => t.split(INSTRUCTION_ISOLATED_MARK).join("").trim();
+  const joined = [plainText, guardedText]
+    .map(stripMark)
+    .filter((t) => t.length > 0)
+    .join("\n\n");
+  const answer = withFoldedRefCount(isolatedMarked ? `${INSTRUCTION_ISOLATED_MARK}\n${joined}` : joined, references, notes).trim();
   const recallUnits =
     Array.isArray(plain.recall_units) || Array.isArray(guarded.recall_units)
       ? { recall_units: [...(plain.recall_units ?? []), ...(guarded.recall_units ?? [])] }
