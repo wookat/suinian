@@ -428,7 +428,10 @@ function TagManagerCard() {
                     value={renameValue}
                     onChange={(e) => setRenameValue(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.nativeEvent.isComposing) void handleRename(tag)
+                      if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                        e.preventDefault()
+                        void handleRename(tag)
+                      }
                       if (e.key === "Escape") setEditingTag(null)
                     }}
                     aria-label={`重命名标签 ${tag}`}

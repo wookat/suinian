@@ -10,10 +10,9 @@ import {
   Bot,
   PackageOpen,
 } from "lucide-react"
-import { m } from "motion/react"
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import { useEffect } from "react"
 import { loadSettings, saveSettings } from "@/lib/settings"
-import { KNOWN_ISSUES_URL, SAFETY_PROMISE_SHORT } from "@/lib/utils"
+import { KNOWN_ISSUES_URL, SAFETY_PROMISE_SHORT } from "@/lib/copy"
 
 const CHOICES = [
   {
@@ -61,7 +60,26 @@ const EXAMPLES = [
   { input: "上周存的那篇文章呢", output: "问一句，AI 带引用找回" },
 ] as const
 
-export function Onboarding() {
+/**
+ * 欢迎门禁：未引导时作为整页渲染（背后没有外壳，也就无从关闭/绕开），只能选一个入口继续。
+ * 这是首次访客的首屏：不依赖 Radix/motion/tailwind-merge，进场动效走 tw-animate-css（尊重 reduced-motion）。
+ * onIdle：页面 load 后空闲时回调，用于预热应用外壳分包。
+ */
+export function Onboarding({ onIdle }: { onIdle?: () => void }) {
+  useEffect(() => {
+    if (!onIdle) return
+    let timer = 0
+    const schedule = () => {
+      timer = window.setTimeout(onIdle, 1500)
+    }
+    if (document.readyState === "complete") schedule()
+    else window.addEventListener("load", schedule, { once: true })
+    return () => {
+      window.removeEventListener("load", schedule)
+      window.clearTimeout(timer)
+    }
+  }, [onIdle])
+
   function choose(action: (typeof CHOICES)[number]["action"] | "import") {
     if (action === "demo") {
       saveSettings({ ...loadSettings(), useMock: true, onboarded: true })
@@ -75,14 +93,14 @@ export function Onboarding() {
   }
 
   return (
-    <Dialog open>
-      {/* 欢迎门禁：不可关闭，只能选一个入口继续（axe region：内容全部落在 dialog 地标内，audit-r263 P3-3） */}
-      <DialogContent
-        showCloseButton={false}
-        onEscapeKeyDown={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
-        aria-labelledby="onboarding-title"
-        className="max-h-[90dvh] max-w-md gap-0 overflow-y-auto p-0"
+    <main
+      id="main-content"
+      aria-labelledby="onboarding-title"
+      className="flex min-h-dvh items-start justify-center bg-background px-3 py-4 sm:items-center sm:p-6"
+    >
+      <div
+        data-testid="onboarding"
+        className="w-full max-w-md overflow-hidden rounded-2xl border bg-card text-card-foreground shadow-lg animate-in fade-in-0 zoom-in-95 duration-200"
       >
         <div className="relative overflow-hidden px-6 pt-6 pb-4">
           <div
@@ -96,15 +114,15 @@ export function Onboarding() {
             >
               碎
             </span>
-            <DialogTitle id="onboarding-title" className="text-display text-lg">
+            <h1 id="onboarding-title" className="text-display text-lg">
               欢迎来到碎念
-            </DialogTitle>
+            </h1>
           </div>
           {/* R182 P2-3：首屏收敛为一句话主张，移动端不再被长段落撑出可视区 */}
           <p className="relative mt-3 text-[15px] font-medium">什么都能丢，AI 帮你想起来。</p>
-          <DialogDescription className="relative mt-1 text-xs">
+          <p className="relative mt-1 text-xs text-muted-foreground">
             想法、链接、语音、账目随手丢进来，自动分拣打标签、串成思考线索，随时问随时找回。
-          </DialogDescription>
+          </p>
           <p className="relative mt-2 text-xs leading-relaxed text-muted-foreground" data-testid="safety-promise-short">
             {SAFETY_PROMISE_SHORT}当前为小范围 beta，完整承诺见注册页，已知问题见{" "}
             <a href={KNOWN_ISSUES_URL} target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-foreground">
@@ -130,17 +148,15 @@ export function Onboarding() {
             {CHOICES.map((c, i) => {
               const Icon = c.icon
               return (
-                <m.button
+                <button
                   key={c.action}
                   type="button"
                   onClick={() => choose(c.action)}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.22, delay: 0.05 + i * 0.05 }}
+                  style={{ animationDelay: `${50 + i * 50}ms` }}
                   className={
                     c.primary
-                      ? "group flex w-full items-center gap-3 rounded-xl border border-primary/30 bg-primary/5 p-3 text-left transition-colors hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background outline-none"
-                      : "group flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background outline-none"
+                      ? "group flex w-full items-center gap-3 rounded-xl border border-primary/30 bg-primary/5 p-3 text-left transition-colors hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background outline-none animate-in fade-in-0 slide-in-from-bottom-1 fill-mode-backwards duration-200"
+                      : "group flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background outline-none animate-in fade-in-0 slide-in-from-bottom-1 fill-mode-backwards duration-200"
                   }
                 >
                   <span
@@ -157,7 +173,7 @@ export function Onboarding() {
                     <span className="block text-xs leading-relaxed text-muted-foreground">{c.description}</span>
                   </span>
                   <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-                </m.button>
+                </button>
               )
             })}
           </div>
@@ -211,7 +227,7 @@ export function Onboarding() {
             </a>
           </p>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </main>
   )
 }
