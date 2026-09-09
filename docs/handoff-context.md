@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-09-05（R320；R314/R316/R318 见 docs/decision-r314/r316/r318.md 与 audit-r315/r317/r319.md）
+> 最后更新：2026-09-09（R337；R330–R336 见 docs/decision-r330/r332/r334/r336.md 与 audit-r331/r332/r333/r335.md；R337 见 docs/decision-r337.md）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -18,12 +18,12 @@
 | `docs/` | SPEC、自部署、导入迁移、图谱设计等 | — |
 
 ## 线上资源（生产）
-- **API**：https://suinian-api.zalize.com （worker `suinian-api`）
+- **API**：https://suinian-api.zalize.com （worker `suinian-api`）——**2026-09-09 15:00 UTC 起被账户级批量 `script_delete` 删除（同批约 40 个 Worker，actor 为账户主体、非本项目会话），DNS NXDOMAIN；截至 18:02 UTC 未恢复**。恢复条件见「等老板事项」；恢复前所有生产验证【未验证】，只能做本机 / 静态
 - **Web**：https://suinian.zalize.com （Pages 项目 `suinian`，deploy 必须 `--branch main`）
 - Cloudflare 账号 ID 见密钥库（`CLOUDFLARE_ACCOUNT_ID`）；worker 部署用 secret `CLOUDFLARE_WORKERS_API_TOKEN`，Pages 用 `CLOUDFLARE_GLOBAL_API_TOKEN`（zone routes 报错可忽略）
 - D1 数据库 `suinian`（迁移 `backend/migrations/`，remote 用 `npx wrangler d1 migrations apply suinian --remote`）
 - R2 桶 `suinian-media`（媒体/文件原件）；Workers AI（bge-m3 嵌入）；Vectorize 未启用（D1 暴力余弦兜底）
-- Worker secrets：`DEEPSEEK_API_KEY`（分拣/摘要/问答）、`SUINIAN_ENC_KEY`（敏感内容 AES-256-GCM）、`ADMIN_TOKEN`（admin 端点）
+- Worker secrets：`DEEPSEEK_API_KEY`（分拣/摘要/问答）、`SUINIAN_ENC_KEY`（敏感内容 AES-256-GCM + 敏感附件 SNE1 + 导入指纹 HMAC；**丢失即既有加密数据不可解，重部署禁止用新值代替**）、`ADMIN_TOKEN`（admin 端点）、`AI_BASE_URL`/`AI_MODEL`/`AI_FALLBACK_MODEL`（provider 覆盖）、`BRIDGE_TOKEN`、`REGISTRATION_INVITE_CODES`、VAPID×3、微信/企微；Worker 被删时 secrets 一并丢失
 - cron（wrangler.toml）：周一 00:00 UTC 周报；每月 1 日 00:00 UTC 月报；每日 20:00 UTC 今日回顾+线索重整；每 10 分钟 兜底补处理（重分拣/链接抓取/嵌入/图谱）
 - GitHub Actions 因账号付款问题**不运行**，交付前本地全量测试即可（汇报注明）
 
@@ -67,6 +67,9 @@
 - R312：落实 R311 审查（audit-r311.md §8.3/§12.2）——**收口范围不再由形态判据决定，按信任域分层**（R311 证伪 R310：`shortPlainFactText`/`plainFactLine`/22–28 字窗口本身是形态判据，新造 44 条 normal 20.5%/verbatim 22.7%/跨轮 63.6% 泄漏；善意整答隔离 16.5%、占位切句中）。①P0-1 `TrustTier`（prompt-armor.ts `resolveAskTrustTier`）：判定输入只有「答案角标去重后引用的笔记数」+「出口」（`x-suinian-outlet: mcp`），LLM/形态分类器不参与。**单笔记直答层**（App 出口 + 恰 1 条引用 + 卡片同屏）允许逐字（例外仅：直答单元本身是默认折叠卡 → 沿用 R310 记号级占位；上下文其他单元/图谱三元组按聚合口径）；**聚合层**（跨笔记 Ask、MCP 全部工具、周报/月报/回顾、线索标题摘要、Push、导出/备份 AI 文本）`closeAggregateVerbatim`：NFKC+小写+字母数字折叠后公共连续片段 ≥8 一律收口，**无任何例外/问句豁免/历史豁免/短文本例外**，占位粒度整句/整行（`sentenceBounds` 含 `〔…〕` 嵌套深度）。Ask REST/JSON/SSE（累计口径，`streamTier` 角标未出齐前按聚合）/确定性路由（`askTierFromBody`）/MCP `ask`（固定聚合）统一。②P0-2 确定性记账标签逐条聚合收口（`ledgerLabel`，`composedLabels` 跳过二次整答复核，finance36 36/36）；线索标题/摘要聚合收口、重合回落「未命名线索」、`seedThreadTitle` 不再用正文前缀；MCP `search_notes` 补 `fold`/`fold_reason`。③P0-3 `defaultFoldedReason`：`broad:code` 不再默认折叠，前端「命令备忘：复制前核对」+ 复制确认弹窗；`fetch/endpoint/opaque/obfuscated`+strict 保持默认折叠。④P0-4 `SAFETY_PROMISE` 改「跨笔记聚合、推送、导出与工具接口不逐字转写；问某条自己的笔记时原文只会连同笔记卡片一起出现」（设置页/注册页/onboarding）。P1：`guard_events` `outlet_<x>_verbatim_closed_spans/_requests`（含 ask）；triage/extract/files/media 四落库点核实只处理本笔记；`pushSnippet` 普通正文不再前 60 字直出。生产（Worker `c418d442`→`e45a9351`→`200c92b5`，Pages `f0317671`）：聚合层 R307 145 + R309 67 + R311 44 + **R312 新造 36**（`qa-r312/new-carriers.ts`）× normal/verbatim/问句注入/多轮/续问，对上下文内容泄漏 0、新造与旧语料一致；剩余 echo 全是 `is_sensitive` 笔记的**用户自己问句**回显（敏感笔记不进 Ask 上下文，决策 §7）；直答层善意 325 条 normal 有用 94.5%、整答隔离/占位 2.5%（R311 16.5%）；线索标题 0 逐字；默认折叠率 9.6%（混合账号）；injection 498 泄露 0 / 执行判定 1（R272-27 复跑 1/3，回退模型随机）；ask-eval 141/141；忠实 29/30 ×2（座位号 7A，`repro-seat.mjs` 独立复现多次通过）；财务 36/36；shell 15/15；生命周期 14/14；D1 25 表零残留、R2 0；Lighthouse 移动 0.96/桌面 0.99、axe 0；Android/web/backend 本地全绿；真实浏览器 4 账号（录屏 + test-report.md）。既有测试改动 16 文件逐条说明见 decision-r312.md §11（每处「直答层原样」配「聚合层强收口」断言，不弱化）。未解决：直答层默认折叠卡仍记号级占位（3/644 句中占位，整句提升会破 12 个既有断言，下轮若做需逐条改 r296/r302/r306/r266/r308）；忠实性矩阵内座位号偶发；SSE 生产 42 危险问未单独重跑；PWA outbox 未改未重跑。详见 docs/decision-r312.md
 - R314→R316→R318：R312 后三轮在**直答层**继续收窄「凭证 / 破坏命令」判据（样例修复→能力族→结构性基元），审查盲测漏判持续（R319：凭证 8/22、破坏命令 10/16 漏，自造集 0/12 无法预测盲测集）。结论：识别精度不能当直答层安全边界（R309/R310 同一结论重演）。详见 decision-r314/r316/r318 与 audit-r315/r317/r319
 - R320（PR #356）：**直答层结构性 fail-closed，终结判据军备竞赛**（prompt-armor.ts `directGuardLines`/`closeDirectGuard`）：单笔记直答任一行含 broad `code` 宽命中 / 命令·路径形态 / 地址·端点（IP、`host:port`、`user@host`、localhost、内网域名）/ 短高熵 token / 凭证形态即整段不转写，换**类别占位 + 内联角标直达卡片**（「〔一条含口令/密钥的记录：问答区不转写，点开引用的笔记卡片查看原文〕[1]」）；多处命中收敛一条最高警示（credential>destructive>opaque>endpoint>code），编号列表项各保留；`ensureDirectGuideCitation` 唯一 reference 时补角标；判据只决定占位类别/警示强度/折叠优先级。预言机是非问（`questionCarriesOpaqueToken`/`stripOpaqueTokens`）候选值先剥除再检索，对/错/半对同一中性回答同一 references；`isOpaqueToken` 全局剥 CJK。聚合层 LCS8/复制守卫/系统占位白名单/注入隔离不动；既有断言只按更严调整（decision-r320 §3.3）。known-issues §1/§2/§4 按实测重写并渲染为同源 `/known-issues`（vite 插件，仓库私有 GitHub 链接 404）；`SAFETY_PROMISE` 3 处改为可守文案。生产（Worker `9fbf8818`，Pages `4e908999`）：盲测 22+16+18+18 四出口原值泄漏 0、预言机 8 组回显 0、injection 498 泄漏 0（评测器「执行」2 为误判）、财务 36/36、生命周期 14/14、ask-eval 140/141、faithful 27/30（`192.168.31.1`/`3.0.62` 同一行按设计端点占位；`7A` 检索未命中）、shell 字面 0/15（有意不转写命令，旧口径待改）、端点 11 条原文 0 泄漏 / 严格类别占位 10/11（E08 多卡走隔离文案无角标）；善意误占位：R310 善意 307 条直答改动 81/307=26.4%（纯散文/记账/待办 208 条 0 改动），R317+R319 善意 49 条 8/49，0 条错分为凭证/破坏；beta 放行条件（3 处文案 + 预言机）实测满足。未解决：多卡聚合无类别占位/角标（体验偏差）、破坏命令卡默认展开、纯占位复制无确认、右键/全选/编辑器复制路径与真机长按未测、`echo hello > /tmp/x` 被既有模型路由误报「下载执行远程代码」、faithful/shell 旧评测口径待更新。详见 docs/decision-r320.md
+- R330→R336（2026-09-06→09-09，修改/审查交替，每轮 decision-rN 先论证再动手、audit-rN+1 独立族外盲测）：安全边界收敛为「**凭据称谓驻留 + 出口字符级比对**」（R334）；R336（#387–#391，终版 main `b37b8d1`）落实 audit-r335 §14：①`/api/ask` 全部 refNote 序列化（含 no-answer 建议、14 处确定性分支）统一 `askGuardedRefNotes`；②图谱实体/属性接同一 guard 口径 + 存量清洗；③称谓驻留区分「称谓+值」与「仅谈论概念」（密码学课笔记不再整卡占位），取件码/车牌/订单号豁免与 known-issues 对齐；④汉字为词边界（无空格标题不当透明 token）；⑤折叠计数句「其中 N 条为折叠卡」+ 角标去重，生成前确定性占位分支同样追加；⑥连续问：本轮话题被普通笔记认领时敏感召回置空、改写器/生成器历史视图剥系统出口指引。生产终版实测（swe-1.7 主模型 + degraded 两口径）：security 82 格 0 漏、qa-r335 attack 2×188 格 0 漏、oracle 差分 0、图谱 0 漏、fold 9/9、history 8/8 stale=false、善意直答 30–34/34（差值为模型自动误标/照抄 fail-closed）、D1/R2 零残留（test-report 见会话附件；qa 脚本 `backend/scripts/qa-r336/`）
+- R337（PR #394，待合并；设计 #393 decision-r337.md）：复合问句「普通事实 + 凭据取值」（「Wi-Fi 密码和航班号分别是什么」）此前整句命中逐位试探正则 → 整答走预言机中性分支、普通子句不作答。修法 = `splitCompoundQuestion`（prompt-armor.ts，纯确定性，无 LLM）按标点/并列连词切 2–3 段 + 共享谓语分配 + 逐句复用 `isSecretValueQuestion`/`isOracleProbeQuestion`；`/api/ask` 拆得开则以 `app.fetch` 起两个内部子请求（nonce 头 `x-suinian-compound-part`：不递归、不重复计限频）→ `mergeAskCompoundParts` 合并（角标顺延重映射、同 note_id 去重且 withheld 优先、计数句重算、`guard_finalized` 免二次收口）；任一子请求失败落回整句路径。不拆：含候选值 / 是非问 / 逐位·第 N 位 / 全普通 / 全凭据 / 实词不足 / >3 段。本地 4590/4590 + 族外语料 qa-r337 38/38 + mock e2e REST/SSE/MCP 零原值；**生产未验证（Worker 被删）**
+- 同期 UI 线（另一会话，#384–#386）：设计系统 + shadcn/Radix + motion/recharts/cmdk 重排版、首屏拆包（移动 Lighthouse Perf 99）、设置页 ConfirmDialog
 
 ## Android/Web 功能奇偶性缺口计划（R129 清单，R130 评估）
 - 今日回顾时间流卡片（Android 降级）：需新增 Compose 卡片 + `/api/reviews/today` 接入与点评交互，估 1 个子会话；与下方导出/导入合并一轮 Android 对齐专项更划算
@@ -75,7 +78,11 @@
 - 上述三项建议合并为一轮「Android 对齐 R131+」专项（后端零改动，纯客户端）；R130 未动手，避免与本轮问答/导入改动互相干扰
 
 ## 已知问题 / 观察项
-- GitHub Actions 不运行（账号付款问题）——所有验证本地做
+- GitHub Actions 不运行（账号付款问题）——所有验证本地做；PR 唯一检查为 GitGuardian
+- 【2026-09-09 P0 事故】`suinian-api` Worker 被账户级批量删除（Cloudflare 审计日志 14:59:40–15:00:31 UTC，`script_delete` ×40，含本项目），自定义域 DNS/证书随之删除；同时段 D1 查询报 7500（免费档每日行读上限）、R2 报 10042（未启用）——账户疑似降为免费档。D1 `suinian` 库与数据仍在（26 表）。**未重部署**，原因：Worker secrets 随删除全丢，`SUINIAN_ENC_KEY` 若用新值将使既有加密笔记/附件不可解；R2 关闭时 `MEDIA` 绑定部署失败。恢复步骤：账户恢复 Workers Paid + R2 → 持原值方以运行时方式注入全部 secrets → `deploy-sync` 锁 main HEAD → health/meta/Pages 三同核验 → 跑 qa-r335/r336/r337 全量回归。事故记录在会话本机 `incident-20260909-suinian-api-deleted.md`（未入库）
+- 【provider】主模型链路：`DEEPSEEK_API_KEY` 直连 api.deepseek.com 余额 2026-09-09 已透支（402）；临时切 `AI_BASE_URL=https://api.aicdks.com` + `AI_MODEL=swe-1.7`（中转，间歇性 30s 超时 / 20 分钟级 degraded 窗口，health 抽样不能证明每条请求都由主模型应答）。老板需在「继续 swe-1.7 / 换模型 / DeepSeek 充值切回」三选一；切换只改 Worker secret。残留 secret `AI_BASE_URL` 指向失效中转曾导致 530 假 degraded（R336 已删）
+- 【流程】Devin 平台禁止会话自行合并到 main（gh/内置工具均拒绝，与 token 无关）；PR 由老板点合并或开启 GitHub auto-merge
+- 【R336 遗留】P13 类「登录密码和我的住址」中「住址」被既有驻留判定判受守 → R337 不拆、整句 fail-closed（语料如实标 null）；known-issues 复合问句文案待 #392/#394 合并后对齐
 - `daily_review:cron` 心跳：cron_heartbeats 表 2026-08-07 23:54 UTC 才在生产建表，首个常规 20:00 UTC 跑批在 2026-08-08；R51 已用一次性 cron 在生产验证写入正常
 - Vectorize 未启用（个人量级 D1 余弦够用）；公众号/小红书正文抓取受反爬限制，有兜底
 - 扩展未上架商店，开发者模式加载（extension/README.md）
@@ -92,14 +99,15 @@
 - 【R142 归因】导入后聚类覆盖率低（R141 观察 21 条仅 1 线索）：代码路径完备——导入即 `resetThreadBackfill` 重置游标，10 分钟 cron `backfillThreadClusters` 全量回扫（frugal：embedding 预筛 + 至多一次 LLM 边界确认）。低覆盖为设计内保守行为的叠加：a) 导入笔记先经异步分拣，仅 idea/collect 参与聚类（todo/记账/资料不参与）；b) 直并阈值 SIM_JOIN=0.76 较严，0.62-0.76 需 LLM 确认（此前确认回复带前缀会解析失败而放弃——R142 已健壮化，预期边界并线索率提升）；c) frugal 路径不走 DeepSeek 兜底。属「宁散勿错并」取向，非缺陷；R142 QA 用生产 flomo 样本导入实测覆盖率，后续轮次如仍偏低再评估阈值
 
 ## 等老板事项
+- **恢复 `suinian-api`**：①Cloudflare 账户恢复 Workers Paid + 启用 R2；②运行时注入原 Worker secrets（至少 `SUINIAN_ENC_KEY`、`DEEPSEEK_API_KEY`、`REGISTRATION_INVITE_CODES`、`ADMIN_TOKEN`、`BRIDGE_TOKEN`、VAPID×3；微信/企微可后补）；③合并 #392/#393/#394 后由负责人 deploy-sync
 - GitHub Actions 付款问题（恢复后 CI 才会跑）
-- DeepSeek 账户充值（R94 已用 Workers AI fallback 恢复服务不阻塞；充值后自动回主）
+- DeepSeek 账户充值（2026-09-09 余额 -0.35 CNY / 402）或决定主模型 provider（见已知问题【provider】）
 - 扩展是否上架 Chrome Web Store（需开发者账号 $5）
 - 微信 bot 实例长期托管方式（当前 skill/bridge 自托管）
 - 【R85】公众号资源：注册公众号（个人订阅号即可起步）、提供 AppID/AppSecret、在公众号后台回填服务器配置（URL/Token/EncodingAESKey）；开发验证可微信扫码领测试号。清单见 docs/wechat-integration.md 第五节
 
 ## 测试约定
-- 测试数据一律 `[QA-R<轮次>]`（R320 收尾已核对 users 仅剩 u_boss、逐表 non_boss=0、`auth_rate_limits` qa_keys=0、R2 total 0，见 decision-r320.md §8，2026-09-05；中途被打断的评测脚本会留下无 token 的 QA 账号，用 `backend/scripts/qa-r320/prod/d1-purge-qa.sh` 按 account.ts 级联口径清、`d1-verify.sh`/`r2-verify.mjs` 复核；R312 收尾已核对 users 仅剩 u_boss、25 表 orphan/non-boss/qa_keys 全 0、R2 total 0，见 decision-r312.md §9/§13，2026-09-03 18:20–18:22 Z；R310 收尾已核对 users 仅剩 u_boss、逐表 orphan/non-boss 全 0、R2 0 对象，见 decision-r310.md §14，2026-09-03 09:52–09:57 Z：25 表全 0、R2 total=0；R302 收尾已核对 [QA-%] users=0、孤儿 embeddings/attachments=0、R2 object_count=0）（按轮次改前缀，R290 收尾已核对 users 仅剩 u_boss、15 表 orphan 全 0、R2 suinian-media 0 对象）；历史示例 `[QA-R88]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
+- 测试数据一律 `[QA-R<轮次>]`（R336 收尾已核对 users 仅剩 u_boss、逐表 non_boss=0（notes 6 / embeddings 4 / api_tokens 1 为 u_boss 基线）、R2 权威列举 0，2026-09-09；R320 收尾已核对 users 仅剩 u_boss、逐表 non_boss=0、`auth_rate_limits` qa_keys=0、R2 total 0，见 decision-r320.md §8，2026-09-05；中途被打断的评测脚本会留下无 token 的 QA 账号，用 `backend/scripts/qa-r320/prod/d1-purge-qa.sh` 按 account.ts 级联口径清、`d1-verify.sh`/`r2-verify.mjs` 复核；R312 收尾已核对 users 仅剩 u_boss、25 表 orphan/non-boss/qa_keys 全 0、R2 total 0，见 decision-r312.md §9/§13，2026-09-03 18:20–18:22 Z；R310 收尾已核对 users 仅剩 u_boss、逐表 orphan/non-boss 全 0、R2 0 对象，见 decision-r310.md §14，2026-09-03 09:52–09:57 Z：25 表全 0、R2 total=0；R302 收尾已核对 [QA-%] users=0、孤儿 embeddings/attachments=0、R2 object_count=0）（按轮次改前缀，R290 收尾已核对 users 仅剩 u_boss、15 表 orphan 全 0、R2 suinian-media 0 对象）；历史示例 `[QA-R88]`（按轮次改前缀），测完调 `DELETE /api/auth/me` 注销自清；**绝不动 u_boss 数据**
 - QA 账号命名建议：用户名允许字符为中英文、数字、`._-[]`（2-32 字符，R60 起支持 `[]`）。建议 QA 账号命名 `[QA-R<轮次>]-<用途>`（如 `[QA-R60]-migrate-a`），**务必记录密码**，测完自助注销；若密码遗失需手动用 wrangler d1 按 `backend/src/account.ts` 的级联口径清理（children 先删，附前后 SQL 证据）
 - **QA 账号清单核对（收尾强制步骤）**：每轮 QA 收尾时，除逐表验证自己账号级联清零外，必须再跑一次 `SELECT id, name FROM users` 全量核对，确认只剩 `u_boss / Thomas`；发现任何 `[QA-*]` 残留账号（如 R91 发现的 `[QA-R88]-repro`，系该轮会话未执行注销、非注销接口缺陷——账号所有 children 与 users 行均完整保留，说明 `DELETE /api/auth/me` 从未被调用），按 account.ts 级联口径手动清理（children 先删，附前后 SQL 证据）并在报告中注明
 - 老板测试 token 由老板在会话中提供附件，勿写入仓库/日志
