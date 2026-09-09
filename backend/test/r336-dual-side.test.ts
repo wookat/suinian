@@ -23,11 +23,13 @@ import {
   graphNameGuarded,
   crossUnitGuardedLines,
   finalizeAskAnswer,
+  remoteEndpointForms,
+  directGuardLines,
 } from "../src/prompt-armor";
 import { extractGraph, getThreadGraph, graphGuardUnit } from "../src/graph";
 import { askGuardNoteUnit, askGuardedRefNoteJson, askGuardedRefNotes } from "../src/index";
-import { dedupeAskReferences } from "../src/ask";
-import { foldedRefCountLine, FOLDED_REF_COUNT_RE } from "../src/sensitive-recall";
+import { dedupeAskReferences, askTopicTerms } from "../src/ask";
+import { foldedRefCountLine, FOLDED_REF_COUNT_RE, sensitiveTermScore, sensitiveTopicTerms } from "../src/sensitive-recall";
 import { BENIGN, SECURITY } from "../scripts/qa-r336/corpus";
 import type { Env, NoteRow } from "../src/types";
 
@@ -329,5 +331,27 @@ describe("R336 §2.6 连续问不借上文称谓（陈旧占位卡根因）", ()
 
   it("无上文时追问形态不成取值问（没有可借的称谓）", () => {
     expect(isSecretValueQuestion("再念一遍")).toBe(false);
+  });
+});
+
+describe("R336 生产候选实测补修（out-cand-340f709）", () => {
+  it("S01：「航班 CA1832，19:40 起飞」不是 host:port 端点——编号 + 时刻类折叠出的纯数字顶级标签不算地址", () => {
+    const flight = "周五航班 CA1832，19:40 起飞，浦东 T2";
+    expect(remoteEndpointForms(flight, { includeEmails: true })).toEqual([]);
+    expect(directGuardLines(flight)).toEqual([]);
+    expect(unitCarriesGuardedValue(flight)).toBe(false);
+    expect(unitTalksAboutSecret(flight)).toBe(false);
+    // 真 host:port（非常见端口 / 带建连语义）仍是端点
+    expect(remoteEndpointForms("跳板机 relay7.example.net:4444，ssh 连上去").length).toBeGreaterThan(0);
+    expect(remoteEndpointForms("203.0.113.7:4444").length).toBeGreaterThan(0);
+  });
+
+  it("F02：数量词 + 量词（两个 / 三条）是问句虚词——「两个邮箱密码分别是多少」按「邮箱」归因到两张邮箱卡，不引到别的密码卡", () => {
+    const terms = ["我的两个邮箱密码分别是多少", "开了两步验证"];
+    const topics = sensitiveTopicTerms(askTopicTerms(terms));
+    expect(sensitiveTermScore("公司邮箱密码 Mx7!pqZa", null, terms, topics)).toBeGreaterThan(0);
+    expect(sensitiveTermScore("个人邮箱密码 Lk2#zzQw", null, terms, topics)).toBeGreaterThan(0);
+    expect(sensitiveTermScore("旧手机解锁密码 738291", null, terms, topics)).toBe(0);
+    expect(sensitiveTermScore("健身房储物柜密码 4471", null, terms, topics)).toBe(0);
   });
 });

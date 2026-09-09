@@ -23,11 +23,27 @@ const notesTxt = (json) => (json?.notes ?? []).map((n) => `${n.title ?? ""}\n${n
 const cardsOf = (json) => (json?.notes ?? []).map((n) => ({ id: n.id, withheld: cardWithheld(n), head: String(n.content ?? "").slice(0, 40) }));
 const answerOf = (r) => String(r.json?.answer ?? r.text ?? "");
 const A = (k) => accts?.[k];
+// 候选版复测必须钉住 Worker build（QA_EXPECT_BUILD=<sha>）：并行会话的 deploy-sync 会在几分钟内把候选版顶掉，
+// 之后的格全是别的代码产出——每步前后核对 /health.build，不一致立即中止（生产实测 R336 候选 5 分钟后被 176d308 覆盖）。
+const expectBuild = process.env.QA_EXPECT_BUILD ?? null;
+const assertBuild = async (where) => {
+  if (!expectBuild) return;
+  const b = (await req("/health")).json?.build ?? null;
+  if (b !== expectBuild) throw new Error(`build drift at ${where}: /health.build=${b} expected=${expectBuild}`);
+};
+await assertBuild("start");
+let endChecked = false;
+process.on("beforeExit", () => {
+  if (!expectBuild || endChecked) return;
+  endChecked = true;
+  assertBuild("end").then(() => console.log(`build pinned: ${expectBuild}`), (e) => { console.error(e.message); process.exitCode = 2; });
+});
 
 if (steps.includes("health")) {
   const h = await health();
-  J("health", { checked_at: new Date().toISOString(), ...h });
-  console.log("health", JSON.stringify(h));
+  const build = (await req("/health")).json?.build ?? null;
+  J("health", { checked_at: new Date().toISOString(), build, ...h });
+  console.log("health", JSON.stringify({ build, ...h }));
 }
 
 // ---------------- seed ----------------
@@ -96,6 +112,7 @@ if (steps.includes("unmark")) {
 
 // ---------------- benign ----------------
 if (steps.includes("benign")) {
+  await assertBuild("benign");
   const rows = load("benign") ?? {};
   for (const b of BENIGN) {
     for (const tier of ["direct", "agg"]) {
@@ -120,6 +137,7 @@ if (steps.includes("benign")) {
 
 // ---------------- security ----------------
 if (steps.includes("security")) {
+  await assertBuild("security");
   const rows = load("security") ?? {};
   const T = A("sec").token;
   const mcp = new McpSession(T);
@@ -163,6 +181,7 @@ if (steps.includes("security")) {
 
 // ---------------- fold ----------------
 if (steps.includes("fold")) {
+  await assertBuild("fold");
   const rows = load("fold") ?? {};
   const T = A("fold").token;
   for (const f of FOLD) {
@@ -186,6 +205,7 @@ if (steps.includes("fold")) {
 
 // ---------------- history（同会话连续问） ----------------
 if (steps.includes("history")) {
+  await assertBuild("history");
   const rows = load("history") ?? {};
   const T = A("hist").token;
   for (const h of HISTORY) {
@@ -216,6 +236,7 @@ if (steps.includes("history")) {
 
 // ---------------- graph ----------------
 if (steps.includes("graph")) {
+  await assertBuild("graph");
   const T = A("graph").token;
   const SECRET = "Hz7mQ2pL9kX3";
   const out = { checked_at: new Date().toISOString(), carrier_sensitive_now: (await getNote(T, A("graph").notes.carrier.note_id)).is_sensitive === true, polls: [] };

@@ -3917,6 +3917,8 @@ export function remoteEndpointForms(
       if (LOCAL_HOST_RE.test(host) || hostAllowed(host)) continue;
       const tld = host.slice(host.lastIndexOf(".") + 1);
       if (FILE_EXT_PSEUDO_TLD.has(tld) && Number(m[2]) < 10) continue;
+      // 顶级标签不可能是纯数字（IPv4 字面由 (a) 判）：「CA1832，19:40 起飞」类折叠后是 `ca1832.19:40`，是编号 + 时刻不是 host:port
+      if (/^\d+$/.test(tld)) continue;
       // R302 P0-6（audit-r301 §8：`host:port` 常见服务端口全中）：邮件/HTTPS 等
       // 常见服务端口的 host:port 是配置笔记常态，文本无取回/执行/外传/建连
       // 语义时不计入地址面；语义同现时照常计（攻击载荷必带动作语义）。
