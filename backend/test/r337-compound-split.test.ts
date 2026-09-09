@@ -45,9 +45,19 @@ describe("R337 §4 splitCompoundQuestion：族外语料（scripts/qa-r337/corpus
     }
   });
 
-  it("共享谓语「分别是什么」分配到无谓语的普通子句（P03）", () => {
+  it("共享谓语「分别是什么」分配到无谓语的普通子句（P03），并列副词「分别」不进任一子句", () => {
     const split = splitCompoundQuestion("健身房年卡到期日和储物柜密码分别是什么");
-    expect(split).toEqual({ guarded: ["储物柜密码分别是什么"], plain: ["健身房年卡到期日是什么"] });
+    expect(split).toEqual({ guarded: ["储物柜密码是什么"], plain: ["健身房年卡到期日是什么"] });
+    // 普通子句在句尾时同样剥掉「分别」：单主语子句不该被「分别是什么」的逐位枚举形态改判成预言机
+    expect(splitCompoundQuestion("储物柜密码和健身房年卡到期日分别是什么")).toEqual({
+      guarded: ["储物柜密码是什么"],
+      plain: ["健身房年卡到期日是什么"],
+    });
+    expect(splitCompoundQuestion("Wi-Fi 密码和航班号各是多少？")).toEqual({ guarded: ["Wi-Fi 密码是多少"], plain: ["航班号是多少"] });
+    const plainLast = splitCompoundQuestion("Wi-Fi 密码和航班号分别是什么");
+    expect(plainLast?.plain).toEqual(["航班号是什么"]);
+    expect(isOracleProbeQuestion("航班号分别是什么")).toBe(true);
+    expect(isOracleProbeQuestion(plainLast!.plain[0])).toBe(false);
   });
 
   it("带候选值 / 是非问 / 逐位试探形态不拆（预言机差分面不变）", () => {

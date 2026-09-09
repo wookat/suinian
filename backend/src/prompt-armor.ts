@@ -10422,7 +10422,11 @@ export function splitCompoundQuestion(question: string, historyText = ""): Compo
   if (pieces.length < 2 || pieces.length > 3) return null;
   const tail = COMPOUND_TAIL_PREDICATE_RE.exec(pieces[pieces.length - 1]);
   const sharedPredicate = tail ? tail[1] : null;
-  const parts = pieces.map((p) => (COMPOUND_HAS_ASK_RE.test(p) || !sharedPredicate ? p : `${p}${sharedPredicate}`));
+  // 拆开后每个子句只有一个主语：并列副词「分别 / 各 / 都」随共享谓语一并剥掉（「密码分别是什么」→「密码是什么」）。
+  const parts = pieces.map((p) => {
+    if (COMPOUND_HAS_ASK_RE.test(p)) return sharedPredicate ? p.replace(COMPOUND_TAIL_PREDICATE_RE, (_m, pred: string) => pred) : p;
+    return sharedPredicate ? `${p}${sharedPredicate}` : p;
+  });
   // 每个子句剥掉问法与功能词后须仍有 ≥ 2 个实词字符（「我 / 第二个呢」一类残片 ⇒ 不拆，整句按现状处理）。
   for (const p of parts) {
     const core = p
