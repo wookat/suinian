@@ -47,7 +47,9 @@ export function ConfirmDialog({
         <AlertDialogContent
           onOpenAutoFocus={(e) => {
             e.preventDefault()
-            ;(e.currentTarget as HTMLElement | null)?.querySelector<HTMLElement>("[data-confirm]")?.focus()
+            // 延后聚焦，确保触发弹窗的那次 Enter（keydown→keypress）不会落到确认键上
+            const content = e.currentTarget as HTMLElement | null
+            window.setTimeout(() => content?.querySelector<HTMLElement>("[data-confirm]")?.focus(), 0)
           }}
         >
           <AlertDialogHeader>

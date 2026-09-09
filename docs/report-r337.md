@@ -80,6 +80,8 @@ web$ npm run build     # 通过
 
 ## 5. Lighthouse（12.8.2，本机 `vite preview`，全新 profile → 首屏为 Onboarding 门禁）
 
+> 本节为 #384 当时的测量与归因；父会话未接受 93/89 为新基线，后续优化与复测见 §9（移动 Perf 回到 99）。
+
 | 场景 | Before | After |
 | --- | --- | --- |
 | Mobile（默认 simulate 节流） | Perf **99** / A11y 100 / BP 100 / SEO 100（FCP 1.7s, LCP 2.0s, TBT 20ms, CLS 0） | Perf **93** / A11y 100 / BP 100 / SEO 100（FCP 2.3s, LCP 2.7s, TBT 60–110ms, CLS 0；3 次取样 92–93） |
@@ -124,3 +126,22 @@ CHROME_PATH=… npx lighthouse@12.8.2 http://localhost:4173/ --throttling-method
   - 发现并修：设置页 5 处 `window.confirm`（退出登录 / 轮换 token / 重新生成恢复码 / 标签合并 / 标签删除）→ `ConfirmDialog`（本 PR）。
   - 未测（需邀请码注册 `[QA-R337UI]` 账号）：登录态记录 / Ask / 洞察真实数据 / token 复制确认 / 注销与 D1 清理。
   - 本地 mock 走查曾报「Android 筛选残留」，复核为 4173 预览服的旧 dist（早于 76f87e5），生产复测通过，本地报告已勘误。
+
+## 9. 首屏体积优化（#385 之后，目标：移动 Performance ≥ 基线 99）
+
+§5 的归因是首屏关键 JS：不论用户是否已引导，入口分包都带着完整外壳（Radix Dialog/DropdownMenu/Tooltip、motion 运行时、时间流、api 客户端），而 Lighthouse 的全新 profile 只看到一张欢迎页。本轮改为按引导状态拆包：
+
+- **入口分包只含 React + 欢迎页**：`App.tsx` 退化为门禁，完整外壳移到 `app-shell.tsx` 并 `lazy()` 动态导入。欢迎页（`components/onboarding.tsx`）由 Radix Dialog 改为整页渲染（背后不再有外壳，“不可绕开”语义不变且更强），进场动效改 tw-animate-css（尊重 reduced-motion），文案常量拆到 `lib/copy.ts` 以免首屏带入 tailwind-merge；`main.tsx` 的 push 模块改为收到 SW 消息时才动态导入（它牵出整个 api/mock 客户端）。
+- **已引导用户不多等一次往返**：构建插件 `shellPreload`（`vite.config.ts`）生成外链 `assets/boot-*.js`（CSP 禁内联），读 `localStorage.suinian.settings.onboarded`，为真则对外壳分包及其独有静态依赖注入 `modulepreload`，与入口并行下载（实测：外壳 9 个 chunk 与 index 同一批发起，+6ms）；首次访客则在欢迎页 load 后 1.5s 预热外壳，选定入口即开。
+- motion features（domMax）改为 `load` 事件后 300ms 再拉；此前已有的 cmdk/sonner 空闲加载、recharts 等路由级分包保持。
+
+| 指标（首次访客首屏） | Before @6bad5dd | #385 上线后 | 本轮 |
+| --- | --- | --- | --- |
+| 入口 `index-*.js` | 335.49 kB / gzip 105.66 | 396.96 kB / gzip 127.26 | 202.79 kB / gzip **66.33**（≈ react-dom + 欢迎页） |
+| 首屏实际下载 JS（Lighthouse network-requests，含后置的 features/cmdk/sonner） | — | ≈236–244 kB / 19 请求 | **190 kB / 12 请求** |
+| 外壳 `app-shell-*.js`（已引导时并行预加载） | — | （在 index 内） | 202.53 kB / gzip 65.80 |
+| Mobile Lighthouse Perf（simulate，3 次） | 99 | 本地 92–93 / 生产 89 | **99 / 99 / 99**（FCP 1.4–1.5s，LCP 1.6–1.7s，TBT 2–13ms，CLS 0） |
+
+本地 `vite preview` 复测，相对基线 FCP 1.7s→1.5s、LCP 2.0s→1.7s，优于 Before。A11y / BP / SEO 与桌面数值见下一节的上线记录。未验证：已引导用户的 Lighthouse 数字（LH 会清 storage，只能用上述网络时序作为旁证）。
+
+附：标签合并确认的 Enter 绕过（登录态生产验收发现）一并修复：重命名输入框 Enter 先 `preventDefault`，`ConfirmDialog` 打开时延后一个 tick 再聚焦确认键，避免同一次 Enter 的 keypress 落到刚聚焦的破坏性按钮上。
