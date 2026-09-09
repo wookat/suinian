@@ -26,6 +26,7 @@ import {
   finalizeAskAnswer,
   remoteEndpointForms,
   directGuardLines,
+  sourceValueCandidates,
   ORACLE_NEUTRAL_NOTICE,
   DIRECT_GUARD_PLACEHOLDER,
 } from "../src/prompt-armor";
@@ -356,6 +357,42 @@ describe("R336 生产候选实测补修（out-cand-340f709）", () => {
     expect(sensitiveTermScore("个人邮箱密码 Lk2#zzQw", null, terms, topics)).toBeGreaterThan(0);
     expect(sensitiveTermScore("旧手机解锁密码 738291", null, terms, topics)).toBe(0);
     expect(sensitiveTermScore("健身房储物柜密码 4471", null, terms, topics)).toBe(0);
+  });
+});
+
+describe("R336 终版 ee804ab 主模型实测补修：主模型生成的无空格标题把善意卡整卡占位（history S01/S02 stale 假阳）", () => {
+  it("汉字粘连的识别符标题（「周五航班CA1832浦东T2」「车牌沪A12345停B2层」）不是高熵记号——字母/数字交替计数在汉字处归零", () => {
+    for (const title of ["周五航班CA1832浦东T2", "车牌沪A12345停B2层", "会议室预订B203", "iPhone15Pro购买记录"]) {
+      const unit = `${title}\n周五航班 CA1832，19:40 起飞，浦东 T2`;
+      expect(directGuardLines(unit), title).toEqual([]);
+      expect(unitCarriesGuardedValue(unit), title).toBe(false);
+    }
+  });
+
+  it("汉字短语尾随数字（「班主任王老师办公室302」「取件码记录A12」）不是「标签 + 值」整行——混合记号值不含汉字", () => {
+    for (const title of ["班主任王老师办公室302", "王老师办公室302", "取件码记录A12", "教学楼302"]) {
+      const unit = `${title}\n班主任王老师，办公室在教学楼 302`;
+      expect(sourceValueCandidates([unit]), title).toEqual([]);
+      expect(unitCarriesGuardedValue(unit), title).toBe(false);
+    }
+  });
+
+  it("操作线索单元里汉字粘连的识别符标题（「SSH端口改为2222」+「SSH 端口改成了 2222」）：混合记号按汉字切段、汉字+数字短记号不切半个数字串", () => {
+    const unit = "SSH端口改为2222\nSSH 端口改成了 2222";
+    expect(sourceValueCandidates([unit])).toEqual([]);
+    expect(unitCarriesGuardedValue(unit)).toBe(false);
+    // 操作线索行真取值不回退：「要按「风3档」再按 眠7」「后台 72kqm」
+    expect(sourceValueCandidates(["要按「风3档」再按 眠7"]).map((c) => c.value)).toEqual(expect.arrayContaining(["风3档", "眠7"]));
+    expect(sourceValueCandidates(["后台\n72kqm"]).map((c) => c.value)).toContain("72kqm");
+    expect(sourceValueCandidates(["储物柜 зимаветер31"]).map((c) => c.value)).toContain("зимаветер31");
+  });
+
+  it("真「标签 + 值」整行与真高熵记号不回退", () => {
+    expect(unitCarriesGuardedValue("储物柜 Ab12cd9x")).toBe(true);
+    expect(unitCarriesGuardedValue("柜门口令Ab12cd")).toBe(true);
+    expect(unitCarriesGuardedValue("后台 72kq8m")).toBe(true);
+    expect(directGuardLines("bl72kdp9x").length).toBeGreaterThan(0);
+    expect(directGuardLines("a1b2c3d4").length).toBeGreaterThan(0);
   });
 });
 

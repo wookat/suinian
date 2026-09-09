@@ -82,6 +82,14 @@ R334 §2.6 把「取件码」列入驻留标签是为了 qa-r333 C24（`取件�
 候选 bae75a5 fold 9/9 里 F02 的第 3 条善意笔记（「两个邮箱都开了两步验证…」）被分拣层降级模型误标敏感，实际走的是 `sensitiveCardsBody`（自带计数句）；终版部署后分拣未误标，同题走 **生成前预言机中性分支**（`oracleGate` → `ORACLE_NEUTRAL_NOTICE + 角标`），2 张折叠卡 0 计数句（fold 6/9）。根因：§3.3 的追加只挂在生成出口，生成前的三个确定性占位返回（预言机中性 / 取值扣留 `DIRECT_GUARD_PLACEHOLDER[kind]` / 出口层裸是非改写）各自拼 `占位 + 角标`，没有走同一条计数句。修法：抽 `withFoldedRefCount(answer, references, refNotes)`，四处共用；`sensitiveCardsBody` 自带计数句（`FOLDED_REF_COUNT_RE` 命中不重复追加）。静态单测锁定 index.ts 内不再有 `ORACLE_NEUTRAL_NOTICE / DIRECT_GUARD_PLACEHOLDER[kind]` 直拼角标的 answer。
 F02 `fact=false`（两步验证事实未答）为预言机中性分支的既定 fail-closed 行为（问句同时是取值问 + 对含口令单元的是非问），不在本轮改。
 
+#### 3.3.2 终版 ee804ab 主模型口径实测追加（out-final-ee804ab，degraded:false）
+主模型恢复后 R336 生产矩阵 history S01/S02 报 `stale=true`（航班号 / 办公室追问返回占位卡），benign 直答 27/34。逐题无 history 复测同样占位 ⇒ 不是历史串染，是引用卡 guard 的假阳。函数级复现（`unitCarriesGuardedValue(title + "\n" + content)`）：主模型给善意笔记生成的**无空格标题**触发两条形态判据——
+1. `isOpaqueToken("周五航班CA1832浦东T2")`：字母↔数字交替计数把汉字当透明字符跳过，`CA1832` 与 `T2` 两个识别符被数成一个 3 次交替的高熵记号（`车牌沪A12345停B2层` 同理）；`周五航班 CA1832` 有空格时不触发。修法：交替计数在汉字处归零（汉字是词边界，一个记号不跨汉字）。
+2. `SOURCE_LABEL_VALUE_LINE_RE`：「标签 + 值」整行的混合记号值允许 `\p{L}` 含汉字，`班主任王老师办公室302` 被切成标签「班」+ 值「主任王老师办公室302」，整行进 `shortCredentialLineValues` 成 opaque 候选（`会议室预订B203` `取件码记录A12` 同理）。修法：混合记号值不含汉字（值是裸 token，汉字短语尾随编号是称呼 / 地点 + 编号）。
+3. 操作线索单元（`SSH 端口改成了 2222` 的「改成了」点亮整单元 op）里，标题 `SSH端口改为2222` 走 `shortCredentialLineValues(op)`：`SOURCE_SCRIPT_MIXED_TOKEN_RE` 把整串当一个任意文字混合记号（原意是西里尔等非拉丁字母口令 `зимаветер31`），`hanDigitTokens` 又从 `改为2222` 切出 `为222`。修法：混合记号按汉字切段后各段再看形态（`SSH` / `2222` 都不是混合记号；数字串 2222 经「端口」识别符窗口豁免）；汉字+数字短记号的数字段取整（不切半个数字串）。
+同一 benign 矩阵里非边界的 4 条直答缺失（L04 SSH 端口 / L11 宿舍房号 / L14 机票座位 / M04 步数）标题分别为 `SSH端口改为2222` / `宿舍房号3-412` / `机票CA1832座位23A` / `步数12480比昨天多3000`，函数级复现全部命中以上三条之一，修后全部 `guarded:false`。
+安全反向验证：`储物柜 Ab12cd9x` / `柜门口令Ab12cd` / `后台 72kq8m` / `储物柜 зимаветер31` / `后台\n72kqm` / `要按「风3档」再按 眠7` 仍候选 / guarded；`bl72kdp9x` / `a1b2c3d4` 仍高熵记号；qa-r336 静态探针善意 34/34、安全 18/18 不变；全量 vitest 4533/4533。实测对照：8b3c3de（degraded 口径）seed 后的标题为 `周五航班 CA1832` `机票 CA1832 座位 23A` 带空格，ee804ab（主模型口径）为 `周五航班CA1832浦东T2` `机票CA1832座位23A` 无空格——两轮 seed-triage.json 直接对比，这正是主模型口径必须补跑的原因。
+
 ## 4. 问题 7 的前端排除证据
 `web/src/components/ask-chat.tsx`：refs 逐消息保存在 `AskChatMessage.refs`，渲染 key 为 `m.id`（`crypto.randomUUID()`）；`askStream` 为 POST 不经 SW/HTTP 缓存；`selectAskContext` 只挑 10 分钟内非 error 消息进 history。前端无任何跨消息复用引用卡的路径 → 陈旧卡只能来自后端对 `history` 的使用。后端 `historyText` 参与 3 处：`isDeterministicRecallProbe`、`isSecretValueQuestion`、`sensitiveRecallTerms`。前两处按 §2.6 收窄；第三处 R332 已按本轮话题词收窄。复现方式：REST `history=[{user:"路由器密码是什么"},{assistant:"〔…占位…〕[1]"}]` + 问「我的航班号是多少」 → 修前判成取值型问句（函数级复现见 §2.6），召回里上一轮的受守卡重新以占位形态返回；修后直答。终版生产浏览器录屏同会话连续问验证。
 
