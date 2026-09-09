@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-09-09（R343；R330–R336 见 docs/decision-r330/r332/r334/r336.md 与 audit-r331/r332/r333/r335.md；R337–R343 见 docs/decision-r337/r338/r340/r341/r342/r343.md）
+> 最后更新：2026-09-09（R344；R330–R336 见 docs/decision-r330/r332/r334/r336.md 与 audit-r331/r332/r333/r335.md；R337–R344 见 docs/decision-r337/r338/r340/r341/r342/r343/r344.md）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -77,6 +77,7 @@
 - R341（PR #403，基于 #402；设计 docs/decision-r341.md）：R335/R336/R340 三轮语料（安全 106 / 善意 137）过非 answer 出口，报告行标题 / 线程摘要 / 复盘评语的模型视图对驻留形态「宿舍柜子的锁改成了 0731」漏原值（无 own 行 ⇒ `redactGuardedLinesForModel` 行级替换放过；ask 出口早有 `normalizedGuardedLeak` 复查）。修法 = `redactGuardedViewForModel`（行级替换 + 归一化复查 fail-closed），仅 reports.ts / threads.ts / review.ts 三处调用改走；**否定**「`residencyTriggered` 接进卡片宽折叠」（静态实测会折取件码/订单号/合同号/护照号与账号注销散文）。`scripts/qa-r335/blind-corpus.d.mts` 补声明供严格 typecheck
 - R342（PR #404，基于 #403；设计 docs/decision-r342.md）：R335 善意 E13「账号：我要把微博账号注销掉」ask 出口 + 模型视图整单元扣留，根因 = `residencyServiceKeyValues` 冒号分支对纯汉字值只看长度 ≥6。修法 = 冒号后纯汉字按 R334 值区口径 6–12 字且首 1–2 字 ∉ `RESIDENCY_HAN_STOP`；四轮语料 348 条走到该分支的仅 E13，纯汉字守值全部由强称谓路径守住。r341 单测 R335 善意边界由 {E13,G17} 收为 {G17}
 - R343（PR #405，基于 #404；设计 docs/decision-r343.md）：待合并队列按序合到本机模拟树全量 vitest 唯一失败 = R337 P12「行李箱密码锁的数字和托运限重各是多少」不拆句。根因 = R340 把「锁」加进 `CONCEPT_SUFFIX_SRC` 后 `conceptualLabelFree` 把「密码锁」整词抹掉，问句失去锁具称谓、`LOCK_OBJECT_TALK_RE` 没机会判（同义「行李箱锁是几」是取值问而「行李箱密码锁是几」走普通生成）。修法 = 后缀为「锁」时只抹称谓保留「锁」（1 行）。模拟树 + 补丁全量 4698/4698。**纪律**：判定层 PR 先在本机合完待合并队列再宣本地全绿
+- R344（PR #406，基于 #405；设计 docs/decision-r344.md）：R343 base 上静态复现三族问句判 `isSecretValueQuestion=false` 走普通生成（无泄漏、与同义问句口径不一致）：①省略句「wifi 密码呢 / 储物柜密码？/ wifi password?」（无取值谓语）；②设备动作 + 几「密码盘转到几 / 门禁要按几」（`VALUE_ASK_RE` 只认「是几」）；③「密码箱设的是几」（与 R343 同因，`conceptualLabelFree` 抹掉整词）。修法 = `conceptualLabelFree` 后缀「锁/箱」都保留实物名 + `RESIDENCY_QUESTION_LABEL_RE` 加 `(?<=\s)箱(?!子)`、`LOCK_OBJECT_TALK_RE` 加尺寸/容量/重量/颜色；`VALUE_ASK_RE` 加动作分支 `(转|拨|调|按|输入|键入|敲|设)(到|成|的)?是?几`；新增 `ellipticalValueAsk`（≤24 字、以 `CREDENTIAL_VALUE_LABEL_RE` 收尾、不含动作/方法/位置/概念/状态词与 `NON_VALUE_ASK_RE`）。证据：自造 48 条探针 mismatch 0；历轮 452 条问句 R343 vs R344 diff 仅 R336 安全族 P03 false→true、善意 0 翻转；R340/R336 探针未回退；本分支 4638/4638，队列模拟树 + 本 PR 4705/4705。**纪律补充**：模拟合并冲突不能 `--theirs` 整文件取分支（会丢不在该分支祖先里的 #394 `splitCompoundQuestion`），要把 base→branch 的 delta patch `git apply --3way` 到队列树
 - 静态复测已知边界（均有意 fail-closed，未改）：R336 K07（PIN 讲座 1234/0000）/ K09（Password 简史 1961）/ L03 / L09（19 位淘宝订单号，R320 ≥12 位数字口径）；R340 Y02/Y11；R335 G17 取件码在模型视图仍占位（ask 出口按 known-issues 豁免直答）
 - 同期 UI 线（另一会话，#384–#386）：设计系统 + shadcn/Radix + motion/recharts/cmdk 重排版、首屏拆包（移动 Lighthouse Perf 99）、设置页 ConfirmDialog
 
@@ -108,7 +109,7 @@
 - 【R142 归因】导入后聚类覆盖率低（R141 观察 21 条仅 1 线索）：代码路径完备——导入即 `resetThreadBackfill` 重置游标，10 分钟 cron `backfillThreadClusters` 全量回扫（frugal：embedding 预筛 + 至多一次 LLM 边界确认）。低覆盖为设计内保守行为的叠加：a) 导入笔记先经异步分拣，仅 idea/collect 参与聚类（todo/记账/资料不参与）；b) 直并阈值 SIM_JOIN=0.76 较严，0.62-0.76 需 LLM 确认（此前确认回复带前缀会解析失败而放弃——R142 已健壮化，预期边界并线索率提升）；c) frugal 路径不走 DeepSeek 兜底。属「宁散勿错并」取向，非缺陷；R142 QA 用生产 flomo 样本导入实测覆盖率，后续轮次如仍偏低再评估阈值
 
 ## 等老板事项
-- **恢复 `suinian-api`**：①Cloudflare 账户恢复 Workers Paid + 启用 R2；②运行时注入原 Worker secrets（至少 `SUINIAN_ENC_KEY`、`DEEPSEEK_API_KEY`、`REGISTRATION_INVITE_CODES`、`ADMIN_TOKEN`、`BRIDGE_TOKEN`、VAPID×3；微信/企微可后补）；③合并 #392→#393→#394→#395→#396→#397→#398→#399→#400→#402→#403→#404→#405（2026-09-09 22:30 UTC 本机 worktree 按此顺序合并 13 支全部无冲突，合并态 backend typecheck 绿、全量 vitest 4698/4698）后由负责人 deploy-sync，并补跑 R337–R343 生产验证（qa-r337 矩阵、tail 核对熔断窗口、同问兜底不命中缓存、qa-r340 语料 REST/SSE/MCP 出口、R341/R342 报告/线程/复盘模型视图与 E13 直答）
+- **恢复 `suinian-api`**：①Cloudflare 账户恢复 Workers Paid + 启用 R2；②运行时注入原 Worker secrets（至少 `SUINIAN_ENC_KEY`、`DEEPSEEK_API_KEY`、`REGISTRATION_INVITE_CODES`、`ADMIN_TOKEN`、`BRIDGE_TOKEN`、VAPID×3；微信/企微可后补）；③合并 #392→#393→#394→#395→#396→#397→#398→#399→#400→#402→#403→#404→#405→#406（2026-09-09 22:30 UTC 本机 worktree 按此顺序合并前 13 支全部无冲突、合并态 typecheck 绿、全量 vitest 4698/4698；22:55 UTC 再叠 #406 delta 全量 4705/4705）后由负责人 deploy-sync，并补跑 R337–R344 生产验证（qa-r337 矩阵、tail 核对熔断窗口、同问兜底不命中缓存、qa-r340 语料 REST/SSE/MCP 出口、R341/R342 报告/线程/复盘模型视图与 E13 直答、R343/R344 锁具/省略句/设备动作问句 REST 出口）
 - GitHub Actions 付款问题（恢复后 CI 才会跑）
 - DeepSeek 账户充值（2026-09-09 余额 -0.35 CNY / 402）或决定主模型 provider（见已知问题【provider】）
 - 扩展是否上架 Chrome Web Store（需开发者账号 $5）
