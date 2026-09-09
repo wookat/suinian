@@ -145,6 +145,8 @@ export interface AskResponse {
   isolated_refs?: number[]
   /** 危险代码判别器不可用，本轮按保守隔离处理（R288 P2-1：与「已确认危险」区分展示并可重试） */
   exec_guard_degraded?: boolean
+  /** 模型暂不可用，answer 为「已找到相关记录」类兜底（R339：服务端不缓存该答案，可重试） */
+  ai_unavailable?: boolean
 }
 
 export interface NotePatch {
