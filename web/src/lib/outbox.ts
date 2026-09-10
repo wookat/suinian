@@ -1,13 +1,15 @@
 /**
  * PWA 离线写入队列（R122 P1-3）：网络失败的速记进 IndexedDB 持久队列，
- * 网络恢复（window online）与应用启动时自动重放，多条离线笔记全部保住，
- * 不再只剩输入框里的最后一条草稿。
+ * 网络恢复（window online）、应用启动、回到前台、登录/改地址时自动重放；
+ * 浏览器在线但服务端 / 会话出故障（连接失败、429/5xx、401/403）时按退避
+ * 定时重试，多条离线笔记全部保住，不再只剩输入框里的最后一条草稿。
  *
  * 选型：IndexedDB 是浏览器端唯一的结构化持久存储（localStorage 有 5MB 配额
  * 且同步阻塞）；Background Sync API 只有 Chromium 支持且 iOS PWA 不可用，
  * 用 online 事件 + 启动重放这一成熟组合覆盖全平台，不新增服务端实体。
  */
 import { ApiError, createNote, ingestMedia, NetworkError } from "./api"
+import { loadSettings, SETTINGS_CHANGED_EVENT } from "./settings"
 
 /** 429/5xx 是服务端瞬时故障；401/403/408 是会话/时序问题（重新登录后能发出）。
  * 这些条目必须留队等下次重放，不能当毒丸丢弃（R302 P0-4：静默丢数据是
@@ -140,6 +142,7 @@ export async function enqueueNote(payload: CreateNotePayload): Promise<boolean> 
     const withId: CreateNotePayload = { ...payload, client_id: payload.client_id ?? crypto.randomUUID() }
     await tx("readwrite", (s) => s.add({ payload: withId, queued_at: new Date().toISOString() }))
     void notifyCount()
+    scheduleRetry()
     return true
   } catch {
     return false
@@ -151,6 +154,7 @@ export async function enqueueMedia(blob: Blob, type: MediaOutboxItem["type"], fi
   try {
     await tx("readwrite", (s) => s.add({ blob, type, fileName, queued_at: new Date().toISOString(), client_id: crypto.randomUUID() }), MEDIA_STORE)
     void notifyCount()
+    scheduleRetry()
     return true
   } catch {
     return false
@@ -159,13 +163,39 @@ export async function enqueueMedia(blob: Blob, type: MediaOutboxItem["type"], fi
 
 let flushing = false
 
+/** 在线但补发失败时的自动重试间隔：短起步、封顶 5 分钟；任一条成功、联网、设置变更即归零 */
+const RETRY_BACKOFF_MS = [20_000, 40_000, 80_000, 160_000, 300_000]
+let retryTimer: number | null = null
+let retryAttempt = 0
+
+function scheduleRetry(): void {
+  if (retryTimer !== null) return
+  // 离线不定时：等 online 事件
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return
+  const delay = RETRY_BACKOFF_MS[Math.min(retryAttempt, RETRY_BACKOFF_MS.length - 1)]
+  retryAttempt++
+  retryTimer = window.setTimeout(() => {
+    retryTimer = null
+    void flushOutbox()
+  }, delay)
+}
+
+function resetRetry(): void {
+  retryAttempt = 0
+  if (retryTimer !== null) {
+    window.clearTimeout(retryTimer)
+    retryTimer = null
+  }
+}
+
 /**
- * 重放队列：逐条按入队顺序补发，成功即删；网络失败/429/5xx 立即停（留队列
- * 等下次 online 重放）。文字笔记服务端按「内容+时间」去重，media 按入队时
+ * 重放队列：逐条按入队顺序补发，成功即删；网络失败/429/5xx 立即停，离线等
+ * online 事件、在线则按退避定时再试。队列里的是真实账号的记录，演示模式下不重放。文字笔记服务端按「内容+时间」去重，media 按入队时
  * 生成的 client_id 幂等，响应丢失导致的重复补发不会产生重复笔记。
  */
 export async function flushOutbox(): Promise<void> {
   if (flushing) return
+  if (loadSettings().useMock) return
   flushing = true
   try {
     for (;;) {
@@ -175,10 +205,14 @@ export async function flushOutbox(): Promise<void> {
       try {
         const note = await createNote(item.payload)
         await tx("readwrite", (s) => s.delete(item.id!))
+        retryAttempt = 0
         void notifyCount()
         for (const l of flushListeners) l(note)
       } catch (e) {
-        if (isTransient(e)) return
+        if (isTransient(e)) {
+          scheduleRetry()
+          return
+        }
         // 确定性 4xx（如内容超长被 413 拒绝）：这条永远发不出去，出队避免卡死
         // 整个队列，但内容交回 UI 展示（不静默丢），其余条目继续
         await tx("readwrite", (s) => s.delete(item.id!))
@@ -195,10 +229,14 @@ export async function flushOutbox(): Promise<void> {
         const file = new File([item.blob], item.fileName, { type: item.blob.type || "application/octet-stream" })
         const note = await ingestMedia(file, item.type, item.client_id)
         await tx("readwrite", (s) => s.delete(item.id!), MEDIA_STORE)
+        retryAttempt = 0
         void notifyCount()
         for (const l of flushListeners) l(note)
       } catch (e) {
-        if (isTransient(e)) return
+        if (isTransient(e)) {
+          scheduleRetry()
+          return
+        }
         await tx("readwrite", (s) => s.delete(item.id!), MEDIA_STORE)
         void notifyCount()
         const reason = e instanceof Error ? e.message : String(e)
@@ -212,10 +250,20 @@ export async function flushOutbox(): Promise<void> {
 
 let started = false
 
-/** 应用启动时调用一次：立即重放存量 + 监听网络恢复自动重放。 */
+/** 应用启动时调用一次：立即重放存量 + 联网 / 回到前台 / 登录或改地址时自动重放。 */
 export function startOutboxAutoFlush(): void {
   if (started) return
   started = true
-  window.addEventListener("online", () => void flushOutbox())
+  window.addEventListener("online", () => {
+    resetRetry()
+    void flushOutbox()
+  })
+  window.addEventListener(SETTINGS_CHANGED_EVENT, () => {
+    resetRetry()
+    void flushOutbox()
+  })
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void flushOutbox()
+  })
   void flushOutbox()
 }
