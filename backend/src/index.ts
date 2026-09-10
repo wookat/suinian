@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
-import { triageNote, triageNoteDetailed, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE, neutralizePromptInjection, scrubModelOutputInjectionArtifacts } from "./triage";
+import { triageNote, triageNoteDetailed, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, zonedDate, todoDueLocalDate, DEFAULT_TZ, FALLBACK_TRIAGE, neutralizePromptInjection, scrubModelOutputInjectionArtifacts } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta, fallbackTitleFromUrl } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import {
@@ -7072,18 +7072,25 @@ app.post("/api/push/test", async (c) => {
 
 // ---- GET /api/todos/today ----
 // 当天（用户时区）到期 + 已过期的未完成待办，供 bridge 上午推送清单
+const TODOS_TODAY_LIMIT = 50;
 app.get("/api/todos/today", async (c) => {
   const tz = await loadUserTz(c.env, c.get("userId"));
   const today = zonedDate(new Date(), tz).iso;
+  // SQLite date() 先把带偏移的时刻转成 UTC 再取日期，与用户时区的本地日期最多差一天：
+  // SQL 只做放宽一天的粗筛，「今天 / 已过期」按 todo_due 在用户时区的本地日期判定。
   const { results } = await c.env.DB.prepare(
     `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL
        AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0)
-       AND todo_due IS NOT NULL AND date(todo_due) <= ?
-     ORDER BY datetime(todo_due) ASC LIMIT 50`
+       AND todo_due IS NOT NULL AND date(todo_due) <= date(?, '+1 day')
+     ORDER BY datetime(todo_due) ASC LIMIT ${TODOS_TODAY_LIMIT * 2}`
   )
     .bind(c.get("userId"), today)
     .all<NoteRow>();
-  const items = (results ?? []).map((n) => ({ ...noteToJson(n), overdue: (n.todo_due ?? "").slice(0, 10) < today }));
+  const items = (results ?? [])
+    .map((n) => ({ n, due: todoDueLocalDate(n.todo_due ?? "", tz) ?? (n.todo_due ?? "").slice(0, 10) }))
+    .filter(({ due }) => due <= today)
+    .slice(0, TODOS_TODAY_LIMIT)
+    .map(({ n, due }) => ({ ...noteToJson(n), overdue: due < today }));
   return c.json({ date: today, items });
 });
 

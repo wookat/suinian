@@ -82,6 +82,18 @@ export function zonedDate(now: Date, tz: string, offsetDays = 0): { iso: string;
   return { iso: local.toISOString().slice(0, 10), weekday: WEEKDAYS_ZH[local.getUTCDay()] };
 }
 
+/**
+ * todo_due 在时区 `tz` 的本地日期（YYYY-MM-DD）。纯日期原样返回；带偏移的时刻按该瞬间换算到 `tz`；
+ * 无偏移的历史值按 Asia/Shanghai 本地时间（与 normalizeStoredTodoDue 同口径）。解析不出返回 null。
+ */
+export function todoDueLocalDate(due: string, tz: string): string | null {
+  const s = due.trim().replace(" ", "T");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const v = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(s) ? `${s}+08:00` : s;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? null : zonedDate(new Date(t), tz).iso;
+}
+
 /** Date in Asia/Shanghai (offset by `offsetDays`) as { iso: "YYYY-MM-DD", weekday: "周X" }. */
 export function shanghaiDate(now: Date = new Date(), offsetDays = 0): { iso: string; weekday: string } {
   return zonedDate(now, DEFAULT_TZ, offsetDays);
