@@ -13,6 +13,15 @@ export interface Settings {
 
 const OFFICIAL_API_BASE = "https://suinian-api.zalize.com"
 
+/** True when `url` points at the official hosted instance. */
+export function isOfficialApiBase(url: string): boolean {
+  try {
+    return new URL(url).host === new URL(OFFICIAL_API_BASE).host
+  } catch {
+    return false
+  }
+}
+
 /** Build-time API base (e.g. VITE_API_BASE=http://127.0.0.1:8787 for local dev).
  * A localhost value is honored only when the page itself is served from
  * localhost, so a stray .env.local can never leak into a deployed build. */
