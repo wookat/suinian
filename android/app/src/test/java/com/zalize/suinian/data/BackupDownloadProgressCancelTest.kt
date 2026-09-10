@@ -2,6 +2,7 @@ package com.zalize.suinian.data
 
 import com.zalize.suinian.data.api.ApiClient
 import com.zalize.suinian.data.api.ApiException
+import com.zalize.suinian.data.api.positiveHeaderLong
 import com.zalize.suinian.ui.BackupDownloadState
 import com.zalize.suinian.ui.backupDownloadLabel
 import com.zalize.suinian.ui.backupDownloadPercent
@@ -42,6 +43,8 @@ class BackupDownloadProgressCancelTest {
         private val chunked: Boolean = true,
         private val status: String = "200 OK",
         private val fileName: String = "suinian-backup-2026-09-08.zip",
+        /** 非空时加 X-Suinian-Backup-Estimate 头（#459 服务端预估总长） */
+        private val estimateHeader: String? = null,
     ) {
         val ss = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
         val sent = AtomicLong(0)
@@ -62,9 +65,10 @@ class BackupDownloadProgressCancelTest {
                     }
                     val out = s.getOutputStream()
                     val framing = if (chunked) "Transfer-Encoding: chunked" else "Content-Length: ${chunk.toLong() * chunks}"
+                    val estimate = if (estimateHeader == null) "" else "X-Suinian-Backup-Estimate: $estimateHeader\r\n"
                     out.write(
                         ("HTTP/1.1 $status\r\nContent-Type: application/zip\r\n" +
-                            "Content-Disposition: attachment; filename=\"$fileName\"\r\n$framing\r\nConnection: close\r\n\r\n").toByteArray()
+                            "Content-Disposition: attachment; filename=\"$fileName\"\r\n$framing\r\n${estimate}Connection: close\r\n\r\n").toByteArray()
                     )
                     val block = ByteArray(chunk) { (it % 251).toByte() }
                     for (i in 0 until chunks) {
@@ -107,7 +111,7 @@ class BackupDownloadProgressCancelTest {
         val progress = mutableListOf<Pair<Long, Long>>()
         try {
             val name = runBlocking {
-                server.api().downloadBackup(onProgress = { r, t -> progress += r to t }) { fileName ->
+                server.api().downloadBackup(onProgress = { r, t, _ -> progress += r to t }) { fileName ->
                     sink.opened++
                     assertEquals("suinian-backup-2026-09-08.zip", fileName)
                     sink
@@ -132,12 +136,108 @@ class BackupDownloadProgressCancelTest {
         val server = SlowServer(chunk = 32 * 1024, chunks = 4, pauseMs = 0, chunked = false)
         val progress = mutableListOf<Pair<Long, Long>>()
         try {
-            runBlocking { server.api().downloadBackup(onProgress = { r, t -> progress += r to t }) { Sink() } }
+            runBlocking { server.api().downloadBackup(onProgress = { r, t, _ -> progress += r to t }) { Sink() } }
             assertTrue(progress.all { it.second == 4L * 32 * 1024 })
             assertEquals(4L * 32 * 1024, progress.last().first)
         } finally {
             server.close()
         }
+    }
+
+    private data class P(val received: Long, val total: Long, val estimate: Long)
+
+    private fun download(server: SlowServer): List<P> {
+        val progress = mutableListOf<P>()
+        runBlocking { server.api().downloadBackup(onProgress = { r, t, e -> progress += P(r, t, e) }) { Sink() } }
+        return progress
+    }
+
+    @Test
+    fun estimate_header_is_reported_alongside_unknown_total() {
+        // 全部原件在位：预估 = 实际（#459 本机实录 5402763 = 5402763）
+        val actual = 8L * 64 * 1024
+        val server = SlowServer(chunk = 64 * 1024, chunks = 8, pauseMs = 0, estimateHeader = actual.toString())
+        try {
+            val progress = download(server)
+            assertTrue(progress.all { it.total == -1L && it.estimate == actual })
+            progress.firstOrNull { it.received in 1 until actual }?.let { mid ->
+                val state = BackupDownloadState.Running(mid.received, mid.total, mid.estimate)
+                val percent = backupDownloadPercent(state)!!
+                assertTrue(percent in 0..99)
+                assertEquals("下载中 ${"%.1fMB".format(mid.received / 1048576.0)} / 约 0.5MB（约 $percent%）", backupDownloadLabel(state))
+            }
+            // 收完前不显示 100%
+            val last = progress.last()
+            assertEquals(actual, last.received)
+            assertEquals(99, backupDownloadPercent(BackupDownloadState.Running(last.received, last.total, last.estimate)))
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun estimate_larger_than_actual_still_completes_without_error() {
+        // R2 缺对象被跳过：实际 < 预估，不得报「中断」
+        val server = SlowServer(chunk = 64 * 1024, chunks = 4, pauseMs = 0, estimateHeader = (10L * 64 * 1024).toString())
+        try {
+            val progress = download(server)
+            assertEquals(4L * 64 * 1024, progress.last().received)
+            assertEquals(40, backupDownloadPercent(BackupDownloadState.Running(progress.last().received, -1, progress.last().estimate)))
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun received_beyond_estimate_falls_back_to_bytes_only() {
+        // attachments.size 未知：实际 > 预估，超出后不显示百分比也不报错
+        val estimate = 2L * 64 * 1024
+        val server = SlowServer(chunk = 64 * 1024, chunks = 4, pauseMs = 0, estimateHeader = estimate.toString())
+        try {
+            val progress = download(server)
+            assertEquals(4L * 64 * 1024, progress.last().received)
+            val over = progress.filter { it.received > estimate }
+            assertTrue(over.isNotEmpty())
+            for (p in over) {
+                val s = BackupDownloadState.Running(p.received, p.total, p.estimate)
+                assertNull(backupDownloadPercent(s))
+                val label = backupDownloadLabel(s)
+                assertTrue(label, label.contains("已接收") && label.contains("预估约 0.1MB") && !label.contains("%"))
+            }
+            // 跨过预估时归约键必变（否则 UI 停在「约 99%」）
+            assertTrue(backupDownloadStep(estimate, -1, estimate) != backupDownloadStep(estimate + 1, -1, estimate))
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun exact_content_length_wins_over_estimate_header() {
+        val server = SlowServer(chunk = 32 * 1024, chunks = 4, pauseMs = 0, chunked = false, estimateHeader = "999999999")
+        try {
+            val progress = download(server)
+            assertTrue(progress.all { it.total == 4L * 32 * 1024 && it.estimate == -1L })
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun malformed_estimate_header_is_ignored() {
+        val server = SlowServer(chunk = 16 * 1024, chunks = 2, pauseMs = 0, estimateHeader = "abc")
+        try {
+            assertTrue(download(server).all { it.total == -1L && it.estimate == -1L })
+        } finally {
+            server.close()
+        }
+        assertEquals(-1L, positiveHeaderLong(null))
+        assertEquals(-1L, positiveHeaderLong(""))
+        assertEquals(-1L, positiveHeaderLong("0"))
+        assertEquals(-1L, positiveHeaderLong("-5"))
+        assertEquals(-1L, positiveHeaderLong("1e3"))
+        assertEquals(-1L, positiveHeaderLong("12.5"))
+        assertEquals(-1L, positiveHeaderLong("99999999999999999999"))
+        assertEquals(123L, positiveHeaderLong(" 123 "))
     }
 
     @Test
@@ -209,5 +309,26 @@ class BackupDownloadProgressCancelTest {
         assertTrue(backupDownloadStep(2 * 1024 * 1024, -1) > backupDownloadStep(2 * 1024 * 1024 - 1, -1))
         assertEquals(backupDownloadStep(10, 1000), backupDownloadStep(19, 1000))
         assertTrue(backupDownloadStep(20, 1000) > backupDownloadStep(19, 1000))
+    }
+
+    @Test
+    fun label_and_percent_handle_estimate() {
+        val est = 100L * 1024 * 1024
+        val approx = BackupDownloadState.Running(received = 25L * 1024 * 1024, total = -1, estimate = est)
+        assertEquals(25, backupDownloadPercent(approx))
+        assertEquals("下载中 25.0MB / 约 100.0MB（约 25%）", backupDownloadLabel(approx))
+        // 预估封顶 99：刚好收满预估也不显 100
+        assertEquals(99, backupDownloadPercent(BackupDownloadState.Running(est, -1, est)))
+        // 超出预估：不显百分比，文案仍说明预估
+        val over = BackupDownloadState.Running(est + 1, -1, est)
+        assertNull(backupDownloadPercent(over))
+        assertTrue(backupDownloadLabel(over).contains("预估约 100.0MB"))
+        // 精确总长优先于预估
+        val exact = BackupDownloadState.Running(50, 100, 1000)
+        assertEquals(50, backupDownloadPercent(exact))
+        assertFalse(backupDownloadLabel(exact).contains("约"))
+        // 预估态按百分点归约
+        assertEquals(backupDownloadStep(10, -1, 1000), backupDownloadStep(19, -1, 1000))
+        assertTrue(backupDownloadStep(20, -1, 1000) > backupDownloadStep(19, -1, 1000))
     }
 }

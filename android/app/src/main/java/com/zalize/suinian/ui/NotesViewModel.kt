@@ -595,12 +595,12 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 repo.downloadBackup(
                     includeSensitive,
                     password,
-                    onProgress = { received, total ->
-                        val step = backupDownloadStep(received, total)
+                    onProgress = { received, total, estimate ->
+                        val step = backupDownloadStep(received, total, estimate)
                         if (step != lastStep) {
                             lastStep = step
                             _backupDownload.update {
-                                if (it is BackupDownloadState.Running) BackupDownloadState.Running(received, total) else it
+                                if (it is BackupDownloadState.Running) BackupDownloadState.Running(received, total, estimate) else it
                             }
                         }
                     },
