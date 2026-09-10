@@ -37,7 +37,8 @@ import {
   getTags,
   importData,
   downloadBackup,
-  formatMB,
+  transferLabel,
+  transferPercent,
   TransferCancelledError,
   type TransferProgress,
   restoreBackup,
@@ -1116,9 +1117,9 @@ export function SettingsPage() {
 
   function backupButtonLabel(p: TransferProgress | null): string {
     if (!p || p.received === 0) return "打包中，请勿关闭页面…"
-    if (p.total) return `下载中 ${formatMB(p.received)} / ${formatMB(p.total)}（${Math.min(100, Math.round((p.received / p.total) * 100))}%）`
-    return `下载中，已接收 ${formatMB(p.received)}`
+    return transferLabel(p)
   }
+  const backupPercent = exporting === "backup" && backupProgress ? transferPercent(backupProgress) : null
 
   async function copyCurl() {
     try {
@@ -1582,11 +1583,11 @@ export function SettingsPage() {
             )}
           </Button>
         </div>
-        {exporting === "backup" && backupProgress?.total ? (
+        {backupPercent ? (
           <Progress
             className="h-1.5"
-            aria-label="备份下载进度"
-            value={Math.min(100, Math.round((backupProgress.received / backupProgress.total) * 100))}
+            aria-label={backupPercent.approx ? "备份下载进度（按预估总长）" : "备份下载进度"}
+            value={backupPercent.value}
           />
         ) : null}
         <p className="text-xs text-muted-foreground">
