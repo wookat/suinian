@@ -369,6 +369,9 @@ export function NoteCard({
   const guardedCard = !sensitive && note.content_withheld === true
   // 敏感预检命中但尚待模型复判（R312 P0-3：R311 T2「加密卡→明文卡」的翻转就是这个状态被当成定论展示）
   const sensitiveRejudging = sensitive && note.meta?.needs_retriage === true
+  // 图片笔记由视觉模型判敏（R188 粘性位）：模型只看像素，对文字密集的资料照片 / 含「密码」「凭据」字样的普通内容会误判，
+  // 且文本复判不会解开——遮罩上如实说清判定来源与唯一出路（菜单「取消敏感标记」），不与预检复判态混为一谈
+  const visionSensitive = sensitive && !sensitiveRejudging && note.meta?.vision_sensitive === true
   // 可执行载荷折叠（R304 P0-A → R312 P0-3）：数据面标记 → strict/broad 默认折叠 + 警示，
   // code（日常命令备忘）展示但复制前确认。敏感遮罩优先（遮罩本身已隐藏原文）；编辑态直接编辑原文不折叠。
   const foldLevel = sensitive ? null : noteFoldLevel(note)
@@ -940,7 +943,13 @@ export function NoteCard({
             </span>
             <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border bg-secondary px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
               {revealing ? <Loader2 className="size-3 animate-spin" /> : <Eye className="size-3" />}
-              {revealing ? "取回原文中…" : guardedCard ? "含口令 / 密钥一类内容，点击查看原文" : "敏感内容，点击查看"}
+              {revealing
+                ? "取回原文中…"
+                : guardedCard
+                  ? "含口令 / 密钥一类内容，点击查看原文"
+                  : visionSensitive
+                    ? "图片被判为含密码 / 凭证，点击查看"
+                    : "敏感内容，点击查看"}
             </span>
             <span className="w-full text-xs leading-relaxed text-muted-foreground">
               {revealError
@@ -949,6 +958,8 @@ export function NoteCard({
                   ? "这条未标注敏感，但正文带口令 / 密钥一类称谓：问答引用卡不回传原文，点开后按登录态取回；取回后可在菜单「标记为敏感」加密保护"
                   : sensitiveRejudging
                   ? "疑似密码/凭据类信息，已先加密保护，AI 复判中；若复判为普通内容会自动恢复明文展示"
+                  : visionSensitive
+                  ? "图片识别模型判断图中含密码 / 凭证类信息，已加密保护（搜索仍能搜到、问答仍会引用这张卡片，但 AI 只拿到占位符，原图与识别文字只在你点开时显示）。模型只看图片、不会因后续文字复判而改判，对文字密集的资料照片、提到「密码」「凭据」等字样但没有实际取值的普通内容也可能误判——点开核对原图，若不是凭据，请在右上角菜单「取消敏感标记」恢复明文展示"
                   : "已加密保护：搜索仍能搜到、问答仍会引用这张卡片，但 AI 只拿到占位符，原文只在你点开时显示；若属误判，可在右上角菜单「取消敏感标记」（取消后不再加密遮罩、卡片 / 详情可直接看原文——含口令密钥的行仍按惯例默认折叠、一键展开；AI 回答对其中带口令 / 操作语境的短码取值仍按出口兜底占位，无任何称谓的短值不保证）"}
             </span>
           </button>
