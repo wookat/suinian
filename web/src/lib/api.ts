@@ -882,6 +882,10 @@ export interface RestoreStats {
   /** 单个文件超过大小上限，服务端主动跳过未导入 */
   media_oversized: number
   media_failed: number
+  /** notes.json 声明了附件、zip 里却没有对应条目 */
+  media_missing?: number
+  /** 原件未随笔记恢复的笔记（最多 50 条）：笔记已入库并打上 meta.attachment_missing */
+  media_missing_notes?: { note_id: string; name: string; reason: "oversized" | "failed" | "missing" }[]
 }
 
 export const MAX_RESTORE_BYTES = 200 * 1024 * 1024

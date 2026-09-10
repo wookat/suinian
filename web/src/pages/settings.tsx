@@ -1033,9 +1033,16 @@ export function SettingsPage() {
     setRestoreMsg(null)
     try {
       const stats: RestoreStats = await restoreBackup(file)
+      const missingNotes = stats.media_missing_notes ?? []
+      const missingTotal = (stats.media_oversized ?? 0) + stats.media_failed + (stats.media_missing ?? 0)
+      const missingNames = missingNotes.slice(0, 5).map((m) => m.name)
+      const missingDetail =
+        missingTotal > 0
+          ? `。${missingTotal} 个原件没跟上${missingNames.length > 0 ? `（${missingNames.join("、")}${missingTotal > missingNames.length ? " 等" : ""}）` : ""}：对应笔记已恢复并在卡片上标出「原件未随备份恢复」，需要原件的话请重新上传`
+          : ""
       setRestoreMsg({
         ok: true,
-        text: `恢复完成：笔记 ${stats.notes_imported}/${stats.notes_total} 条（跳过重复 ${stats.notes_skipped} 条）${(stats.sensitive_skipped ?? 0) > 0 ? `，跳过脱敏占位的敏感笔记 ${stats.sensitive_skipped} 条（迁移敏感内容请用勾选「包含敏感内容」的完整备份）` : ""}，媒体 ${stats.media_imported} 个${(stats.media_oversized ?? 0) > 0 ? `，超过大小上限跳过 ${stats.media_oversized} 个` : ""}${stats.media_failed > 0 ? `，导入失败 ${stats.media_failed} 个` : ""}${(stats.reports_imported ?? 0) > 0 || (stats.reports_skipped ?? 0) > 0 ? `，历史报告导入 ${stats.reports_imported} 份${(stats.reports_skipped ?? 0) > 0 ? `（跳过重复/无效 ${stats.reports_skipped} 份）` : ""}` : ""}${(stats.threads_rebuilt ?? 0) > 0 ? `，${stats.threads_rebuilt} 条线索归组将由后台聚类重建` : ""}。AI 分拣/线索/图谱会在后台陆续补全`,
+        text: `恢复完成：笔记 ${stats.notes_imported}/${stats.notes_total} 条（跳过重复 ${stats.notes_skipped} 条）${(stats.sensitive_skipped ?? 0) > 0 ? `，跳过脱敏占位的敏感笔记 ${stats.sensitive_skipped} 条（迁移敏感内容请用勾选「包含敏感内容」的完整备份）` : ""}，媒体 ${stats.media_imported} 个${(stats.media_oversized ?? 0) > 0 ? `，超过大小上限跳过 ${stats.media_oversized} 个` : ""}${stats.media_failed > 0 ? `，存档失败 ${stats.media_failed} 个` : ""}${(stats.media_missing ?? 0) > 0 ? `，备份包里缺少 ${stats.media_missing} 个` : ""}${(stats.reports_imported ?? 0) > 0 || (stats.reports_skipped ?? 0) > 0 ? `，历史报告导入 ${stats.reports_imported} 份${(stats.reports_skipped ?? 0) > 0 ? `（跳过重复/无效 ${stats.reports_skipped} 份）` : ""}` : ""}${(stats.threads_rebuilt ?? 0) > 0 ? `，${stats.threads_rebuilt} 条线索归组将由后台聚类重建` : ""}${missingDetail}。AI 分拣/线索/图谱会在后台陆续补全`,
       })
     } catch (e) {
       setRestoreMsg({ ok: false, text: e instanceof Error ? e.message : "恢复失败，请稍后重试" })
