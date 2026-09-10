@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react"
-import { CircleAlert, Loader2, X } from "lucide-react"
+import { CircleAlert, Download, Loader2, X } from "lucide-react"
 import { fetchNoteMediaUrl } from "@/lib/api"
 import { loadSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import type { NoteAttachment } from "@/lib/types"
+import { audioFormatLabel, browserCanPlayAudio, unplayableAudioText } from "@/lib/audio-support"
 
 /**
  * 附件原件渲染（R144 P1-1）：图片缩略图+点击大图、语音可播放。
@@ -127,8 +128,10 @@ export function NoteAudio({
 }) {
   const demo = loadSettings().useMock
   const { url, error } = useMediaUrl(noteId, attachment.id, !demo)
+  const [unplayable, setUnplayable] = useState(() => !browserCanPlayAudio(attachment.mime))
+  const [decodeFailed, setDecodeFailed] = useState(false)
   if (demo) return null
-  if (error)
+  if (error || decodeFailed)
     return (
       <p className={cn("flex items-center gap-1.5 text-xs text-muted-foreground", className)}>
         <CircleAlert className="size-3.5 shrink-0" /> 语音加载失败，可稍后刷新重试
@@ -140,12 +143,41 @@ export function NoteAudio({
         <Loader2 className="size-3.5 animate-spin" /> 语音加载中…
       </div>
     )
+  if (unplayable) {
+    const format = audioFormatLabel(attachment)
+    return (
+      <div
+        role="note"
+        onClick={(e) => e.stopPropagation()}
+        className={cn(
+          "flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground",
+          className,
+        )}
+      >
+        <CircleAlert className="size-3.5 shrink-0" />
+        <span>{unplayableAudioText(format)}</span>
+        <a
+          href={url}
+          download={attachment.name}
+          className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-2 hover:opacity-80"
+        >
+          <Download className="size-3.5" /> 下载原件
+        </a>
+      </div>
+    )
+  }
   return (
     <audio
       controls
       preload="metadata"
       src={url}
       onClick={(e) => e.stopPropagation()}
+      onError={(e) => {
+        const code = e.currentTarget.error?.code
+        // 3 = MEDIA_ERR_DECODE, 4 = MEDIA_ERR_SRC_NOT_SUPPORTED：格式不受支持（canPlayType 答 maybe 但解封装失败）；其余是加载问题
+        if (code === 3 || code === 4) setUnplayable(true)
+        else setDecodeFailed(true)
+      }}
       className={cn("h-10 w-full max-w-sm", className)}
     >
       <a href={url}>播放语音</a>
