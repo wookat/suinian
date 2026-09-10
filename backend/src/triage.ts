@@ -685,7 +685,8 @@ export function demoteEventLog(content: string, triage: TriageResult): TriageRes
   return triage;
 }
 
-const TODO_DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::\d{2})?\s*(Z|[+-]\d{2}:?\d{2})?)?/;
+// 秒后可带小数（JS `Date#toISOString()` 恒输出 `.000Z`）：小数不进结果，但其后的偏移必须照常识别
+const TODO_DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d{1,9})?)?\s*(Z|[+-]\d{2}:?\d{2})?)?/;
 
 // ---- 裸「周X」相对日期确定性后校验（R208 P2-2，audit-r207 §3）----
 // LLM 对裸「周X」（无「下/上」修饰）的星期算术会系统性 +1 天（R207 实测
