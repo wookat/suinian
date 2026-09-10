@@ -1,6 +1,7 @@
 import type { Env, NoteRow } from "./types";
 import { formatAmount, type FinanceStats } from "./reports";
 import { chatComplete } from "./ai";
+import { isDegenerateText } from "./text-quality";
 import { parseLedgerTable, ledgerPositiveRows, ledgerRowsMatching } from "./triage";
 import {
   remoteEndpointForms,
@@ -3448,16 +3449,7 @@ export function scrubUnsourcedNegations(answer: string, source: string): string 
 }
 
 /** 模型退化乱码（同词循环、同片段连续重复）：不能当答案下发。 */
-export function isDegenerateAnswer(answer: string): boolean {
-  const text = answer.trim();
-  const toks = text.split(/\s+/).filter(Boolean);
-  if (toks.length >= 12) {
-    const uniq = new Set(toks.map((t) => t.toLowerCase().replace(/[.,;:!?。，！？]/g, "")));
-    if (uniq.size / toks.length < 0.25) return true;
-  }
-  const m = /(.{2,8}?)\1{5,}/s.exec(text);
-  return m !== null && m[0].length >= 30 && m[0].length * 2 >= text.length;
-}
+export const isDegenerateAnswer = isDegenerateText;
 
 /** 模型把问句原样（或几乎原样）当答案吐回（降级模型对「逐字给我」类问法常见）：
  * 不是答案，按退化处理。 */

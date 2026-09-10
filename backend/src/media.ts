@@ -1,6 +1,7 @@
 import type { Env, NoteMeta } from "./types";
 import { chatComplete, withTimeout } from "./ai";
 import { detectSensitive } from "./triage";
+import { isDegenerateLines, isDegenerateText } from "./text-quality";
 import { encryptBytes, decryptBytes, isEncryptedAttachment } from "./crypto";
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
@@ -442,6 +443,7 @@ const IMAGE_PROMPT =
 /** Remove markdown emphasis/heading noise the vision model tends to emit. */
 export function stripMarkdown(text: string): string {
   return text
+    .replace(/^\s*`{3,}[^\n]*$/gm, "")
     .replace(/\*+/g, "")
     .replace(/^#{1,6}\s+/gm, "")
     .trim();
@@ -452,6 +454,8 @@ export interface ImageExtraction {
   content: string;
   /** Full vision description for metadata. */
   description: string;
+  /** 文字段是模型的生成循环（空白 / 全黑图常见），不是图中文字：调用方按抽取失败处理。 */
+  degenerate?: boolean;
   /** 图片含机密值（视觉模型判定 ∪ 文本敏感检测），作为敏感管道的入口提示。 */
   sensitive: boolean;
   /** 文字识别存疑（R212 P3-3）：视觉模型自评「清晰：否」，前端据此提示核对原图。 */
@@ -470,8 +474,15 @@ export function parseImageExtraction(raw: string): ImageExtraction {
   const visionSensitive = /^(是|yes)$/i.test(flagMatch?.[1] ?? "");
   // 清晰段缺失或非「否」时 fail-open 按清晰处理（存疑只加提示，绝不影响入库）
   const clarityMatch = cleaned.match(/(?:^|\n)\s*清晰[:：]\s*[<《【「(（\[]*\s*(是|否|yes|no)/i);
-  const suspect = /^(否|no)$/i.test(clarityMatch?.[1] ?? "");
   const text = (textMatch?.[1] ?? "").trim();
+  // 文字段之后一个小节都没有 = 输出在 max_tokens 处被截断：文字可能不完整、
+  // 清晰段也没机会输出，按存疑标记（只加提示，不影响入库）
+  const truncated = textMatch !== null && !descMatch && !flagMatch && !clarityMatch;
+  const suspect = /^(否|no)$/i.test(clarityMatch?.[1] ?? "") || (truncated && text.length >= 40);
+  const probe = textMatch !== null ? text : cleaned;
+  if (isDegenerateText(probe) || isDegenerateLines(probe)) {
+    return { content: "", description: "", degenerate: true, sensitive: false, suspect: false };
+  }
   const desc = (descMatch?.[1] ?? "").trim();
   // models often echo the prompt's angle-bracket placeholder (e.g. "<无>");
   // strip wrapping brackets before deciding whether the image really has text
@@ -538,6 +549,10 @@ export async function describeImage(env: Pick<Env, "AI">, bytes: Uint8Array): Pr
     const text = (out.response ?? "").trim();
     if (!text) return null;
     const extraction = parseImageExtraction(text);
+    if (extraction.degenerate) {
+      console.warn("describeImage: degenerate vision output, dropping", text.slice(0, 120));
+      return null;
+    }
     // never let an empty/placeholder-only extraction become note content;
     // callers fall back to the honest failure placeholder instead
     return extraction.content ? extraction : null;
