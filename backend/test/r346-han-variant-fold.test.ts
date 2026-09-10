@@ -5,6 +5,7 @@ import { foldHanVariants, isDeterministicRecallProbe, isOracleProbeQuestion, isS
 describe("R346 foldHanVariants", () => {
   it("逐字一对一折叠，长度与下标不变，简体 / 非汉字原样", () => {
     expect(foldHanVariants("wifi密碼是多少")).toBe("wifi密码是多少");
+    expect(foldHanVariants("註銷賬號 簽名 隱藏 溫度 狀態 匯款 帳號 録音")).toBe("注销账号 签名 隐藏 温度 状态 汇款 账号 录音");
     expect(foldHanVariants("密碼箱多少錢一個")).toBe("密码箱多少钱一个");
     for (const s of ["wifi密码是多少", "password? 123", "パスワード", "비밀번호"]) expect(foldHanVariants(s)).toBe(s);
     for (const t of ["儲物櫃密碼？", "會議室在哪，還有門禁密碼是幾"]) expect([...foldHanVariants(t)].length).toBe([...t].length);
