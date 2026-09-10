@@ -64,7 +64,7 @@ class BackupTransferTimeoutTest {
     fun download_body_truncated_is_readable_error() {
         val ss = truncatingServer()
         try {
-            runBlocking { ApiClient("http://127.0.0.1:${ss.localPort}", "t").downloadBackup() }
+            runBlocking { ApiClient("http://127.0.0.1:${ss.localPort}", "t").downloadBackup { java.io.ByteArrayOutputStream() } }
             fail("expected ApiException")
         } catch (e: ApiException) {
             assertTrue(e.message, e.message!!.contains("备份下载"))
