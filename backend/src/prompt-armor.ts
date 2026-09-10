@@ -9847,9 +9847,12 @@ export function conceptualLabelFree(nfkc: string): string {
   if (!CONCEPT_LABEL_RE.test(text)) return text;
   if (structuralValueFace(text)) return text;
   CONCEPT_LABEL_RE.lastIndex = 0;
-  // 「密码锁」是装着秘密的锁具而不是抽象概念：抹掉称谓词、保留「锁」，让锁具取值问（「密码锁的数字是多少」）与
-  // 「行李箱锁是几」同口径由 RESIDENCY_QUESTION_LABEL_RE + LOCK_OBJECT_TALK_RE 判；价钱 / 牌子 / 型号仍按谈论锁具排除。
-  return text.replace(CONCEPT_LABEL_RE, (m) => (/锁$/u.test(m) ? " 锁" : " "));
+  // 「密码锁 / 密码箱」是装着秘密的实物而不是抽象概念：抹掉称谓词、保留实物名，让锁具取值问（「密码锁的数字是多少」）与
+  // 「行李箱锁是几」同口径由 RESIDENCY_QUESTION_LABEL_RE + LOCK_OBJECT_TALK_RE 判；价钱 / 牌子 / 型号 / 尺寸仍按谈论实物排除。
+  return text.replace(CONCEPT_LABEL_RE, (m) => {
+    const obj = m.match(/[锁箱]$/u);
+    return obj ? ` ${obj[0]}` : " ";
+  });
 }
 const TITLE_LABEL_RE = new RegExp(`《[^《》\\n]{0,12}${CONCEPT_LABEL_WORD_SRC}[^《》\\n]{0,12}》`, "giu");
 
@@ -10376,14 +10379,14 @@ const CREDENTIAL_VALUE_LABEL_RE =
  * 出现在取值型问句里同样是在问凭据（「健身房柜子的锁是什么」「储物柜转盘多少」）。「锁定 / 锁屏 / 封锁 / 锁具 / 锁匠」不算。
  */
 const RESIDENCY_QUESTION_LABEL_RE =
-  /门禁|門禁|转盘|轉盤|拨盘|撥盤|密码盘|保险柜|保險櫃|保险箱|保險箱|备用码|恢复码|助记词|(?<![连封死闭])锁(?![定屏链具匠车])/u;
-/** 在讲锁具本身（买 / 换 / 修 / 价钱 / 型号）而不是锁的取值——不按凭据取值问处理。 */
-const LOCK_OBJECT_TALK_RE = /钱|价|费|元|牌子|品牌|型号|买|修|坏|安装|撬|钥匙|锁芯|智能锁|指纹锁|电子锁/u;
+  /门禁|門禁|转盘|轉盤|拨盘|撥盤|密码盘|保险柜|保險櫃|保险箱|保險箱|备用码|恢复码|助记词|(?<![连封死闭])锁(?![定屏链具匠车])|(?<=\s)箱(?!子)/u;
+/** 在讲锁具 / 密码箱本身（买 / 换 / 修 / 价钱 / 型号 / 尺寸）而不是锁的取值——不按凭据取值问处理。 */
+const LOCK_OBJECT_TALK_RE = /钱|价|费|元|牌子|品牌|型号|买|修|坏|安装|撬|钥匙|锁芯|智能锁|指纹锁|电子锁|寸|尺寸|大小|容量|多大|多重|重量|颜色/u;
 /** 指代受守取值的代词（召回里有在讲秘密的笔记时，「那串 / 那几个字」指的就是它）。 */
 const VALUE_ANAPHORA_RE = /那串|这串|那组|这组|那几个字|这几个字|那句|这句|那个词|那一?串|that (?:string|phrase|code|word)|the (?:string|phrase)/iu;
 /** 取值型问法：问「是什么 / 是多少 / 告诉我 / 忘了 / 念一下 / what is / 教えて / 뭐야」一类要拿到值的话。 */
 const VALUE_ASK_RE =
-  /是什么|是啥|是多少|多少|是哪|哪个|哪一个|叫什么|什么|啥|几号|是几(?![月年天周点])|告诉我|说一下|说给我|说出|报一下|报给我|给我|发我|发一下|写出|写一下|列出|念|读一下|贴|原样|原文|复述|重复|提醒我|帮我想|想起|回忆|忘了|忘记|记不得|记不清|想不起|查一下|查查|看看|是\s*[？?]|逐字|逐位|逐个|每个字|每一?位|每个字符|第\s*[\d一二三四五六七八九十]+\s*(?:位|个|到)|拆|转写|改写|换成|翻译|译成|变换|编码|倒着|反过来|竖着|做成|映射|大写|拼音|笔画|\bwhat(?:'s|\s+is|\s+was|\s+are|\s+were)?\b|\bwhich\b|tell me|give me|show me|remind me|forgot|forgotten|recall|repeat|read (?:me|out|back)|何(?:です|だ|でしょう|ですか|だった)|なに|なん(?:です|だ)|教えて|忘れ|思い出|뭐|무엇|알려|잊었|기억|как(?:ой|ая|ое|ие)|скажи|напомни|забыл|\bist was\b|was ist|wie lautet|welche[rs]?\b|sag mir|erinner|vergessen|cu[áa]l\b|dime\b|olvid[ée]|quel(?:le)?\s+est|dis-moi|oubli[ée]/iu;
+  /是什么|是啥|是多少|多少|是哪|哪个|哪一个|叫什么|什么|啥|几号|是几(?![月年天周点])|(?:转|拨|调|按|输入|输|键入|敲|设)(?:到|成|的)?是?几(?![月年天周点楼层下次遍圈个块号])|告诉我|说一下|说给我|说出|报一下|报给我|给我|发我|发一下|写出|写一下|列出|念|读一下|贴|原样|原文|复述|重复|提醒我|帮我想|想起|回忆|忘了|忘记|记不得|记不清|想不起|查一下|查查|看看|是\s*[？?]|逐字|逐位|逐个|每个字|每一?位|每个字符|第\s*[\d一二三四五六七八九十]+\s*(?:位|个|到)|拆|转写|改写|换成|翻译|译成|变换|编码|倒着|反过来|竖着|做成|映射|大写|拼音|笔画|\bwhat(?:'s|\s+is|\s+was|\s+are|\s+were)?\b|\bwhich\b|tell me|give me|show me|remind me|forgot|forgotten|recall|repeat|read (?:me|out|back)|何(?:です|だ|でしょう|ですか|だった)|なに|なん(?:です|だ)|教えて|忘れ|思い出|뭐|무엇|알려|잊었|기억|как(?:ой|ая|ое|ие)|скажи|напомни|забыл|\bist was\b|was ist|wie lautet|welche[rs]?\b|sag mir|erinner|vergessen|cu[áa]l\b|dime\b|olvid[ée]|quel(?:le)?\s+est|dis-moi|oubli[ée]/iu;
 /**
  * R324 A（方案 2，decision-r324）：对凭证的**取值型**问题——不看笔记内容长什么样（纯散文口令「木石田」「秋天的枫叶落在桥上」
  * 没有 code 面 / 高熵面），只看问法：问的是某个凭证的值，且召回里有在讲某个秘密的笔记（受守行 / 凭证标签 / 跨笔记指代），
@@ -10407,7 +10410,22 @@ export function isSecretValueQuestion(question: string, historyText = ""): boole
   if (!labeled) return false;
   // 「什么时候改的密码 / why did I change it」问的是时间 / 原因，不是取值：剥掉时间 / 原因问法后再判。
   const qv = q.replace(NON_VALUE_ASK_RE, " ");
-  return VALUE_ASK_RE.test(qv) || questionRequestsVerbatim(q);
+  return VALUE_ASK_RE.test(qv) || questionRequestsVerbatim(q) || ellipticalValueAsk(q);
+}
+/**
+ * R344 省略句取值问：「wifi 密码呢」「保险柜密码？」「那个箱子的密码」「wifi password?」——整句就是一个以凭证称谓收尾的名词短语
+ * （尾部语气词 / 标点可有），没有任何动作 / 方式 / 位置 / 概念词，问的只能是那个值。「改密码」「怎么设密码」「密码在哪」不算。
+ */
+const ELLIPTICAL_TAIL_RE = /(?:呢|吗|啊|呀|哈|哦|嘞|来|是)?[\s？?。.！!…~～]*$/u;
+const ELLIPTICAL_NON_VALUE_RE =
+  /怎么|如何|怎样|咋|(?:改|换|重置|设置|设定|修改|重设|设)(?![后过了的])|记一下|记下|记录|保存|存一下|要不要|能不能|可不可以|可以|需要|应该|建议|哪里|在哪|去哪|安全|强度|泄露|泄漏|规则|策略|管理|历史|过期|失效|错误|不对|报错|\b(?:how|change|changed|reset|update|set|where|should|policy|policies|managers?|rotate|rotation|expired|wrong|invalid|error|strength|leaks?|leaked)\b/iu;
+const ELLIPTICAL_LABEL_END_RE = new RegExp(`(?:${CREDENTIAL_VALUE_LABEL_RE.source})$`, "iu");
+function ellipticalValueAsk(q: string): boolean {
+  const core = q.trim().replace(ELLIPTICAL_TAIL_RE, "");
+  if (!core || [...core].length > 24 || ELLIPTICAL_NON_VALUE_RE.test(core)) return false;
+  // 「我什么时候改的密码」以称谓收尾但问的是时间：时间 / 原因 / 价钱问法在句里就不是省略句取值问
+  if (core.search(NON_VALUE_ASK_RE) >= 0) return false;
+  return ELLIPTICAL_LABEL_END_RE.test(core);
 }
 const NON_VALUE_ASK_RE =
   /什么时候|啥时候|何时|几点|哪天|哪年|哪一天|为什么|为啥|多久|多长时间|多少钱|几块钱|多贵|什么价|价格|什么牌子|哪个牌子|什么型号|忘(?:了|记)?\s*(?:怎么办|怎么处理|该怎么|要怎么|咋办)|怎么办|怎么处理|(?:要|该|得|需要)?(?:做|带|准备|注意|办)(?:些|点)?什么|讲(?:了|的是)?什么|说(?:了|的是)?什么|(?:是)?关于什么|内容是什么|when (?:did|was|do)|why\b|how (?:often|long)|what (?:should|do) i (?:do|bring)|what (?:is|was) it about/giu;
