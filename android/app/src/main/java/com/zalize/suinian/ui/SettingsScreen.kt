@@ -114,10 +114,7 @@ fun SettingsScreen(
                 if (bytes.size > 200 * 1024 * 1024) {
                     restoreMessage = "备份文件过大：最大支持 200MB"
                 } else {
-                    val stats = vm.restoreFromBackup(bytes, "backup.zip")
-                    restoreMessage = "恢复完成：笔记 ${stats.notesImported}/${stats.notesTotal} 条（跳过重复 ${stats.notesSkipped} 条），媒体 ${stats.mediaImported} 个" +
-                        (if (stats.mediaFailed > 0) "，失败 ${stats.mediaFailed} 个" else "") +
-                        "。AI 分拣/线索/图谱会在后台陆续补全"
+                    restoreMessage = restoreSummary(vm.restoreFromBackup(bytes, "backup.zip"))
                 }
             } catch (e: Exception) {
                 restoreMessage = e.message ?: "恢复失败，请稍后重试"
