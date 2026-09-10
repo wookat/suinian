@@ -242,6 +242,14 @@ export async function askUserDataVersion(db: D1Database, userId: string): Promis
 /** 答案缓存的收口版本：出口收口规则变更时递增，旧规则下产出的答案不会在新版部署后继续从边缘缓存送出。 */
 export const ASK_ANSWER_CACHE_EPOCH = "r322.12";
 
+/**
+ * 答案是否可进边缘缓存：只缓存 200 且非「模型不可用」兜底的答案。兜底（`ai_unavailable`，服务端构造的字段）
+ * 是当下 provider 状态的产物而非用户资料的产物，缓存它会让模型恢复后同问在 TTL 内继续拿旧兜底。
+ */
+export function askAnswerCacheable(body: Record<string, unknown>, status: number): boolean {
+  return status === 200 && body.ai_unavailable !== true;
+}
+
 async function askAnswerCacheKey(auth: string, material: string, dataVersion: string): Promise<Request> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -398,7 +406,7 @@ app.use("/api/ask", async (c, next) => {
       const finDur = Date.now() - t0;
       const conaudPart = prevTiming?.includes("conaud") ? "" : `conaud;dur=${finDur}, `;
       headers.set("Server-Timing", `${prevTiming ? `${prevTiming}, ` : ""}${conaudPart}detguard;dur=${finDur}`);
-      if (cacheKey && c.res.status === 200) {
+      if (cacheKey && askAnswerCacheable(outBody, c.res.status)) {
         const stored = new Response(JSON.stringify(outBody), {
           headers: { "content-type": "application/json", "cache-control": `max-age=${ASK_ANSWER_CACHE_TTL_S}` },
         });
@@ -6335,7 +6343,7 @@ app.post("/api/ask", async (c) => {
     const fallback = questionRequestsVerbatim(question) && references.length > 0
       ? `已找到相关记录 [1]。${VERBATIM_REDIRECT_NOTICE}`
       : "（AI 暂不可用）已找到相关记录，见 references。";
-    return { answer: fallback, references, notes: refNotes };
+    return { answer: fallback, references, notes: refNotes, ai_unavailable: true };
   }
   // R296 P1-6（audit-r295 §6.1）：财务类问题带时间窗、答案由 LLM 基于召回
   // 生成时，召回可能不全（8 月 3 笔只召回 1 笔）却自信下结论。用 D1 台账
