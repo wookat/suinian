@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -38,7 +39,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -133,27 +133,24 @@ fun NoteImageAttachment(
     }
 }
 
-/** 语音附件：鉴权拉取原音频，播放/暂停控件 */
+/** 语音附件：鉴权拉取原音频到落盘缓存，MediaPlayer 直接读缓存文件；播放/暂停控件 */
 @Composable
 fun NoteAudioAttachment(
     noteId: String,
     attachment: NoteAttachment,
-    fetchMedia: suspend (noteId: String, attachmentId: String) -> Pair<ByteArray, String>,
+    fetchMediaFile: suspend (noteId: String, attachmentId: String) -> File,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
     var audioFile by remember(noteId, attachment.id) { mutableStateOf<File?>(null) }
     var failed by remember(noteId, attachment.id) { mutableStateOf(false) }
+    var loadAttempt by remember(noteId, attachment.id) { mutableIntStateOf(0) }
     var playing by remember { mutableStateOf(false) }
     val player = remember { MediaPlayer() }
 
-    LaunchedEffect(noteId, attachment.id) {
+    LaunchedEffect(noteId, attachment.id, loadAttempt) {
         if (audioFile != null || failed) return@LaunchedEffect
         try {
-            val (bytes, _) = fetchMedia(noteId, attachment.id)
-            val f = File.createTempFile("suinian-audio-", null, context.cacheDir)
-            f.writeBytes(bytes)
-            audioFile = f
+            audioFile = fetchMediaFile(noteId, attachment.id)
         } catch (_: Exception) {
             failed = true
         }
@@ -165,7 +162,6 @@ fun NoteAudioAttachment(
                 player.release()
             } catch (_: Exception) {
             }
-            audioFile?.delete()
         }
     }
 
@@ -203,8 +199,15 @@ fun NoteAudioAttachment(
                                     playing = false
                                 } else {
                                     if (!player.isPlaying && player.currentPosition == 0) {
+                                        val f = audioFile!!
+                                        if (!f.isFile) {
+                                            // 缓存已被容量淘汰 / 退出登录清空：重新取一次再播
+                                            audioFile = null
+                                            loadAttempt++
+                                            return@IconButton
+                                        }
                                         player.reset()
-                                        player.setDataSource(audioFile!!.absolutePath)
+                                        player.setDataSource(f.absolutePath)
                                         player.prepare()
                                         player.setOnCompletionListener {
                                             playing = false

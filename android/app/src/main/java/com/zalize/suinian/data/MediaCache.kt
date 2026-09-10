@@ -37,10 +37,32 @@ class MediaCache(
         return entry
     }
 
+    /**
+     * 落盘文件（语音直接喂 MediaPlayer，不经内存）：磁盘有就返回并刷新时间戳；只在内存里则补写一份；都没有返回 null。
+     * 返回的文件随容量淘汰 / clear 可能随时消失，调用方用前需再确认 isFile。
+     */
     @Synchronized
-    fun put(key: String, bytes: ByteArray, mime: String) {
-        val entry = Entry(bytes, mime)
-        putMemory(key, entry)
+    fun file(key: String): File? {
+        val bin = binFile(key)
+        if (bin.isFile && mimeFile(key).isFile) {
+            val now = System.currentTimeMillis()
+            bin.setLastModified(now)
+            mimeFile(key).setLastModified(now)
+            return bin
+        }
+        val mem = memory[key] ?: return null
+        writeDisk(key, mem.bytes, mem.mime)
+        return bin.takeIf { it.isFile }
+    }
+
+    /** keepInMemory=false：只落盘不占内存 LRU（几 MB 的语音会把整个图片内存缓存挤掉，而语音播放只需要文件） */
+    @Synchronized
+    fun put(key: String, bytes: ByteArray, mime: String, keepInMemory: Boolean = true) {
+        if (keepInMemory) putMemory(key, Entry(bytes, mime)) else memory.remove(key)?.let { memoryBytes -= it.bytes.size }
+        writeDisk(key, bytes, mime)
+    }
+
+    private fun writeDisk(key: String, bytes: ByteArray, mime: String) {
         if (bytes.size > diskLimit) return
         try {
             dir.mkdirs()

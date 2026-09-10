@@ -55,6 +55,7 @@ import com.zalize.suinian.data.Note
 import com.zalize.suinian.data.UrlTitle
 import com.zalize.suinian.ui.attachmentMissingText
 import com.zalize.suinian.ui.todoDueInvalidText
+import java.io.File
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -222,6 +223,7 @@ fun NoteCard(
     onSelectToggle: ((Note) -> Unit)? = null,
     onLongPress: ((Note) -> Unit)? = null,
     fetchMedia: (suspend (noteId: String, attachmentId: String) -> Pair<ByteArray, String>)? = null,
+    fetchMediaFile: (suspend (noteId: String, attachmentId: String) -> File)? = null,
 ) {
     var confirmDelete by rememberSaveable(note.id) { mutableStateOf(false) }
     // 敏感遮罩：点击临时查看，可再隐藏（对齐 Web）；遮罩时标题/链接卡/文件摘录/图片描述/金额一律不露出
@@ -715,16 +717,16 @@ fun NoteCard(
             }
 
             // 附件原件：图片缩略图+点击大图 / 语音可播放（敏感遮罩时不加载不展示）
-            if (fetchMedia != null && !masked) {
-                val imageAtt = if (note.rawType == "image") note.attachments?.firstOrNull(::isImageAttachment) else null
-                val audioAtt = if (note.rawType == "voice") note.attachments?.firstOrNull(::isAudioAttachment) else null
-                if (imageAtt != null) {
+            if (!masked) {
+                val imageAtt = if (fetchMedia != null && note.rawType == "image") note.attachments?.firstOrNull(::isImageAttachment) else null
+                val audioAtt = if (fetchMediaFile != null && note.rawType == "voice") note.attachments?.firstOrNull(::isAudioAttachment) else null
+                if (imageAtt != null && fetchMedia != null) {
                     Spacer(Modifier.height(8.dp))
                     NoteImageAttachment(note.id, imageAtt, fetchMedia)
                 }
-                if (audioAtt != null) {
+                if (audioAtt != null && fetchMediaFile != null) {
                     Spacer(Modifier.height(8.dp))
-                    NoteAudioAttachment(note.id, audioAtt, fetchMedia)
+                    NoteAudioAttachment(note.id, audioAtt, fetchMediaFile)
                 }
             }
             if (attachmentMissingHint != null && fileMeta == null && !masked) {

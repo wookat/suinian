@@ -72,6 +72,68 @@ class MediaCacheTest {
     }
 
     @Test
+    fun `file returns disk entry and refreshes mtime, null when absent`() {
+        val dir = tmp.newFolder("media")
+        val c = MediaCache(dir)
+        c.put("v", bytes(3000, 9), "audio/amr")
+        val bin = java.io.File(dir, "v.bin")
+        bin.setLastModified(1_000_000L)
+        val f = c.file("v")
+        assertNotNull(f)
+        assertEquals(bin.absolutePath, f!!.absolutePath)
+        assertArrayEquals(bytes(3000, 9), f.readBytes())
+        assertTrue("file() 应刷新 mtime 让最近播过的语音最后被淘汰", bin.lastModified() > 1_000_000L)
+        assertNull(c.file("missing"))
+        assertNull(MediaCache(dir).file("missing"))
+    }
+
+    @Test
+    fun `file materializes a memory-only entry back to disk`() {
+        val dir = tmp.newFolder("media")
+        val c = MediaCache(dir)
+        c.put("v", bytes(500, 4), "audio/mp4")
+        assertTrue(java.io.File(dir, "v.bin").delete())
+        assertTrue(java.io.File(dir, "v.mime").delete())
+        val f = c.file("v")
+        assertNotNull(f)
+        assertArrayEquals(bytes(500, 4), f!!.readBytes())
+        assertEquals("audio/mp4", java.io.File(dir, "v.mime").readText())
+    }
+
+    @Test
+    fun `put keepInMemory=false lands on disk only and does not evict images from memory`() {
+        val dir = tmp.newFolder("media")
+        val c = MediaCache(dir, memoryLimit = 2500, diskLimit = 1L shl 20)
+        c.put("img-a", bytes(1000, 1), "image/png")
+        c.put("img-b", bytes(1000, 2), "image/png")
+        c.put("voice", bytes(2000, 3), "audio/amr", keepInMemory = false)
+        assertTrue(java.io.File(dir, "voice.bin").isFile)
+        assertNotNull(c.file("voice"))
+
+        // 删掉磁盘副本后还能 get 到 = 在内存里；图片应都在，语音不在
+        dir.listFiles()!!.forEach { it.delete() }
+        assertNotNull(c.get("img-a"))
+        assertNotNull(c.get("img-b"))
+        assertNull(c.get("voice"))
+        assertNull(c.file("voice"))
+    }
+
+    @Test
+    fun `put keepInMemory=false drops a previous in-memory copy of the same key`() {
+        val dir = tmp.newFolder("media")
+        val c = MediaCache(dir, memoryLimit = 2500, diskLimit = 1L shl 20)
+        c.put("v", bytes(2000, 1), "audio/amr")
+        c.put("v", bytes(2000, 1), "audio/amr", keepInMemory = false)
+        assertTrue(java.io.File(dir, "v.bin").delete())
+        assertNull("之前的内存副本应被释放", c.get("v"))
+        c.put("img-a", bytes(1200, 2), "image/png")
+        c.put("img-b", bytes(1200, 3), "image/png")
+        dir.listFiles()!!.forEach { it.delete() }
+        assertNotNull(c.get("img-a"))
+        assertNotNull(c.get("img-b"))
+    }
+
+    @Test
     fun `clear removes memory and disk`() {
         val dir = tmp.newFolder("media")
         val c = MediaCache(dir)
