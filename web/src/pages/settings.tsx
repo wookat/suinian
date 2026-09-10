@@ -902,6 +902,7 @@ export function SettingsPage() {
   const [regenerating, setRegenerating] = useState(false)
   const [newRecoveryCode, setNewRecoveryCode] = useState<string | null>(null)
   const [accountMsg, setAccountMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [deleteMsg, setDeleteMsg] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleteConfirmText, setDeleteConfirmText] = useState("")
@@ -921,7 +922,10 @@ export function SettingsPage() {
   const importInputRef = useRef<HTMLInputElement>(null)
   const restoreInputRef = useRef<HTMLInputElement>(null)
   useSettingsVersion()
-  const demoOnly = loadSettings().useMock
+  const persisted = loadSettings()
+  const demoOnly = persisted.useMock
+  /** token 相关操作与注销只对已登录真实账号有意义；演示访客 / 未填 token 时不展示必失败的按钮 */
+  const signedIn = !demoOnly && persisted.apiToken.trim() !== ""
 
   useEffect(() => {
     const s = loadSettings()
@@ -1115,7 +1119,7 @@ export function SettingsPage() {
   async function handleDeleteAccount() {
     if (deleting || deleteConfirmText !== "注销") return
     setDeleting(true)
-    setAccountMsg(null)
+    setDeleteMsg(null)
     try {
       await deleteAccount()
       forgetPushIntent()
@@ -1132,7 +1136,7 @@ export function SettingsPage() {
         window.location.reload()
         return
       }
-      setAccountMsg({ ok: false, text: e instanceof Error ? e.message : "注销失败，请稍后重试" })
+      setDeleteMsg(e instanceof Error ? e.message : "注销失败，请稍后重试")
       setDeleting(false)
     }
   }
@@ -1281,69 +1285,79 @@ export function SettingsPage() {
         <div>
           <h3 className="text-[15px] font-semibold leading-snug">账号</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            还没有账号？支持用户名 + 密码自助注册，注册后自动配置 token
+            {demoOnly
+              ? "当前是演示模式，数据只在本浏览器。注册 / 登录后自动配置 token，演示期间记的笔记可一键导入"
+              : "还没有账号？支持用户名 + 密码自助注册，注册后自动配置 token"}
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <Button variant="outline" onClick={() => (window.location.hash = "#/auth")} className="w-full sm:w-auto">
             <UserPlus /> 注册 / 登录
           </Button>
-          <Button variant="outline" onClick={() => void copyToken()} className="w-full sm:w-auto">
-            {copied ? (
-              <>
-                <Check /> 已复制
-              </>
-            ) : (
-              <>
-                <Copy /> 复制我的 API token
-              </>
-            )}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={handleRotate}
-            disabled={rotating}
-            className="w-full sm:w-auto"
-          >
-            {rotating ? (
-              <>
-                <Loader2 className="animate-spin" /> 轮换中…
-              </>
-            ) : (
-              <>
-                <RefreshCw /> 轮换 token
-              </>
-            )}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={handleRegenerateRecovery}
-            disabled={regenerating}
-            className="w-full sm:w-auto"
-          >
-            {regenerating ? (
-              <>
-                <Loader2 className="animate-spin" /> 生成中…
-              </>
-            ) : (
-              <>
-                <KeyRound /> 重新生成恢复码
-              </>
-            )}
-          </Button>
-          <Button variant="outline" onClick={handleLogout} className="w-full sm:w-auto">
-            <LogOut /> 退出登录
-          </Button>
+          {signedIn && (
+            <>
+            <Button variant="outline" onClick={() => void copyToken()} className="w-full sm:w-auto">
+              {copied ? (
+                <>
+                  <Check /> 已复制
+                </>
+              ) : (
+                <>
+                  <Copy /> 复制我的 API token
+                </>
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleRotate}
+              disabled={rotating}
+              className="w-full sm:w-auto"
+            >
+              {rotating ? (
+                <>
+                  <Loader2 className="animate-spin" /> 轮换中…
+                </>
+              ) : (
+                <>
+                  <RefreshCw /> 轮换 token
+                </>
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleRegenerateRecovery}
+              disabled={regenerating}
+              className="w-full sm:w-auto"
+            >
+              {regenerating ? (
+                <>
+                  <Loader2 className="animate-spin" /> 生成中…
+                </>
+              ) : (
+                <>
+                  <KeyRound /> 重新生成恢复码
+                </>
+              )}
+            </Button>
+            <Button variant="outline" onClick={handleLogout} className="w-full sm:w-auto">
+              <LogOut /> 退出登录
+            </Button>
+            </>
+          )}
         </div>
         {newRecoveryCode && (
           <RecoveryCodeCard code={newRecoveryCode} onDone={() => setNewRecoveryCode(null)} />
         )}
-        <p className="text-xs text-muted-foreground">
-          恢复码是忘记密码时找回账号的唯一方式，丢失或泄露时可在这里重新生成（旧码同时作废）。用恢复码找回账号会同时作废所有旧 token：其他设备、浏览器扩展、MCP/API 集成需重新登录或重新配置
-        </p>
-        <p className="text-xs text-muted-foreground">
-          退出登录仅清除本机登录状态，云端数据不受影响，重新登录即可找回全部笔记
-        </p>
+        {signedIn && (
+          <>
+            <p className="text-xs text-muted-foreground">
+              恢复码是忘记密码时找回账号的唯一方式，丢失或泄露时可在这里重新生成（旧码同时作废）。用恢复码找回账号会同时作废所有旧 token：其他设备、浏览器扩展、MCP/API 集成需重新登录或重新配置
+            </p>
+            <p className="text-xs text-muted-foreground">
+              退出登录仅清除本机登录状态，云端数据不受影响，重新登录即可找回全部笔记
+            </p>
+          </>
+        )}
         {lastUsedAt && (
           <p className="text-xs text-muted-foreground">
             token 上次使用时间：{formatLastUsed(lastUsedAt)}（若非本人操作，建议立即轮换 token）
@@ -1721,6 +1735,7 @@ export function SettingsPage() {
       </Card>
       </SettingsGroup>
 
+      {signedIn && (
       <SettingsGroup title="危险操作">
       <Card className="space-y-4 border-destructive/40 bg-destructive/[0.03] p-5">
         <div>
@@ -1762,12 +1777,19 @@ export function SettingsPage() {
                 onClick={() => {
                   setDeleteConfirmOpen(false)
                   setDeleteConfirmText("")
+                  setDeleteMsg(null)
                 }}
                 disabled={deleting}
               >
                 取消
               </Button>
             </div>
+            {deleteMsg && (
+              <p role="alert" className="flex items-center gap-1.5 text-sm text-destructive">
+                <CircleAlert className="size-4 shrink-0" />
+                {deleteMsg}
+              </p>
+            )}
           </div>
         ) : (
           <Button
@@ -1780,6 +1802,7 @@ export function SettingsPage() {
         )}
       </Card>
       </SettingsGroup>
+      )}
       <PendingConfirmDialog pending={pendingConfirm} onClose={() => setPendingConfirm(null)} />
     </div>
   )
