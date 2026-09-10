@@ -11,6 +11,7 @@ import type {
   ThreadDetail,
   ThreadsResponse,
   StatsResponse,
+  TagCount,
   TodayReviewResponse,
   TrashNote,
   TrashResponse,
@@ -277,6 +278,59 @@ export async function mockGetNotes(query: NotesQuery): Promise<NotesResponse> {
   const notes = filterMockNotes(loadMockNotes(), query)
   notes.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
   return { notes, cursor: null }
+}
+
+/** 标签面（与服务端 /api/tags 同口径）：敏感行的标签不进公开标签面，按次数降序、同次数按字典序 */
+export async function mockGetTags(): Promise<TagCount[]> {
+  await delay(100)
+  const counts = new Map<string, number>()
+  for (const n of loadMockNotes()) {
+    if (n.is_sensitive === 1) continue
+    for (const t of n.tags) counts.set(t, (counts.get(t) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([tag, count]) => ({ tag, count }))
+}
+
+/**
+ * 全局改写标签（与服务端 retagUser 同语义）：`to = null` 即移除；改到已有标签即合并（去重）；
+ * 回收站行一并覆盖，恢复后与全局口径一致；只计实际含该标签的行。
+ */
+function retagMock(from: string, to: string | null): number {
+  let affected = 0
+  const retag = <T extends Note>(list: T[]) => {
+    for (const n of list) {
+      if (!n.tags.includes(from)) continue
+      n.tags = [...new Set(n.tags.map((t) => (t === from ? to : t)).filter((t): t is string => t !== null))]
+      n.updated_at = new Date().toISOString()
+      affected++
+    }
+  }
+  const notes = loadMockNotes()
+  const trash = loadMockTrash()
+  retag(notes)
+  retag(trash)
+  saveMockNotes(notes)
+  saveMockTrash(trash)
+  return affected
+}
+
+export async function mockRenameTag(from: string, to: string): Promise<number> {
+  await delay(150)
+  const f = from.trim()
+  const t = to.trim()
+  if (!f || !t) throw new Error("from/to required")
+  if (t.length > 32) throw new Error("标签最长 32 个字符")
+  if (f === t) return 0
+  return retagMock(f, t)
+}
+
+export async function mockDeleteTag(tag: string): Promise<number> {
+  await delay(150)
+  const t = tag.trim()
+  if (!t) throw new Error("tag required")
+  return retagMock(t, null)
 }
 
 /**

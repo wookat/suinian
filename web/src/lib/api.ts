@@ -7,6 +7,7 @@ import {
   mockBatchNotes,
   mockCreateNote,
   mockDeleteNote,
+  mockDeleteTag,
   mockEmptyTrash,
   mockGetNote,
   mockGetTrash,
@@ -22,6 +23,8 @@ import {
   mockPatchNote,
   mockGetStats,
   mockGetRandomNote,
+  mockGetTags,
+  mockRenameTag,
 } from "./mock"
 import type {
   AskHistoryMessage,
@@ -612,13 +615,14 @@ export async function getRandomNote(): Promise<Note | null> {
 }
 
 export async function getTags(): Promise<TagCount[]> {
-  if (loadSettings().useMock) throw new Error("演示模式不支持标签管理，请先配置真实 API")
+  if (loadSettings().useMock) return mockGetTags()
   const res = await realFetch<{ tags: TagCount[] }>("/api/tags")
   return res.tags
 }
 
 /** 重命名标签（全局替换；改名到已有标签即合并），返回影响的笔记数 */
 export function renameTag(from: string, to: string): Promise<number> {
+  if (loadSettings().useMock) return mutated(mockRenameTag(from, to))
   return mutated(
     realFetch<{ ok: boolean; affected: number }>("/api/tags/rename", {
       method: "POST",
@@ -629,6 +633,7 @@ export function renameTag(from: string, to: string): Promise<number> {
 
 /** 从所有笔记移除标签，返回影响的笔记数 */
 export function deleteTag(tag: string): Promise<number> {
+  if (loadSettings().useMock) return mutated(mockDeleteTag(tag))
   return mutated(
     realFetch<{ ok: boolean; affected: number }>("/api/tags/delete", {
       method: "POST",
