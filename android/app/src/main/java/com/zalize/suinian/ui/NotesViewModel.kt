@@ -24,6 +24,7 @@ import com.zalize.suinian.data.SendResult
 import com.zalize.suinian.data.StaleDownloadCleaner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import com.zalize.suinian.ui.components.AudioPlayback
 import com.zalize.suinian.ui.components.audioDownloadName
 import com.zalize.suinian.ui.components.mediaStatusLine
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -298,10 +299,16 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         repo.updatePreferences(dailyReviewPush, todoReminderPush)
 
     /** 永久注销账号：删除云端全部数据并清本机登录状态 */
-    suspend fun deleteAccount() = repo.deleteAccount()
+    suspend fun deleteAccount() {
+        AudioPlayback.stop()
+        repo.deleteAccount()
+    }
 
     /** 退出登录：清登录态与本机缓存的私有附件 */
-    suspend fun logout() = repo.logout()
+    suspend fun logout() {
+        AudioPlayback.stop()
+        repo.logout()
+    }
 
     /** 最近删除列表（软删且未彻底清理，含剩余保留时间） */
     suspend fun listTrash() = repo.listTrash()
@@ -527,6 +534,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteNote(note: Note) {
+        AudioPlayback.stopIfNote(note.id)
         val prev = _ui.value.notes
         _ui.value = _ui.value.copy(notes = prev.filter { it.id != note.id })
         viewModelScope.launch {
@@ -851,6 +859,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun batchDelete() {
+        AudioPlayback.stop()
         val s = _ui.value
         if (s.allMatching) {
             _ui.value = s.copy(batchBusy = true, batchProgress = null)

@@ -1,7 +1,6 @@
 package com.zalize.suinian.ui.components
 
 import android.media.MediaMetadataRetriever
-import android.media.MediaPlayer
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -35,7 +34,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -187,8 +185,8 @@ fun NoteImageAttachment(
 }
 
 /**
- * 语音附件：鉴权拉取原音频到落盘缓存，MediaPlayer 直接读缓存文件；显示时长与播放进度，
- * 同一时刻只放一段（新卡开播时上一张暂停）；本机播放器放不出来的文件给「下载原件」而不是重拉同一份缓存。
+ * 语音附件：鉴权拉取原音频到落盘缓存，交给进程级 [AudioPlayback] 播放（滑出屏幕不中断、同一时刻只放一段）；
+ * 卡片只显示时长与本条的播放进度；本机播放器放不出来的文件给「下载原件」而不是重拉同一份缓存。
  * reloadKey 同 NoteImageAttachment。
  */
 @Composable
@@ -200,17 +198,19 @@ fun NoteAudioAttachment(
     reloadKey: Int = 0,
     onDownload: (() -> Unit)? = null,
 ) {
-    var audioFile by remember(noteId, attachment.id) { mutableStateOf<File?>(null) }
-    var durationMs by remember(noteId, attachment.id) { mutableStateOf<Long?>(null) }
-    var failed by remember(noteId, attachment.id) { mutableStateOf(false) }
-    var failReason by remember(noteId, attachment.id) { mutableStateOf<String?>(null) }
-    var failAutoRetries by remember(noteId, attachment.id) { mutableStateOf(false) }
-    var playFailed by remember(noteId, attachment.id) { mutableStateOf(false) }
-    var loadAttempt by remember(noteId, attachment.id) { mutableIntStateOf(0) }
-    var playing by remember { mutableStateOf(false) }
-    var prepared by remember { mutableStateOf(false) }
-    var positionMs by remember { mutableLongStateOf(0L) }
-    val player = remember { MediaPlayer() }
+    val key = audioPlaybackKey(noteId, attachment.id)
+    var audioFile by remember(key) { mutableStateOf<File?>(null) }
+    var durationMs by remember(key) { mutableStateOf<Long?>(null) }
+    var failed by remember(key) { mutableStateOf(false) }
+    var failReason by remember(key) { mutableStateOf<String?>(null) }
+    var failAutoRetries by remember(key) { mutableStateOf(false) }
+    var playFailed by remember(key) { mutableStateOf(false) }
+    var loadAttempt by remember(key) { mutableIntStateOf(0) }
+    var positionMs by remember(key) { mutableLongStateOf(0L) }
+
+    val mine = AudioPlayback.now?.takeIf { it.key == key }
+    val playing = mine?.playing == true
+    val inProgress = mine != null && (playing || mine.pausedAtMs > 0)
 
     LaunchedEffect(noteId, attachment.id, loadAttempt) {
         if (audioFile != null || failed) return@LaunchedEffect
@@ -227,13 +227,13 @@ fun NoteAudioAttachment(
         }
     }
 
-    LaunchedEffect(playing) {
-        while (playing) {
-            positionMs = try {
-                player.currentPosition.toLong()
-            } catch (_: Exception) {
-                positionMs
-            }
+    LaunchedEffect(playing, mine?.pausedAtMs) {
+        if (!playing) {
+            positionMs = mine?.pausedAtMs ?: 0L
+            return@LaunchedEffect
+        }
+        while (true) {
+            positionMs = AudioPlayback.positionMs()
             delay(250)
         }
     }
@@ -245,16 +245,6 @@ fun NoteAudioAttachment(
         loadAttempt++
     }
     AutoReloadOnKey(reloadKey, failed, failAutoRetries, retry)
-
-    DisposableEffect(Unit) {
-        onDispose {
-            AudioPlaybackArbiter.release(player)
-            try {
-                player.release()
-            } catch (_: Exception) {
-            }
-        }
-    }
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -285,46 +275,18 @@ fun NoteAudioAttachment(
                 else -> {
                     IconButton(
                         onClick = {
+                            val f = audioFile!!
+                            if (!f.isFile) {
+                                // 缓存已被容量淘汰 / 退出登录清空：重新取一次再播
+                                AudioPlayback.stopIfNote(noteId)
+                                audioFile = null
+                                loadAttempt++
+                                return@IconButton
+                            }
                             try {
-                                if (playing) {
-                                    player.pause()
-                                    playing = false
-                                    AudioPlaybackArbiter.release(player)
-                                } else {
-                                    if (!prepared) {
-                                        val f = audioFile!!
-                                        if (!f.isFile) {
-                                            // 缓存已被容量淘汰 / 退出登录清空：重新取一次再播
-                                            audioFile = null
-                                            loadAttempt++
-                                            return@IconButton
-                                        }
-                                        player.reset()
-                                        player.setDataSource(f.absolutePath)
-                                        player.prepare()
-                                        prepared = true
-                                        player.duration.toLong().takeIf { it > 0 }?.let { durationMs = it }
-                                        player.setOnCompletionListener {
-                                            playing = false
-                                            positionMs = 0L
-                                            AudioPlaybackArbiter.release(it)
-                                            it.seekTo(0)
-                                        }
-                                    }
-                                    AudioPlaybackArbiter.claim(player) {
-                                        try {
-                                            player.pause()
-                                        } catch (_: Exception) {
-                                        }
-                                        playing = false
-                                    }
-                                    player.start()
-                                    playing = true
-                                }
+                                AudioPlayback.toggle(key, f)
+                                AudioPlayback.now?.durationMs?.let { durationMs = it }
                             } catch (_: Exception) {
-                                playing = false
-                                prepared = false
-                                AudioPlaybackArbiter.release(player)
                                 playFailed = true
                             }
                         },
@@ -337,15 +299,14 @@ fun NoteAudioAttachment(
                         )
                     }
                     Spacer(Modifier.width(6.dp))
-                    val total = formatAudioClock(durationMs)
-                    val inProgress = playing || positionMs > 0
+                    val total = formatAudioClock(mine?.durationMs ?: durationMs)
                     Column(Modifier.weight(1f)) {
                         Text(
                             audioClockLabel(playing, inProgress, formatAudioClock(positionMs), total),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        val progress = if (inProgress) audioProgress(positionMs, durationMs) else null
+                        val progress = if (inProgress) audioProgress(positionMs, mine?.durationMs ?: durationMs) else null
                         if (progress != null) {
                             Spacer(Modifier.height(4.dp))
                             LinearProgressIndicator(
