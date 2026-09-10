@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, restoreCategories, getThreads, getStats, ApiError, NetworkError } from "@/lib/api"
 import type { BatchFilter } from "@/lib/api"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
 import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
 import { PENDING_UNDO_KEY } from "@/lib/pending-undo"
@@ -722,6 +723,8 @@ export function TimelinePage() {
   useEffect(() => {
     void load()
   }, [load, settingsVersion])
+
+  useRetryOnReconnect(!loading && error?.kind === "network", load)
 
   const loadMore = useCallback(async () => {
     if (!cursor || loadingMore || loading) return

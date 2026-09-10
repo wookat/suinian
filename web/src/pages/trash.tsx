@@ -9,6 +9,7 @@ import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { NoteCard } from "@/components/note-card"
 import { EmptyState } from "@/components/empty-state"
 import { emptyTrash, getTrash, purgeNotes, restoreNotes, ApiError, NetworkError } from "@/lib/api"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 import { clearStoredPendingUndo, prunePendingUndoIds } from "@/lib/pending-undo"
 import { useSettingsVersion } from "@/lib/settings"
 import type { TrashNote } from "@/lib/types"
@@ -31,6 +32,7 @@ export function TrashPage() {
   const [retentionDays, setRetentionDays] = useState(30)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [unreachable, setUnreachable] = useState(false)
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
   const [emptying, setEmptying] = useState(false)
   const [confirmEmpty, setConfirmEmpty] = useState(false)
@@ -41,6 +43,7 @@ export function TrashPage() {
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setUnreachable(false)
     try {
       const res = await getTrash()
       setNotes(res.notes)
@@ -48,8 +51,10 @@ export function TrashPage() {
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.status === 403))
         setError("未连接或 token 失效，请到设置页检查连接")
-      else if (e instanceof NetworkError) setError(e.message)
-      else setError(e instanceof Error ? e.message : String(e))
+      else if (e instanceof NetworkError) {
+        setError(e.message)
+        setUnreachable(true)
+      } else setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
     }
@@ -58,6 +63,8 @@ export function TrashPage() {
   useEffect(() => {
     void load()
   }, [load, settingsVersion])
+
+  useRetryOnReconnect(!loading && error !== null && unreachable, load)
 
   const withBusy = useCallback(async (id: string, fn: () => Promise<void>) => {
     setBusyIds((s) => new Set(s).add(id))
