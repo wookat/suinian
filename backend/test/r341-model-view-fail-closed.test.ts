@@ -25,8 +25,8 @@ const SECURITY = [
   ...(ALL_ATTACK as Attack[]).flatMap((a) => a.notes.map((n, i) => ({ id: `r335:${a.id}#${i}`, note: n, secrets: [a.secret] }))),
 ];
 const BENIGN_PLAIN = [...B36, ...B40].filter((b) => !b.boundary).map((b) => ({ id: b.id, note: b.note }));
-/** R335 盲测善意里模型视图会被 fail-closed 整条扣的两条（与 ask 出口 modelContextNoteText 同一误伤集合，显式钉住防无声漂移）。 */
-const R335_VIEW_BOUNDARY = new Set(["E13", "G17"]);
+/** R335 盲测善意里模型视图会被 fail-closed 整条扣的边界（与 ask 出口 modelContextNoteText 同一集合，显式钉住防无声漂移）：G17 取件码（R336 §2.4）；E13 自 R342 起不再触发。 */
+const R335_VIEW_BOUNDARY = new Set(["G17"]);
 const BENIGN_R335 = (ALL_BENIGN as Benign[]).flatMap((b) => b.notes.map((n, i) => ({ id: b.id, idx: i, note: n })));
 
 describe("R341 §2 驻留形态无 own 行：行级替换放过，视图层 fail-closed 拦下", () => {
@@ -81,7 +81,7 @@ describe("R341 §4 善意语料的模型视图不占位", () => {
       expect(v.text, b.id).toBe(b.note);
     }
   });
-  it("R335 盲测善意：除 E13（账号：+ 汉语整句）/ G17（取件码，R336 §2.4 边界）外视图即原文；两条边界显式钉住", () => {
+  it("R335 盲测善意：除 G17（取件码，R336 §2.4 边界）外视图即原文；边界显式钉住", () => {
     for (const b of BENIGN_R335) {
       const v = view(b.note);
       if (R335_VIEW_BOUNDARY.has(b.id)) {
