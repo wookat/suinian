@@ -1,9 +1,7 @@
 package com.zalize.suinian.ui.components
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AudioClockTest {
@@ -53,25 +51,9 @@ class AudioClockTest {
     }
 
     @Test
-    fun arbiter_preempts_previous_owner_only() {
-        val a = Any()
-        val b = Any()
-        var aPreempted = 0
-        var bPreempted = 0
-        AudioPlaybackArbiter.claim(a) { aPreempted++ }
-        assertTrue(AudioPlaybackArbiter.isHeldBy(a))
-        AudioPlaybackArbiter.claim(a) { aPreempted++ }
-        assertEquals(0, aPreempted)
-        AudioPlaybackArbiter.claim(b) { bPreempted++ }
-        assertEquals(1, aPreempted)
-        assertFalse(AudioPlaybackArbiter.isHeldBy(a))
-        assertTrue(AudioPlaybackArbiter.isHeldBy(b))
-        AudioPlaybackArbiter.release(a)
-        assertTrue(AudioPlaybackArbiter.isHeldBy(b))
-        AudioPlaybackArbiter.release(b)
-        assertFalse(AudioPlaybackArbiter.isHeldBy(b))
-        AudioPlaybackArbiter.claim(a) { aPreempted++ }
-        assertEquals(0, bPreempted)
-        AudioPlaybackArbiter.release(a)
+    fun playback_key_round_trips_note_id() {
+        val key = audioPlaybackKey("note-1", "att/with/slash")
+        assertEquals("note-1", audioPlaybackNoteId(key))
+        assertEquals("note-1/att/with/slash", key)
     }
 }

@@ -85,6 +85,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.zalize.suinian.data.InlineCommand
 import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.parseInlineCommand
@@ -93,6 +95,7 @@ import com.zalize.suinian.ui.components.VoiceRecorderController
 import kotlinx.coroutines.delay
 import java.io.File
 import androidx.compose.foundation.border
+import com.zalize.suinian.ui.components.AudioPlayback
 import com.zalize.suinian.ui.components.DailyReviewCard
 import com.zalize.suinian.ui.components.FirstRunTour
 import com.zalize.suinian.ui.components.NoteCard
@@ -180,6 +183,8 @@ fun HomeScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
     OnNetworkAvailable { vm.onNetworkAvailable() }
+    // 退到后台 / 离开首页时暂停语音（笔记应用不做后台播放），回来仍可从暂停处继续
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { AudioPlayback.pause() }
 
     // 文件选择器：PDF/txt/md/docx → 上传入库
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
