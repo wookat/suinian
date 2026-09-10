@@ -1089,10 +1089,14 @@ export async function generateReport(
 }
 
 /** 今日到期 + 已逾期的未完成待办（时间流顶部应用内提醒条） */
-export async function getTodosToday(): Promise<{ date: string; items: (Note & { overdue: boolean })[] }> {
+export async function getTodosToday(): Promise<{ date: string; items: (Note & { overdue: boolean })[]; overdue_total?: number }> {
   if (loadSettings().useMock) return mockGetTodosToday()
-  const res = await realFetch<{ date: string; items: Record<string, unknown>[] }>("/api/todos/today")
-  return { date: res.date, items: res.items.map((r) => ({ ...normalizeNote(r), overdue: !!r.overdue })) }
+  const res = await realFetch<{ date: string; items: Record<string, unknown>[]; overdue_total?: number }>("/api/todos/today")
+  return {
+    date: res.date,
+    items: res.items.map((r) => ({ ...normalizeNote(r), overdue: !!r.overdue })),
+    overdue_total: res.overdue_total,
+  }
 }
 
 /** 今日回顾（那年今日 / 上月今日 / 久未回看） */

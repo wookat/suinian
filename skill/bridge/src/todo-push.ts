@@ -20,12 +20,19 @@ const MAX_TODO_LINES = 10
 export function formatTodoMessage(todos: TodayTodosResponse): string | null {
   if (todos.items.length === 0) return null
   const lines = [`【今日待办 · ${todos.date}】`, '']
-  for (const t of todos.items.slice(0, MAX_TODO_LINES)) {
+  // 当天到期的优先列出，余下行数给最近的逾期项（items 里逾期项按到期升序，最近的在末尾）
+  const dueToday = todos.items.filter((t) => !t.overdue)
+  const overdue = todos.items.filter((t) => t.overdue)
+  const shownToday = dueToday.slice(0, MAX_TODO_LINES)
+  const shownOverdue = overdue.slice(Math.max(0, overdue.length - (MAX_TODO_LINES - shownToday.length)))
+  for (const t of [...shownToday, ...shownOverdue]) {
     const text = (t.title || t.content).replace(/\s+/g, ' ').slice(0, 50)
     const due = t.todo_due ? t.todo_due.replace('T', ' ').slice(0, 16) : ''
     lines.push(`${t.overdue ? '⚠️已过期' : '·'} ${text}${due ? `（${due}）` : ''}`)
   }
-  if (todos.items.length > MAX_TODO_LINES) lines.push(`…还有 ${todos.items.length - MAX_TODO_LINES} 条`)
+  const total = dueToday.length + Math.max(todos.overdue_total ?? 0, overdue.length)
+  const shown = shownToday.length + shownOverdue.length
+  if (total > shown) lines.push(`…还有 ${total - shown} 条`)
   lines.push('', '完成后可在 suinian.zalize.com 勾掉它们')
   return lines.join('\n')
 }

@@ -45,6 +45,8 @@ export interface PreferencesResponse {
 
 export interface TodayTodosResponse {
   date: string
+  /** 逾期总数（items 有上限，只含最近的一部分逾期项）；老服务端无此字段 */
+  overdue_total?: number
   items: {
     id: string
     title: string | null
