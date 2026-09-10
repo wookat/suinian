@@ -2560,11 +2560,16 @@ app.patch("/api/notes/:id", async (c) => {
   // 异步复判静默撤销恢复明文）：与分类/标签同一 manual_override 机制锁住
   if (typeof patch.is_sensitive === "boolean") override.is_sensitive = true;
   if (typeof body.todo_due === "string" || body.todo_due === null) {
+    // 空串 / null 清除；非空必须整串可解析，否则 400（Android 编辑页是自由文本框，手输「2026/09/12 18:00」
+    // 不能被静默清空还打上 manual_override）。裸时刻按用户时区解释，与分拣输出同口径
+    const raw = typeof body.todo_due === "string" ? body.todo_due.trim() : "";
+    let due: string | null = null;
+    if (raw) {
+      due = normalizeTodoDue(raw, tzOffsetString(new Date(), await loadUserTz(c.env, userId)), true);
+      if (!due) return c.json({ error: "到期时间格式不支持：请用 2026-08-10 或 2026-08-10 18:00（可带时区偏移，如 +08:00）" }, 400);
+    }
     extraSets.push("todo_due = ?");
-    // 裸时刻（无偏移，Android 编辑页手输「2026-08-10 18:00」）按用户时区解释，与分拣输出同口径
-    const tzOffset =
-      typeof body.todo_due === "string" ? tzOffsetString(new Date(), await loadUserTz(c.env, userId)) : undefined;
-    extraBinds.push(normalizeTodoDue(body.todo_due, tzOffset));
+    extraBinds.push(due);
     override.todo_due = true;
   }
   // 用户改过正文＝完成人工核对，转写/识别存疑提示随之清除（R212 P2-1/P3-3）；
