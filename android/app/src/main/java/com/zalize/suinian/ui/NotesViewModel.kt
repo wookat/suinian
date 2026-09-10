@@ -276,6 +276,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     /** 永久注销账号：删除云端全部数据并清本机登录状态 */
     suspend fun deleteAccount() = repo.deleteAccount()
 
+    /** 退出登录：清登录态与本机缓存的私有附件 */
+    suspend fun logout() = repo.logout()
+
     /** 最近删除列表（软删且未彻底清理，含剩余保留时间） */
     suspend fun listTrash() = repo.listTrash()
 

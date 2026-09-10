@@ -198,7 +198,7 @@ fun SettingsScreen(
                 TextButton(onClick = {
                     confirmLogout = false
                     scope.launch {
-                        vm.settingsRepo.logout()
+                        vm.logout()
                         onLogout()
                     }
                 }) { Text("退出登录") }

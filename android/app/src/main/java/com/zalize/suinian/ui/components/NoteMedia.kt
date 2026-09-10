@@ -1,6 +1,5 @@
 package com.zalize.suinian.ui.components
 
-import android.graphics.BitmapFactory
 import android.media.MediaPlayer
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -44,6 +43,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.zalize.suinian.data.NoteAttachment
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /** 附件类型判定：优先 mime，回退文件扩展名 */
@@ -71,7 +72,7 @@ fun NoteImageAttachment(
         if (bitmap != null || failed) return@LaunchedEffect
         try {
             val (bytes, _) = fetchMedia(noteId, attachment.id)
-            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            val bmp = withContext(Dispatchers.Default) { decodeSampledBitmap(bytes) }
             if (bmp != null) bitmap = bmp.asImageBitmap() else failed = true
         } catch (_: Exception) {
             failed = true
