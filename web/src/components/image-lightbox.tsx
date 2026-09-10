@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { X } from "lucide-react"
+import { Download, Share2, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { clampPan, clampScale, nextDoubleTapScale, wheelScale, zoomAboutFocus } from "@/lib/zoom-math"
 
@@ -17,8 +17,22 @@ interface Pointer {
  * 全屏看图：滚轮 / 双指缩放（1–5 倍）、放大后拖动（贴边为止）、双击 1x ↔ 2.5x、单击 / Esc / 右上角关闭。
  * 覆盖层 touch-action: none，浏览器自己的页面缩放不参与——否则关掉大图后整页还停在放大状态。
  */
-export function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+export function ImageLightbox({
+  src,
+  alt,
+  downloadName,
+  mime,
+  onClose,
+}: {
+  src: string
+  alt: string
+  /** 保存 / 分享时的文件名（服务端原名），浏览器对 blob: URL 自己只会起 uuid.png */
+  downloadName: string
+  mime: string | null
+  onClose: () => void
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const shareFile = useShareFile(src, downloadName, mime)
   const imgRef = useRef<HTMLImageElement>(null)
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState<[number, number]>([0, 0])
@@ -219,18 +233,61 @@ export function ImageLightbox({ src, alt, onClose }: { src: string; alt: string;
           {Math.round(scale * 100)}% · 双击复原
         </span>
       )}
-      <button
-        type="button"
+      <div
         onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-        aria-label="关闭大图"
-        className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+        onClick={(e) => e.stopPropagation()}
+        className="absolute right-4 top-4 flex items-center gap-2"
       >
-        <X className="size-5" />
-      </button>
+        <a
+          href={src}
+          download={downloadName}
+          aria-label="保存原图"
+          title="保存原图"
+          className={toolButtonClass}
+        >
+          <Download className="size-5" />
+        </a>
+        {shareFile && (
+          <button
+            type="button"
+            onClick={() => void navigator.share({ files: [shareFile] }).catch(() => undefined)}
+            aria-label="分享原图"
+            title="分享原图"
+            className={toolButtonClass}
+          >
+            <Share2 className="size-5" />
+          </button>
+        )}
+        <button type="button" onClick={onClose} aria-label="关闭大图" className={toolButtonClass}>
+          <X className="size-5" />
+        </button>
+      </div>
     </div>
   )
+}
+
+const toolButtonClass = "rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+
+/**
+ * 系统分享（Web Share API Level 2，手机浏览器）：打开大图时就把 blob 读成 File，点分享时同步调用——
+ * Safari 要求 share 在用户手势里直接触发，点了再 fetch 会丢手势。桌面浏览器多数没有 canShare，返回 null 不显示按钮。
+ */
+function useShareFile(src: string, name: string, mime: string | null): File | null {
+  const [file, setFile] = useState<File | null>(null)
+  useEffect(() => {
+    if (typeof navigator.canShare !== "function" || typeof navigator.share !== "function") return
+    let alive = true
+    fetch(src)
+      .then((r) => r.blob())
+      .then((blob) => {
+        const f = new File([blob], name, { type: mime || blob.type })
+        if (alive && navigator.canShare({ files: [f] })) setFile(f)
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+      setFile(null)
+    }
+  }, [src, name, mime])
+  return file
 }
