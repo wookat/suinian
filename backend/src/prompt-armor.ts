@@ -8223,10 +8223,12 @@ export function closeSecretLabelSentences(answer: string, units: string[]): { an
 }
 
 // ---- R322 A 兜底：归一化比对 ----
-/** 归一面：NFKC、小写、汉字数字→阿拉伯数字、去掉一切非字母数字（空白 / 分隔符 / 标点 / 空格分字）。 */
+/**
+ * 归一面：NFKC、汉字变体折简（R348：「为了胜利向我开炮」转写成「為了勝利向我開炮」是同一口令）、小写、汉字数字→阿拉伯数字、
+ * 去掉一切非字母数字（空白 / 分隔符 / 标点 / 空格分字）。答案与候选两侧都过同一函数，折叠只在比对面。
+ */
 export function normalizeForLeakCompare(s: string): string {
-  return s
-    .normalize("NFKC")
+  return foldHanVariants(s.normalize("NFKC"))
     .toLowerCase()
     .replace(/[零〇一壹幺二贰两三叁四肆五伍六陆七柒八捌九玖]/g, (c) => CJK_DIGIT_MAP[c] ?? c)
     .replace(/[^\p{L}\p{N}]+/gu, "");
