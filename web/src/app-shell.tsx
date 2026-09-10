@@ -20,7 +20,8 @@ import { PageHeader } from "@/components/page-header"
 import { RightRail } from "@/components/right-rail"
 import { COMMAND_PALETTE_EVENT, openCommandPalette } from "@/lib/command-palette"
 import { ChunkBoundary } from "@/components/chunk-boundary"
-import { lazyRetry } from "@/lib/lazy-retry"
+import { importRetry, lazyRetry } from "@/lib/lazy-retry"
+import { TOAST_WANTED_EVENT } from "@/lib/toast"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -42,7 +43,7 @@ const loadMotionFeatures = () =>
   new Promise<void>((resolve) => {
     if (document.readyState === "complete") window.setTimeout(resolve, 300)
     else window.addEventListener("load", () => window.setTimeout(resolve, 300), { once: true })
-  }).then(() => import("@/lib/motion-features").then((mod) => mod.default))
+  }).then(() => importRetry(() => import("@/lib/motion-features")).then((mod) => mod.default))
 
 const TodosPage = lazyRetry(
   () => import("@/pages/todos"),
@@ -217,10 +218,12 @@ function useDeferredUiReady(): boolean {
       }
     }
     window.addEventListener(COMMAND_PALETTE_EVENT, markReady)
+    window.addEventListener(TOAST_WANTED_EVENT, markReady)
     window.addEventListener("keydown", onKey)
     const idle = window.setTimeout(markReady, 1500)
     return () => {
       window.removeEventListener(COMMAND_PALETTE_EVENT, markReady)
+      window.removeEventListener(TOAST_WANTED_EVENT, markReady)
       window.removeEventListener("keydown", onKey)
       window.clearTimeout(idle)
     }
