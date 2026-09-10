@@ -5,7 +5,11 @@ import {
   mockAsk,
   mockCreateNote,
   mockDeleteNote,
+  mockEmptyTrash,
   mockGetNote,
+  mockGetTrash,
+  mockPurgeNotes,
+  mockRestoreNotes,
   mockGetNotes,
   mockGenerateReport,
   mockGetReport,
@@ -379,7 +383,7 @@ export async function deleteNote(id: string): Promise<void> {
 
 /** 撤销删除：清除软删标记，恢复笔记（服务端单次上限 1000，超出自动分批） */
 export async function restoreNotes(ids: string[]): Promise<number> {
-  if (loadSettings().useMock) throw new Error("演示模式不支持恢复，请先配置真实 API")
+  if (loadSettings().useMock) return mockRestoreNotes(ids)
   let restored = 0
   for (let i = 0; i < ids.length; i += 1000) {
     const res = await realFetch<{ ok: boolean; restored: number }>("/api/notes/restore", {
@@ -393,7 +397,7 @@ export async function restoreNotes(ids: string[]): Promise<number> {
 
 /** 最近删除列表：软删且未彻底清理的笔记（含剩余保留时间） */
 export async function getTrash(): Promise<TrashResponse> {
-  if (loadSettings().useMock) throw new Error("演示模式不支持最近删除，请先配置真实 API")
+  if (loadSettings().useMock) return mockGetTrash()
   const res = await realFetch<{ notes: Record<string, unknown>[]; retention_days: number }>("/api/notes/trash")
   return {
     notes: (res.notes ?? []).map((n) => ({
@@ -407,6 +411,7 @@ export async function getTrash(): Promise<TrashResponse> {
 
 /** 立即彻底删除最近删除里的笔记（不可恢复） */
 export async function purgeNotes(ids: string[]): Promise<number> {
+  if (loadSettings().useMock) return mockPurgeNotes(ids)
   const res = await realFetch<{ ok: boolean; purged: number }>("/api/notes/purge", {
     method: "POST",
     body: JSON.stringify({ ids }),
@@ -416,6 +421,7 @@ export async function purgeNotes(ids: string[]): Promise<number> {
 
 /** 清空最近删除：彻底删除全部软删笔记（不可恢复） */
 export async function emptyTrash(): Promise<number> {
+  if (loadSettings().useMock) return mockEmptyTrash()
   const res = await realFetch<{ ok: boolean; purged: number }>("/api/notes/trash/empty", {
     method: "POST",
     body: JSON.stringify({}),

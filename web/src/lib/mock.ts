@@ -11,10 +11,14 @@ import type {
   ThreadsResponse,
   StatsResponse,
   TodayReviewResponse,
+  TrashNote,
+  TrashResponse,
   WeeklyReport,
 } from "./types"
 
 const MOCK_KEY = "suinian.mock.notes.v2"
+const MOCK_TRASH_KEY = "suinian.mock.trash.v1"
+export const MOCK_TRASH_RETENTION_DAYS = 30
 
 function hoursAgo(h: number): string {
   return new Date(Date.now() - h * 3600_000).toISOString()
@@ -193,6 +197,7 @@ export function userDemoNotes(): Note[] {
 export function clearDemoNotes(): void {
   try {
     localStorage.removeItem(MOCK_KEY)
+    localStorage.removeItem(MOCK_TRASH_KEY)
   } catch {
     // ignore
   }
@@ -210,6 +215,25 @@ function loadMockNotes(): Note[] {
 
 function saveMockNotes(notes: Note[]) {
   localStorage.setItem(MOCK_KEY, JSON.stringify(notes))
+}
+
+/** 演示模式回收站：只保留未过保留期的软删笔记，过期项在读取时顺手清掉（对齐服务端到期彻底清理） */
+function loadMockTrash(): TrashNote[] {
+  let all: TrashNote[] = []
+  try {
+    const raw = localStorage.getItem(MOCK_TRASH_KEY)
+    if (raw) all = JSON.parse(raw) as TrashNote[]
+  } catch {
+    all = []
+  }
+  const now = Date.now()
+  const kept = all.filter((n) => !n.purge_at || Date.parse(n.purge_at) > now)
+  if (kept.length !== all.length) saveMockTrash(kept)
+  return kept
+}
+
+function saveMockTrash(notes: TrashNote[]) {
+  localStorage.setItem(MOCK_TRASH_KEY, JSON.stringify(notes))
 }
 
 function delay(ms = 250): Promise<void> {
@@ -289,7 +313,56 @@ export async function mockGetNote(id: string): Promise<Note | null> {
 
 export async function mockDeleteNote(id: string): Promise<void> {
   await delay(120)
-  saveMockNotes(loadMockNotes().filter((n) => n.id !== id))
+  const notes = loadMockNotes()
+  const note = notes.find((n) => n.id === id)
+  saveMockNotes(notes.filter((n) => n.id !== id))
+  if (!note) return
+  const now = Date.now()
+  const trash = loadMockTrash().filter((n) => n.id !== id)
+  trash.unshift({
+    ...note,
+    deleted_at: new Date(now).toISOString(),
+    purge_at: new Date(now + MOCK_TRASH_RETENTION_DAYS * 86_400_000).toISOString(),
+  })
+  saveMockTrash(trash)
+}
+
+export async function mockGetTrash(): Promise<TrashResponse> {
+  await delay(120)
+  return { notes: loadMockTrash(), retention_days: MOCK_TRASH_RETENTION_DAYS }
+}
+
+/** 恢复软删笔记：从回收站移回时间流（保持原 created_at 排序位置），返回实际恢复条数 */
+export async function mockRestoreNotes(ids: string[]): Promise<number> {
+  await delay(120)
+  const want = new Set(ids)
+  const trash = loadMockTrash()
+  const hit = trash.filter((n) => want.has(n.id))
+  if (hit.length === 0) return 0
+  const notes = loadMockNotes().filter((n) => !want.has(n.id))
+  for (const t of hit) {
+    const { deleted_at: _d, purge_at: _p, ...note } = t
+    notes.push(note)
+  }
+  saveMockNotes(notes)
+  saveMockTrash(trash.filter((n) => !want.has(n.id)))
+  return hit.length
+}
+
+export async function mockPurgeNotes(ids: string[]): Promise<number> {
+  await delay(120)
+  const want = new Set(ids)
+  const trash = loadMockTrash()
+  const kept = trash.filter((n) => !want.has(n.id))
+  saveMockTrash(kept)
+  return trash.length - kept.length
+}
+
+export async function mockEmptyTrash(): Promise<number> {
+  await delay(120)
+  const n = loadMockTrash().length
+  saveMockTrash([])
+  return n
 }
 
 export async function mockPatchNote(
