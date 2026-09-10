@@ -49,6 +49,7 @@ interface AttachmentRow {
 export interface BackupAttachment {
   /** Entry path inside the zip, e.g. media/<note_id>/0-voice.ogg */
   path: string;
+  /** Original file name (no zip index prefix), restored as the attachment's display / download name */
   name: string;
   mime: string | null;
   size: number | null;
@@ -180,9 +181,24 @@ function safeParse<T>(raw: string | null): T | null {
   }
 }
 
-function attachmentName(r2Key: string, idx: number): string {
-  const base = (r2Key.split("/").pop() || "file").replace(/^\d+-/, "");
-  return `${idx}-${base}`;
+/** Display name of an R2 original: key basename without the `<timestamp>-` prefix storeOriginal adds. */
+function attachmentBaseName(r2Key: string): string {
+  return (r2Key.split("/").pop() || "file").replace(/^\d+-/, "");
+}
+
+/**
+ * File name to re-upload a backup attachment under. Backups written before
+ * `name` carried the bare file name used the zip entry name (`<idx>-<file>`)
+ * for both fields; strip that index once so restores don't accumulate `0-`.
+ */
+export function restoreFileName(att: Pick<BackupAttachment, "path" | "name">): string {
+  const entry = att.path.split("/").pop() || "";
+  const name = typeof att.name === "string" && att.name ? att.name : entry;
+  if (name === entry) {
+    const m = /^\d+-(.+)$/.exec(name);
+    if (m) return m[1];
+  }
+  return name || "file";
 }
 
 /**
@@ -270,8 +286,8 @@ export async function buildBackupZip(
       attachmentsRedacted += noteAtts.length;
     } else {
       backupAtts = noteAtts.map((a, i) => {
-        const name = attachmentName(a.r2_key, i);
-        const path = `media/${n.id}/${name}`;
+        const name = attachmentBaseName(a.r2_key);
+        const path = `media/${n.id}/${i}-${name}`;
         mediaEntries.push({ path, r2_key: a.r2_key });
         return { path, name, mime: a.mime, size: a.size };
       });
@@ -742,7 +758,7 @@ export async function restoreBackup(
       type,
       bytes: entry.data,
       mime,
-      fileName: info.att.name,
+      fileName: restoreFileName(info.att),
     });
     if (key) stats.media_imported++;
     else stats.media_failed++;

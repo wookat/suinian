@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { unzipSync, strFromU8, zipSync, strToU8 } from "fflate";
-import { buildBackupZip, restoreBackup, BACKUP_FORMAT, type BackupNote, type BackupManifest } from "../src/backup";
+import { buildBackupZip, restoreBackup, restoreFileName, BACKUP_FORMAT, type BackupNote, type BackupManifest } from "../src/backup";
 import { SENSITIVE_EXPORT_PLACEHOLDER } from "../src/constants";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "../src/crypto";
 import type { Env } from "../src/types";
@@ -192,7 +192,9 @@ describe("buildBackupZip", () => {
     const n3 = notes.find((n) => n.id === "n3")!;
     expect(n3.attachments).toHaveLength(1);
     const path = n3.attachments[0].path;
-    expect(path.startsWith("media/n3/")).toBe(true);
+    expect(path).toBe("media/n3/0-pic.png");
+    // name is the bare file name (no zip index / R2 timestamp prefix)
+    expect(n3.attachments[0].name).toBe("pic.png");
     expect(Array.from(entries.get(path)!)).toEqual([1, 2, 3, 4]);
   });
 
@@ -282,6 +284,56 @@ describe("restoreBackup", () => {
     expect(Array.from(store.get(key)!)).toEqual([9, 8, 7, 6]);
     const attInsert = inserted.find((r) => r.sql.includes("INSERT INTO attachments"))!;
     expect(attInsert.binds[2]).toBe(key);
+    // legacy backup (name == zip entry name): the `0-` index is not baked into the restored key
+    expect(key.endsWith("-pic.png")).toBe(true);
+    expect(key).not.toContain("-0-pic.png");
+  });
+
+  it("restores attachments under their original file name (no index prefix accumulating across generations)", async () => {
+    const cases: [BackupNote["attachments"][number], string][] = [
+      // current format: name is the bare file name, path carries the index
+      [{ path: "media/old1/0-voice.ogg", name: "voice.ogg", mime: "audio/ogg", size: 1 }, "voice.ogg"],
+      // file whose own name starts with digits-dash keeps it
+      [{ path: "media/old1/0-2024-report.pdf", name: "2024-report.pdf", mime: "application/pdf", size: 1 }, "2024-report.pdf"],
+      // legacy format: name == entry name → strip exactly one index prefix
+      [{ path: "media/old1/0-2024-report.pdf", name: "0-2024-report.pdf", mime: "application/pdf", size: 1 }, "2024-report.pdf"],
+      // legacy zip that already went through one buggy restore keeps the leftover `0-` (only one strip)
+      [{ path: "media/old1/0-0-pic.png", name: "0-0-pic.png", mime: "image/png", size: 1 }, "0-pic.png"],
+      // missing name falls back to the entry name minus index
+      [{ path: "media/old1/3-note.txt", name: "", mime: "text/plain", size: 1 }, "note.txt"],
+    ];
+    for (const [att, expected] of cases) expect(restoreFileName(att)).toBe(expected);
+
+    const inserted: Recorded[] = [];
+    const store = new Map<string, Uint8Array>();
+    const env = {
+      DB: fakeDb({ inserted }),
+      MEDIA: fakeR2(store),
+      DEEPSEEK_API_KEY: "",
+      DEEPSEEK_BASE_URL: "https://api.deepseek.com",
+    } as unknown as Env;
+    const zip = makeBackupZip(
+      [
+        {
+          id: "old1",
+          source: "api",
+          raw_type: "voice",
+          content: "【语音】转写失败，稍后可重发（voice.ogg）",
+          is_sensitive: false,
+          meta: { media_status: "extract_failed" } as BackupNote["meta"],
+          created_at: "2026-08-03 00:00:00",
+          updated_at: "2026-08-03 00:00:00",
+          attachments: [{ path: "media/old1/0-voice.ogg", name: "voice.ogg", mime: "audio/ogg", size: 2 }],
+        },
+      ],
+      { "media/old1/0-voice.ogg": new Uint8Array([1, 2]) }
+    );
+    const tasks: Promise<unknown>[] = [];
+    const result = await restoreBackup(env, "u9", streamOf(zip), (p) => tasks.push(p));
+    await Promise.all(tasks);
+    expect(result).toMatchObject({ notes_imported: 1, media_imported: 1 });
+    const key = [...store.keys()][0];
+    expect(key).toMatch(/\/\d+-voice\.ogg$/);
   });
 
   it("skips duplicates (same content + created_at) including their media", async () => {
