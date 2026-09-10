@@ -5,8 +5,10 @@ import com.zalize.suinian.data.api.ApiClient
 import com.zalize.suinian.data.local.PendingNote
 import com.zalize.suinian.data.local.PendingNoteDao
 import com.zalize.suinian.sync.SyncWorker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -27,6 +29,7 @@ class NotesRepository(
 
     private val json = Json { ignoreUnknownKeys = true }
     private val tagsSerializer = ListSerializer(String.serializer())
+    private val mediaCache = MediaCache(java.io.File(context.cacheDir, "media"))
 
     private suspend fun api(): Pair<ApiClient, Boolean> {
         val s = settingsRepo.settings.first()
@@ -235,7 +238,7 @@ class NotesRepository(
         val (client, mock) = api()
         if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
         client.deleteAccount()
-        settingsRepo.logout()
+        logout()
     }
 
     /** 链接笔记重试抓取 */
@@ -252,11 +255,21 @@ class NotesRepository(
         return client.downloadNoteFile(id)
     }
 
-    /** 鉴权取附件原件字节（图片/语音内联展示）：返回字节 + mime */
+    /** 鉴权取附件原件字节（图片/语音内联展示）：返回字节 + mime；命中本机缓存不发网 */
     suspend fun fetchNoteMedia(noteId: String, attachmentId: String): Pair<ByteArray, String> {
-        val (client, mock) = api()
-        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
-        return client.fetchNoteMedia(noteId, attachmentId)
+        val s = settingsRepo.settings.first()
+        if (s.mockMode) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        val key = MediaCache.key(s.token, noteId, attachmentId)
+        withContext(Dispatchers.IO) { mediaCache.get(key) }?.let { return it.bytes to it.mime }
+        val (bytes, mime) = ApiClient(s.baseUrl, s.token).fetchNoteMedia(noteId, attachmentId)
+        withContext(Dispatchers.IO) { mediaCache.put(key, bytes, mime) }
+        return bytes to mime
+    }
+
+    /** 退出登录：清本机登录态 + 已缓存的私有原件 */
+    suspend fun logout() {
+        withContext(Dispatchers.IO) { mediaCache.clear() }
+        settingsRepo.logout()
     }
 
     /** 下载全量备份 zip：返回字节 + 文件名。includeSensitive=true 时敏感笔记含明文 */
