@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import java.util.TimeZone
 
 sealed class SendResult {
     data class Sent(val note: Note?) : SendResult()
@@ -186,6 +187,23 @@ class NotesRepository(
         val (client, mock) = api()
         if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
         return client.updatePreferences(dailyReviewPush, todoReminderPush)
+    }
+
+    /**
+     * 把设备时区同步到服务端偏好（与 web syncTimezone 同口径）：服务端分拣的裸时刻、PATCH 手输到期、
+     * 今日待办 / 周月报边界都按 user_preferences.tz 算，没同步过的非东八区用户会按默认 +08:00 落库。
+     * Mock / 未登录跳过；同 token 同时区只发一次；失败静默、下次启动再试。
+     */
+    suspend fun syncTimezone(zoneId: String = TimeZone.getDefault().id) {
+        val s = settingsRepo.settings.first()
+        if (s.mockMode || s.token.isBlank() || zoneId.isBlank()) return
+        val marker = tzSyncMarker(s.token, zoneId)
+        if (settingsRepo.tzSyncedMarker.first() == marker) return
+        try {
+            ApiClient(s.baseUrl, s.token).updatePreferences(tz = zoneId)
+            settingsRepo.setTzSyncedMarker(marker)
+        } catch (_: Exception) {
+        }
     }
 
     /** 当天到期 + 已过期的未完成待办 */
@@ -378,3 +396,6 @@ class NotesRepository(
         return allOk
     }
 }
+
+/** 时区同步去重标记：换账号（token 前缀变）或换时区都会重新同步 */
+fun tzSyncMarker(token: String, zoneId: String): String = "${token.take(8)}:$zoneId"

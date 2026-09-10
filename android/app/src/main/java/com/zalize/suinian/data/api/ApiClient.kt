@@ -449,12 +449,17 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         execute(request("/api/preferences").get().build(), PushPreferences.serializer())
     }
 
-    /** PATCH /api/preferences：更新推送偏好 */
-    suspend fun updatePreferences(dailyReviewPush: Boolean? = null, todoReminderPush: Boolean? = null): PushPreferences =
+    /** PATCH /api/preferences：更新推送偏好 / 用户时区（IANA id，服务端分拣、待办到期、今日待办、周月报边界都按它算） */
+    suspend fun updatePreferences(
+        dailyReviewPush: Boolean? = null,
+        todoReminderPush: Boolean? = null,
+        tz: String? = null,
+    ): PushPreferences =
         withContext(Dispatchers.IO) {
             val body = buildJsonObject {
                 if (dailyReviewPush != null) put("daily_review_push", dailyReviewPush)
                 if (todoReminderPush != null) put("todo_reminder_push", todoReminderPush)
+                if (tz != null) put("tz", tz)
             }.toString().toRequestBody(jsonMedia)
             execute(request("/api/preferences").patch(body).build(), PushPreferences.serializer())
         }
