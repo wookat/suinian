@@ -82,7 +82,7 @@ import { detectFileKind, buildFileNote, buildFileReply, FILE_FAILED_PLACEHOLDER,
 import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMPORT_ITEMS, type ImportSource, type ImportItem, type ImportFailure } from "./import";
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
-import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES, BACKUP_AI_DERIVED_NOTICE, closeBackupDerived } from "./backup";
+import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES, BACKUP_AI_DERIVED_NOTICE, closeBackupDerived, BACKUP_ESTIMATE_HEADER } from "./backup";
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
 import { propagateSensitiveContinuation } from "./sensitive-continuation";
@@ -164,6 +164,8 @@ app.use(
     origin: (origin, c) => corsOrigin(origin, (c.env as Env).CORS_ALLOWED_ORIGINS),
     allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type", "X-Suinian-Password"],
+    // 非 CORS 安全列表的响应头需显式暴露，跨域的 web 端才能读到
+    exposeHeaders: [BACKUP_ESTIMATE_HEADER],
     maxAge: 86400,
   })
 );

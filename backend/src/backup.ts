@@ -46,6 +46,43 @@ interface AttachmentRow {
   size: number | null;
 }
 
+/**
+ * 备份 zip 的预估总字节。zip 边打边发（TransformStream），开流前给不出精确
+ * Content-Length；但 JSON 条目在开流前已整体压完、按实际字节计，媒体条目是
+ * STORE（不压缩）按 attachments.size 计，所以预估与实际只差「R2 缺对象 / 敏感
+ * 附件解密失败被跳过」的部分——实际只会 ≤ 预估，客户端用来显示「约 n%」。
+ * 不是 Content-Length：对不上不能当传输中断。
+ */
+export const BACKUP_ESTIMATE_HEADER = "X-Suinian-Backup-Estimate";
+
+// fflate Zip 流式条目的固定开销：本地头 30 + 数据描述符 16 + 中央目录项 46，
+// 文件名在本地头与中央目录各写一遍（无 extra / comment）
+const ZIP_LOCAL_HEADER_BYTES = 30;
+const ZIP_DATA_DESCRIPTOR_BYTES = 16;
+const ZIP_CENTRAL_ENTRY_BYTES = 46;
+const ZIP_EOCD_BYTES = 22;
+
+/** 一个 STORE 条目从本地头到中央目录项占的总字节 */
+export function zipStoredEntryBytes(path: string, size: number): number {
+  const nameLen = strToU8(path).length;
+  return ZIP_LOCAL_HEADER_BYTES + nameLen + size + ZIP_DATA_DESCRIPTOR_BYTES + ZIP_CENTRAL_ENTRY_BYTES + nameLen;
+}
+
+/**
+ * 开流前已发出的字节（JSON 条目本地头 + 压缩体 + 描述符）+ 这些条目的中央目录项
+ * + 媒体 STORE 条目 + EOCD。
+ */
+export function estimateBackupBytes(
+  emittedBeforeMedia: number,
+  jsonEntryPaths: readonly string[],
+  media: readonly { path: string; size: number | null }[]
+): number {
+  let total = emittedBeforeMedia + ZIP_EOCD_BYTES;
+  for (const p of jsonEntryPaths) total += ZIP_CENTRAL_ENTRY_BYTES + strToU8(p).length;
+  for (const m of media) total += zipStoredEntryBytes(m.path, m.size ?? 0);
+  return total;
+}
+
 export interface BackupAttachment {
   /** Entry path inside the zip, e.g. media/<note_id>/0-voice.ogg */
   path: string;
@@ -237,7 +274,7 @@ export async function buildBackupZip(
 
   const threadTitle = new Map(threads.map((t) => [t.id, t.title]));
   const backupNotes: BackupNote[] = [];
-  const mediaEntries: { path: string; r2_key: string }[] = [];
+  const mediaEntries: { path: string; r2_key: string; size: number | null }[] = [];
   let attachmentsRedacted = 0;
   let execMarked = 0;
   let broadMarked = 0;
@@ -288,7 +325,7 @@ export async function buildBackupZip(
       backupAtts = noteAtts.map((a, i) => {
         const name = attachmentBaseName(a.r2_key);
         const path = `media/${n.id}/${i}-${name}`;
-        mediaEntries.push({ path, r2_key: a.r2_key });
+        mediaEntries.push({ path, r2_key: a.r2_key, size: a.size });
         return { path, name, mime: a.mime, size: a.size };
       });
     }
@@ -380,6 +417,7 @@ export async function buildBackupZip(
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();
   let failed = false;
+  let emitted = 0;
   const zip = new Zip((err, dat, final) => {
     if (failed) return;
     if (err) {
@@ -387,35 +425,39 @@ export async function buildBackupZip(
       void writer.abort(err);
       return;
     }
+    emitted += dat.length;
     void writer.write(dat).catch(() => {
       failed = true;
     });
     if (final) void writer.close().catch(() => undefined);
   });
 
-  const addJson = (name: string, obj: unknown) => {
+  // JSON 条目同步压完并进入流的队列（fflate 非 async 变体 push 即回调），
+  // 之后 emitted 就是它们的精确字节，用来算预估总长
+  const jsonPaths: string[] = [];
+  const addText = (name: string, text: string) => {
     const f = new ZipDeflate(name, { level: 6 });
     zip.add(f);
-    f.push(strToU8(JSON.stringify(obj, null, 1)), true);
+    f.push(strToU8(text), true);
+    jsonPaths.push(name);
   };
+  const addJson = (name: string, obj: unknown) => addText(name, JSON.stringify(obj, null, 1));
+
+  addJson("manifest.json", manifest);
+  if (manifest.content_risk) {
+    // 打开 ZIP 的人（或代理）第一眼能看到的纯文本声明，不依赖解析 manifest
+    addText(
+      "README-CONTENT-RISK.txt",
+      `${manifest.content_risk.notice}\n\n宽判据折叠：${manifest.content_risk.broad_fold_notes} 条；严判据判危：${manifest.content_risk.strict_marked_notes} 条。\n逐条标记见 notes.json 的 fold / fold_reason / exec_warning 字段。\n`
+    );
+  }
+  addJson("notes.json", backupNotes);
+  addJson("threads.json", closedThreads);
+  addJson("reports.json", closedReports);
+  const estimate = estimateBackupBytes(emitted, jsonPaths, mediaEntries);
 
   const drive = async () => {
     try {
-      addJson("manifest.json", manifest);
-      if (manifest.content_risk) {
-        // 打开 ZIP 的人（或代理）第一眼能看到的纯文本声明，不依赖解析 manifest
-        const f = new ZipDeflate("README-CONTENT-RISK.txt", { level: 6 });
-        zip.add(f);
-        f.push(
-          strToU8(
-            `${manifest.content_risk.notice}\n\n宽判据折叠：${manifest.content_risk.broad_fold_notes} 条；严判据判危：${manifest.content_risk.strict_marked_notes} 条。\n逐条标记见 notes.json 的 fold / fold_reason / exec_warning 字段。\n`
-          ),
-          true
-        );
-      }
-      addJson("notes.json", backupNotes);
-      addJson("threads.json", closedThreads);
-      addJson("reports.json", closedReports);
       for (const m of mediaEntries) {
         if (failed || !env.MEDIA) break;
         const obj = await env.MEDIA.get(m.r2_key);
@@ -462,6 +504,7 @@ export async function buildBackupZip(
       // 明文包文件名带 -full 后缀，桌面上与脱敏包肉眼可分
       "Content-Disposition": `attachment; filename="suinian-backup-${date}${includeSensitive ? "-full" : ""}.zip"`,
       "Cache-Control": "private, no-store",
+      [BACKUP_ESTIMATE_HEADER]: String(estimate),
       ...(manifest.content_risk ? { [OUTLET_GLOBAL_RISK_HEADER]: OUTLET_GLOBAL_RISK_HEADER_VALUE } : {}),
     },
   });
