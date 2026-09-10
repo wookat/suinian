@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.zalize.suinian.data.Note
+import com.zalize.suinian.data.NoteAttachment
 import com.zalize.suinian.data.UrlTitle
 import java.io.File
 import java.time.Duration
@@ -219,6 +220,8 @@ fun NoteCard(
     onRetryMedia: ((Note) -> Unit)? = null,
     retryingMedia: Boolean = false,
     onDownloadFile: ((Note) -> Unit)? = null,
+    /** 语音附件本机放不出来时「下载原件」 */
+    onDownloadAttachment: ((Note, NoteAttachment) -> Unit)? = null,
     onEdit: ((Note) -> Unit)? = null,
     selectable: Boolean = false,
     selected: Boolean = false,
@@ -703,7 +706,13 @@ fun NoteCard(
                 }
                 if (audioAtt != null && fetchMediaFile != null) {
                     Spacer(Modifier.height(8.dp))
-                    NoteAudioAttachment(note.id, audioAtt, fetchMediaFile, reloadKey = mediaReloadKey)
+                    NoteAudioAttachment(
+                        note.id,
+                        audioAtt,
+                        fetchMediaFile,
+                        reloadKey = mediaReloadKey,
+                        onDownload = onDownloadAttachment?.let { dl -> { dl(note, audioAtt) } },
+                    )
                 }
                 val mediaStatus = mediaStatusLine(note)
                 if (mediaStatus != null) {

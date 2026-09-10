@@ -14,10 +14,12 @@ import com.zalize.suinian.data.CreateNoteRequest
 import com.zalize.suinian.data.DailyReviewItem
 import com.zalize.suinian.data.InlineCommand
 import com.zalize.suinian.data.Note
+import com.zalize.suinian.data.NoteAttachment
 import com.zalize.suinian.data.parseInlineCommand
 import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.RestoreStats
 import com.zalize.suinian.data.SendResult
+import com.zalize.suinian.ui.components.audioDownloadName
 import com.zalize.suinian.ui.components.mediaStatusLine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.channels.Channel
@@ -25,9 +27,11 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 删除后可撤销：服务端软删进「最近删除」，保留 30 天后真删，期间可恢复 */
 data class UndoDelete(
@@ -467,6 +471,22 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val (bytes, mime) = repo.downloadNoteFile(note.id)
                 saveToDownloads(fileName, mime, bytes)
+                _ui.value = _ui.value.copy(toast = "已保存到下载：$fileName")
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(toast = e.message ?: "下载失败")
+            }
+        }
+    }
+
+    /** 语音附件原件存到系统下载目录（本机播放器放不出来时换其他应用打开）；命中落盘缓存不发网 */
+    fun downloadAttachment(note: Note, att: NoteAttachment) {
+        val fileName = audioDownloadName(att.name, att.mime, note.id)
+        _ui.value = _ui.value.copy(toast = "开始下载…")
+        viewModelScope.launch {
+            try {
+                val file = repo.fetchNoteMediaFile(note.id, att.id)
+                val bytes = withContext(Dispatchers.IO) { file.readBytes() }
+                saveToDownloads(fileName, att.mime ?: "application/octet-stream", bytes)
                 _ui.value = _ui.value.copy(toast = "已保存到下载：$fileName")
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(toast = e.message ?: "下载失败")

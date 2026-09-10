@@ -862,6 +862,7 @@ fun HomeScreen(
                                 onRetryMedia = { vm.retryMedia(it) },
                                 retryingMedia = note.id in ui.retryingMediaIds,
                                 onDownloadFile = { vm.downloadFile(it) },
+                                onDownloadAttachment = { n, att -> vm.downloadAttachment(n, att) },
                                 onEdit = { vm.openEditor(it) },
                                 selectable = ui.selectionMode,
                                 selected = note.id in ui.selectedIds,
