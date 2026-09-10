@@ -31,38 +31,42 @@ type Options = {
 }
 
 /**
- * `React.lazy` 的容错版：分包下载失败（断网、切网、CDN 抖动）不会让整棵树炸掉——
- * 浏览器离线就先等联网再发请求，在线则短退避重试两次，仍失败才抛给外层 `ChunkBoundary`（components/chunk-boundary）。
+ * 容错的动态 `import()`：分包下载失败（断网、切网、CDN 抖动）时——
+ * 浏览器离线就先等联网再发请求，在线则短退避重试两次，仍失败才 reject。
+ * `load` 是原始 `import("...")`（保留 Vite 的静态分析与预加载）。
+ */
+export async function importRetry<M>(load: () => Promise<M>, { leaf }: Options = { leaf: true }): Promise<M> {
+  let onlineAttempt = 0
+  let freshUrl: string | null = null
+  for (;;) {
+    // 明知离线就不发请求：失败过的 URL（含 modulepreload 的依赖）会被浏览器记成「失败」，之后只能整页重载
+    if (typeof navigator !== "undefined" && navigator.onLine === false) await waitOnline()
+    try {
+      return freshUrl ? ((await import(/* @vite-ignore */ freshUrl)) as M) : await load()
+    } catch (err) {
+      if (!isChunkLoadError(err)) throw err
+      if (leaf) {
+        const url = CHUNK_URL_RE.exec(errorMessage(err))?.[0]
+        if (url) freshUrl = `${url}?retry=${Date.now().toString(36)}`
+      }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) continue
+      if (onlineAttempt >= RETRY_DELAYS_MS.length) throw err
+      await sleep(RETRY_DELAYS_MS[onlineAttempt++])
+    }
+  }
+}
+
+/**
+ * `React.lazy` 的容错版：分包加载走 `importRetry`，仍失败才抛给外层 `ChunkBoundary`（components/chunk-boundary）。
  * `React.lazy` 对已拒绝的 thenable 是永久缓存的，所以重试必须发生在这里、在 reject 之前。
- *
- * `load` 是原始 `import("...")`（保留 Vite 的静态分析与预加载），`pick` 从模块里取出组件。
+ * `pick` 从模块里取出组件。
  */
 // 泛型约束照抄 React.lazy 的签名（组件 props 由调用方类型决定，这里不能收窄）
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function lazyRetry<M, T extends ComponentType<any>>(
   load: () => Promise<M>,
   pick: (mod: M) => T,
-  { leaf }: Options = { leaf: true },
+  options: Options = { leaf: true },
 ): LazyExoticComponent<T> {
-  return lazy<T>(async () => {
-    let onlineAttempt = 0
-    let freshUrl: string | null = null
-    for (;;) {
-      // 明知离线就不发请求：失败过的 URL（含 modulepreload 的依赖）会被浏览器记成「失败」，之后只能整页重载
-      if (typeof navigator !== "undefined" && navigator.onLine === false) await waitOnline()
-      try {
-        const mod = freshUrl ? ((await import(/* @vite-ignore */ freshUrl)) as M) : await load()
-        return { default: pick(mod) }
-      } catch (err) {
-        if (!isChunkLoadError(err)) throw err
-        if (leaf) {
-          const url = CHUNK_URL_RE.exec(errorMessage(err))?.[0]
-          if (url) freshUrl = `${url}?retry=${Date.now().toString(36)}`
-        }
-        if (typeof navigator !== "undefined" && navigator.onLine === false) continue
-        if (onlineAttempt >= RETRY_DELAYS_MS.length) throw err
-        await sleep(RETRY_DELAYS_MS[onlineAttempt++])
-      }
-    }
-  })
+  return lazy<T>(async () => ({ default: pick(await importRetry(load, options)) }))
 }
