@@ -271,6 +271,13 @@ class NotesRepository(
         return client.refetchLink(id)
     }
 
+    /** 语音 / 图片 / 文件笔记原地重跑转写 / 识别 / 提取 */
+    suspend fun retryMedia(id: String): Note? {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.retryMedia(id)
+    }
+
     /** 下载文件笔记原件：返回字节 + mime */
     suspend fun downloadNoteFile(id: String): Pair<ByteArray, String> {
         val (client, mock) = api()

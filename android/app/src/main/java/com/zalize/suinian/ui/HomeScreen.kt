@@ -857,6 +857,8 @@ fun HomeScreen(
                                 sensitivePending = note.id in ui.sensitivePendingIds,
                                 onRetryLink = { vm.retryLink(it) },
                                 retryingLink = note.id in ui.retryingLinkIds,
+                                onRetryMedia = { vm.retryMedia(it) },
+                                retryingMedia = note.id in ui.retryingMediaIds,
                                 onDownloadFile = { vm.downloadFile(it) },
                                 onEdit = { vm.openEditor(it) },
                                 selectable = ui.selectionMode,

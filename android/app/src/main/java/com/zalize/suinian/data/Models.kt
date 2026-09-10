@@ -40,6 +40,9 @@ object FlexibleBooleanSerializer : KSerializer<Boolean> {
 @Serializable
 data class NoteMeta(
     @SerialName("raw_transcript") val rawTranscript: String? = null,
+    @SerialName("media_status") val mediaStatus: String? = null, // ok|extract_failed（voice / image）
+    @SerialName("transcript_suspect") val transcriptSuspect: Boolean? = null,
+    @SerialName("ocr_suspect") val ocrSuspect: Boolean? = null,
     @SerialName("image_description") val imageDescription: String? = null,
     @SerialName("link_site") val linkSite: String? = null,
     @SerialName("link_excerpt") val linkExcerpt: String? = null,

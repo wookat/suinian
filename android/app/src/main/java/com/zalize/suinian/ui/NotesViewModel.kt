@@ -23,6 +23,7 @@ import com.zalize.suinian.data.SendResult
 import com.zalize.suinian.data.StaleDownloadCleaner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import com.zalize.suinian.ui.components.mediaStatusLine
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.OutputStream
 import kotlinx.coroutines.flow.update
@@ -61,6 +62,8 @@ data class NotesUiState(
     val cursor: String? = null,
     val loadingMore: Boolean = false,
     val retryingLinkIds: Set<String> = emptySet(),
+    /** 语音 / 图片 / 文件原地重试在途的笔记 */
+    val retryingMediaIds: Set<String> = emptySet(),
     /** 敏感标记 PATCH 在途的笔记：菜单项禁用防连发（R206 P2-2） */
     val sensitivePendingIds: Set<String> = emptySet(),
     val reviewItems: List<DailyReviewItem> = emptyList(),
@@ -364,6 +367,29 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(
                     retryingLinkIds = _ui.value.retryingLinkIds - note.id,
+                    toast = e.message ?: "重试失败",
+                )
+            }
+        }
+    }
+
+    /** 语音 / 图片 / 文件卡原地重试：服务端用存档原件重跑，成功后用返回的笔记替换；失败保留失败态、toast 服务端原因（频率 / 仍失败 / 原件不在） */
+    fun retryMedia(note: Note) {
+        if (note.id in _ui.value.retryingMediaIds) return
+        _ui.value = _ui.value.copy(retryingMediaIds = _ui.value.retryingMediaIds + note.id)
+        viewModelScope.launch {
+            try {
+                val updated = repo.retryMedia(note.id)
+                _ui.value = _ui.value.copy(
+                    notes = if (updated != null) {
+                        _ui.value.notes.map { if (it.id == note.id) updated else it }
+                    } else _ui.value.notes,
+                    retryingMediaIds = _ui.value.retryingMediaIds - note.id,
+                    toast = mediaStatusLine(note)?.doneToast ?: "已重试",
+                )
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(
+                    retryingMediaIds = _ui.value.retryingMediaIds - note.id,
                     toast = e.message ?: "重试失败",
                 )
             }
