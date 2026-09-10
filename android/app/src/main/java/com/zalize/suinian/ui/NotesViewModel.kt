@@ -19,6 +19,7 @@ import com.zalize.suinian.data.parseInlineCommand
 import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.RestoreStats
 import com.zalize.suinian.data.SendResult
+import com.zalize.suinian.data.StaleDownloadCleaner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -424,6 +425,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val (bytes, mime) = repo.downloadNoteFile(note.id)
+                StaleDownloadCleaner.ensureCleaned(getApplication())
                 saveToDownloads(fileName, mime, bytes)
                 _ui.value = _ui.value.copy(toast = "已保存到下载：$fileName")
             } catch (e: Exception) {
@@ -592,6 +594,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         backupDownloadJob = viewModelScope.launch {
             var target: DownloadTarget? = null
             try {
+                StaleDownloadCleaner.ensureCleaned(getApplication())
                 var lastStep = -1L
                 val fileName = repo.downloadBackup(
                     includeSensitive,
@@ -629,12 +632,24 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         if (backupDownloadJob?.isActive != true) _backupDownload.value = BackupDownloadState.Idle
     }
 
-    /** 下载目录里一个正在写的文件：Q+ 是 IS_PENDING 的 MediaStore 行（对其他应用不可见），旧系统是应用外部目录下的文件 */
-    private inner class DownloadTarget(val stream: OutputStream, private val uri: Uri?, private val file: java.io.File?) {
+    /** 下载目录里一个正在写的文件：Q+ 是 IS_PENDING 的 MediaStore 行（对其他应用不可见），旧系统是应用外部目录下的 .part 文件、完成后才改成最终名 */
+    private inner class DownloadTarget(
+        val stream: OutputStream,
+        private val uri: Uri?,
+        private val file: java.io.File?,
+        private val finalFile: java.io.File? = null,
+    ) {
         fun commit() {
-            val u = uri ?: return
-            val values = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
-            getApplication<Application>().contentResolver.update(u, values, null, null)
+            val u = uri
+            if (u != null) {
+                val values = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                getApplication<Application>().contentResolver.update(u, values, null, null)
+                return
+            }
+            val part = file ?: return
+            val dest = finalFile ?: return
+            if (dest.exists()) dest.delete()
+            if (!part.renameTo(dest)) throw IllegalStateException("无法保存下载文件")
         }
 
         fun discard() {
@@ -662,8 +677,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
             ?: throw IllegalStateException("存储不可用")
-        val file = java.io.File(dir, fileName)
-        return DownloadTarget(file.outputStream(), null, file)
+        val part = java.io.File(dir, fileName + StaleDownloadCleaner.PART_SUFFIX)
+        return DownloadTarget(part.outputStream(), null, part, java.io.File(dir, fileName))
     }
 
     private val _restore = MutableStateFlow<RestoreState>(RestoreState.Idle)
