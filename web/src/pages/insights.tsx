@@ -10,6 +10,7 @@ import { ChartContainer, ChartTooltipContent, chartColor } from "@/components/ui
 import { NoteCard } from "@/components/note-card"
 import { EmptyState } from "@/components/empty-state"
 import { getRandomNote, getStats, ApiError, NetworkError } from "@/lib/api"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 import { useSettingsVersion } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import type { Note, StatsResponse } from "@/lib/types"
@@ -300,6 +301,7 @@ export function InsightsPage() {
   const [stats, setStats] = useState<StatsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [unreachable, setUnreachable] = useState(false)
   const [randomNote, setRandomNote] = useState<Note | null>(null)
   const [randomEmpty, setRandomEmpty] = useState(false)
   const [drawing, setDrawing] = useState(false)
@@ -313,6 +315,7 @@ export function InsightsPage() {
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setUnreachable(false)
     try {
       const res = await getStats(365, {
         tag: scopeTag || undefined,
@@ -323,8 +326,10 @@ export function InsightsPage() {
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.status === 403))
         setError("未连接或 token 失效，请到设置页检查连接")
-      else if (e instanceof NetworkError) setError(e.message)
-      else setError(e instanceof Error ? e.message : String(e))
+      else if (e instanceof NetworkError) {
+        setError(e.message)
+        setUnreachable(true)
+      } else setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
     }
@@ -333,6 +338,8 @@ export function InsightsPage() {
   useEffect(() => {
     void load()
   }, [load, settingsVersion])
+
+  useRetryOnReconnect(!loading && error !== null && unreachable, load)
 
   const draw = useCallback(async () => {
     setDrawing(true)
