@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   Check,
   Loader2,
@@ -56,7 +56,9 @@ import {
   type WechatBindingStatus,
   type PushPreferences,
   type TestConnectionResult,
+  NetworkError,
 } from "@/lib/api"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 import { detectPushSupport, currentSubscription, enablePush, disablePush, forgetPushIntent, rememberPushIntent } from "@/lib/push"
 import { detachServiceWorker, isOfflineCacheEnabled, setOfflineCacheEnabled } from "@/lib/sw-control"
 import { RecoveryCodeCard } from "@/pages/auth"
@@ -318,28 +320,39 @@ function TagManagerCard() {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [showLongTail, setShowLongTail] = useState(false)
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null)
+  const [unreachable, setUnreachable] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const settingsVersion = useSettingsVersion()
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
     let cancelled = false
     setError(null)
+    setUnreachable(false)
     getTags()
       .then((t) => {
         if (!cancelled) setTags(t)
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : String(e))
+        setUnreachable(e instanceof NetworkError)
       })
     return () => {
       cancelled = true
     }
-  }, [settingsVersion])
+  }, [settingsVersion, attempt])
+
+  useRetryOnReconnect(error !== null && unreachable, retry)
 
   async function refresh() {
     try {
       setTags(await getTags())
+      setError(null)
+      setUnreachable(false)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      setUnreachable(e instanceof NetworkError)
     }
   }
 
@@ -407,7 +420,15 @@ function TagManagerCard() {
         </p>
       </div>
       {error ? (
-        <p className="text-sm text-destructive">{error}</p>
+        <div className="flex flex-col items-start gap-2">
+          <p className="text-sm text-destructive">
+            {error}
+            {unreachable ? "（会自动重试）" : ""}
+          </p>
+          <Button size="sm" variant="outline" onClick={retry}>
+            <RefreshCw className="size-3.5" /> 重试
+          </Button>
+        </div>
       ) : tags === null ? (
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" /> 加载中…
@@ -640,19 +661,25 @@ function PushPreferencesCard() {
   const [busy, setBusy] = useState(false)
   // fail closed like WechatBindingCard: only mention WeChat when a channel is live
   const [wechatOn, setWechatOn] = useState(false)
+  const [loadFailed, setLoadFailed] = useState<{ unreachable: boolean } | null>(null)
+  const [attempt, setAttempt] = useState(0)
   const settingsVersion = useSettingsVersion()
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
     let cancelled = false
     const s = loadSettings()
     if (s.useMock || !s.apiBaseUrl || !s.apiToken) return
     setError(null)
+    setLoadFailed(null)
     getPreferences()
       .then((p) => {
         if (!cancelled) setPrefs(p)
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : String(e))
+        setLoadFailed({ unreachable: e instanceof NetworkError })
       })
     getWechatBinding()
       .then((st) => {
@@ -662,7 +689,9 @@ function PushPreferencesCard() {
     return () => {
       cancelled = true
     }
-  }, [settingsVersion])
+  }, [settingsVersion, attempt])
+
+  useRetryOnReconnect(loadFailed?.unreachable === true, retry)
 
   const s = loadSettings()
   if (s.useMock || !s.apiBaseUrl || !s.apiToken) return null
@@ -708,7 +737,19 @@ function PushPreferencesCard() {
         <h3 className="text-[15px] font-semibold leading-snug">推送偏好</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{`控制浏览器通知${wechatOn ? "与微信 bot" : ""}的主动推送，默认全开；关闭后当天即生效`}</p>
       </div>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && (
+        <div className="flex flex-col items-start gap-2">
+          <p className="text-sm text-destructive">
+            {error}
+            {loadFailed?.unreachable ? "（会自动重试）" : ""}
+          </p>
+          {loadFailed && (
+            <Button size="sm" variant="outline" onClick={retry}>
+              <RefreshCw className="size-3.5" /> 重试
+            </Button>
+          )}
+        </div>
+      )}
       {prefs === null && !error ? (
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" /> 加载中…
@@ -738,28 +779,32 @@ function PushPreferencesCard() {
 
 function WechatBindingCard() {
   const [status, setStatus] = useState<WechatBindingStatus | null>(null)
-  const [loadFailed, setLoadFailed] = useState(false)
+  const [loadFailed, setLoadFailed] = useState<{ unreachable: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [bindCode, setBindCode] = useState<{ code: string; ttl_minutes: number } | null>(null)
+  const [attempt, setAttempt] = useState(0)
   const settingsVersion = useSettingsVersion()
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
     let cancelled = false
     const s = loadSettings()
     if (s.useMock || !s.apiBaseUrl || !s.apiToken) return
-    setLoadFailed(false)
+    setLoadFailed(null)
     getWechatBinding()
       .then((st) => {
         if (!cancelled) setStatus(st)
       })
-      .catch(() => {
-        if (!cancelled) setLoadFailed(true)
+      .catch((e: unknown) => {
+        if (!cancelled) setLoadFailed({ unreachable: e instanceof NetworkError })
       })
     return () => {
       cancelled = true
     }
-  }, [settingsVersion])
+  }, [settingsVersion, attempt])
+
+  useRetryOnReconnect(status === null && loadFailed?.unreachable === true, retry)
 
   const s = loadSettings()
   if (s.useMock || !s.apiBaseUrl || !s.apiToken) return null
