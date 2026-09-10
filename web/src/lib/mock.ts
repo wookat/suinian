@@ -6,6 +6,7 @@ import type {
   NotesQuery,
   NotesResponse,
   PrevCategory,
+  ReportPeriod,
   ReportsResponse,
   Thread,
   ThreadDetail,
@@ -21,6 +22,7 @@ import type { BatchBody, BatchResult } from "./api"
 
 const MOCK_KEY = "suinian.mock.notes.v2"
 const MOCK_TRASH_KEY = "suinian.mock.trash.v1"
+const MOCK_REPORTS_KEY = "suinian.mock.reports.v1"
 export const MOCK_TRASH_RETENTION_DAYS = 30
 
 function hoursAgo(h: number): string {
@@ -201,6 +203,7 @@ export function clearDemoNotes(): void {
   try {
     localStorage.removeItem(MOCK_KEY)
     localStorage.removeItem(MOCK_TRASH_KEY)
+    localStorage.removeItem(MOCK_REPORTS_KEY)
   } catch {
     // ignore
   }
@@ -662,11 +665,20 @@ export async function mockGetThread(id: string): Promise<ThreadDetail> {
   return { ...thread, notes }
 }
 
+/** 本地日历周（周一起）/ 月的起止，与 backend/src/reports.ts thisWeekRange / thisMonthRange 同口径 */
+function thisPeriodRange(period: ReportPeriod, now = Date.now()): { start: string; end: string } {
+  const today = localDateOf(now)
+  if (period === "month") return { start: `${today.slice(0, 7)}-01`, end: today }
+  const dow = new Date(`${today}T00:00:00Z`).getUTCDay()
+  return { start: addDays(today, -((dow + 6) % 7)), end: today }
+}
+
 const seedReports: WeeklyReport[] = [
   {
     id: "r-1",
     user_id: "u-1",
-    week_start: new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10),
+    week_start: addDays(thisPeriodRange("week").start, -7),
+    period: "week",
     content_md: `# 本周思考报告
 
 ## 你在想什么
@@ -689,21 +701,118 @@ flomo 的产品理念、MyMind 的 AI 标签方案，都值得回看。`,
   },
 ]
 
+/** 演示模式手动生成的报告落本地；同一周期重复生成覆盖（与服务端 weekly_reports 唯一键同语义） */
+function loadMockReports(): WeeklyReport[] {
+  let stored: WeeklyReport[] = []
+  try {
+    const raw = localStorage.getItem(MOCK_REPORTS_KEY)
+    if (raw) stored = JSON.parse(raw) as WeeklyReport[]
+  } catch {
+    stored = []
+  }
+  const key = (r: WeeklyReport) => `${r.period ?? "week"}:${r.week_start}`
+  const taken = new Set(stored.map(key))
+  return [...stored, ...seedReports.filter((r) => !taken.has(key(r)))].sort((a, b) =>
+    a.week_start < b.week_start ? 1 : a.week_start > b.week_start ? -1 : 0,
+  )
+}
+
+function saveMockReports(reports: WeeklyReport[]) {
+  localStorage.setItem(MOCK_REPORTS_KEY, JSON.stringify(reports))
+}
+
 export async function mockGetReports(): Promise<ReportsResponse> {
   await delay()
-  return { reports: seedReports }
+  return { reports: loadMockReports().map(({ content_md: _md, ...r }) => r) }
 }
 
 export async function mockGetReport(id: string): Promise<WeeklyReport> {
   await delay(120)
-  const report = seedReports.find((r) => r.id === id)
+  const report = loadMockReports().find((r) => r.id === id)
   if (!report) throw new Error("report not found")
   return report
 }
 
-export async function mockGenerateReport(): Promise<WeeklyReport> {
+const REPORT_CATEGORY_LABEL: Record<string, string> = {
+  idea: "想法",
+  todo: "待办",
+  collect: "收藏",
+  data: "资料",
+  expense: "支出",
+  income: "收入",
+  transfer: "资金往来",
+}
+
+function escapeMdText(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/`/g, "'")
+}
+
+function reportRowTitle(n: Note, max: number): string {
+  const t = (n.title?.trim() || n.url_title?.trim() || n.content.trim().split(/\r?\n/)[0] || "").replace(/\s+/g, " ")
+  return t.length > max ? `${t.slice(0, max)}…` : t
+}
+
+/**
+ * 演示模式生成本周 / 本月报告：与 backend generatePeriodReport 的确定性部分（fallbackMarkdown + todoSection）
+ * 同口径——按本地日期取期段内笔记、敏感笔记只计数不展示、期段无笔记返回 null 由页面给引导文案；
+ * 本地没有模型，不做 AI 叙述。
+ */
+export async function mockGenerateReport(period: ReportPeriod = "week"): Promise<WeeklyReport | null> {
   await delay(600)
-  return seedReports[0]
+  const { start, end } = thisPeriodRange(period)
+  const inRange = (iso: string) => {
+    const d = localDateOf(Date.parse(iso))
+    return d >= start && d <= end
+  }
+  const all = loadMockNotes()
+  const notes = all
+    .filter((n) => inRange(n.created_at))
+    .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
+  if (notes.length === 0) return null
+
+  const label = period === "month" ? "月报" : "周报"
+  const unit = period === "month" ? "本月" : "本周"
+  const byCat = new Map<string, Note[]>()
+  for (const n of notes) {
+    const k = n.category ?? "idea"
+    if (!byCat.has(k)) byCat.set(k, [])
+    byCat.get(k)!.push(n)
+  }
+  const sensitive = notes.filter((n) => n.is_sensitive === 1).length
+  let md = `# 碎念${label}（${start} ~ ${end}）\n\n${unit}共记录 ${notes.length} 条${sensitive > 0 ? `（含 ${sensitive} 条敏感记录，仅计数不展示内容）` : ""}。\n`
+  for (const [cat, rows] of byCat) {
+    md += `\n## ${REPORT_CATEGORY_LABEL[cat] ?? cat}（${rows.length}）\n`
+    const hidden = rows.filter((n) => n.is_sensitive === 1).length
+    for (const n of rows.filter((n) => n.is_sensitive !== 1)) md += `- ${escapeMdText(reportRowTitle(n, 60))}\n`
+    if (hidden > 0) md += `- （另有 ${hidden} 条敏感记录，内容不展示）\n`
+  }
+  const todos = notes.filter((n) => n.category === "todo")
+  const doneInPeriod = all.filter(
+    (n) => n.category === "todo" && n.todo_done === 1 && n.is_sensitive !== 1 && inRange(n.done_at ?? n.updated_at),
+  )
+  md += `\n## 待办盘点\n${unit}新增待办 ${todos.length} 条，共完成 ${doneInPeriod.length} 条。\n`
+  if (doneInPeriod.length > 0) {
+    md += `\n已完成：\n`
+    for (const n of doneInPeriod.slice(0, 10)) md += `- [x] ${escapeMdText(reportRowTitle(n, 40))}\n`
+  }
+  const open = todos.filter((n) => n.todo_done !== 1 && n.is_sensitive !== 1)
+  if (open.length > 0) {
+    md += `\n未完成：\n`
+    for (const n of open.slice(0, 10)) md += `- [ ] ${escapeMdText(reportRowTitle(n, 40))}\n`
+  }
+  md += `\n> 演示模式：本报告由本地统计拼接，未经 AI 叙述；登录真实账号后的报告会由模型讲述「这段时间你在想什么」。\n`
+
+  const report: WeeklyReport = {
+    id: `r-${period}-${start}`,
+    user_id: "u-1",
+    week_start: start,
+    period,
+    content_md: md,
+    created_at: new Date().toISOString(),
+  }
+  const rest = loadMockReports().filter((r) => !((r.period ?? "week") === period && r.week_start === start) && !seedReports.includes(r))
+  saveMockReports([report, ...rest])
+  return report
 }
 
 /** 浏览器本地时区的 "YYYY-MM-DD"（与真实 API 按 tz_offset 分桶同口径） */
