@@ -64,6 +64,8 @@ data class NotesUiState(
     val retryingLinkIds: Set<String> = emptySet(),
     /** 语音 / 图片 / 文件原地重试在途的笔记 */
     val retryingMediaIds: Set<String> = emptySet(),
+    /** 列表刷新成功 / 网络恢复时递增，卡片附件因断网 / 5xx 失败的据此自动重拉 */
+    val mediaReloadKey: Int = 0,
     /** 敏感标记 PATCH 在途的笔记：菜单项禁用防连发（R206 P2-2） */
     val sensitivePendingIds: Set<String> = emptySet(),
     val reviewItems: List<DailyReviewItem> = emptyList(),
@@ -166,12 +168,27 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                     source = s.filterSource,
                     from = s.filterTime?.fromParam(),
                 )
-                _ui.value = _ui.value.copy(notes = page.notes, loading = false, cursor = page.cursor)
+                _ui.value = _ui.value.copy(
+                    notes = page.notes,
+                    loading = false,
+                    cursor = page.cursor,
+                    mediaReloadKey = _ui.value.mediaReloadKey + 1,
+                )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(loading = false, error = e.message ?: "加载失败")
             }
+        }
+    }
+
+    /** 系统网络恢复（新网络变为默认）：列表处于错误态则重拉列表（成功后附件随之重拉），否则只让断网时失败的附件重拉 */
+    fun onNetworkAvailable() {
+        val s = _ui.value
+        if (s.error != null && !s.loading) {
+            refresh()
+        } else {
+            _ui.value = s.copy(mediaReloadKey = s.mediaReloadKey + 1)
         }
     }
 

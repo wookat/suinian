@@ -59,17 +59,38 @@ fun isAudioAttachment(att: NoteAttachment): Boolean =
     att.mime?.startsWith("audio/") == true ||
         att.name.substringAfterLast('.', "").lowercase() in setOf("mp3", "m4a", "aac", "wav", "ogg", "amr", "opus")
 
-/** 图片附件：鉴权拉取原图，卡片内缩略图，点击全屏查看 */
+/**
+ * 列表刷新 / 网络恢复时自动清附件失败态：reloadKey 变化且当前失败值得重拉（连接级 / 5xx）才重新发起，
+ * 404 / Token 失效等重拉也不会变的失败保持原样等用户点击。首次进入组合不算变化。
+ */
+@Composable
+private fun AutoReloadOnKey(
+    reloadKey: Int,
+    failed: Boolean,
+    autoRetry: Boolean,
+    retry: () -> Unit,
+) {
+    var seenKey by remember { mutableIntStateOf(reloadKey) }
+    LaunchedEffect(reloadKey) {
+        if (reloadKey == seenKey) return@LaunchedEffect
+        seenKey = reloadKey
+        if (failed && autoRetry) retry()
+    }
+}
+
+/** 图片附件：鉴权拉取原图，卡片内缩略图，点击全屏查看；reloadKey 由列表层在刷新成功 / 网络恢复时递增 */
 @Composable
 fun NoteImageAttachment(
     noteId: String,
     attachment: NoteAttachment,
     fetchMedia: suspend (noteId: String, attachmentId: String) -> Pair<ByteArray, String>,
     modifier: Modifier = Modifier,
+    reloadKey: Int = 0,
 ) {
     var bitmap by remember(noteId, attachment.id) { mutableStateOf<ImageBitmap?>(null) }
     var failed by remember(noteId, attachment.id) { mutableStateOf(false) }
     var failReason by remember(noteId, attachment.id) { mutableStateOf<String?>(null) }
+    var failAutoRetries by remember(noteId, attachment.id) { mutableStateOf(false) }
     var loadAttempt by remember(noteId, attachment.id) { mutableIntStateOf(0) }
     var fullscreen by remember { mutableStateOf(false) }
 
@@ -82,15 +103,24 @@ fun NoteImageAttachment(
                 bitmap = bmp.asImageBitmap()
             } else {
                 failReason = "图片格式无法解码"
+                failAutoRetries = false
                 failed = true
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             failReason = mediaLoadFailureReason(e)
+            failAutoRetries = mediaLoadFailureAutoRetries(e)
             failed = true
         }
     }
+
+    val retry: () -> Unit = {
+        failed = false
+        failReason = null
+        loadAttempt++
+    }
+    AutoReloadOnKey(reloadKey, failed, failAutoRetries, retry)
 
     val bmp = bitmap
     when {
@@ -130,11 +160,7 @@ fun NoteImageAttachment(
         failed -> MediaLoadFailed(
             label = "图片加载失败",
             reason = failReason,
-            onRetry = {
-                failed = false
-                failReason = null
-                loadAttempt++
-            },
+            onRetry = retry,
             modifier = modifier,
         )
         else -> Box(
@@ -150,17 +176,19 @@ fun NoteImageAttachment(
     }
 }
 
-/** 语音附件：鉴权拉取原音频到落盘缓存，MediaPlayer 直接读缓存文件；播放/暂停控件 */
+/** 语音附件：鉴权拉取原音频到落盘缓存，MediaPlayer 直接读缓存文件；播放/暂停控件；reloadKey 同 NoteImageAttachment */
 @Composable
 fun NoteAudioAttachment(
     noteId: String,
     attachment: NoteAttachment,
     fetchMediaFile: suspend (noteId: String, attachmentId: String) -> File,
     modifier: Modifier = Modifier,
+    reloadKey: Int = 0,
 ) {
     var audioFile by remember(noteId, attachment.id) { mutableStateOf<File?>(null) }
     var failed by remember(noteId, attachment.id) { mutableStateOf(false) }
     var failReason by remember(noteId, attachment.id) { mutableStateOf<String?>(null) }
+    var failAutoRetries by remember(noteId, attachment.id) { mutableStateOf(false) }
     var loadAttempt by remember(noteId, attachment.id) { mutableIntStateOf(0) }
     var playing by remember { mutableStateOf(false) }
     val player = remember { MediaPlayer() }
@@ -173,9 +201,18 @@ fun NoteAudioAttachment(
             throw e
         } catch (e: Exception) {
             failReason = mediaLoadFailureReason(e)
+            failAutoRetries = mediaLoadFailureAutoRetries(e)
             failed = true
         }
     }
+
+    val retry: () -> Unit = {
+        failed = false
+        failReason = null
+        audioFile = null
+        loadAttempt++
+    }
+    AutoReloadOnKey(reloadKey, failed, failAutoRetries, retry)
 
     DisposableEffect(Unit) {
         onDispose {
@@ -200,12 +237,7 @@ fun NoteAudioAttachment(
                 failed -> MediaLoadFailed(
                     label = "语音加载失败",
                     reason = failReason,
-                    onRetry = {
-                        failed = false
-                        failReason = null
-                        audioFile = null
-                        loadAttempt++
-                    },
+                    onRetry = retry,
                 )
                 audioFile == null -> {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
