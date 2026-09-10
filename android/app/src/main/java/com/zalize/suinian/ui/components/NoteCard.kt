@@ -226,6 +226,8 @@ fun NoteCard(
     onLongPress: ((Note) -> Unit)? = null,
     fetchMedia: (suspend (noteId: String, attachmentId: String) -> Pair<ByteArray, String>)? = null,
     fetchMediaFile: (suspend (noteId: String, attachmentId: String) -> File)? = null,
+    /** 列表刷新成功 / 网络恢复时递增：附件因断网 / 5xx 失败的卡片自动重拉 */
+    mediaReloadKey: Int = 0,
 ) {
     var confirmDelete by rememberSaveable(note.id) { mutableStateOf(false) }
     // 敏感遮罩：点击临时查看，可再隐藏（对齐 Web）；遮罩时标题/链接卡/文件摘录/图片描述/金额一律不露出
@@ -697,11 +699,11 @@ fun NoteCard(
                 val audioAtt = if (fetchMediaFile != null && note.rawType == "voice") note.attachments?.firstOrNull(::isAudioAttachment) else null
                 if (imageAtt != null && fetchMedia != null) {
                     Spacer(Modifier.height(8.dp))
-                    NoteImageAttachment(note.id, imageAtt, fetchMedia)
+                    NoteImageAttachment(note.id, imageAtt, fetchMedia, reloadKey = mediaReloadKey)
                 }
                 if (audioAtt != null && fetchMediaFile != null) {
                     Spacer(Modifier.height(8.dp))
-                    NoteAudioAttachment(note.id, audioAtt, fetchMediaFile)
+                    NoteAudioAttachment(note.id, audioAtt, fetchMediaFile, reloadKey = mediaReloadKey)
                 }
                 val mediaStatus = mediaStatusLine(note)
                 if (mediaStatus != null) {

@@ -50,8 +50,16 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/** 面向用户的可读错误（网络/解析/HTTP 统一人话文案） */
-class ApiException(message: String, cause: Throwable? = null) : Exception(message, cause)
+/**
+ * 面向用户的可读错误（网络/解析/HTTP 统一人话文案）。
+ * status：HTTP 状态码（非 HTTP 层失败为 null）；network：连接级失败（连不上 / 传输中断），换网后重试有意义。
+ */
+class ApiException(
+    message: String,
+    cause: Throwable? = null,
+    val status: Int? = null,
+    val network: Boolean = false,
+) : Exception(message, cause)
 
 /** 乐观锁冲突（409）：笔记已被其他设备修改；latest 为服务器最新副本（409 响应体携带），供调用方展示对照合并 */
 class ConflictException(message: String, val latest: Note? = null) : Exception(message)
@@ -77,7 +85,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
 
     private fun httpError(code: Int, body: String? = null): ApiException {
         val serverMsg = body?.let { parseErrorMessage(it) }
-        if (serverMsg != null) return ApiException(serverMsg)
+        if (serverMsg != null) return ApiException(serverMsg, status = code)
         return defaultHttpError(code)
     }
 
@@ -88,11 +96,11 @@ class ApiClient(private val baseUrl: String, private val token: String) {
     }
 
     private fun defaultHttpError(code: Int): ApiException = when (code) {
-        401, 403 -> ApiException("Token 无效或没有权限，请在设置中检查 API Token")
-        404 -> ApiException("内容不存在或已被删除")
-        413 -> ApiException("内容过长：最多 20000 字符，请拆成多条或精简后再发")
-        in 500..599 -> ApiException("服务器开小差了（$code），请稍后重试")
-        else -> ApiException("请求失败（$code），请稍后重试")
+        401, 403 -> ApiException("Token 无效或没有权限，请在设置中检查 API Token", status = code)
+        404 -> ApiException("内容不存在或已被删除", status = code)
+        413 -> ApiException("内容过长：最多 20000 字符，请拆成多条或精简后再发", status = code)
+        in 500..599 -> ApiException("服务器开小差了（$code），请稍后重试", status = code)
+        else -> ApiException("请求失败（$code），请稍后重试", status = code)
     }
 
     private fun <T> execute(request: Request, deserializer: DeserializationStrategy<T>): T {
@@ -394,7 +402,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         val resp = try {
             call.awaitResponse()
         } catch (e: IOException) {
-            throw ApiException("网络连接失败，请检查网络后重试", e)
+            throw ApiException("网络连接失败，请检查网络后重试", e, network = true)
         }
         resp.use {
             if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
@@ -403,7 +411,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             val bytes = try {
                 body.bytesCancellable(call)
             } catch (e: IOException) {
-                throw ApiException("附件加载中断，请检查网络后重试", e)
+                throw ApiException("附件加载中断，请检查网络后重试", e, network = true)
             }
             bytes to mime
         }

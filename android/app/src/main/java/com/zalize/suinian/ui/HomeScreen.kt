@@ -97,6 +97,7 @@ import com.zalize.suinian.ui.components.DailyReviewCard
 import com.zalize.suinian.ui.components.FirstRunTour
 import com.zalize.suinian.ui.components.NoteCard
 import com.zalize.suinian.ui.components.NoteEditSheet
+import com.zalize.suinian.ui.components.OnNetworkAvailable
 import kotlinx.coroutines.launch
 
 /** 时间流加载骨架屏：首登/切账号时代替菜单圈，不闪任何旧数据 */
@@ -178,6 +179,7 @@ fun HomeScreen(
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
+    OnNetworkAvailable { vm.onNetworkAvailable() }
 
     // 文件选择器：PDF/txt/md/docx → 上传入库
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -867,6 +869,7 @@ fun HomeScreen(
                                 onLongPress = { vm.enterSelection(it) },
                                 fetchMedia = vm::fetchMedia,
                                 fetchMediaFile = vm::fetchMediaFile,
+                                mediaReloadKey = ui.mediaReloadKey,
                             )
                         }
                         if (ui.loadingMore) {

@@ -8,3 +8,12 @@ import com.zalize.suinian.data.api.ApiException
  */
 fun mediaLoadFailureReason(e: Throwable): String? =
     (e as? ApiException)?.message?.takeIf { it.isNotBlank() }
+
+/**
+ * 列表刷新 / 网络恢复时值得自动重拉的失败：只有连接级失败与服务端 5xx。
+ * 404 / 401 / 缓存写失败 / 解码失败重拉也不会变，留给用户点击重试（与 web mediaLoadFailureAutoRetries 同口径）。
+ */
+fun mediaLoadFailureAutoRetries(e: Throwable): Boolean {
+    val api = e as? ApiException ?: return false
+    return api.network || (api.status ?: 0) >= 500
+}
