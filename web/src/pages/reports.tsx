@@ -66,6 +66,17 @@ function stripLeadingH1(md: string): string {
   return md.replace(/^\s*#\s+[^\n]*\n+/, "")
 }
 
+// 列表卡摘要：去标题行（卡头已有标题、小节名无信息量）、去列表/强调标记，段落间用「·」分隔
+function reportPreview(md: string): string {
+  return md
+    .split("\n")
+    .filter((l) => l.trim() && !/^\s*#{1,6}\s/.test(l))
+    .map((l) => l.replace(/^\s*(?:[-*+]|\d+\.)\s+/, "").replace(/[*`>_~]+/g, "").trim())
+    .filter(Boolean)
+    .join(" · ")
+    .slice(0, 160)
+}
+
 function ReportBody({ md }: { md: string }) {
   const html = useMemo(() => sanitizeGeneratedHtml(marked.parse(md, { async: false })), [md])
   return (
@@ -302,7 +313,7 @@ export function ReportsPage() {
                   <p className="mt-0.5 text-xs text-muted-foreground">{reportRangeLabel(r)}</p>
                   {r.content_md && (
                     <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
-                      {r.content_md.replace(/[#*`>\-\n]+/g, " ").trim().slice(0, 120)}
+                      {reportPreview(r.content_md)}
                     </p>
                   )}
                 </div>
