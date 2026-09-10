@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
@@ -96,6 +97,10 @@ fun NoteImageAttachment(
     fetchMedia: suspend (noteId: String, attachmentId: String) -> Pair<ByteArray, String>,
     modifier: Modifier = Modifier,
     reloadKey: Int = 0,
+    /** 全屏时「保存原图」到系统下载目录 */
+    onDownload: (() -> Unit)? = null,
+    /** 全屏时「分享」原图给其他应用 */
+    onShare: (() -> Unit)? = null,
 ) {
     var bitmap by remember(noteId, attachment.id) { mutableStateOf<ImageBitmap?>(null) }
     var failed by remember(noteId, attachment.id) { mutableStateOf(false) }
@@ -150,6 +155,8 @@ fun NoteImageAttachment(
                     cardBitmap = bmp,
                     fetchBytes = { fetchMedia(noteId, attachment.id).first },
                     onDismiss = { fullscreen = false },
+                    onDownload = onDownload,
+                    onShare = onShare,
                 )
             }
         }
@@ -310,7 +317,7 @@ fun NoteAudioAttachment(
 }
 
 /**
- * 全屏看图：可双指缩放 / 拖动 / 双击放大，单击或右上角关闭。
+ * 全屏看图：可双指缩放 / 拖动 / 双击放大，单击或右上角关闭；右上角「保存原图」/「分享」。
  * 卡片那张按长边 2048 采样，放大看不清；原图被采样过时按屏幕长边 2 倍（≤ 4096）从缓存字节再解一张，解好前先显示卡片那张。
  */
 @Composable
@@ -318,6 +325,8 @@ private fun FullscreenImage(
     cardBitmap: ImageBitmap,
     fetchBytes: suspend () -> ByteArray,
     onDismiss: () -> Unit,
+    onDownload: (() -> Unit)?,
+    onShare: (() -> Unit)?,
 ) {
     val metrics = LocalContext.current.resources.displayMetrics
     var fullBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -349,11 +358,20 @@ private fun FullscreenImage(
                 onTap = onDismiss,
                 modifier = Modifier.fillMaxSize(),
             )
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-            ) {
-                Icon(Icons.Outlined.Close, contentDescription = "关闭大图", tint = Color.White)
+            Row(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                if (onDownload != null) {
+                    IconButton(onClick = onDownload) {
+                        Icon(Icons.Outlined.Download, contentDescription = "保存原图", tint = Color.White)
+                    }
+                }
+                if (onShare != null) {
+                    IconButton(onClick = onShare) {
+                        Icon(Icons.Outlined.Share, contentDescription = "分享原图", tint = Color.White)
+                    }
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Outlined.Close, contentDescription = "关闭大图", tint = Color.White)
+                }
             }
         }
     }

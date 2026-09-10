@@ -222,8 +222,10 @@ fun NoteCard(
     onRetryMedia: ((Note) -> Unit)? = null,
     retryingMedia: Boolean = false,
     onDownloadFile: ((Note) -> Unit)? = null,
-    /** 语音附件本机放不出来时「下载原件」 */
+    /** 语音附件本机放不出来时「下载原件」；图片全屏「保存原图」 */
     onDownloadAttachment: ((Note, NoteAttachment) -> Unit)? = null,
+    /** 图片全屏「分享」原图给其他应用 */
+    onShareAttachment: ((Note, NoteAttachment) -> Unit)? = null,
     onEdit: ((Note) -> Unit)? = null,
     selectable: Boolean = false,
     selected: Boolean = false,
@@ -724,7 +726,14 @@ fun NoteCard(
                 val audioAtt = if (fetchMediaFile != null && note.rawType == "voice") note.attachments?.firstOrNull(::isAudioAttachment) else null
                 if (imageAtt != null && fetchMedia != null) {
                     Spacer(Modifier.height(8.dp))
-                    NoteImageAttachment(note.id, imageAtt, fetchMedia, reloadKey = mediaReloadKey)
+                    NoteImageAttachment(
+                        note.id,
+                        imageAtt,
+                        fetchMedia,
+                        reloadKey = mediaReloadKey,
+                        onDownload = onDownloadAttachment?.let { dl -> { dl(note, imageAtt) } },
+                        onShare = onShareAttachment?.let { sh -> { sh(note, imageAtt) } },
+                    )
                 }
                 if (audioAtt != null && fetchMediaFile != null) {
                     Spacer(Modifier.height(8.dp))
