@@ -19,6 +19,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
@@ -86,8 +87,8 @@ fun SettingsScreen(
     var backupMessage by remember { mutableStateOf<String?>(null) }
     var showBackupPasswordDialog by remember { mutableStateOf(false) }
     var backupPassword by remember { mutableStateOf("") }
-    var restoring by remember { mutableStateOf(false) }
-    var restoreMessage by remember { mutableStateOf<String?>(null) }
+    val restore by vm.restore.collectAsState()
+    val restoring = restore is RestoreState.Reading || restore is RestoreState.Running
     var pushPrefs by remember { mutableStateOf<PushPreferences?>(null) }
     var pushPrefsMessage by remember { mutableStateOf<String?>(null) }
 
@@ -105,23 +106,7 @@ fun SettingsScreen(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        restoring = true
-        restoreMessage = null
-        scope.launch {
-            try {
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: throw IllegalStateException("无法读取所选文件")
-                if (bytes.size > 200 * 1024 * 1024) {
-                    restoreMessage = "备份文件过大：最大支持 200MB"
-                } else {
-                    restoreMessage = restoreSummary(vm.restoreFromBackup(bytes, "backup.zip"))
-                }
-            } catch (e: Exception) {
-                restoreMessage = e.message ?: "恢复失败，请稍后重试"
-            } finally {
-                restoring = false
-            }
-        }
+        vm.startRestore(uri)
     }
 
     LaunchedEffect(settings) {
@@ -640,16 +625,59 @@ fun SettingsScreen(
                 onClick = { restorePicker.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !settings.mockMode && !restoring && !backingUp,
-            ) { Text(if (restoring) "恢复中，请勿离开…" else "从备份恢复（选择 zip）") }
+            ) { Text(if (restoring) "恢复中…" else "从备份恢复（选择 zip）") }
             Spacer(Modifier.height(4.dp))
             Text(
                 "导入「下载完整备份」导出的 zip：笔记保留原时间/标签/分类，重复导入自动跳过（最大 200MB）",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            restoreMessage?.let {
-                Spacer(Modifier.height(4.dp))
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            when (val r = restore) {
+                RestoreState.Idle -> {}
+                RestoreState.Reading -> {
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(4.dp))
+                    Text("读取所选文件中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                is RestoreState.Running -> {
+                    Spacer(Modifier.height(8.dp))
+                    if (r.uploaded) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    else LinearProgressIndicator(progress = { restorePercent(r) / 100f }, modifier = Modifier.fillMaxWidth())
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            restoreProgressLabel(r),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { vm.cancelRestore() }) { Text(if (r.uploaded) "不再等待" else "取消") }
+                    }
+                }
+                is RestoreState.Done -> {
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            restoreSummary(r.stats),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { vm.dismissRestoreResult() }) { Text("知道了") }
+                    }
+                }
+                is RestoreState.Failed -> {
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            r.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { vm.dismissRestoreResult() }) { Text("知道了") }
+                    }
+                }
             }
 
             Spacer(Modifier.height(24.dp))

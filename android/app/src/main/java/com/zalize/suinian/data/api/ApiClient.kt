@@ -41,15 +41,27 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.addJsonObject
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MultipartBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okio.Buffer
+import okio.BufferedSink
+import okio.ForwardingSink
+import okio.buffer
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 /** 备份 zip 最大 200MB（服务端 MAX_RESTORE_BYTES），按 ~0.5MB/s 慢网估算整包传输上限 */
 internal const val BACKUP_DOWNLOAD_CALL_TIMEOUT_SECONDS = 600L
@@ -59,6 +71,45 @@ internal const val BACKUP_DOWNLOAD_TIMEOUT_MESSAGE =
     "备份下载超时：备份包较大或网络较慢，请在网络较好时重试"
 internal const val BACKUP_RESTORE_TIMEOUT_MESSAGE =
     "恢复超时：备份包较大或网络较慢，服务端可能仍在导入，请稍后刷新列表确认；重新上传同一备份会自动跳过已导入的笔记"
+
+/** 上传进度回调（已写入字节 / 请求体总字节），在 OkHttp 写线程回调 */
+typealias UploadProgress = (sent: Long, total: Long) -> Unit
+
+/** 包一层请求体，把写入 socket 的字节数报给 [onProgress]（每次 writeTo 从 0 重新计） */
+private class ProgressRequestBody(
+    private val delegate: RequestBody,
+    private val onProgress: UploadProgress,
+) : RequestBody() {
+    override fun contentType(): MediaType? = delegate.contentType()
+    override fun contentLength(): Long = delegate.contentLength()
+    override fun writeTo(sink: BufferedSink) {
+        val total = contentLength()
+        var sent = 0L
+        val counting = object : ForwardingSink(sink) {
+            override fun write(source: Buffer, byteCount: Long) {
+                super.write(source, byteCount)
+                sent += byteCount
+                onProgress(sent, total)
+            }
+        }.buffer()
+        delegate.writeTo(counting)
+        counting.flush()
+    }
+}
+
+/** 挂起等待响应；协程取消时 cancel() 整个 Call（阻塞式 execute() 不响应取消，上传会在 IO 线程继续跑完） */
+private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            if (!cont.isCancelled) cont.resumeWithException(e)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            if (cont.isActive) cont.resume(response) else response.close()
+        }
+    })
+    cont.invokeOnCancellation { cancel() }
+}
 
 /** 面向用户的可读错误（网络/解析/HTTP 统一人话文案） */
 class ApiException(message: String, cause: Throwable? = null) : Exception(message, cause)
@@ -607,14 +658,18 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
     }
 
-    /** POST /api/backup/restore：上传备份 zip 恢复（multipart file），返回恢复统计 */
-    suspend fun restoreBackup(bytes: ByteArray, fileName: String): RestoreStats = withContext(Dispatchers.IO) {
-        val body = MultipartBody.Builder()
+    /**
+     * POST /api/backup/restore：上传备份 zip 恢复（multipart file），返回恢复统计。
+     * [onProgress] 报上传进度；协程取消会中断上传（未传完的包服务端不会导入）
+     */
+    suspend fun restoreBackup(bytes: ByteArray, fileName: String, onProgress: UploadProgress? = null): RestoreStats = withContext(Dispatchers.IO) {
+        val multipart = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("file", fileName, bytes.toRequestBody("application/zip".toMediaType()))
             .build()
+        val body: RequestBody = if (onProgress != null) ProgressRequestBody(multipart, onProgress) else multipart
         val resp = try {
-            backupRestoreClient.newCall(request("/api/backup/restore").post(body).build()).execute()
+            backupRestoreClient.newCall(request("/api/backup/restore").post(body).build()).await()
         } catch (e: InterruptedIOException) {
             throw ApiException(BACKUP_RESTORE_TIMEOUT_MESSAGE, e)
         } catch (e: IOException) {

@@ -2,6 +2,7 @@ package com.zalize.suinian.data
 
 import android.content.Context
 import com.zalize.suinian.data.api.ApiClient
+import com.zalize.suinian.data.api.UploadProgress
 import com.zalize.suinian.data.local.PendingNote
 import com.zalize.suinian.data.local.PendingNoteDao
 import com.zalize.suinian.sync.SyncWorker
@@ -284,11 +285,11 @@ class NotesRepository(
         return client.downloadBackup(includeSensitive, password)
     }
 
-    /** 从备份 zip 恢复：返回恢复统计 */
-    suspend fun restoreBackup(bytes: ByteArray, fileName: String): RestoreStats {
+    /** 从备份 zip 恢复：返回恢复统计；[onProgress] 报上传进度，协程取消会中断上传 */
+    suspend fun restoreBackup(bytes: ByteArray, fileName: String, onProgress: UploadProgress? = null): RestoreStats {
         val (client, mock) = api()
         if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
-        return client.restoreBackup(bytes, fileName)
+        return client.restoreBackup(bytes, fileName, onProgress)
     }
 
     suspend fun delete(id: String) {
