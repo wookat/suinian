@@ -138,6 +138,21 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
     }
 
+    /** GET /api/notes/:id：登录态取单条原文（敏感笔记服务端解密后回传）；404 返 null */
+    suspend fun getNote(id: String): Note? = withContext(Dispatchers.IO) {
+        val resp = try {
+            client.newCall(request("/api/notes/$id").get().build()).execute()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e, network = true)
+        }
+        resp.use {
+            if (it.code == 404) return@withContext null
+            val text = it.body?.string().orEmpty()
+            if (!it.isSuccessful) throw httpError(it.code, text)
+            parseNoteLenient(text) ?: throw ApiException("服务端返回了无法解析的笔记数据", status = it.code)
+        }
+    }
+
     /** GET /api/notes?category=&tag=&q=&source=&from=&to=&cursor= */
     suspend fun listNotes(
         category: String? = null,

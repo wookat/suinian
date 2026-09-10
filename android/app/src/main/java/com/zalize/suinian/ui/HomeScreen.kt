@@ -756,7 +756,7 @@ fun HomeScreen(
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "换个关键词、标签或分类试试，或清除筛选条件查看全部碎念。" +
-                            if (ui.query.isNotBlank()) "敏感笔记正文已加密存储、不参与搜索。" else "",
+                            if (ui.query.isNotBlank()) "敏感笔记也会被搜到，以遮罩卡出现在结果里，点开可查看原文。" else "",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -877,6 +877,7 @@ fun HomeScreen(
                                 fetchMedia = vm::fetchMedia,
                                 fetchMediaFile = vm::fetchMediaFile,
                                 mediaReloadKey = ui.mediaReloadKey,
+                                fetchNote = vm::fetchNote,
                             )
                         }
                         if (ui.loadingMore) {

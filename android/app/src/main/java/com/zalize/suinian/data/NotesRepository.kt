@@ -80,6 +80,13 @@ class NotesRepository(
         return client.setTodoDone(id, done)
     }
 
+    /** 登录态取单条原文（GET /api/notes/:id）：搜索 / 问答回传的占位卡点开时取回；不存在返 null */
+    suspend fun getNote(id: String): Note? {
+        val (client, mock) = api()
+        if (mock) return MockStore.getNote(id)
+        return client.getNote(id)
+    }
+
     /** 手动标记/取消敏感（PATCH is_sensitive） */
     suspend fun setSensitive(id: String, sensitive: Boolean): Note? {
         val (client, mock) = api()
