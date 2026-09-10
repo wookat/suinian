@@ -19,6 +19,7 @@ import type {
   WeeklyReport,
 } from "./types"
 import type { BatchBody, BatchResult } from "./api"
+import { parseDue } from "./utils"
 
 const MOCK_KEY = "suinian.mock.notes.v2"
 const MOCK_TRASH_KEY = "suinian.mock.trash.v1"
@@ -860,6 +861,23 @@ export async function mockGetRandomNote(): Promise<Note | null> {
   const notes = loadMockNotes().filter((n) => n.is_sensitive !== 1 && !n.tags.includes("示例"))
   if (notes.length === 0) return null
   return notes[Math.floor(Math.random() * notes.length)]
+}
+
+/** 与 GET /api/todos/today 同口径：今天（本地日期）到期 + 已逾期的未完成待办，按期限升序，最多 50 条 */
+export async function mockGetTodosToday(): Promise<{ date: string; items: (Note & { overdue: boolean })[] }> {
+  await delay(120)
+  const today = localDateOf(Date.now())
+  const items = loadMockNotes()
+    .flatMap((n) => {
+      if (n.category !== "todo" || n.todo_done === 1 || !n.todo_due) return []
+      const dueMs = parseDue(n.todo_due).getTime()
+      const dueDate = localDateOf(dueMs)
+      return dueDate <= today ? [{ n, dueMs, overdue: dueDate < today }] : []
+    })
+    .sort((a, b) => a.dueMs - b.dueMs)
+    .slice(0, 50)
+    .map(({ n, overdue }) => ({ ...n, overdue }))
+  return { date: today, items }
 }
 
 export async function mockGetTodayReview(): Promise<TodayReviewResponse> {
