@@ -240,12 +240,24 @@ function delay(ms = 250): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+/** 服务端 from/to 是 UTC "YYYY-MM-DD[ HH:MM:SS]"；纯日期按整天补齐，与 backend 同口径 */
+function utcSqlToMs(s: string, endOfDay: boolean): number | null {
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}:\d{2}))?$/)
+  if (!m) return null
+  const ms = Date.parse(`${m[1]}T${m[2] ?? (endOfDay ? "23:59:59" : "00:00:00")}Z`)
+  return Number.isNaN(ms) ? null : ms
+}
+
 export async function mockGetNotes(query: NotesQuery): Promise<NotesResponse> {
   await delay()
   let notes = loadMockNotes()
   if (query.category) notes = notes.filter((n) => n.category === query.category)
   if (query.tag) notes = notes.filter((n) => n.tags.includes(query.tag!))
   if (query.source) notes = notes.filter((n) => n.source === query.source)
+  const fromMs = query.from ? utcSqlToMs(query.from, false) : null
+  const toMs = query.to ? utcSqlToMs(query.to, true) : null
+  if (fromMs !== null) notes = notes.filter((n) => Date.parse(n.created_at) >= fromMs)
+  if (toMs !== null) notes = notes.filter((n) => Date.parse(n.created_at) <= toMs)
   if (query.q) {
     const q = query.q.toLowerCase()
     notes = notes.filter(
