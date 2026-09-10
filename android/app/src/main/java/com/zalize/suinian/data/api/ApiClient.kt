@@ -475,15 +475,22 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             .build()
         val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS).build()
         val req = Request.Builder().url(url).header("Authorization", "Bearer $token").get().build()
+        // 卡片滑出屏幕即取消协程：必须真正中断传输，否则每张滑过的原图都会在 IO 线程收完再丢掉
+        val call = client60.newCall(req)
         val resp = try {
-            client60.newCall(req).execute()
+            call.awaitResponse()
         } catch (e: IOException) {
             throw ApiException("网络连接失败，请检查网络后重试", e)
         }
         resp.use {
             if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
-            val bytes = it.body?.bytes() ?: throw ApiException("加载失败：附件内容为空")
+            val body = it.body ?: throw ApiException("加载失败：附件内容为空")
             val mime = it.header("Content-Type") ?: "application/octet-stream"
+            val bytes = try {
+                body.bytesCancellable(call)
+            } catch (e: IOException) {
+                throw ApiException("附件加载中断，请检查网络后重试", e)
+            }
             bytes to mime
         }
     }
