@@ -1,5 +1,6 @@
 package com.zalize.suinian.ui.components
 
+import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -7,15 +8,20 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
@@ -24,13 +30,16 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -47,6 +56,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.zalize.suinian.data.NoteAttachment
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -176,7 +186,11 @@ fun NoteImageAttachment(
     }
 }
 
-/** 语音附件：鉴权拉取原音频到落盘缓存，MediaPlayer 直接读缓存文件；播放/暂停控件；reloadKey 同 NoteImageAttachment */
+/**
+ * 语音附件：鉴权拉取原音频到落盘缓存，MediaPlayer 直接读缓存文件；显示时长与播放进度，
+ * 同一时刻只放一段（新卡开播时上一张暂停）；本机播放器放不出来的文件给「下载原件」而不是重拉同一份缓存。
+ * reloadKey 同 NoteImageAttachment。
+ */
 @Composable
 fun NoteAudioAttachment(
     noteId: String,
@@ -184,25 +198,43 @@ fun NoteAudioAttachment(
     fetchMediaFile: suspend (noteId: String, attachmentId: String) -> File,
     modifier: Modifier = Modifier,
     reloadKey: Int = 0,
+    onDownload: (() -> Unit)? = null,
 ) {
     var audioFile by remember(noteId, attachment.id) { mutableStateOf<File?>(null) }
+    var durationMs by remember(noteId, attachment.id) { mutableStateOf<Long?>(null) }
     var failed by remember(noteId, attachment.id) { mutableStateOf(false) }
     var failReason by remember(noteId, attachment.id) { mutableStateOf<String?>(null) }
     var failAutoRetries by remember(noteId, attachment.id) { mutableStateOf(false) }
+    var playFailed by remember(noteId, attachment.id) { mutableStateOf(false) }
     var loadAttempt by remember(noteId, attachment.id) { mutableIntStateOf(0) }
     var playing by remember { mutableStateOf(false) }
+    var prepared by remember { mutableStateOf(false) }
+    var positionMs by remember { mutableLongStateOf(0L) }
     val player = remember { MediaPlayer() }
 
     LaunchedEffect(noteId, attachment.id, loadAttempt) {
         if (audioFile != null || failed) return@LaunchedEffect
         try {
-            audioFile = fetchMediaFile(noteId, attachment.id)
+            val f = fetchMediaFile(noteId, attachment.id)
+            audioFile = f
+            if (durationMs == null) durationMs = readAudioDurationMs(f)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             failReason = mediaLoadFailureReason(e)
             failAutoRetries = mediaLoadFailureAutoRetries(e)
             failed = true
+        }
+    }
+
+    LaunchedEffect(playing) {
+        while (playing) {
+            positionMs = try {
+                player.currentPosition.toLong()
+            } catch (_: Exception) {
+                positionMs
+            }
+            delay(250)
         }
     }
 
@@ -216,6 +248,7 @@ fun NoteAudioAttachment(
 
     DisposableEffect(Unit) {
         onDispose {
+            AudioPlaybackArbiter.release(player)
             try {
                 player.release()
             } catch (_: Exception) {
@@ -239,6 +272,7 @@ fun NoteAudioAttachment(
                     reason = failReason,
                     onRetry = retry,
                 )
+                playFailed -> AudioUnplayable(onDownload = onDownload)
                 audioFile == null -> {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
@@ -255,8 +289,9 @@ fun NoteAudioAttachment(
                                 if (playing) {
                                     player.pause()
                                     playing = false
+                                    AudioPlaybackArbiter.release(player)
                                 } else {
-                                    if (!player.isPlaying && player.currentPosition == 0) {
+                                    if (!prepared) {
                                         val f = audioFile!!
                                         if (!f.isFile) {
                                             // 缓存已被容量淘汰 / 退出登录清空：重新取一次再播
@@ -267,18 +302,30 @@ fun NoteAudioAttachment(
                                         player.reset()
                                         player.setDataSource(f.absolutePath)
                                         player.prepare()
+                                        prepared = true
+                                        player.duration.toLong().takeIf { it > 0 }?.let { durationMs = it }
                                         player.setOnCompletionListener {
                                             playing = false
+                                            positionMs = 0L
+                                            AudioPlaybackArbiter.release(it)
                                             it.seekTo(0)
                                         }
+                                    }
+                                    AudioPlaybackArbiter.claim(player) {
+                                        try {
+                                            player.pause()
+                                        } catch (_: Exception) {
+                                        }
+                                        playing = false
                                     }
                                     player.start()
                                     playing = true
                                 }
                             } catch (_: Exception) {
                                 playing = false
-                                failReason = "这段语音无法播放，格式可能不受支持"
-                                failed = true
+                                prepared = false
+                                AudioPlaybackArbiter.release(player)
+                                playFailed = true
                             }
                         },
                         modifier = Modifier.size(32.dp),
@@ -290,13 +337,72 @@ fun NoteAudioAttachment(
                         )
                     }
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        if (playing) "播放中…" else "播放原始语音",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    val total = formatAudioClock(durationMs)
+                    val inProgress = playing || positionMs > 0
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            audioClockLabel(playing, inProgress, formatAudioClock(positionMs), total),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        val progress = if (inProgress) audioProgress(positionMs, durationMs) else null
+                        if (progress != null) {
+                            Spacer(Modifier.height(4.dp))
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier.fillMaxWidth().height(3.dp),
+                            )
+                        }
+                    }
                 }
             }
+        }
+    }
+}
+
+/** 本机播放器放不出来（格式不受支持 / 文件损坏）：重拉同一份缓存没有意义，给「下载原件」换其他应用播 */
+@Composable
+private fun RowScope.AudioUnplayable(onDownload: (() -> Unit)?) {
+    Icon(
+        Icons.Outlined.ErrorOutline,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.error,
+        modifier = Modifier.size(14.dp),
+    )
+    Spacer(Modifier.width(4.dp))
+    Column(Modifier.weight(1f)) {
+        Text(
+            "这段语音无法在本机播放",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        Text(
+            "格式可能不受支持或文件已损坏" + if (onDownload != null) "，可下载原件用其他应用打开" else "",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    if (onDownload != null) {
+        TextButton(onClick = onDownload, contentPadding = PaddingValues(horizontal = 8.dp)) {
+            Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("下载原件", style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+/** 落盘后读一次时长（MediaMetadataRetriever，IO 线程，失败返回 null 由播放时 MediaPlayer.duration 兜底） */
+private suspend fun readAudioDurationMs(file: File): Long? = withContext(Dispatchers.IO) {
+    val r = MediaMetadataRetriever()
+    try {
+        r.setDataSource(file.absolutePath)
+        r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?.takeIf { it > 0 }
+    } catch (_: Exception) {
+        null
+    } finally {
+        try {
+            r.release()
+        } catch (_: Exception) {
         }
     }
 }
