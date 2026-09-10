@@ -115,6 +115,46 @@ export function resolveAttachmentMime(mime: string | null | undefined, fileName?
   return (ext && EXT_MIME[ext]) || m || "application/octet-stream";
 }
 
+/** mime → 首选扩展名（EXT_MIME 反向，首个命中优先：audio/mp4→m4a、image/jpeg→jpg、audio/ogg→ogg）。 */
+const MIME_EXT: Record<string, string> = Object.assign(
+  Object.fromEntries(
+    Object.entries(EXT_MIME)
+      .reverse()
+      .map(([ext, mime]) => [mime, ext])
+  ),
+  {
+    "audio/webm": "webm",
+    "audio/x-m4a": "m4a",
+    "audio/mp3": "mp3",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+    "audio/opus": "opus",
+    "audio/3gpp": "3gp",
+    "audio/amr-wb": "awb",
+    "image/jpg": "jpg",
+    "image/heif": "heif",
+    "video/webm": "webm",
+  }
+);
+
+const R2_KEY_TS_PREFIX = /^\d{10,}-/;
+const HAS_EXT = /\.[A-Za-z0-9]{1,5}$/;
+
+/**
+ * User-facing file name of a stored original, derived from its R2 key
+ * (`media/<user>/<note>/<Date.now()>-<safeName>`): strip the timestamp, and
+ * when the name carries no extension (ingest paths without a file name —
+ * WeChat / WeCom media and JSON `/api/ingest/media` — store under the bare
+ * type word `audio` / `image`) append one from the recorded mime so every
+ * consumer (list, /file download, backup zip) sees `audio.amr`, not `audio`.
+ */
+export function attachmentDisplayName(r2Key: string, mime: string | null | undefined): string {
+  const base = (r2Key.split("/").pop() || "file").replace(R2_KEY_TS_PREFIX, "") || "file";
+  if (HAS_EXT.test(base)) return base;
+  const ext = MIME_EXT[(mime || "").toLowerCase().split(";")[0].trim()];
+  return ext ? `${base}.${ext}` : base;
+}
+
 export function mediaTooLargeMessage(size: number): string {
   return `文件过大：最多 ${MAX_MEDIA_BYTES / 1024 / 1024}MB，当前约 ${(size / 1024 / 1024).toFixed(1)}MB。`;
 }

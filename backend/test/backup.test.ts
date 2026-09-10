@@ -59,7 +59,7 @@ const IMAGE_NOTE = {
   updated_at: "2026-08-03 00:00:00",
 };
 
-const ATTACHMENT = { id: "a1", note_id: "n3", r2_key: "media/u1/n3/123-pic.png", mime: "image/png", size: 4 };
+const ATTACHMENT = { id: "a1", note_id: "n3", r2_key: "media/u1/n3/1757000000000-pic.png", mime: "image/png", size: 4 };
 // R128 P1: sensitive note's original attachment (e.g. a txt holding a password)
 const SENSITIVE_ATTACHMENT = { id: "a2", note_id: "n2", r2_key: "media/u1/n2/456-deploy.txt", mime: "text/plain", size: 5 };
 

@@ -77,6 +77,7 @@ import {
   flushMediaEncryptFailures,
   AUDIO_FAILED_PLACEHOLDER,
   IMAGE_FAILED_PLACEHOLDER,
+  attachmentDisplayName,
 } from "./media";
 import { detectFileKind, buildFileNote, buildFileReply, FILE_FAILED_PLACEHOLDER, decodeTextBytes, looksBinaryText } from "./files";
 import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMPORT_ITEMS, type ImportSource, type ImportItem, type ImportFailure } from "./import";
@@ -1686,10 +1687,8 @@ async function withAttachments<T extends { id: string }>(env: Env, notes: T[]): 
     if (!results || results.length === 0) return notes;
     const byNote = new Map<string, { id: string; name: string; mime: string | null; size: number | null }[]>();
     for (const a of results) {
-      const base = a.r2_key.split("/").pop() || "file";
-      const name = base.replace(/^\d{10,}-/, "");
       const list = byNote.get(a.note_id) ?? [];
-      list.push({ id: a.id, name, mime: a.mime, size: a.size });
+      list.push({ id: a.id, name: attachmentDisplayName(a.r2_key, a.mime), mime: a.mime, size: a.size });
       byNote.set(a.note_id, list);
     }
     return notes.map((n) => (byNote.has(n.id) ? { ...n, attachments: byNote.get(n.id) } : n));
@@ -3294,8 +3293,7 @@ app.get("/api/notes/:id/file", async (c) => {
   // 加密对象无密钥/密钥不符时 fail-closed 拒绝吐密文
   const bytes = await loadOriginal(c.env, att.r2_key);
   if (!bytes) return c.json({ error: "attachment missing" }, 404);
-  const fileName =
-    parseNoteMeta(note.meta)?.file_name || (att.r2_key.split("/").pop() || "file").replace(/^\d{10,}-/, "") || "file";
+  const fileName = parseNoteMeta(note.meta)?.file_name || attachmentDisplayName(att.r2_key, att.mime);
   const mime = att.mime || "application/octet-stream";
   // inline rendering (R144 P1-1) only for safe media types the clients embed
   // (<img>/<audio>); everything else keeps forced download semantics

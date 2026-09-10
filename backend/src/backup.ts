@@ -11,7 +11,7 @@ import { clusterNote, UNTITLED_THREAD } from "./threads";
 import { SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 import { maybeSensitive } from "./triage";
 import { scrubDerivedMeta } from "./ingest";
-import { storeOriginal, type MediaType } from "./media";
+import { storeOriginal, attachmentDisplayName, type MediaType } from "./media";
 import {
   noteContainsExecutableCommand,
   noteMetaExecFragment,
@@ -181,11 +181,6 @@ function safeParse<T>(raw: string | null): T | null {
   }
 }
 
-/** Display name of an R2 original: key basename without the `<timestamp>-` prefix storeOriginal adds. */
-function attachmentBaseName(r2Key: string): string {
-  return (r2Key.split("/").pop() || "file").replace(/^\d+-/, "");
-}
-
 /**
  * File name to re-upload a backup attachment under. Backups written before
  * `name` carried the bare file name used the zip entry name (`<idx>-<file>`)
@@ -286,7 +281,7 @@ export async function buildBackupZip(
       attachmentsRedacted += noteAtts.length;
     } else {
       backupAtts = noteAtts.map((a, i) => {
-        const name = attachmentBaseName(a.r2_key);
+        const name = attachmentDisplayName(a.r2_key, a.mime);
         const path = `media/${n.id}/${i}-${name}`;
         mediaEntries.push({ path, r2_key: a.r2_key });
         return { path, name, mime: a.mime, size: a.size };
