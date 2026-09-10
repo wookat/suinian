@@ -1,6 +1,7 @@
 import { loadSettings } from "./settings"
 import { identityFingerprint, isCacheableApiPath, withIdentityParam } from "./api-cache"
 import { escapeSwWedgeForAuth } from "./sw-control"
+import { mutated } from "./notes-bus"
 import {
   mockAsk,
   mockCreateNote,
@@ -198,7 +199,11 @@ export async function getNote(id: string): Promise<Note | null> {
   }
 }
 
-export async function createNote(payload: CreateNotePayload): Promise<Note> {
+export function createNote(payload: CreateNotePayload): Promise<Note> {
+  return mutated(createNoteRaw(payload))
+}
+
+async function createNoteRaw(payload: CreateNotePayload): Promise<Note> {
   if (loadSettings().useMock) return mockCreateNote(payload)
   const res = await realFetch<Record<string, unknown>>("/api/notes", {
     method: "POST",
@@ -218,7 +223,11 @@ export function mediaTooLargeText(kind: string, size: number): string {
 export const SUPPORTED_FILE_EXTS = ["pdf", "txt", "md", "markdown", "docx", "csv", "tsv", "xlsx"]
 
 /** 图片/文件/语音上传：走 /api/ingest/media，后端提取文字/转写/摘要后入库 */
-export async function ingestMedia(file: File, type: "image" | "file" | "audio", clientId?: string): Promise<Note> {
+export function ingestMedia(file: File, type: "image" | "file" | "audio", clientId?: string): Promise<Note> {
+  return mutated(ingestMediaRaw(file, type, clientId))
+}
+
+async function ingestMediaRaw(file: File, type: "image" | "file" | "audio", clientId?: string): Promise<Note> {
   if (loadSettings().useMock) {
     return mockCreateNote({
       source: "web",
@@ -342,7 +351,11 @@ export function patchPersisted(fresh: Note, patch: NotePatch): boolean {
   return true
 }
 
-export async function patchNote(id: string, patch: NotePatch, baseUpdatedAt?: string): Promise<Note> {
+export function patchNote(id: string, patch: NotePatch, baseUpdatedAt?: string): Promise<Note> {
+  return mutated(patchNoteRaw(id, patch, baseUpdatedAt))
+}
+
+async function patchNoteRaw(id: string, patch: NotePatch, baseUpdatedAt?: string): Promise<Note> {
   if (loadSettings().useMock) return mockPatchNote(id, patch)
   const body: Record<string, unknown> = { ...patch }
   if (patch.todo_done != null) body.todo_done = patch.todo_done === 1
@@ -376,13 +389,21 @@ export async function retryMedia(id: string): Promise<Note> {
   return normalizeNote((res.note ?? res) as Record<string, unknown>)
 }
 
-export async function deleteNote(id: string): Promise<void> {
+export function deleteNote(id: string): Promise<void> {
+  return mutated(deleteNoteRaw(id))
+}
+
+async function deleteNoteRaw(id: string): Promise<void> {
   if (loadSettings().useMock) return mockDeleteNote(id)
   await realFetch<{ ok: boolean }>(`/api/notes/${id}`, { method: "DELETE" })
 }
 
 /** 撤销删除：清除软删标记，恢复笔记（服务端单次上限 1000，超出自动分批） */
-export async function restoreNotes(ids: string[]): Promise<number> {
+export function restoreNotes(ids: string[]): Promise<number> {
+  return mutated(restoreNotesRaw(ids))
+}
+
+async function restoreNotesRaw(ids: string[]): Promise<number> {
   if (loadSettings().useMock) return mockRestoreNotes(ids)
   let restored = 0
   for (let i = 0; i < ids.length; i += 1000) {
@@ -410,7 +431,11 @@ export async function getTrash(): Promise<TrashResponse> {
 }
 
 /** 立即彻底删除最近删除里的笔记（不可恢复） */
-export async function purgeNotes(ids: string[]): Promise<number> {
+export function purgeNotes(ids: string[]): Promise<number> {
+  return mutated(purgeNotesRaw(ids))
+}
+
+async function purgeNotesRaw(ids: string[]): Promise<number> {
   if (loadSettings().useMock) return mockPurgeNotes(ids)
   const res = await realFetch<{ ok: boolean; purged: number }>("/api/notes/purge", {
     method: "POST",
@@ -420,7 +445,11 @@ export async function purgeNotes(ids: string[]): Promise<number> {
 }
 
 /** 清空最近删除：彻底删除全部软删笔记（不可恢复） */
-export async function emptyTrash(): Promise<number> {
+export function emptyTrash(): Promise<number> {
+  return mutated(emptyTrashRaw())
+}
+
+async function emptyTrashRaw(): Promise<number> {
   if (loadSettings().useMock) return mockEmptyTrash()
   const res = await realFetch<{ ok: boolean; purged: number }>("/api/notes/trash/empty", {
     method: "POST",
@@ -438,7 +467,14 @@ export interface BatchResult {
 }
 
 /** NDJSON 批量流：{done,total} 进度行 + 最终 {ok,affected,remaining,ids?}（或 {error}） */
-async function batchStream(
+function batchStream(
+  body: Record<string, unknown>,
+  onProgress?: (done: number, total: number) => void,
+): Promise<BatchResult> {
+  return mutated(batchStreamRaw(body, onProgress))
+}
+
+async function batchStreamRaw(
   body: Record<string, unknown>,
   onProgress?: (done: number, total: number) => void,
 ): Promise<BatchResult> {
@@ -570,21 +606,23 @@ export async function getTags(): Promise<TagCount[]> {
 }
 
 /** 重命名标签（全局替换；改名到已有标签即合并），返回影响的笔记数 */
-export async function renameTag(from: string, to: string): Promise<number> {
-  const res = await realFetch<{ ok: boolean; affected: number }>("/api/tags/rename", {
-    method: "POST",
-    body: JSON.stringify({ from, to }),
-  })
-  return res.affected
+export function renameTag(from: string, to: string): Promise<number> {
+  return mutated(
+    realFetch<{ ok: boolean; affected: number }>("/api/tags/rename", {
+      method: "POST",
+      body: JSON.stringify({ from, to }),
+    }).then((res) => res.affected),
+  )
 }
 
 /** 从所有笔记移除标签，返回影响的笔记数 */
-export async function deleteTag(tag: string): Promise<number> {
-  const res = await realFetch<{ ok: boolean; affected: number }>("/api/tags/delete", {
-    method: "POST",
-    body: JSON.stringify({ tag }),
-  })
-  return res.affected
+export function deleteTag(tag: string): Promise<number> {
+  return mutated(
+    realFetch<{ ok: boolean; affected: number }>("/api/tags/delete", {
+      method: "POST",
+      body: JSON.stringify({ tag }),
+    }).then((res) => res.affected),
+  )
 }
 
 export async function ask(

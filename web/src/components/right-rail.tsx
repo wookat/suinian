@@ -4,17 +4,37 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { getStats, getThreads } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
+import { onNotesMutated } from "@/lib/notes-bus"
 import type { Thread } from "@/lib/types"
 
 const MAX_RAIL_THREADS = 3
 
 const MAX_RAIL_TAGS = 20
 
+/** 连续写操作（批量删除 / 撤销恢复）合并成一次重拉 */
+const REFRESH_DEBOUNCE_MS = 400
+
 export function RightRail() {
   const [threads, setThreads] = useState<Thread[]>([])
   const [globalStats, setGlobalStats] = useState<{ total: number; days: number } | null>(null)
   const [topTags, setTopTags] = useState<{ tag: string; count: number }[]>([])
   const settingsVersion = useSettingsVersion()
+  const [mutationVersion, setMutationVersion] = useState(0)
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const off = onNotesMutated(() => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        setMutationVersion((v) => v + 1)
+      }, REFRESH_DEBOUNCE_MS)
+    })
+    return () => {
+      off()
+      if (timer) clearTimeout(timer)
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -43,7 +63,7 @@ export function RightRail() {
     return () => {
       cancelled = true
     }
-  }, [settingsVersion])
+  }, [settingsVersion, mutationVersion])
 
   // 全局聚合的 top_tags，而非前 100 条采样计数
   const tags = useMemo(
