@@ -141,7 +141,7 @@ export function NoteImage({
           className="max-h-56 max-w-full cursor-zoom-in object-contain transition-opacity hover:opacity-90"
         />
       </button>
-      {open && <ImageLightbox src={url} alt={alt} onClose={close} />}
+      {open && <ImageLightbox src={url} alt={alt} downloadName={attachment.name} mime={attachment.mime} onClose={close} />}
     </>
   )
 }
