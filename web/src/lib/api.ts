@@ -1040,7 +1040,12 @@ export async function generateReport(
   which: "this" | "last" = "this",
   period: "week" | "month" = "week",
 ): Promise<{ report: WeeklyReport | null; message?: string }> {
-  if (loadSettings().useMock) return { report: await mockGenerateReport() }
+  if (loadSettings().useMock) {
+    const report = await mockGenerateReport(period)
+    if (report) return { report }
+    const unit = period === "month" ? "本月" : "本周"
+    return { report: null, message: `${unit}还没有记录，随手记下第一条碎念，报告就有素材了` }
+  }
   const res = await realFetch<{ report: WeeklyReport | null; message?: string }>(
     "/api/reports/generate",
     {
