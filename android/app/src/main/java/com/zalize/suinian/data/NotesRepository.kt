@@ -2,7 +2,9 @@ package com.zalize.suinian.data
 
 import android.content.Context
 import com.zalize.suinian.data.api.ApiClient
+import com.zalize.suinian.data.api.DownloadProgress
 import com.zalize.suinian.data.api.UploadProgress
+import java.io.OutputStream
 import com.zalize.suinian.data.local.PendingNote
 import com.zalize.suinian.data.local.PendingNoteDao
 import com.zalize.suinian.sync.SyncWorker
@@ -278,11 +280,19 @@ class NotesRepository(
         return client.fetchNoteMedia(noteId, attachmentId)
     }
 
-    /** 下载全量备份 zip：返回字节 + 文件名。includeSensitive=true 时敏感笔记含明文 */
-    suspend fun downloadBackup(includeSensitive: Boolean = false, password: String? = null): Pair<ByteArray, String> {
+    /**
+     * 下载全量备份 zip：响应体边收边写进 [open] 打开的输出流，返回文件名。includeSensitive=true 时敏感笔记含明文；
+     * [onProgress] 报已接收字节，协程取消会中断接收
+     */
+    suspend fun downloadBackup(
+        includeSensitive: Boolean = false,
+        password: String? = null,
+        onProgress: DownloadProgress? = null,
+        open: (fileName: String) -> OutputStream,
+    ): String {
         val (client, mock) = api()
         if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
-        return client.downloadBackup(includeSensitive, password)
+        return client.downloadBackup(includeSensitive, password, onProgress, open)
     }
 
     /** 从备份 zip 恢复：返回恢复统计；[onProgress] 报上传进度，协程取消会中断上传 */

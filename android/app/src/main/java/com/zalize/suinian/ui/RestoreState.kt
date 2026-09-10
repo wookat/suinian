@@ -35,5 +35,3 @@ fun restoreProgressLabel(state: RestoreState.Running): String =
 /** 0–100；total 未知时 0 */
 fun restorePercent(state: RestoreState.Running): Int =
     if (state.total <= 0) 0 else (state.sent * 100 / state.total).toInt().coerceIn(0, 100)
-
-private fun formatMb(bytes: Long): String = "%.1fMB".format(bytes / 1024.0 / 1024.0)

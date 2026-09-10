@@ -22,6 +22,7 @@ import com.zalize.suinian.data.SendResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import java.io.OutputStream
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.Channel
@@ -585,11 +586,93 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 下载全量备份 zip 到系统下载目录，返回文件名。includeSensitive=true 时敏感笔记含明文 */
-    suspend fun downloadBackupToDownloads(includeSensitive: Boolean = false, password: String? = null): String {
-        val (bytes, fileName) = repo.downloadBackup(includeSensitive, password)
-        saveToDownloads(fileName, "application/zip", bytes)
-        return fileName
+    private val _backupDownload = MutableStateFlow<BackupDownloadState>(BackupDownloadState.Idle)
+    /** 备份下载进度 / 结果：挂在 ViewModel 上，离开设置页不中断下载、回来仍能看到 */
+    val backupDownload: StateFlow<BackupDownloadState> = _backupDownload
+    private var backupDownloadJob: Job? = null
+
+    /**
+     * 下载全量备份 zip 到系统下载目录，边收边写（不整包进内存）；同时只允许一次。
+     * includeSensitive=true 时敏感笔记含明文。取消 / 失败都删掉半个文件，下载目录不会留下打不开的 zip
+     */
+    fun startBackupDownload(includeSensitive: Boolean = false, password: String? = null) {
+        if (backupDownloadJob?.isActive == true) return
+        _backupDownload.value = BackupDownloadState.Running(0, -1)
+        backupDownloadJob = viewModelScope.launch {
+            var target: DownloadTarget? = null
+            try {
+                var lastStep = -1L
+                val fileName = repo.downloadBackup(
+                    includeSensitive,
+                    password,
+                    onProgress = { received, total ->
+                        val step = backupDownloadStep(received, total)
+                        if (step != lastStep) {
+                            lastStep = step
+                            _backupDownload.update {
+                                if (it is BackupDownloadState.Running) BackupDownloadState.Running(received, total) else it
+                            }
+                        }
+                    },
+                    open = { name -> openDownload(name, "application/zip").also { target = it }.stream },
+                )
+                target?.commit()
+                target = null
+                _backupDownload.value = BackupDownloadState.Done(fileName)
+            } catch (e: CancellationException) {
+                target?.discard()
+                _backupDownload.value = BackupDownloadState.Failed(BACKUP_DOWNLOAD_CANCELLED)
+                throw e
+            } catch (e: Exception) {
+                target?.discard()
+                _backupDownload.value = BackupDownloadState.Failed(e.message ?: "备份下载失败，请稍后重试")
+            }
+        }
+    }
+
+    fun cancelBackupDownload() {
+        backupDownloadJob?.cancel()
+    }
+
+    fun dismissBackupDownloadResult() {
+        if (backupDownloadJob?.isActive != true) _backupDownload.value = BackupDownloadState.Idle
+    }
+
+    /** 下载目录里一个正在写的文件：Q+ 是 IS_PENDING 的 MediaStore 行（对其他应用不可见），旧系统是应用外部目录下的文件 */
+    private inner class DownloadTarget(val stream: OutputStream, private val uri: Uri?, private val file: java.io.File?) {
+        fun commit() {
+            val u = uri ?: return
+            val values = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+            getApplication<Application>().contentResolver.update(u, values, null, null)
+        }
+
+        fun discard() {
+            runCatching { stream.close() }
+            val u = uri
+            if (u != null) runCatching { getApplication<Application>().contentResolver.delete(u, null, null) }
+            file?.delete()
+        }
+    }
+
+    private fun openDownload(fileName: String, mime: String): DownloadTarget {
+        val context = getApplication<Application>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, mime.substringBefore(';'))
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("无法创建下载文件")
+            val stream = resolver.openOutputStream(uri)
+                ?: run { resolver.delete(uri, null, null); throw IllegalStateException("无法写入下载文件") }
+            return DownloadTarget(stream, uri, null)
+        }
+        val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            ?: throw IllegalStateException("存储不可用")
+        val file = java.io.File(dir, fileName)
+        return DownloadTarget(file.outputStream(), null, file)
     }
 
     private val _restore = MutableStateFlow<RestoreState>(RestoreState.Idle)

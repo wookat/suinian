@@ -28,6 +28,10 @@ import com.zalize.suinian.data.TagCount
 import com.zalize.suinian.data.TagsPage
 import com.zalize.suinian.data.ThreadsPage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.json.Json
@@ -58,6 +62,7 @@ import okio.ForwardingSink
 import okio.buffer
 import java.io.IOException
 import java.io.InterruptedIOException
+import java.io.OutputStream
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -74,6 +79,11 @@ internal const val BACKUP_RESTORE_TIMEOUT_MESSAGE =
 
 /** 上传进度回调（已写入字节 / 请求体总字节），在 OkHttp 写线程回调 */
 typealias UploadProgress = (sent: Long, total: Long) -> Unit
+
+/** 下载进度回调（已接收字节 / Content-Length；服务端流式打包 zip 时没有 Content-Length，total = -1），在 IO 线程回调 */
+typealias DownloadProgress = (received: Long, total: Long) -> Unit
+
+private const val DOWNLOAD_CHUNK = 64 * 1024
 
 /** 包一层请求体，把写入 socket 的字节数报给 [onProgress]（每次 writeTo 从 0 重新计） */
 private class ProgressRequestBody(
@@ -626,8 +636,17 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
     }
 
-    /** GET /api/backup：全量备份 zip（笔记全字段 + 线索/周报 + 媒体原件），返回字节与文件名。敏感笔记默认脱敏，includeSensitive=true 时含明文 */
-    suspend fun downloadBackup(includeSensitive: Boolean = false, password: String? = null): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
+    /**
+     * GET /api/backup：全量备份 zip（笔记全字段 + 线索/周报 + 媒体原件）。敏感笔记默认脱敏，includeSensitive=true 时含明文。
+     * 响应体边收边写进 [open] 打开的输出流（≤200MB 的包不整包进内存），返回文件名；[open] 只在 2xx 且拿到文件名后调用，
+     * 4xx/5xx 不会创建文件。[onProgress] 报已接收字节；协程取消会 cancel() 底层 Call、立刻中断接收（调用方负责清理半个文件）。
+     */
+    suspend fun downloadBackup(
+        includeSensitive: Boolean = false,
+        password: String? = null,
+        onProgress: DownloadProgress? = null,
+        open: (fileName: String) -> OutputStream,
+    ): String = withContext(Dispatchers.IO) {
         val path = if (includeSensitive) "/api/backup?include_sensitive=true" else "/api/backup"
         val builder = request(path).get()
         // 敏感明文导出需密码复核；URLEncoder 编码以通过 HTTP 头 ASCII 限制（服务端解码）
@@ -635,8 +654,9 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             // URLEncoder 把空格编成 +，而服务端 decodeURIComponent 不还原 +，改用 %20
             builder.header("X-Suinian-Password", java.net.URLEncoder.encode(password, "UTF-8").replace("+", "%20"))
         }
+        val call = backupDownloadClient.newCall(builder.build())
         val resp = try {
-            backupDownloadClient.newCall(builder.build()).execute()
+            call.await()
         } catch (e: InterruptedIOException) {
             throw ApiException(BACKUP_DOWNLOAD_TIMEOUT_MESSAGE, e)
         } catch (e: IOException) {
@@ -644,17 +664,48 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
         resp.use {
             if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
-            val bytes = try {
-                it.body?.bytes()
-            } catch (e: InterruptedIOException) {
-                throw ApiException(BACKUP_DOWNLOAD_TIMEOUT_MESSAGE, e)
-            } catch (e: IOException) {
-                throw ApiException("备份下载中断，请检查网络后重试", e)
-            } ?: throw ApiException("备份下载失败：内容为空")
+            val body = it.body ?: throw ApiException("备份下载失败：内容为空")
             val disposition = it.header("Content-Disposition").orEmpty()
             val fileName = Regex("filename=\"?([^\";]+)\"?").find(disposition)?.groupValues?.get(1)
                 ?: "suinian-backup.zip"
-            bytes to fileName
+            val total = body.contentLength()
+            var received = 0L
+            coroutineScope {
+                // 读体是阻塞 IO：协程取消时由这个哨兵 cancel() Call，让阻塞中的 read 立刻抛出而不是等到 readTimeout
+                var finished = false
+                val watcher = launch {
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        if (!finished) call.cancel()
+                    }
+                }
+                try {
+                    open(fileName).use { out ->
+                        val buf = ByteArray(DOWNLOAD_CHUNK)
+                        val input = body.byteStream()
+                        while (true) {
+                            ensureActive()
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            received += n
+                            onProgress?.invoke(received, total)
+                        }
+                        out.flush()
+                    }
+                    finished = true
+                } catch (e: InterruptedIOException) {
+                    throw ApiException(BACKUP_DOWNLOAD_TIMEOUT_MESSAGE, e)
+                } catch (e: IOException) {
+                    ensureActive()
+                    throw ApiException("备份下载中断，请检查网络后重试", e)
+                } finally {
+                    watcher.cancel()
+                }
+            }
+            if (total >= 0 && received < total) throw ApiException("备份下载中断，请检查网络后重试")
+            fileName
         }
     }
 

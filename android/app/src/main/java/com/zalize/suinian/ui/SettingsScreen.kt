@@ -82,9 +82,9 @@ fun SettingsScreen(
     var deleteAccountInput by remember { mutableStateOf("") }
     var deletingAccount by remember { mutableStateOf(false) }
     var deleteAccountMessage by remember { mutableStateOf<String?>(null) }
-    var backingUp by remember { mutableStateOf(false) }
+    val backupDownload by vm.backupDownload.collectAsState()
+    val backingUp = backupDownload is BackupDownloadState.Running
     var backupIncludeSensitive by remember { mutableStateOf(false) }
-    var backupMessage by remember { mutableStateOf<String?>(null) }
     var showBackupPasswordDialog by remember { mutableStateOf(false) }
     var backupPassword by remember { mutableStateOf("") }
     val restore by vm.restore.collectAsState()
@@ -554,22 +554,11 @@ fun SettingsScreen(
                         showBackupPasswordDialog = true
                         return@OutlinedButton
                     }
-                    backingUp = true
-                    backupMessage = null
-                    scope.launch {
-                        try {
-                            val fileName = vm.downloadBackupToDownloads(backupIncludeSensitive)
-                            backupMessage = "已保存到系统下载：$fileName"
-                        } catch (e: Exception) {
-                            backupMessage = e.message ?: "备份下载失败，请稍后重试"
-                        } finally {
-                            backingUp = false
-                        }
-                    }
+                    vm.startBackupDownload(false)
                 },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !settings.mockMode && !backingUp && !restoring,
-            ) { Text(if (backingUp) "备份打包中，请稍候…" else "下载完整备份（zip 含媒体）") }
+            ) { Text(if (backingUp) "备份下载中…" else "下载完整备份（zip 含媒体）") }
             if (showBackupPasswordDialog) {
                 AlertDialog(
                     onDismissRequest = { showBackupPasswordDialog = false },
@@ -592,18 +581,7 @@ fun SettingsScreen(
                             showBackupPasswordDialog = false
                             val pw = backupPassword
                             backupPassword = ""
-                            backingUp = true
-                            backupMessage = null
-                            scope.launch {
-                                try {
-                                    val fileName = vm.downloadBackupToDownloads(true, pw)
-                                    backupMessage = "已保存到系统下载：$fileName"
-                                } catch (e: Exception) {
-                                    backupMessage = e.message ?: "备份下载失败，请稍后重试"
-                                } finally {
-                                    backingUp = false
-                                }
-                            }
+                            vm.startBackupDownload(true, pw)
                         }) { Text("验证并备份") }
                     },
                     dismissButton = { TextButton(onClick = { showBackupPasswordDialog = false }) { Text("取消") } },
@@ -615,9 +593,47 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            backupMessage?.let {
-                Spacer(Modifier.height(4.dp))
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            when (val d = backupDownload) {
+                BackupDownloadState.Idle -> {}
+                is BackupDownloadState.Running -> {
+                    Spacer(Modifier.height(8.dp))
+                    val percent = backupDownloadPercent(d)
+                    if (percent == null) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    else LinearProgressIndicator(progress = { percent / 100f }, modifier = Modifier.fillMaxWidth())
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            backupDownloadLabel(d),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { vm.cancelBackupDownload() }) { Text("取消") }
+                    }
+                }
+                is BackupDownloadState.Done -> {
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "已保存到系统下载：${d.fileName}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { vm.dismissBackupDownloadResult() }) { Text("知道了") }
+                    }
+                }
+                is BackupDownloadState.Failed -> {
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            d.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { vm.dismissBackupDownloadResult() }) { Text("知道了") }
+                    }
+                }
             }
 
             Spacer(Modifier.height(12.dp))
