@@ -65,13 +65,24 @@ async function realFetch<T>(
   }
 }
 
+export const NOT_LOGGED_IN_MESSAGE = "尚未登录，请先登录或注册"
+
+/** Settings for an authenticated real-API call. Fails locally (no round trip)
+ * when the page has no API base or no token, so callers see the same 401
+ * shape as an expired session instead of a network error. */
+function requireRealApi(): { apiBaseUrl: string; apiToken: string } {
+  const { apiBaseUrl, apiToken } = loadSettings()
+  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  if (!apiToken) throw new ApiError(401, NOT_LOGGED_IN_MESSAGE)
+  return { apiBaseUrl, apiToken }
+}
+
 async function realFetchOnce<T>(
   path: string,
   init: RequestInit | undefined,
   timeoutMs: number,
 ): Promise<T> {
-  const { apiBaseUrl, apiToken } = loadSettings()
-  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  const { apiBaseUrl, apiToken } = requireRealApi()
   // SW 会缓存这几条 GET 路由：URL 带上当前账号指纹，缓存按身份分区（R166 P1）
   const method = (init?.method ?? "GET").toUpperCase()
   const reqPath =
@@ -216,8 +227,7 @@ export async function ingestMedia(file: File, type: "image" | "file" | "audio", 
             : `【文件】${file.name}（演示模式不做提取）`,
     })
   }
-  const { apiBaseUrl, apiToken } = loadSettings()
-  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  const { apiBaseUrl, apiToken } = requireRealApi()
   const form = new FormData()
   form.set("type", type)
   form.set("source", "web")
@@ -623,8 +633,7 @@ export async function askStream(
   signal?: AbortSignal,
 ): Promise<AskResponse> {
   if (loadSettings().useMock) return mockAsk(question)
-  const { apiBaseUrl, apiToken } = loadSettings()
-  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  const { apiBaseUrl, apiToken } = requireRealApi()
   // 流式预算按「空闲」计：只要正文持续流动就不中断（长笔记 verbatim 回显
   // 可能远超 60s），仅在 60s 无任何字节到达时才判定断流。
   const idleCtrl = new AbortController()

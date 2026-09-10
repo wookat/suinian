@@ -40,7 +40,7 @@ import {
 import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, restoreCategories, getThreads, getStats, ApiError, NetworkError } from "@/lib/api"
 import type { BatchFilter } from "@/lib/api"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
-import { loadSettings, useSettingsVersion } from "@/lib/settings"
+import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
 import { PENDING_UNDO_KEY } from "@/lib/pending-undo"
 import { FirstRunTour } from "@/components/first-run-tour"
 import { cn, parseServerTime } from "@/lib/utils"
@@ -136,7 +136,7 @@ type PendingUndo = {
 }
 
 type LoadError =
-  | { kind: "auth" }
+  | { kind: "auth"; notLoggedIn: boolean }
   | { kind: "network" }
   | { kind: "other"; message: string }
 
@@ -706,7 +706,7 @@ export function TimelinePage() {
       if (e instanceof DOMException && e.name === "AbortError") return
       if (controller.signal.aborted) return
       if (e instanceof ApiError && (e.status === 401 || e.status === 403))
-        setError({ kind: "auth" })
+        setError({ kind: "auth", notLoggedIn: !loadSettings().apiToken })
       else if (e instanceof NetworkError) setError({ kind: "network" })
       else setError({ kind: "other", message: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -1229,7 +1229,32 @@ export function TimelinePage() {
         <NoteListSkeleton />
       ) : error ? (
         <Card className="flex flex-col items-center gap-3 border-dashed p-8 text-center">
-          {error.kind === "auth" ? (
+          {error.kind === "auth" && error.notLoggedIn ? (
+            <>
+              <p className="text-sm text-muted-foreground">
+                尚未登录，登录后才能看到你自己的碎念。
+              </p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    window.location.hash = "#/auth"
+                  }}
+                >
+                  登录 / 注册
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    saveSettings({ ...loadSettings(), useMock: true })
+                  }}
+                >
+                  先看演示
+                </Button>
+              </div>
+            </>
+          ) : error.kind === "auth" ? (
             <>
               <p className="text-sm text-muted-foreground">
                 登录已失效或 Token 不正确，无法读取你的碎念。
