@@ -421,40 +421,23 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 下载文件笔记原件到系统下载目录 */
     fun downloadFile(note: Note) {
-        val fileName = note.meta?.fileName ?: "suinian-file"
+        val fileName = safeDownloadName(note.meta?.fileName)
         _ui.value = _ui.value.copy(toast = "开始下载…")
         viewModelScope.launch {
+            var target: DownloadTarget? = null
             try {
                 val (bytes, mime) = repo.downloadNoteFile(note.id)
                 StaleDownloadCleaner.ensureCleaned(getApplication())
-                saveToDownloads(fileName, mime, bytes)
-                _ui.value = _ui.value.copy(toast = "已保存到下载：$fileName")
+                target = openDownload(fileName, mime)
+                target.stream.use { it.write(bytes) }
+                val saved = target.commit()
+                target = null
+                _ui.value = _ui.value.copy(toast = savedToLabel(saved.fileName, saved.inAppDir))
             } catch (e: Exception) {
+                target?.discard()
+                if (e is CancellationException) throw e
                 _ui.value = _ui.value.copy(toast = e.message ?: "下载失败")
             }
-        }
-    }
-
-    private fun saveToDownloads(fileName: String, mime: String, bytes: ByteArray) {
-        val context = getApplication<Application>()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                put(MediaStore.Downloads.MIME_TYPE, mime.substringBefore(';'))
-                put(MediaStore.Downloads.IS_PENDING, 1)
-            }
-            val resolver = context.contentResolver
-            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: throw IllegalStateException("无法创建下载文件")
-            resolver.openOutputStream(uri)?.use { it.write(bytes) }
-                ?: throw IllegalStateException("无法写入下载文件")
-            values.clear()
-            values.put(MediaStore.Downloads.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
-        } else {
-            val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                ?: throw IllegalStateException("存储不可用")
-            java.io.File(dir, fileName).writeBytes(bytes)
         }
     }
 
