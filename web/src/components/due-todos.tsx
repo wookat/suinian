@@ -20,8 +20,9 @@ export function DueTodosBanner({ onSettled }: { onSettled?: () => void } = {}) {
     getTodosToday()
       .then((res) => {
         if (cancelled) return
-        const overdue = res.items.filter((i) => i.overdue).length
-        setCounts({ due: res.items.length - overdue, overdue })
+        const overdueShown = res.items.filter((i) => i.overdue).length
+        // 列表有上限，逾期总数以服务端计数为准（老服务端无该字段时退回列表内计数）
+        setCounts({ due: res.items.length - overdueShown, overdue: res.overdue_total ?? overdueShown })
       })
       .catch(() => {
         /* 提醒条是兜底能力：加载失败时静默隐藏 */

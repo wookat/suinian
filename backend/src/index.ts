@@ -7074,24 +7074,42 @@ app.post("/api/push/test", async (c) => {
 // 当天（用户时区）到期 + 已过期的未完成待办，供 bridge 上午推送清单
 const TODOS_TODAY_LIMIT = 50;
 app.get("/api/todos/today", async (c) => {
-  const tz = await loadUserTz(c.env, c.get("userId"));
+  const userId = c.get("userId");
+  const tz = await loadUserTz(c.env, userId);
   const today = zonedDate(new Date(), tz).iso;
   // SQLite date() 先把带偏移的时刻转成 UTC 再取日期，与用户时区的本地日期最多差一天：
-  // SQL 只做放宽一天的粗筛，「今天 / 已过期」按 todo_due 在用户时区的本地日期判定。
-  const { results } = await c.env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL
-       AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0)
-       AND todo_due IS NOT NULL AND date(todo_due) <= date(?, '+1 day')
-     ORDER BY datetime(todo_due) ASC LIMIT ${TODOS_TODAY_LIMIT * 2}`
-  )
-    .bind(c.get("userId"), today)
-    .all<NoteRow>();
-  const items = (results ?? [])
-    .map((n) => ({ n, due: todoDueLocalDate(n.todo_due ?? "", tz) ?? (n.todo_due ?? "").slice(0, 10) }))
-    .filter(({ due }) => due <= today)
-    .slice(0, TODOS_TODAY_LIMIT)
-    .map(({ n, due }) => ({ ...noteToJson(n), overdue: due < today }));
-  return c.json({ date: today, items });
+  // SQL 只做按 UTC 日期放宽一天的粗筛，「今天 / 已过期」按 todo_due 在用户时区的本地日期判定。
+  // 当天窗口与更早的过期积压分开取：积压按到期倒序只取最近的，当天到期的不会被历史积压挤出列表。
+  const pendingTodo = `FROM notes WHERE user_id = ? AND deleted_at IS NULL
+       AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0) AND todo_due IS NOT NULL`;
+  const [windowRes, backlogRes, backlogCount] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT * ${pendingTodo} AND date(todo_due) BETWEEN date(?, '-1 day') AND date(?, '+1 day')
+       ORDER BY datetime(todo_due) ASC LIMIT ${TODOS_TODAY_LIMIT * 4}`
+    )
+      .bind(userId, today, today)
+      .all<NoteRow>(),
+    c.env.DB.prepare(
+      `SELECT * ${pendingTodo} AND date(todo_due) < date(?, '-1 day')
+       ORDER BY datetime(todo_due) DESC LIMIT ${TODOS_TODAY_LIMIT}`
+    )
+      .bind(userId, today)
+      .all<NoteRow>(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n ${pendingTodo} AND date(todo_due) < date(?, '-1 day')`)
+      .bind(userId, today)
+      .first<{ n: number }>(),
+  ]);
+  const withLocalDate = (rows: NoteRow[] | undefined) =>
+    (rows ?? []).map((n) => ({ n, due: todoDueLocalDate(n.todo_due ?? "", tz) ?? (n.todo_due ?? "").slice(0, 10) }));
+  const windowRows = withLocalDate(windowRes.results);
+  const dueToday = windowRows.filter(({ due }) => due === today).slice(0, TODOS_TODAY_LIMIT);
+  // UTC 日期早于昨天的行本地日期必然早于今天，全部是过期，且都早于窗口内的过期行
+  const windowOverdue = windowRows.filter(({ due }) => due < today);
+  const overdue = [...withLocalDate(backlogRes.results).reverse(), ...windowOverdue];
+  const overdueTotal = (backlogCount?.n ?? 0) + windowOverdue.length;
+  const overdueShown = overdue.slice(Math.max(0, overdue.length - (TODOS_TODAY_LIMIT - dueToday.length)));
+  const items = [...overdueShown, ...dueToday].map(({ n, due }) => ({ ...noteToJson(n), overdue: due < today }));
+  return c.json({ date: today, items, overdue_total: overdueTotal });
 });
 
 // ---- GET /api/reports ----
