@@ -2,6 +2,7 @@ package com.zalize.suinian.data
 
 import android.content.Context
 import com.zalize.suinian.data.api.ApiClient
+import com.zalize.suinian.data.api.ApiException
 import com.zalize.suinian.data.local.PendingNote
 import com.zalize.suinian.data.local.PendingNoteDao
 import com.zalize.suinian.sync.SyncWorker
@@ -13,7 +14,6 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.io.IOException
 
 sealed class SendResult {
     data class Sent(val note: Note?) : SendResult()
@@ -287,7 +287,7 @@ class NotesRepository(
         val (bytes, mime) = ApiClient(s.baseUrl, s.token).fetchNoteMedia(noteId, attachmentId)
         return withContext(Dispatchers.IO) {
             mediaCache.put(key, bytes, mime, keepInMemory = false)
-            mediaCache.file(key) ?: throw IOException("语音无法写入本机缓存，请清理存储空间后重试")
+            mediaCache.file(key) ?: throw ApiException("语音无法写入本机缓存，请清理存储空间后重试")
         }
     }
 
