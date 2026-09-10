@@ -12,6 +12,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import java.io.File
+import java.io.IOException
 
 sealed class SendResult {
     data class Sent(val note: Note?) : SendResult()
@@ -264,6 +266,22 @@ class NotesRepository(
         val (bytes, mime) = ApiClient(s.baseUrl, s.token).fetchNoteMedia(noteId, attachmentId)
         withContext(Dispatchers.IO) { mediaCache.put(key, bytes, mime) }
         return bytes to mime
+    }
+
+    /**
+     * 鉴权取附件原件的落盘文件（语音直接喂 MediaPlayer）：命中磁盘缓存不发网也不进内存；
+     * 未命中拉取后只落盘不占内存 LRU。文件属于缓存，调用方不删。
+     */
+    suspend fun fetchNoteMediaFile(noteId: String, attachmentId: String): File {
+        val s = settingsRepo.settings.first()
+        if (s.mockMode) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        val key = MediaCache.key(s.token, noteId, attachmentId)
+        withContext(Dispatchers.IO) { mediaCache.file(key) }?.let { return it }
+        val (bytes, mime) = ApiClient(s.baseUrl, s.token).fetchNoteMedia(noteId, attachmentId)
+        return withContext(Dispatchers.IO) {
+            mediaCache.put(key, bytes, mime, keepInMemory = false)
+            mediaCache.file(key) ?: throw IOException("语音无法写入本机缓存，请清理存储空间后重试")
+        }
     }
 
     /** 退出登录：清本机登录态 + 已缓存的私有原件 */

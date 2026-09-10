@@ -412,6 +412,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun fetchMedia(noteId: String, attachmentId: String): Pair<ByteArray, String> =
         repo.fetchNoteMedia(noteId, attachmentId)
 
+    /** 语音附件的落盘缓存文件，直接喂 MediaPlayer */
+    suspend fun fetchMediaFile(noteId: String, attachmentId: String): java.io.File =
+        repo.fetchNoteMediaFile(noteId, attachmentId)
+
     /** 下载文件笔记原件到系统下载目录 */
     fun downloadFile(note: Note) {
         val fileName = note.meta?.fileName ?: "suinian-file"
