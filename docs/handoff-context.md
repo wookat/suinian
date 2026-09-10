@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-09-10（R352；R330–R336 见 docs/decision-r330/r332/r334/r336.md 与 audit-r331/r332/r333/r335.md；R337–R349 见 docs/decision-r337/r338/r340/r341/r342/r343/r344/r346/r347/r348/r349/r350.md）
+> 最后更新：2026-09-10（R353；R330–R336 见 docs/decision-r330/r332/r334/r336.md 与 audit-r331/r332/r333/r335.md；R337–R349 见 docs/decision-r337/r338/r340/r341/r342/r343/r344/r346/r347/r348/r349/r350.md）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -86,6 +86,7 @@
 - R350（两条独立线）：**(a) web PR #412（独立可随时合）**：生产演示模式（API 被删期间访客唯一可用路径）删除确认框承诺「移入最近删除，30 天内可恢复」，但撤销条报「演示模式不支持恢复」、`#/trash` 整页「加载失败」（`mockDeleteNote` 直接过滤、`getTrash` 在 mock 下 throw）。修法 = `web/src/lib/mock.ts` 加本地回收站 `suinian.mock.trash.v1`（`deleted_at / purge_at`，30 天与服务端同口径，读取时清过期项；`clearDemoNotes` 同时清回收站），`api.ts` 的 `restoreNotes / getTrash / purgeNotes / emptyTrash` 在 `useMock` 下走 mock，真实分支不改；本机 preview + Playwright 全流程通过。同时产出 7 路由 × 桌面/移动 生产截图：无横向溢出、page errors 0。**(b) 后端派生问法（docs/decision-r350.md，不改代码）**：R349 收口时 `finalizeAskAnswer()` 单点探针显示拼音 / 首字母 / 翻译 / 首尾字 / 字数 / 英文念数字 候选答案原样放行——完整链路复现证明这是探针产物：12 条派生问句单轮全部被 `oracleProbe`（anchored）或 `valueProbe` 在生成前截住；漏过闸门的名词形态（「wifi 密码的 md5 / ascii 码 / utf-8 字节」「暗号的注音 / 日文读音 / 英文 / 字数」「取款密码加 1」）进了生成，但 `modelContextNoteText()` 对 6 条凭据笔记（含无直守行的「暗号：+ 纯汉字」「锁改成了 0731」）全部 REDACTED / WITHHELD，模型看不到原值无从派生。**探针纪律**：凡假设「模型产出派生形态」，先过 `modelContextNoteText()` 再过两道闸门，`finalizeAskAnswer()` 单点结果不得宣称链路泄漏。观察项：名词形态编码问补进预言机正则收益低（答案从「生成『已隔离』」变成中性卡），每加一条需复核「订单号的 md5 / 会议号的拼音」善意面，未开轮。
 - R351 **web PR #413（基于 #412）**：生产实测右栏「记录统计 / 最近线索 / 标签云」新建 / 删除后总条数不变（8→8→8）。修法 = 新增 `web/src/lib/notes-bus.ts`（`onNotesMutated / notifyNotesMutated / mutated()`），`api.ts` 的写操作（create / ingestMedia / patch / delete / restore / purge / emptyTrash / batchStream 系 / renameTag / deleteTag）成功后统一广播、失败不广播、真实与 mock 分支同一包装；`right-rail.tsx` 订阅并 400ms 合并后 bump `mutationVersion` 重拉。本机 preview + Playwright 8→9→8→9→7→8、page errors 0；真实 API 分支只有代码路径一致性推论（API 被删）。
 - R352 **web PR #414（基于 #413）**：生产演示洞察页一手复现（Asia/Shanghai 与 UTC 均）「当前连续 0 天 / 最长 3 天」而热力图与趋势显示今天/昨天有记——`mockGetStats` 的 `current = has(todayUTC) ? 1 : 0`、`longest: 3` 硬编码，分桶用 UTC 日期，洞察范围（时间×标签）在 mock 下丢参无效。修法 = mock 端移植 backend `computeStreaks` 同算法、按浏览器本地日期分桶、`scopeDays / tag` 生效、`thread_count` 按范围内笔记实际归属；真实分支不改。本机 Playwright：Shanghai 5/5、UTC 01:35 4/4（昨天有记连续存活）、7 天 + 标签 2/2/3，page errors 0。
+- R353 **web PR #415（基于 #414）**：生产演示一手复现 `#/?date=2026-09-06`（洞察热力图点某天 / 时间流日期筛选同一路径）筛选栏显示 09/06 → 09/06 但列表仍渲染全部 8 条（5 个日期分组）——`mockGetNotes` 只处理 category / tag / source / q，`from/to` 丢弃。修法 = mock 端新增 `utcSqlToMs`（服务端 UTC `YYYY-MM-DD[ HH:MM:SS]`，纯日期按 backend 口径补 00:00:00 / 23:59:59）并按 `created_at` 过滤；真实分支不改；演示模式批量操作仍明确不支持。本机 Playwright Shanghai / UTC 单日、今天、清除筛选均正确，page errors 0。
 - web 观察项（未改）：`review-bus`（今日回顾卡）与 `notes-bus`（右栏）两套相似事件并存，后续可合并；`getThreads()` NetworkFirst 缓存在写后重拉是否总读到新值未单独验证；洞察页「近 30 天趋势」x 轴末刻度是最后一个 7 天格而非今天（视觉上像少一天，未改）。
 - 静态复测已知边界（均有意 fail-closed，未改）：R350 §3.3「京东订单号 2024091812345678，明天到」整行在模型上下文被替换（≥12 位数字口径）⇒「订单什么时候到」答不出「明天」；R336 K07（PIN 讲座 1234/0000）/ K09（Password 简史 1961）/ L03 / L09（19 位淘宝订单号，R320 ≥12 位数字口径）；R340 Y02/Y11；R335 G17 取件码在模型视图仍占位（ask 出口按 known-issues 豁免直答）
 - 同期 UI 线（另一会话，#384–#386）：设计系统 + shadcn/Radix + motion/recharts/cmdk 重排版、首屏拆包（移动 Lighthouse Perf 99）、设置页 ConfirmDialog
