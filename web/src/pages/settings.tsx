@@ -921,6 +921,7 @@ export function SettingsPage() {
   const [lastUsedAt, setLastUsedAt] = useState<string | null>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
   const restoreInputRef = useRef<HTMLInputElement>(null)
+  const deleteMsgRef = useRef<HTMLParagraphElement>(null)
   useSettingsVersion()
   const persisted = loadSettings()
   const demoOnly = persisted.useMock
@@ -1140,6 +1141,10 @@ export function SettingsPage() {
       setDeleting(false)
     }
   }
+
+  useEffect(() => {
+    if (deleteMsg) deleteMsgRef.current?.scrollIntoView({ block: "center" })
+  }, [deleteMsg])
 
   function save() {
     const next =
@@ -1785,7 +1790,7 @@ export function SettingsPage() {
               </Button>
             </div>
             {deleteMsg && (
-              <p role="alert" className="flex items-center gap-1.5 text-sm text-destructive">
+              <p ref={deleteMsgRef} role="alert" className="flex items-center gap-1.5 text-sm text-destructive">
                 <CircleAlert className="size-4 shrink-0" />
                 {deleteMsg}
               </p>
