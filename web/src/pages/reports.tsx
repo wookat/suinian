@@ -7,7 +7,7 @@ import { marked } from "marked"
 import { sanitizeGeneratedHtml } from "@/lib/safe-html"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Segmented } from "@/components/ui/segmented"
 import { parseServerTime } from "@/lib/utils"
 import { getReports, getReport, generateReport } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
@@ -233,12 +233,16 @@ export function ReportsPage() {
   const visible = reports.filter((r) => reportPeriod(r) === periodTab)
 
   const periodTabs = (
-    <Tabs value={periodTab} onValueChange={(v) => setPeriodTab(v as ReportPeriod)}>
-      <TabsList aria-label="报告类型">
-        <TabsTrigger value="week">周报</TabsTrigger>
-        <TabsTrigger value="month">月报</TabsTrigger>
-      </TabsList>
-    </Tabs>
+    <Segmented<ReportPeriod>
+      aria-label="报告类型"
+      className="w-fit"
+      value={periodTab}
+      onValueChange={setPeriodTab}
+      options={[
+        { value: "week", label: "周报" },
+        { value: "month", label: "月报" },
+      ]}
+    />
   )
 
   if (loading) return <NoteListSkeleton />

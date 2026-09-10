@@ -431,7 +431,7 @@ export function ThreadsPage() {
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <h3 className="min-w-0 flex-1 text-[15px] font-semibold">{t.title}</h3>
+                  <h2 className="min-w-0 flex-1 text-[15px] font-semibold">{t.title}</h2>
                   {(t.week_new_count ?? 0) > 0 && (
                     <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
                       本周 +{t.week_new_count}
