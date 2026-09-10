@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { unzipSync, strFromU8, zipSync, strToU8 } from "fflate";
-import { buildBackupZip, restoreBackup, restoreFileName, BACKUP_FORMAT, type BackupNote, type BackupManifest, type RestoreStats } from "../src/backup";
+import { buildBackupZip, restoreBackup, restoreFileName, restoreTodoDue, BACKUP_FORMAT, type BackupNote, type BackupManifest, type RestoreStats } from "../src/backup";
 import { SENSITIVE_EXPORT_PLACEHOLDER } from "../src/constants";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "../src/crypto";
 import type { Env } from "../src/types";
@@ -435,6 +435,71 @@ describe("restoreBackup", () => {
     expect(result2).toMatchObject({ media_imported: 0, media_failed: 2, media_oversized: 1, media_missing: 2 });
     const reasons = (result2 as RestoreStats).media_missing_notes.map((m) => m.reason).sort();
     expect(reasons).toEqual(["failed", "failed", "missing", "missing", "oversized"]);
+  });
+
+  it("restoreTodoDue: date / offset kept, legacy bare -> +08:00, anything else invalid", () => {
+    expect(restoreTodoDue("2026-09-12")).toEqual({ due: "2026-09-12", invalid: null });
+    expect(restoreTodoDue("2026-09-12T18:00:00+08:00")).toEqual({ due: "2026-09-12T18:00:00+08:00", invalid: null });
+    expect(restoreTodoDue("2026-09-12T15:00:00.000Z")).toEqual({ due: "2026-09-12T15:00:00.000Z", invalid: null });
+    expect(restoreTodoDue("2026-09-12 18:00:00-04:00")).toEqual({ due: "2026-09-12T18:00:00-04:00", invalid: null });
+    // 历史无偏移值：与 normalizeStoredTodoDue 读路径同口径补 +08:00，落库后不再有裸值
+    expect(restoreTodoDue("2026-09-12T15:50:55")).toEqual({ due: "2026-09-12T15:50:00+08:00", invalid: null });
+    expect(restoreTodoDue("2026-09-12 15:50")).toEqual({ due: "2026-09-12T15:50:00+08:00", invalid: null });
+    expect(restoreTodoDue(null)).toEqual({ due: null, invalid: null });
+    expect(restoreTodoDue("  ")).toEqual({ due: null, invalid: null });
+    expect(restoreTodoDue(123)).toEqual({ due: null, invalid: null });
+    for (const bad of ["明天下午", "2026/09/12 18:00", "2026-09-12 6pm", "2026-13-45", "2026-9-12"])
+      expect(restoreTodoDue(bad)).toEqual({ due: null, invalid: bad });
+    expect(restoreTodoDue("x".repeat(100)).invalid).toHaveLength(40);
+  });
+
+  it("restore: unparseable todo_due is cleared + reported (note still imported, meta.todo_due_invalid), bare legacy normalized", async () => {
+    const inserted: Recorded[] = [];
+    const env = { DB: fakeDb({ inserted }), MEDIA: fakeR2(new Map()), DEEPSEEK_API_KEY: "", DEEPSEEK_BASE_URL: "" } as unknown as Env;
+    const todo = (i: number, content: string, todo_due: string | null): Partial<BackupNote> => ({
+      id: `old${i}`,
+      source: "api",
+      raw_type: "text",
+      content,
+      category: "todo",
+      tags: [],
+      is_sensitive: false,
+      todo_due,
+      todo_done: false,
+      meta: { client_id: `c${i}` } as BackupNote["meta"],
+      created_at: `2026-09-01 00:00:0${i}`,
+      updated_at: `2026-09-01 00:00:0${i}`,
+      attachments: [],
+    });
+    const zip = makeBackupZip([
+      todo(1, "bare legacy", "2026-09-12T15:50:55"),
+      todo(2, "garbage", "明天下午"),
+      todo(3, "slash", "2026/09/12 18:00"),
+      todo(4, "offset", "2026-09-12T18:00:00+08:00"),
+      todo(5, "date", "2026-09-12"),
+    ]);
+    const tasks: Promise<unknown>[] = [];
+    const result = await restoreBackup(env, "u9", streamOf(zip), (p) => tasks.push(p));
+    await Promise.all(tasks);
+    const stats = result as RestoreStats;
+    expect(stats).toMatchObject({ notes_total: 5, notes_imported: 5, notes_skipped: 0, todo_due_invalid: 2 });
+    expect(stats.todo_due_invalid_notes.map((m) => m.value).sort()).toEqual(["2026/09/12 18:00", "明天下午"]);
+
+    const notes = inserted.filter((r) => r.sql.includes("INSERT INTO notes"));
+    const byContent = Object.fromEntries(notes.map((r) => [r.binds[4] as string, r]));
+    const due = (c: string) => byContent[c].binds[14];
+    const meta = (c: string) => JSON.parse(String(byContent[c].binds[19] ?? "null")) as Record<string, unknown> | null;
+    expect(due("bare legacy")).toBe("2026-09-12T15:50:00+08:00");
+    expect(due("offset")).toBe("2026-09-12T18:00:00+08:00");
+    expect(due("date")).toBe("2026-09-12");
+    expect(due("garbage")).toBeNull();
+    expect(due("slash")).toBeNull();
+    expect(meta("garbage")).toMatchObject({ client_id: "c2", todo_due_invalid: "明天下午" });
+    expect(meta("slash")).toMatchObject({ client_id: "c3", todo_due_invalid: "2026/09/12 18:00" });
+    expect(meta("offset")).not.toHaveProperty("todo_due_invalid");
+    // 上报的 note_id 就是新落库的 id
+    const ids = new Set(notes.map((r) => r.binds[0] as string));
+    for (const m of stats.todo_due_invalid_notes) expect(ids.has(m.note_id)).toBe(true);
   });
 
   it("skips duplicates (same content + created_at) including their media", async () => {

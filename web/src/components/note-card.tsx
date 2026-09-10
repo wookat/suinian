@@ -499,6 +499,10 @@ export function NoteCard({
     (note.raw_type === "image" && (note.meta?.media_status === "extract_failed" || note.content.startsWith("【图片】文字提取失败"))) ||
     (note.raw_type === "file" && note.meta?.file_status === "extract_failed")
 
+  const dueInvalidText =
+    note.category === "todo" && !note.todo_due && note.meta?.todo_due_invalid
+      ? `备份里的到期时间「${note.meta.todo_due_invalid}」无法识别，已按无到期时间恢复，请重新设置`
+      : null
   // 备份恢复后原件没跟上：服务端没有 attachment 行，下载 / 原地重试必然 404，只给原因与重新上传提示
   const attachmentMissing = note.meta?.attachment_missing
   const attachmentMissingText = attachmentMissing
@@ -1112,6 +1116,12 @@ export function NoteCard({
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <CircleAlert className="size-3.5 shrink-0" />
                 <span>{attachmentMissingText}</span>
+              </div>
+            )}
+            {dueInvalidText && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <CircleAlert className="size-3.5 shrink-0" />
+                <span>{dueInvalidText}</span>
               </div>
             )}
             {mediaFailed && !attachmentMissingText && (

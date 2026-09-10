@@ -103,6 +103,8 @@ export interface NoteMeta {
   client_id?: string;
   /** 备份恢复后原件缺失（voice/image/file notes）：客户端不再提供下载 / 原地重试入口，提示重新上传。 */
   attachment_missing?: AttachmentMissingReason;
+  /** 备份恢复时 todo_due 解析不出的原文（≤40 字）：到期已清空，客户端提示重新设置。 */
+  todo_due_invalid?: string;
   /** Original Whisper transcript before LLM correction (audio notes). */
   raw_transcript?: string;
   /** Result of the last transcription/extraction attempt (voice/image notes). */
