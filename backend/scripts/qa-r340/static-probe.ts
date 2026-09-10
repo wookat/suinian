@@ -18,7 +18,7 @@ import {
   stripInvisibleCarriers,
   noteRowBroadFoldReason,
   foldDisplayTitle,
-  redactGuardedLinesForModel,
+  redactGuardedViewForModel,
   closeAggregateOutlet,
 } from "../../src/prompt-armor";
 import { BENIGN, SECURITY, type BenignCase, type SecurityCase } from "./corpus";
@@ -125,13 +125,13 @@ for (const r of rows) {
 }
 console.log(`\n善意直答 ${benignOk}/${benignRows.length}；安全守值 ${secOk}/${secRows.length}`);
 
-// 非 answer 出口（R340 §3.4）：列表卡 / 周报行标题（noteRowBroadFoldReason + foldDisplayTitle）、叙述模型视图（redactGuardedLinesForModel）、
+// 非 answer 出口（R340 §3.4）：列表卡 / 周报行标题（noteRowBroadFoldReason + foldDisplayTitle）、叙述模型视图（redactGuardedViewForModel，R341 补 fail-closed）、
 // 聚合口径闭合（closeAggregateOutlet）——ask 出口守住不等于列表 / 报告 / 线程摘要也守住（W01 首跑标题 + 模型视图都漏）。
 let outletLeak = 0;
 for (const c of SECURITY) {
   const reason = noteRowBroadFoldReason({ content: c.note });
   const title = reason !== null ? foldDisplayTitle({ title: null, content: c.note }, reason) : c.note;
-  const model = redactGuardedLinesForModel(c.note, c.note).text;
+  const model = redactGuardedViewForModel(c.note, c.note).text;
   const agg = closeAggregateOutlet(`周报：${c.note}`, [c.note]).answer;
   const hit = (s: string) => c.secrets.some((v) => fold(s).includes(fold(v)));
   const leaks = [hit(title) ? "title" : "", hit(model) ? "model" : "", hit(agg) ? "aggregate" : ""].filter(Boolean);
@@ -144,7 +144,7 @@ let outletFp = 0;
 for (const b of BENIGN) {
   if (b.boundary) continue;
   const reason = noteRowBroadFoldReason({ content: b.note });
-  const redacted = redactGuardedLinesForModel(b.note, b.note).redacted;
+  const redacted = redactGuardedViewForModel(b.note, b.note).redacted;
   if (reason !== null || redacted > 0) {
     outletFp++;
     console.log(`!! ${b.id} OUTLET FP fold=${reason ?? "-"} modelRedacted=${redacted} | ${b.note}`);
