@@ -485,29 +485,71 @@ export async function mockGenerateReport(): Promise<WeeklyReport> {
   return seedReports[0]
 }
 
-export async function mockGetStats(): Promise<StatsResponse> {
+/** 浏览器本地时区的 "YYYY-MM-DD"（与真实 API 按 tz_offset 分桶同口径） */
+function localDateOf(ms: number): string {
+  return new Date(ms - new Date(ms).getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+}
+
+function addDays(iso: string, delta: number): string {
+  return new Date(Date.parse(`${iso}T00:00:00Z`) + delta * 86_400_000).toISOString().slice(0, 10)
+}
+
+/** 与 backend/src/stats.ts computeStreaks 同算法：今天没记但昨天有记，连续仍算存活 */
+function computeStreaks(days: Iterable<string>, today: string): { current: number; longest: number } {
+  const set = new Set(days)
+  let longest = 0
+  let run = 0
+  let prev: string | null = null
+  for (const d of [...set].sort()) {
+    run = prev !== null && addDays(prev, 1) === d ? run + 1 : 1
+    if (run > longest) longest = run
+    prev = d
+  }
+  let anchor: string | null = set.has(today) ? today : set.has(addDays(today, -1)) ? addDays(today, -1) : null
+  let current = 0
+  while (anchor && set.has(anchor)) {
+    current++
+    anchor = addDays(anchor, -1)
+  }
+  return { current, longest }
+}
+
+export async function mockGetStats(
+  days = 365,
+  scope?: { tag?: string; scopeDays?: number },
+): Promise<StatsResponse> {
   await delay(120)
-  const notes = loadMockNotes().filter((n) => !n.tags.includes("示例"))
+  const today = localDateOf(Date.now())
+  const since = addDays(today, -(days - 1))
+  const scopeSince = scope?.scopeDays ? addDays(today, -(scope.scopeDays - 1)) : null
+  const notes = loadMockNotes().filter((n) => {
+    if (n.tags.includes("示例")) return false
+    if (scopeSince && localDateOf(Date.parse(n.created_at)) < scopeSince) return false
+    if (scope?.tag && (n.is_sensitive === 1 || !n.tags.includes(scope.tag))) return false
+    return true
+  })
   const dailyMap = new Map<string, number>()
+  const allDays = new Set<string>()
   const catMap = new Map<string, number>()
   const srcMap = new Map<string, number>()
   const tagMap = new Map<string, number>()
   for (const n of notes) {
-    const d = n.created_at.slice(0, 10)
-    dailyMap.set(d, (dailyMap.get(d) ?? 0) + 1)
+    const d = localDateOf(Date.parse(n.created_at))
+    allDays.add(d)
+    if (d >= since && d <= today) dailyMap.set(d, (dailyMap.get(d) ?? 0) + 1)
     catMap.set(n.category ?? "pending", (catMap.get(n.category ?? "pending") ?? 0) + 1)
     srcMap.set(n.source, (srcMap.get(n.source) ?? 0) + 1)
     if (n.is_sensitive !== 1) for (const t of n.tags) tagMap.set(t, (tagMap.get(t) ?? 0) + 1)
   }
   const byCount = (m: Map<string, number>) =>
     [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-  const today = new Date().toISOString().slice(0, 10)
+  const threadIds = new Set(notes.map((n) => n.thread_id).filter((t): t is string => !!t))
   return {
     total_notes: notes.length,
-    thread_count: 2,
-    active_days: dailyMap.size,
+    thread_count: seedThreads.filter((t) => threadIds.has(t.id)).length,
+    active_days: allDays.size,
     daily: [...dailyMap.entries()].sort().map(([date, count]) => ({ date, count })),
-    streak: { current: dailyMap.has(today) ? 1 : 0, longest: 3 },
+    streak: computeStreaks(allDays, today),
     categories: byCount(catMap).map(([category, count]) => ({ category, count })),
     sources: byCount(srcMap).map(([source, count]) => ({ source, count })),
     top_tags: byCount(tagMap)
