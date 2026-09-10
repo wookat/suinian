@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.zalize.suinian.data.Note
 import com.zalize.suinian.data.UrlTitle
+import com.zalize.suinian.ui.attachmentMissingText
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -616,6 +617,9 @@ fun NoteCard(
                 }
             }
 
+            // 备份恢复后原件没跟上：服务端没有 attachment 行，下载必然 404，只给原因与重新上传提示
+            val attachmentMissingHint = attachmentMissingText(note.meta?.attachmentMissing)
+
             // 文件笔记卡：文件名/类型/大小 + 正文摘录（可展开）+ 下载原件
             val fileMeta = note.meta?.takeIf { note.rawType == "file" && it.fileName != null }
             if (fileMeta != null && !masked) {
@@ -649,7 +653,7 @@ fun NoteCard(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            if (onDownloadFile != null) {
+                            if (onDownloadFile != null && attachmentMissingHint == null) {
                                 IconButton(onClick = { onDownloadFile(note) }, modifier = Modifier.size(32.dp)) {
                                     Icon(
                                         Icons.Outlined.Download,
@@ -659,7 +663,14 @@ fun NoteCard(
                                 }
                             }
                         }
-                        if (fileMeta.fileStatus == "extract_failed") {
+                        if (attachmentMissingHint != null) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                attachmentMissingHint,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        } else if (fileMeta.fileStatus == "extract_failed") {
                             Spacer(Modifier.height(4.dp))
                             Text(
                                 "文本提取失败，已存档原件",
@@ -705,6 +716,14 @@ fun NoteCard(
                     Spacer(Modifier.height(8.dp))
                     NoteAudioAttachment(note.id, audioAtt, fetchMedia)
                 }
+            }
+            if (attachmentMissingHint != null && fileMeta == null && !masked) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    attachmentMissingHint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
 
             // 图片笔记：视觉模型完整描述可展开（文字优先，描述作补充）
