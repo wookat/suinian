@@ -1,4 +1,4 @@
-import { loadSettings } from "./settings"
+import { isOfficialApiBase, loadSettings } from "./settings"
 import { identityFingerprint, isCacheableApiPath, withIdentityParam } from "./api-cache"
 import { escapeSwWedgeForAuth } from "./sw-control"
 import { mutated } from "./notes-bus"
@@ -70,13 +70,24 @@ async function realFetch<T>(
   }
 }
 
+export const NOT_LOGGED_IN_MESSAGE = "尚未登录，请先登录或注册"
+
+/** Settings for an authenticated real-API call. Fails locally (no round trip)
+ * when the page has no API base or no token, so callers see the same 401
+ * shape as an expired session instead of a network error. */
+function requireRealApi(): { apiBaseUrl: string; apiToken: string } {
+  const { apiBaseUrl, apiToken } = loadSettings()
+  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  if (!apiToken) throw new ApiError(401, NOT_LOGGED_IN_MESSAGE)
+  return { apiBaseUrl, apiToken }
+}
+
 async function realFetchOnce<T>(
   path: string,
   init: RequestInit | undefined,
   timeoutMs: number,
 ): Promise<T> {
-  const { apiBaseUrl, apiToken } = loadSettings()
-  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  const { apiBaseUrl, apiToken } = requireRealApi()
   // SW 会缓存这几条 GET 路由：URL 带上当前账号指纹，缓存按身份分区（R166 P1）
   const method = (init?.method ?? "GET").toUpperCase()
   const reqPath =
@@ -104,7 +115,7 @@ async function realFetchOnce<T>(
       if (timeoutSignal.aborted) throw new NetworkError("请求超时，请重试", true)
       throw e
     }
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -135,6 +146,21 @@ export class NetworkError extends Error {
     super(message)
     this.timeout = timeout
   }
+}
+
+/** Message for a fetch that failed before any response arrived (DNS / TLS /
+ * connection refused). Only blames the user's network when the browser is
+ * actually offline; otherwise the API side is the one that cannot be reached. */
+export function unreachableMessage(baseUrl: string): string {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return "网络已断开，请检查网络后重试"
+  if (isOfficialApiBase(baseUrl)) return "碎念服务暂时连不上（浏览器显示在线，多半是服务端故障），请稍后重试"
+  let host = baseUrl
+  try {
+    host = new URL(baseUrl).host
+  } catch {
+    /* keep raw value */
+  }
+  return `无法连接到 API 地址 ${host}，请确认地址正确且服务在线`
 }
 
 // Backend returns booleans for is_sensitive/todo_done and wraps single notes in {note}
@@ -229,8 +255,7 @@ async function ingestMediaRaw(file: File, type: "image" | "file" | "audio", clie
             : `【文件】${file.name}（演示模式不做提取）`,
     })
   }
-  const { apiBaseUrl, apiToken } = loadSettings()
-  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  const { apiBaseUrl, apiToken } = requireRealApi()
   const form = new FormData()
   form.set("type", type)
   form.set("source", "web")
@@ -244,7 +269,7 @@ async function ingestMediaRaw(file: File, type: "image" | "file" | "audio", clie
       body: form,
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -280,7 +305,7 @@ export function fetchNoteMediaUrl(noteId: string, attachmentId?: string): Promis
         headers: { Authorization: `Bearer ${apiToken}` },
       })
     } catch {
-      throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+      throw new NetworkError(unreachableMessage(apiBaseUrl))
     }
     if (!res.ok) {
       const text = await res.text().catch(() => "")
@@ -303,7 +328,7 @@ export async function downloadNoteFile(noteId: string, fileName: string): Promis
       headers: { Authorization: `Bearer ${apiToken}` },
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -478,7 +503,7 @@ async function batchStreamRaw(
       body: JSON.stringify(body),
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -667,8 +692,7 @@ export async function askStream(
   signal?: AbortSignal,
 ): Promise<AskResponse> {
   if (loadSettings().useMock) return mockAsk(question)
-  const { apiBaseUrl, apiToken } = loadSettings()
-  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  const { apiBaseUrl, apiToken } = requireRealApi()
   // 流式预算按「空闲」计：只要正文持续流动就不中断（长笔记 verbatim 回显
   // 可能远超 60s），仅在 60s 无任何字节到达时才判定断流。
   const idleCtrl = new AbortController()
@@ -793,7 +817,7 @@ export async function exportData(
       },
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) throw await blobFetchError(res)
   const blob = await res.blob()
@@ -815,7 +839,7 @@ export async function downloadBackup(includeSensitive: boolean, password?: strin
       },
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) throw await blobFetchError(res)
   const blob = await res.blob()
@@ -859,7 +883,7 @@ export async function restoreBackup(file: File): Promise<RestoreStats> {
       body: form,
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -924,7 +948,7 @@ export async function importData(
       body: form,
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -1218,10 +1242,10 @@ async function authPost(
       try {
         res = await authFetchOnce(baseUrl, path, body, AUTH_TIMEOUT_MS - AUTH_ATTEMPT_TIMEOUT_MS)
       } catch (e2) {
-        throw authFetchError(e2)
+        throw authFetchError(e2, baseUrl)
       }
     } else {
-      throw authFetchError(e)
+      throw authFetchError(e, baseUrl)
     }
   }
   if (!res.ok) {
@@ -1247,16 +1271,17 @@ function authFetchOnce(baseUrl: string, path: string, body: unknown, timeoutMs: 
   })
 }
 
-function authFetchError(e: unknown): NetworkError {
+function authFetchError(e: unknown, baseUrl: string): NetworkError {
   if (e instanceof DOMException && e.name === "TimeoutError") {
     const wedged = typeof navigator !== "undefined" && !!navigator.serviceWorker?.controller
     return new NetworkError(
       wedged
         ? "请求超时（浏览器离线缓存组件可能卡住）：请用相同用户名密码重试一次（不会重复创建账号）；仍失败可到设置页「关闭离线缓存」后重试"
         : "请求超时，请用相同用户名密码重试一次（不会重复创建账号）",
+      true,
     )
   }
-  return new NetworkError("网络连接失败，请检查网络或 API 地址")
+  return new NetworkError(unreachableMessage(baseUrl))
 }
 
 export function register(baseUrl: string, name: string, password: string, inviteCode?: string): Promise<AuthResult> {
