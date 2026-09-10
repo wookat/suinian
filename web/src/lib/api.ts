@@ -838,31 +838,91 @@ export async function exportData(
     throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) throw await blobFetchError(res)
-  const blob = await res.blob()
+  let blob: Blob
+  try {
+    blob = await res.blob()
+  } catch {
+    throw new NetworkError("导出下载中断，请重试")
+  }
   const date = new Date().toISOString().slice(0, 10)
   return { blob, filename: `suinian-export-${date}.${format === "markdown" ? "md" : "json"}` }
 }
 
-/** 下载完整备份 zip（notes.json 全字段 + media/ 原件 + manifest） */
-export async function downloadBackup(includeSensitive: boolean, password?: string): Promise<{ blob: Blob; filename: string }> {
+/** 大文件传输进度：total 为 null 表示服务端流式输出、总长未知（只能显示已接收字节） */
+export interface TransferProgress {
+  received: number
+  total: number | null
+}
+
+export class TransferCancelledError extends Error {
+  constructor() {
+    super("已取消")
+  }
+}
+
+export function formatMB(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`
+}
+
+/** 下载完整备份 zip（notes.json 全字段 + media/ 原件 + manifest）：边收边报进度，signal 取消即断开连接 */
+export async function downloadBackup(
+  includeSensitive: boolean,
+  password?: string,
+  opts: { signal?: AbortSignal; onProgress?: (p: TransferProgress) => void } = {},
+): Promise<{ blob: Blob; filename: string }> {
   const { apiBaseUrl, apiToken, useMock } = loadSettings()
   if (useMock || !apiBaseUrl) throw new Error("演示模式不支持备份，请先配置真实 API")
+  const { signal, onProgress } = opts
   const qs = includeSensitive ? "?include_sensitive=true" : ""
   let res: Response
   try {
     res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/backup${qs}`, {
+      signal,
       headers: {
         Authorization: `Bearer ${apiToken}`,
         ...(includeSensitive && password ? { "X-Suinian-Password": encodeURIComponent(password) } : {}),
       },
     })
   } catch {
+    if (signal?.aborted) throw new TransferCancelledError()
     throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) throw await blobFetchError(res)
-  const blob = await res.blob()
+  const lenHeader = Number(res.headers.get("Content-Length"))
+  const total = Number.isFinite(lenHeader) && lenHeader > 0 ? lenHeader : null
+  const chunks: Uint8Array[] = []
+  let received = 0
+  onProgress?.({ received, total })
+  const reader = res.body?.getReader()
+  if (!reader) {
+    try {
+      const blob = await res.blob()
+      return { blob, filename: backupFilename(includeSensitive) }
+    } catch {
+      throw new NetworkError("备份下载中断，请重试")
+    }
+  }
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) {
+        chunks.push(value)
+        received += value.byteLength
+        onProgress?.({ received, total })
+      }
+    }
+  } catch {
+    if (signal?.aborted) throw new TransferCancelledError()
+    throw new NetworkError(`备份下载中断（已接收 ${formatMB(received)}），请重试`)
+  }
+  if (signal?.aborted) throw new TransferCancelledError()
+  return { blob: new Blob(chunks as BlobPart[], { type: "application/zip" }), filename: backupFilename(includeSensitive) }
+}
+
+function backupFilename(includeSensitive: boolean): string {
   const date = new Date().toISOString().slice(0, 10)
-  return { blob, filename: `suinian-backup-${date}${includeSensitive ? "-full" : ""}.zip` }
+  return `suinian-backup-${date}${includeSensitive ? "-full" : ""}.zip`
 }
 
 export interface RestoreStats {
