@@ -579,7 +579,7 @@ export async function restoreCategories(
 
 /** 全部标签 + 使用次数（按次数降序） */
 export async function getStats(days = 365, scope?: { tag?: string; scopeDays?: number }): Promise<StatsResponse> {
-  if (loadSettings().useMock) return mockGetStats()
+  if (loadSettings().useMock) return mockGetStats(days, scope)
   const tz = -new Date().getTimezoneOffset()
   let qs = `/api/stats?days=${days}&tz_offset=${tz}`
   if (scope?.tag) qs += `&tag=${encodeURIComponent(scope.tag)}`
