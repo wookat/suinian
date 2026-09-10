@@ -409,45 +409,84 @@ export async function mockBatchNotes(
     : { affected: ids.length, remaining: 0, ids }
 }
 
-const URL_RE = /^https?:\/\/\S+$/i
+// 与 backend/src/linkmeta.ts URL_RE 同口径：正文中的第一个链接就是笔记的 url，不要求整条只有链接
+const URL_RE = /https?:\/\/[^\s<>"'）)\]】，,；;]+/
+const MOCK_TITLE_MAX = 20
+
+/** 与 backend fallbackTitleFromUrl 同口径：域名 › 路径末两段，链接卡不会只剩一串裸 URL */
+function mockLinkTitle(url: string): { title: string | null; site: string | null } {
+  try {
+    const u = new URL(url)
+    let path = u.pathname.replace(/\/+$/, "")
+    try {
+      path = decodeURIComponent(path)
+    } catch {
+      /* keep raw path */
+    }
+    const tail = path.split("/").filter(Boolean).slice(-2).join("/")
+    return { title: tail ? `${u.hostname} › ${tail}`.slice(0, 300) : u.hostname, site: u.hostname }
+  } catch {
+    return { title: null, site: null }
+  }
+}
+
+/**
+ * 演示版分拣标题：真实服务由模型出 ≤20 字的概括，这里只取首句——正文多于一句且首句不长才给，
+ * 否则留空（卡片不会在正文上方重复一道截断的同文）。
+ */
+function mockTriageTitle(content: string): string | null {
+  const text = content.replace(new RegExp(URL_RE.source, "g"), "").replace(/\s+/g, " ").trim()
+  const parts = text.split(/[。！？!?；;\n]+/).map((s) => s.trim()).filter(Boolean)
+  if (parts.length < 2) return null
+  const first = parts[0].replace(/[，,]+$/, "")
+  return first.length > 0 && first.length <= MOCK_TITLE_MAX ? first : null
+}
 
 export async function mockCreateNote(payload: CreateNotePayload): Promise<Note> {
   await delay()
   const now = new Date().toISOString()
-  const isLink = payload.url != null || URL_RE.test(payload.content.trim())
+  const content = payload.content
+  const url = payload.url ?? content.match(URL_RE)?.[0] ?? null
+  const bareLink = url != null && content.trim() === url
+  const manualTags = (payload.tags ?? []).map((t) => t.trim()).filter(Boolean)
+  const skipTriage = payload.skip_triage === true
+  const link = url ? mockLinkTitle(url) : null
   const id = `n-${Date.now()}`
   const note: Note = {
     id,
     user_id: "u-1",
     source: payload.source,
-    raw_type: isLink ? "link" : payload.raw_type,
-    content: payload.content,
-    url: payload.url ?? (isLink ? payload.content.trim() : null),
-    url_title: null,
+    raw_type: bareLink ? "link" : payload.raw_type,
+    content,
+    url,
+    url_title: link?.title ?? null,
     url_summary: null,
     title: null,
-    category: null,
-    tags: [],
+    category: skipTriage ? "idea" : null,
+    tags: manualTags,
     thread_id: null,
     is_sensitive: 0,
     todo_due: null,
     todo_done: null,
     created_at: now,
     updated_at: now,
+    meta: link?.site ? { link_site: link.site } : null,
   }
   const notes = loadMockNotes()
   notes.unshift(note)
   saveMockNotes(notes)
-  // Simulate the async AI triage pipeline backfilling category/tags
+  if (skipTriage) return note
+  // Simulate the async AI triage pipeline backfilling category/tags/title;
+  // manual #tags stay as typed (server locks them against AI rewrite)
   setTimeout(() => {
     const all = loadMockNotes()
     const idx = all.findIndex((n) => n.id === id)
     if (idx === -1) return
     all[idx] = {
       ...all[idx],
-      category: isLink ? "collect" : "idea",
-      tags: isLink ? ["收藏"] : ["随手记"],
-      title: all[idx].content.slice(0, 18) || null,
+      category: bareLink ? "collect" : "idea",
+      tags: manualTags.length > 0 ? manualTags : bareLink ? ["收藏"] : ["随手记"],
+      title: bareLink ? null : mockTriageTitle(content),
       updated_at: new Date().toISOString(),
     }
     saveMockNotes(all)
