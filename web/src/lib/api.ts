@@ -18,6 +18,7 @@ import {
   mockGetReport,
   mockGetReports,
   mockGetTodayReview,
+  mockGetTodosToday,
   mockGetThread,
   mockGetThreads,
   mockPatchNote,
@@ -1082,7 +1083,7 @@ export async function generateReport(
 
 /** 今日到期 + 已逾期的未完成待办（时间流顶部应用内提醒条） */
 export async function getTodosToday(): Promise<{ date: string; items: (Note & { overdue: boolean })[] }> {
-  if (loadSettings().useMock) return { date: "", items: [] }
+  if (loadSettings().useMock) return mockGetTodosToday()
   const res = await realFetch<{ date: string; items: Record<string, unknown>[] }>("/api/todos/today")
   return { date: res.date, items: res.items.map((r) => ({ ...normalizeNote(r), overdue: !!r.overdue })) }
 }
