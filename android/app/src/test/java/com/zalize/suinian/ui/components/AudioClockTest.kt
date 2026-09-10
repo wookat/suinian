@@ -51,6 +51,16 @@ class AudioClockTest {
     }
 
     @Test
+    fun image_download_name_uses_image_mime_and_image_prefix() {
+        assertEquals("IMG_0001.jpg", attachmentDownloadName("IMG_0001.jpg", "image/jpeg", "n1", "image"))
+        assertEquals("photo.jpg", attachmentDownloadName("photo", "image/jpeg", "n1", "image"))
+        assertEquals("白板.png", attachmentDownloadName("白板", "image/png", "n1", "image"))
+        assertEquals("image-0123abcd.webp", attachmentDownloadName("", "image/webp", "0123abcd-ffff", "image"))
+        assertEquals("image-0123abcd", attachmentDownloadName("", "image/x-unknown", "0123abcd-ffff", "image"))
+        assertEquals("voice-0123abcd.amr", attachmentDownloadName("", "audio/amr", "0123abcd-ffff", "voice"))
+    }
+
+    @Test
     fun playback_key_round_trips_note_id() {
         val key = audioPlaybackKey("note-1", "att/with/slash")
         assertEquals("note-1", audioPlaybackNoteId(key))

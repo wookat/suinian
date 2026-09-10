@@ -35,16 +35,31 @@ private val AUDIO_EXT_BY_MIME = mapOf(
     "audio/x-flac" to "flac",
 )
 
+private val IMAGE_EXT_BY_MIME = mapOf(
+    "image/jpeg" to "jpg",
+    "image/jpg" to "jpg",
+    "image/png" to "png",
+    "image/webp" to "webp",
+    "image/gif" to "gif",
+    "image/heic" to "heic",
+    "image/heif" to "heif",
+    "image/bmp" to "bmp",
+)
+
 /**
- * 语音原件的下载文件名：服务端给的附件名优先（web「下载原件」同口径）；没有扩展名时按 mime 补一个，
- * 让系统下载目录 / 其他播放器能按后缀识别；完全没名字时用 voice-<noteId 前 8 位>。
+ * 附件原件的下载 / 分享文件名：服务端给的附件名优先（web「下载原件」同口径）；没有扩展名时按 mime 补一个，
+ * 让系统下载目录 / 其他应用能按后缀识别；完全没名字时用 <fallbackPrefix>-<noteId 前 8 位>。
  */
-fun audioDownloadName(attachmentName: String, mime: String?, noteId: String): String {
-    val base = attachmentName.trim().ifEmpty { "voice-${noteId.take(8)}" }
+fun attachmentDownloadName(attachmentName: String, mime: String?, noteId: String, fallbackPrefix: String): String {
+    val base = attachmentName.trim().ifEmpty { "$fallbackPrefix-${noteId.take(8)}" }
     if (base.substringAfterLast('.', "").let { it.isNotEmpty() && it.length <= 5 && it.all { c -> c.isLetterOrDigit() } }) return base
-    val ext = mime?.lowercase()?.substringBefore(';')?.trim()?.let { AUDIO_EXT_BY_MIME[it] }
+    val m = mime?.lowercase()?.substringBefore(';')?.trim()
+    val ext = m?.let { AUDIO_EXT_BY_MIME[it] ?: IMAGE_EXT_BY_MIME[it] }
     return if (ext != null) "$base.$ext" else base
 }
+
+fun audioDownloadName(attachmentName: String, mime: String?, noteId: String): String =
+    attachmentDownloadName(attachmentName, mime, noteId, "voice")
 
 /** 语音卡文字：未播过只显示时长；播放 / 暂停中显示「已播 / 总长」 */
 fun audioClockLabel(playing: Boolean, inProgress: Boolean, position: String?, total: String?): String = when {

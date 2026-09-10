@@ -2,9 +2,11 @@ package com.zalize.suinian.ui
 
 import android.app.Application
 import android.content.ContentValues
+import android.content.Intent
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zalize.suinian.SuinianApp
@@ -20,7 +22,7 @@ import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.RestoreStats
 import com.zalize.suinian.data.SendResult
 import com.zalize.suinian.ui.components.AudioPlayback
-import com.zalize.suinian.ui.components.audioDownloadName
+import com.zalize.suinian.ui.components.attachmentDownloadName
 import com.zalize.suinian.ui.components.mediaStatusLine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.channels.Channel
@@ -485,9 +487,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 语音附件原件存到系统下载目录（本机播放器放不出来时换其他应用打开）；命中落盘缓存不发网 */
+    /** 语音 / 图片附件原件存到系统下载目录（语音：本机放不出来换其他应用打开；图片：保存原图）；命中落盘缓存不发网 */
     fun downloadAttachment(note: Note, att: NoteAttachment) {
-        val fileName = audioDownloadName(att.name, att.mime, note.id)
+        val fileName = attachmentDownloadName(att.name, att.mime, note.id, if (note.rawType == "image") "image" else "voice")
         _ui.value = _ui.value.copy(toast = "开始下载…")
         viewModelScope.launch {
             try {
@@ -497,6 +499,36 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(toast = "已保存到下载：$fileName")
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(toast = e.message ?: "下载失败")
+            }
+        }
+    }
+
+    /**
+     * 把附件原件分享给其他应用（ACTION_SEND 系统选择器）：缓存文件按真实文件名复制到 cacheDir/share 再经 FileProvider 授权，
+     * 接收方拿到的是带正确后缀的名字而不是缓存键 .bin。拿到 Intent 后由界面层 [launch]。
+     */
+    fun shareAttachment(note: Note, att: NoteAttachment, launch: (Intent) -> Unit) {
+        val context = getApplication<Application>()
+        val fileName = attachmentDownloadName(att.name, att.mime, note.id, if (note.rawType == "image") "image" else "voice")
+        val mime = (att.mime ?: "application/octet-stream").substringBefore(';')
+        viewModelScope.launch {
+            try {
+                val cached = repo.fetchNoteMediaFile(note.id, att.id)
+                val shared = withContext(Dispatchers.IO) {
+                    val dir = java.io.File(context.cacheDir, "share").apply { mkdirs() }
+                    val stale = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
+                    dir.listFiles()?.filter { it.name != fileName && it.lastModified() < stale }?.forEach { it.delete() }
+                    java.io.File(dir, fileName).also { cached.copyTo(it, overwrite = true) }
+                }
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", shared)
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = mime
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                launch(Intent.createChooser(send, "分享原图"))
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(toast = e.message ?: "分享失败")
             }
         }
     }
