@@ -10378,6 +10378,76 @@ const NON_VALUE_ASK_RE =
 /** 追问形态：指代上文 / 再来一遍 / 第 N 位 / 变换写法——只有这些形态才把上一轮的称谓借给本轮问句。 */
 const HISTORY_FOLLOWUP_RE =
   /那|它|这个|上面|刚才|之前|前面|上一|再|还有|呢|一遍|一次|继续|接着|剩下|后面|其余|另外|第\s*[\d一二三四五六七八九十]+|倒着|反过来|拆|逐字|逐位|每位|每个字|大写|小写|拼音|翻译|译成|编码|换成|改写|转写|念|读|\b(?:again|it|that|those|rest|next|remaining|reverse|spell|repeat|more)\b/iu;
+
+/* ── R337（decision-r337 §3.1）：复合问句拆句 ── */
+/** 逐位 / 逐字 / 第 N 位形态：整句是对单一凭据的枚举试探，不拆。 */
+const COMPOUND_NO_SPLIT_RE = /每个字|每一?位|每个字符|逐字|逐位|第\s*[\d一二三四五六七八九十]+\s*(?:位|个字|个字符)|哪几个字|哪些字/u;
+/** 子句间标点（NFKC 已把全角逗号 / 分号 / 问号折成 ASCII）。 */
+const COMPOUND_PUNCT_RE = /[、，,；;？?！!]+/u;
+/** 子句间并列连词：两侧各 ≥ 2 个字（词内的「参与 / 涉及 / 和平」不算）。 */
+const COMPOUND_CONJ_RE = /(?<=[\p{L}\p{N}]{2})(?:以及|还有|另外|顺便说下|顺便问下|顺便|再问下|然后|跟|和|与|及)(?=\s*[\p{L}\p{N}]{2})/u;
+/** 子句开头的接续填充词。 */
+const COMPOUND_LEAD_FILLER_RE = /^(?:以及|还有|另外|顺便说下|顺便问下|顺便|再问下|然后|再|请|麻烦)\s*/u;
+/** 句尾共享谓语（「X 和 Y 分别是什么」的「是什么」）。 */
+const COMPOUND_TAIL_PREDICATE_RE =
+  /(?:分别|各|都|各自)?\s*((?:是|为|叫)?(?:什么|啥|多少|几|哪(?:天|年|个|一个|里|儿)?)|在哪(?:里|儿|个[^\s]{0,4})?|几(?:点|号|楼|斤|次)|(?:是|叫)什么名字|叫什么)\s*[？?。！!]*$/u;
+/** 子句是否自带问法（有则不再分配共享谓语）。 */
+const COMPOUND_HAS_ASK_RE = /什么|啥|多少|哪|几|吗|呢|告诉我|说一下|念|忘了|想不起|记不得/u;
+/** 分类 / 有效性判定时剥掉的功能词。 */
+const COMPOUND_FUNCTION_WORD_RE =
+  /(?:分别|各自|各|都|我的|我|的|吗|呢|请|一下|顺便|另外|以及|还有|再|它|对应的|第\s*[\d一二三四五六七八九十]+\s*(?:个|条|组|串|位)?|另一(?:个|条|组|串)?|其余|剩下|后面|前面|上面|那(?:个|条|串|组)?|这(?:个|条|串|组)?)/gu;
+
+export interface CompoundSplit {
+  /** 凭据取值 / 预言机形态的子句（进闸门，不进生成）。 */
+  guarded: string[];
+  /** 普通子句（照常生成；候选剔除全部受守 / 敏感卡）。 */
+  plain: string[];
+}
+
+/**
+ * R337：把「普通事实 + 凭据取值」的复合问句确定性地拆成子句并逐句分类。纯字符串操作，无 LLM、无随机。
+ * 返回 null ⇒ 不拆（无并列 / 全普通 / 全凭据 / 逐位形态 / 带候选值 / 是非问 / 子句无实词 / 超过 3 段），
+ * 调用方行为与现状逐字相同。凭据子句判定复用 isSecretValueQuestion / isOracleProbeQuestion（含历史借称谓）。
+ */
+export function splitCompoundQuestion(question: string, historyText = ""): CompoundSplit | null {
+  const q = question.normalize("NFKC").trim();
+  if (!q || COMPOUND_NO_SPLIT_RE.test(q)) return null;
+  // 候选值 / 是非问形态：候选值里的标点与连词不参与切分，整句仍走预言机（R320 B1 / O02）。
+  if (questionCarriesOpaqueToken(q) || isYesNoQuestion(q)) return null;
+  const pieces = q
+    .split(COMPOUND_PUNCT_RE)
+    .flatMap((p) => p.split(COMPOUND_CONJ_RE))
+    .map((p) => p.replace(COMPOUND_LEAD_FILLER_RE, "").trim())
+    .filter((p) => p.length > 0);
+  if (pieces.length < 2 || pieces.length > 3) return null;
+  const tail = COMPOUND_TAIL_PREDICATE_RE.exec(pieces[pieces.length - 1]);
+  const sharedPredicate = tail ? tail[1] : null;
+  // 拆开后每个子句只有一个主语：并列副词「分别 / 各 / 都」随共享谓语一并剥掉（「密码分别是什么」→「密码是什么」）。
+  const parts = pieces.map((p) => {
+    if (COMPOUND_HAS_ASK_RE.test(p)) return sharedPredicate ? p.replace(COMPOUND_TAIL_PREDICATE_RE, (_m, pred: string) => pred) : p;
+    return sharedPredicate ? `${p}${sharedPredicate}` : p;
+  });
+  // 每个子句剥掉问法与功能词后须仍有 ≥ 2 个实词字符（「我 / 第二个呢」一类残片 ⇒ 不拆，整句按现状处理）。
+  for (const p of parts) {
+    const core = p
+      .replace(VALUE_ASK_RE, " ")
+      .replace(COMPOUND_TAIL_PREDICATE_RE, " ")
+      .replace(COMPOUND_FUNCTION_WORD_RE, " ")
+      .replace(/[\s\p{P}]+/gu, "");
+    if (core.length < 2) return null;
+  }
+  // 分类用问句：没有共享谓语时补默认「是什么」——「体检报告系统的登录密码」这类无谓语子句按取值问判（fail-closed）。
+  const classifyQ = (p: string) => (COMPOUND_HAS_ASK_RE.test(p) ? p : `${p}是什么`);
+  const guarded: string[] = [];
+  const plain: string[] = [];
+  for (const p of parts) {
+    const cq = classifyQ(p);
+    const isGuarded = isSecretValueQuestion(cq, historyText) || isOracleProbeQuestion(cq, { anchored: true });
+    (isGuarded ? guarded : plain).push(p);
+  }
+  if (guarded.length === 0 || plain.length === 0) return null;
+  return { guarded, plain };
+}
 const SECRET_LABEL_ALL_RE = new RegExp(SECRET_LABEL_RE.source, "giu");
 /**
  * 取值 / 预言机闸门的引用归因（R324 E1，audit-r323 U2「跳板机→财务」错引）：问题主题词剥掉凭证称谓词
