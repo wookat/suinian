@@ -9,8 +9,9 @@ import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Segmented } from "@/components/ui/segmented"
 import { parseServerTime } from "@/lib/utils"
-import { getReports, getReport, generateReport } from "@/lib/api"
+import { getReports, getReport, generateReport, NetworkError } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 import type { ReportPeriod, WeeklyReport } from "@/lib/types"
 
 function weekLabel(weekStart: string): string {
@@ -91,10 +92,12 @@ export function ReportsPage() {
   const [reports, setReports] = useState<WeeklyReport[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [unreachable, setUnreachable] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selected, setSelected] = useState<WeeklyReport | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [detailAttempt, setDetailAttempt] = useState(0)
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
   const [generateNotice, setGenerateNotice] = useState<string | null>(null)
@@ -104,11 +107,13 @@ export function ReportsPage() {
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setUnreachable(false)
     try {
       const res = await getReports()
       setReports(res.reports)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      setUnreachable(e instanceof NetworkError)
     } finally {
       setLoading(false)
     }
@@ -117,6 +122,8 @@ export function ReportsPage() {
   useEffect(() => {
     void load()
   }, [load, settingsVersion])
+
+  useRetryOnReconnect(!loading && error !== null && unreachable, load)
 
   async function handleGenerate() {
     if (generating) return
@@ -192,7 +199,7 @@ export function ReportsPage() {
     return () => {
       cancelled = true
     }
-  }, [selectedId])
+  }, [selectedId, detailAttempt])
 
   if (selectedId)
     return (
@@ -205,6 +212,9 @@ export function ReportsPage() {
         ) : detailError ? (
           <Card className="flex flex-col items-center gap-3 p-8 text-center">
             <p className="text-sm text-destructive">{detailError}</p>
+            <Button size="sm" variant="outline" onClick={() => setDetailAttempt((n) => n + 1)}>
+              <RefreshCw className="size-3.5" /> 重试
+            </Button>
           </Card>
         ) : (
           selected && (
@@ -250,7 +260,10 @@ export function ReportsPage() {
   if (error)
     return (
       <Card className="flex flex-col items-center gap-3 p-8 text-center">
-        <p className="text-sm text-destructive">{error}</p>
+        <p className="text-sm text-destructive">
+          {error}
+          {unreachable ? "（会自动重试）" : ""}
+        </p>
         <Button size="sm" variant="outline" onClick={() => void load()}>
           <RefreshCw className="size-3.5" /> 重试
         </Button>
