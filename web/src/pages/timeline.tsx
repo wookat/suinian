@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AnimatePresence, m } from "motion/react"
 import { toast as sonnerToast } from "@/lib/toast"
 import {
@@ -42,12 +42,17 @@ import type { BatchFilter } from "@/lib/api"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
 import { PENDING_UNDO_KEY } from "@/lib/pending-undo"
+import { ChunkBoundary } from "@/components/chunk-boundary"
+import { lazyRetry } from "@/lib/lazy-retry"
 import { FirstRunTour } from "@/components/first-run-tour"
 import { cn, parseServerTime } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch, PrevCategory } from "@/lib/types"
 
 // ask mode is opt-in: keep its chat UI out of the first-paint bundle
-const AskChat = lazy(() => import("@/components/ask-chat").then((m) => ({ default: m.AskChat })))
+const AskChat = lazyRetry(
+  () => import("@/components/ask-chat"),
+  (m) => m.AskChat,
+)
 
 const CATEGORY_OPTIONS: { value: NoteCategory; label: string }[] = [
   { value: "idea", label: "想法" },
@@ -1135,24 +1140,40 @@ export function TimelinePage() {
       )}
 
       {askMode && (
-        <Suspense
-          // 问答面板是懒加载分包：慢网/请求在途时 fallback 为空会让点击「问答」
-          // 毫无反馈（R228 P3-5），先给一个可见的加载占位
-          fallback={
-            <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground" role="status">
-              问答面板加载中…
+        <ChunkBoundary
+          fallback={({ chunk }) => (
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-4 text-sm" role="alert">
+              <span className="text-muted-foreground">
+                {chunk ? "问答面板的代码没能下载完成（多半是网络中断），联网后重新加载即可" : "问答面板出错了"}
+              </span>
+              <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+                重新加载
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setAskMode(false)}>
+                关闭
+              </Button>
             </div>
-          }
+          )}
         >
-          <AskChat
-            onTagClick={setTag}
-            initialQuestion={askPrefill}
-            onInitialQuestionConsumed={() => setAskPrefill(null)}
-            initialInput={askInputPrefill}
-            onInitialInputConsumed={() => setAskInputPrefill(null)}
-            onClose={() => setAskMode(false)}
-          />
-        </Suspense>
+          <Suspense
+            // 问答面板是懒加载分包：慢网/请求在途时 fallback 为空会让点击「问答」
+            // 毫无反馈（R228 P3-5），先给一个可见的加载占位
+            fallback={
+              <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground" role="status">
+                问答面板加载中…
+              </div>
+            }
+          >
+            <AskChat
+              onTagClick={setTag}
+              initialQuestion={askPrefill}
+              onInitialQuestionConsumed={() => setAskPrefill(null)}
+              initialInput={askInputPrefill}
+              onInitialInputConsumed={() => setAskInputPrefill(null)}
+              onClose={() => setAskMode(false)}
+            />
+          </Suspense>
+        </ChunkBoundary>
       )}
 
       <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1 [scrollbar-width:none]">
