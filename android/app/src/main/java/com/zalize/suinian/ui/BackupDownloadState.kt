@@ -22,25 +22,8 @@ const val BACKUP_DOWNLOAD_CANCELLED = "已取消下载，未保存任何文件"
 
 /** 完成后的一行说明：实话说文件在哪——旧系统的应用私有目录在文件管理器里不叫「下载」 */
 fun backupDoneLabel(state: BackupDownloadState.Done): String =
-    if (state.inAppDir) "已保存到本应用目录 Android/data/com.zalize.suinian/files/Download/${state.fileName}，可点「分享」发到新设备或网盘"
-    else "已保存到系统下载：${state.fileName}"
-
-/**
- * 同名文件已存在时按系统 MediaStore 同规则改名：foo.zip → foo (1).zip → foo (2).zip…，绝不覆盖上一份备份。
- * exists 由调用方给（文件系统 / 测试桩）
- */
-fun uniqueDownloadName(name: String, exists: (String) -> Boolean): String {
-    if (!exists(name)) return name
-    val dot = name.lastIndexOf('.')
-    val base = if (dot > 0) name.substring(0, dot) else name
-    val ext = if (dot > 0) name.substring(dot) else ""
-    var i = 1
-    while (true) {
-        val candidate = "$base ($i)$ext"
-        if (!exists(candidate)) return candidate
-        i++
-    }
-}
+    if (state.inAppDir) "${savedToLabel(state.fileName, inAppDir = true)}，可点「分享」发到新设备或网盘"
+    else savedToLabel(state.fileName, inAppDir = false)
 
 /** 进度条下方的一行说明 */
 fun backupDownloadLabel(state: BackupDownloadState.Running): String =
