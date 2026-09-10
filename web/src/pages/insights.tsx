@@ -304,6 +304,7 @@ export function InsightsPage() {
   const [unreachable, setUnreachable] = useState(false)
   const [randomNote, setRandomNote] = useState<Note | null>(null)
   const [randomEmpty, setRandomEmpty] = useState(false)
+  const [randomError, setRandomError] = useState<string | null>(null)
   const [drawing, setDrawing] = useState(false)
   // 自定义洞察范围（时间×标签，借鉴 flomo）；默认全部
   const [scopeDays, setScopeDays] = useState(0)
@@ -343,12 +344,15 @@ export function InsightsPage() {
 
   const draw = useCallback(async () => {
     setDrawing(true)
+    setRandomError(null)
     try {
       const note = await getRandomNote()
       setRandomNote(note)
       setRandomEmpty(note === null)
-    } catch {
-      setRandomEmpty(true)
+    } catch (e) {
+      // 抽不到（404）才是“没有可回看的笔记”；连不上 / 服务端错误要如实告知，不能冒充空态
+      const msg = e instanceof Error ? e.message : String(e)
+      setRandomError(e instanceof NetworkError ? msg : `抽取失败：${msg}`)
     } finally {
       setDrawing(false)
     }
@@ -485,9 +489,14 @@ export function InsightsPage() {
           </h2>
           <Button size="sm" variant={randomNote ? "outline" : "default"} disabled={drawing} onClick={() => void draw()}>
             {drawing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            {randomNote ? "再抽一条" : "抽一条旧笔记"}
+            {randomError && !randomNote ? "重试" : randomNote ? "再抽一条" : "抽一条旧笔记"}
           </Button>
         </div>
+        {randomError && (
+          <p role="alert" className="text-sm text-destructive">
+            {randomError}
+          </p>
+        )}
         {randomNote ? (
           <NoteCard
             note={randomNote}
@@ -495,7 +504,7 @@ export function InsightsPage() {
               window.location.hash = `#/?tag=${encodeURIComponent(tag)}`
             }}
           />
-        ) : (
+        ) : randomError ? null : (
           <p className="text-sm text-muted-foreground">
             {randomEmpty
               ? "暂无可回看的笔记（敏感与示例笔记不参与随机漫步）"
