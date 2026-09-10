@@ -762,10 +762,42 @@ export async function exportData(
   return { blob, filename: `suinian-export-${date}.${format === "markdown" ? "md" : "json"}` }
 }
 
-/** 大文件传输进度：total 为 null 表示服务端流式输出、总长未知（只能显示已接收字节） */
+/**
+ * 大文件传输进度：total 为精确总长（Content-Length），null 表示服务端流式输出、总长未知；
+ * estimate 为服务端预估总长（X-Suinian-Backup-Estimate），只用于显示「约 n%」——
+ * 原件缺失被跳过时实际会少于预估、size 未知时可能超出，不得据此判断下载是否完整。
+ */
 export interface TransferProgress {
   received: number
   total: number | null
+  estimate: number | null
+}
+
+export const BACKUP_ESTIMATE_HEADER = "X-Suinian-Backup-Estimate"
+
+function positiveHeaderInt(res: Response, name: string): number | null {
+  const raw = res.headers.get(name)
+  if (raw === null || !/^\d+$/.test(raw.trim())) return null
+  const n = Number(raw)
+  return Number.isSafeInteger(n) && n > 0 ? n : null
+}
+
+/** 进度百分比：精确总长按实际；预估总长封顶 99（收完才算 100），已超出预估返回 null（只显示已接收字节） */
+export function transferPercent(p: TransferProgress): { value: number; approx: boolean } | null {
+  if (p.total) return { value: Math.min(100, Math.round((p.received / p.total) * 100)), approx: false }
+  if (p.estimate) {
+    if (p.received > p.estimate) return null
+    return { value: Math.min(99, Math.floor((p.received / p.estimate) * 100)), approx: true }
+  }
+  return null
+}
+
+export function transferLabel(p: TransferProgress): string {
+  const pct = transferPercent(p)
+  if (pct && p.total) return `下载中 ${formatMB(p.received)} / ${formatMB(p.total)}（${pct.value}%）`
+  if (pct && p.estimate) return `下载中 ${formatMB(p.received)} / 约 ${formatMB(p.estimate)}（约 ${pct.value}%）`
+  if (p.estimate) return `下载中，已接收 ${formatMB(p.received)}（预估约 ${formatMB(p.estimate)}）`
+  return `下载中，已接收 ${formatMB(p.received)}`
 }
 
 export class TransferCancelledError extends Error {
@@ -802,11 +834,11 @@ export async function downloadBackup(
     throw new NetworkError("网络连接失败，请检查网络或 API 地址")
   }
   if (!res.ok) throw await blobFetchError(res)
-  const lenHeader = Number(res.headers.get("Content-Length"))
-  const total = Number.isFinite(lenHeader) && lenHeader > 0 ? lenHeader : null
+  const total = positiveHeaderInt(res, "Content-Length")
+  const estimate = total ? null : positiveHeaderInt(res, BACKUP_ESTIMATE_HEADER)
   const chunks: Uint8Array[] = []
   let received = 0
-  onProgress?.({ received, total })
+  onProgress?.({ received, total, estimate })
   const reader = res.body?.getReader()
   if (!reader) {
     try {
@@ -823,7 +855,7 @@ export async function downloadBackup(
       if (value) {
         chunks.push(value)
         received += value.byteLength
-        onProgress?.({ received, total })
+        onProgress?.({ received, total, estimate })
       }
     }
   } catch {
