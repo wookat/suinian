@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
-import { triageNote, triageNoteDetailed, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE, neutralizePromptInjection, scrubModelOutputInjectionArtifacts } from "./triage";
+import { triageNote, triageNoteDetailed, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, tzOffsetString, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE, neutralizePromptInjection, scrubModelOutputInjectionArtifacts } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta, fallbackTitleFromUrl } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import {
@@ -2403,7 +2403,10 @@ app.patch("/api/notes/:id", async (c) => {
   if (typeof patch.is_sensitive === "boolean") override.is_sensitive = true;
   if (typeof body.todo_due === "string" || body.todo_due === null) {
     extraSets.push("todo_due = ?");
-    extraBinds.push(normalizeTodoDue(body.todo_due));
+    // 裸时刻（无偏移，Android 编辑页手输「2026-08-10 18:00」）按用户时区解释，与分拣输出同口径
+    const tzOffset =
+      typeof body.todo_due === "string" ? tzOffsetString(new Date(), await loadUserTz(c.env, userId)) : undefined;
+    extraBinds.push(normalizeTodoDue(body.todo_due, tzOffset));
     override.todo_due = true;
   }
   // 用户改过正文＝完成人工核对，转写/识别存疑提示随之清除（R212 P2-1/P3-3）；
