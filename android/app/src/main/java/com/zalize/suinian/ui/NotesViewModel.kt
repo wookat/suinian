@@ -23,6 +23,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -104,6 +106,13 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
         loadReview()
         loadTags()
+        // 启动 / 登录 / 换地址 / 关 Mock 后把设备时区同步到服务端偏好（Repository 内去重、失败静默）
+        viewModelScope.launch {
+            settingsRepo.settings
+                .map { Triple(it.token, it.baseUrl, it.mockMode) }
+                .distinctUntilChanged()
+                .collect { repo.syncTimezone() }
+        }
     }
 
     /** 筛选用标签列表：锦上添花，失败静默隐藏 */
