@@ -350,6 +350,21 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
     }
 
+    /** POST /api/notes/:id/retry-media：用 R2 存档原件原地重跑转写 / 识别 / 提取，返回更新后的笔记（无需重传） */
+    suspend fun retryMedia(id: String): Note? = withContext(Dispatchers.IO) {
+        val body = "{}".toRequestBody(jsonMedia)
+        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS).build()
+        val resp = try {
+            client60.newCall(request("/api/notes/$id/retry-media").post(body).build()).awaitResponse()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use {
+            if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
+            parseNoteLenient(it.body?.string().orEmpty())
+        }
+    }
+
     /** GET /api/notes/:id/file：下载原件字节（附件不超 10MB，直接读入内存） */
     suspend fun downloadNoteFile(id: String): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
         val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS).build()

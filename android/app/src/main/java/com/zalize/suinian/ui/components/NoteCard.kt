@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.MoreVert
@@ -214,6 +215,9 @@ fun NoteCard(
     sensitivePending: Boolean = false,
     onRetryLink: ((Note) -> Unit)? = null,
     retryingLink: Boolean = false,
+    /** 语音 / 图片 / 文件提取失败或存疑时的原地重试（POST retry-media） */
+    onRetryMedia: ((Note) -> Unit)? = null,
+    retryingMedia: Boolean = false,
     onDownloadFile: ((Note) -> Unit)? = null,
     onEdit: ((Note) -> Unit)? = null,
     selectable: Boolean = false,
@@ -661,14 +665,6 @@ fun NoteCard(
                                 }
                             }
                         }
-                        if (fileMeta.fileStatus == "extract_failed") {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "文本提取失败，已存档原件",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
                         val excerpt = fileMeta.fileExcerpt?.takeIf { it.isNotBlank() }
                         if (excerpt != null) {
                             var fileExcerptOpen by rememberSaveable(note.id) { mutableStateOf(false) }
@@ -706,6 +702,16 @@ fun NoteCard(
                 if (audioAtt != null && fetchMediaFile != null) {
                     Spacer(Modifier.height(8.dp))
                     NoteAudioAttachment(note.id, audioAtt, fetchMediaFile)
+                }
+                val mediaStatus = mediaStatusLine(note)
+                if (mediaStatus != null) {
+                    Spacer(Modifier.height(4.dp))
+                    MediaStatusRow(
+                        status = mediaStatus,
+                        retrying = retryingMedia,
+                        onRetry = onRetryMedia?.let { cb -> { cb(note) } },
+                        onEdit = if (!mediaStatus.failed) onEdit?.let { cb -> { cb(note) } } else null,
+                    )
                 }
             }
 
@@ -794,4 +800,70 @@ fun CategoryBadge(category: String?) {
             .background(MaterialTheme.colorScheme.primaryContainer)
             .padding(horizontal = 6.dp, vertical = 2.dp),
     )
+}
+
+/** 原件提取失败 / 存疑状态行：文案 + 「原地重试」（存疑另给「纠错」进编辑页），对齐 web 卡片 */
+@Composable
+private fun MediaStatusRow(
+    status: MediaStatusLine,
+    retrying: Boolean,
+    onRetry: (() -> Unit)?,
+    onEdit: (() -> Unit)?,
+) {
+    val color = if (status.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Icon(
+            Icons.Outlined.Info,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(14.dp),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            status.text,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            modifier = Modifier.weight(1f),
+        )
+        if (onEdit != null) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClick = onEdit)
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.Edit,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(2.dp))
+                Text("纠错", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+        if (onRetry != null) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(enabled = !retrying, onClick = onRetry)
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.Refresh,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(2.dp))
+                Text(
+                    if (retrying) "重试中…" else "原地重试",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
 }
