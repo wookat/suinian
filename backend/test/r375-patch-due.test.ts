@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { app } from "../src/index";
+import { normalizeTodoDue } from "../src/triage";
 import type { Env } from "../src/types";
 
 type Row = Record<string, unknown>;
@@ -132,5 +133,15 @@ describe("PATCH todo_due: unparseable non-empty strings are rejected, not silent
 
   it("surrounding whitespace around a valid value is tolerated", async () => {
     expect(await patchDue(null, " 2026-09-12 18:00 ")).toBe("2026-09-12T18:00:00+08:00");
+  });
+});
+
+describe("normalizeTodoDue strict mode", () => {
+  it("rejects trailing garbage that the lenient parser would truncate", () => {
+    expect(normalizeTodoDue("2026-09-12 6pm")).toBe("2026-09-12");
+    expect(normalizeTodoDue("2026-09-12 6pm", "+08:00", true)).toBeNull();
+    expect(normalizeTodoDue("2026-09-12 18:00", "+08:00", true)).toBe("2026-09-12T18:00:00+08:00");
+    expect(normalizeTodoDue(" 2026-09-12T18:00:00Z ", "+08:00", true)).toBe("2026-09-12T18:00:00+00:00");
+    expect(normalizeTodoDue("2026-09-12", "+08:00", true)).toBe("2026-09-12");
   });
 });

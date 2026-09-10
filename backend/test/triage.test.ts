@@ -92,14 +92,6 @@ describe("normalizeTodoDue", () => {
     expect(normalizeTodoDue("2026-08-07T15:30:00-05:00")).toBe("2026-08-07T15:30:00-05:00");
   });
 
-  it("strict mode rejects trailing garbage that the lenient parser would truncate", () => {
-    expect(normalizeTodoDue("2026-09-12 6pm")).toBe("2026-09-12");
-    expect(normalizeTodoDue("2026-09-12 6pm", "+08:00", true)).toBeNull();
-    expect(normalizeTodoDue("2026-09-12 18:00", "+08:00", true)).toBe("2026-09-12T18:00:00+08:00");
-    expect(normalizeTodoDue(" 2026-09-12T18:00:00Z ", "+08:00", true)).toBe("2026-09-12T18:00:00+00:00");
-    expect(normalizeTodoDue("2026-09-12", "+08:00", true)).toBe("2026-09-12");
-  });
-
   it("keeps date-only values as YYYY-MM-DD", () => {
     expect(normalizeTodoDue("2026-08-10")).toBe("2026-08-10");
   });
