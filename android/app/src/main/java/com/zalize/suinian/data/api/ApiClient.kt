@@ -48,7 +48,17 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
+
+/** 备份 zip 最大 200MB（服务端 MAX_RESTORE_BYTES），按 ~0.5MB/s 慢网估算整包传输上限 */
+internal const val BACKUP_DOWNLOAD_CALL_TIMEOUT_SECONDS = 600L
+/** 恢复 = 上传整包 + 服务端逐条导入并归档媒体，比下载多一段服务端处理时间 */
+internal const val BACKUP_RESTORE_CALL_TIMEOUT_SECONDS = 900L
+internal const val BACKUP_DOWNLOAD_TIMEOUT_MESSAGE =
+    "备份下载超时：备份包较大或网络较慢，请在网络较好时重试"
+internal const val BACKUP_RESTORE_TIMEOUT_MESSAGE =
+    "恢复超时：备份包较大或网络较慢，服务端可能仍在导入，请稍后刷新列表确认；重新上传同一备份会自动跳过已导入的笔记"
 
 /** 面向用户的可读错误（网络/解析/HTTP 统一人话文案） */
 class ApiException(message: String, cause: Throwable? = null) : Exception(message, cause)
@@ -66,6 +76,22 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         // 首启冷启动碰上 DNS 挂死会让首页骨架屏无限停留而非报错重试
         .callTimeout(30, TimeUnit.SECONDS)
         .build()
+
+    // 备份下载 / 恢复上传是整包传输（≤200MB），总耗时随包体与网速线性增长：readTimeout 只管单次读的空闲，
+    // callTimeout 才是整次调用的上限，newBuilder() 会继承基础 client 的 30s，必须一起放宽
+    internal val backupDownloadClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(120, TimeUnit.SECONDS)
+            .callTimeout(BACKUP_DOWNLOAD_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .build()
+    }
+    internal val backupRestoreClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(300, TimeUnit.SECONDS)
+            .writeTimeout(300, TimeUnit.SECONDS)
+            .callTimeout(BACKUP_RESTORE_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .build()
+    }
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -546,7 +572,6 @@ class ApiClient(private val baseUrl: String, private val token: String) {
 
     /** GET /api/backup：全量备份 zip（笔记全字段 + 线索/周报 + 媒体原件），返回字节与文件名。敏感笔记默认脱敏，includeSensitive=true 时含明文 */
     suspend fun downloadBackup(includeSensitive: Boolean = false, password: String? = null): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
-        val client120 = client.newBuilder().readTimeout(120, TimeUnit.SECONDS).build()
         val path = if (includeSensitive) "/api/backup?include_sensitive=true" else "/api/backup"
         val builder = request(path).get()
         // 敏感明文导出需密码复核；URLEncoder 编码以通过 HTTP 头 ASCII 限制（服务端解码）
@@ -555,13 +580,21 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             builder.header("X-Suinian-Password", java.net.URLEncoder.encode(password, "UTF-8").replace("+", "%20"))
         }
         val resp = try {
-            client120.newCall(builder.build()).execute()
+            backupDownloadClient.newCall(builder.build()).execute()
+        } catch (e: InterruptedIOException) {
+            throw ApiException(BACKUP_DOWNLOAD_TIMEOUT_MESSAGE, e)
         } catch (e: IOException) {
             throw ApiException("网络连接失败，请检查网络后重试", e)
         }
         resp.use {
             if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
-            val bytes = it.body?.bytes() ?: throw ApiException("备份下载失败：内容为空")
+            val bytes = try {
+                it.body?.bytes()
+            } catch (e: InterruptedIOException) {
+                throw ApiException(BACKUP_DOWNLOAD_TIMEOUT_MESSAGE, e)
+            } catch (e: IOException) {
+                throw ApiException("备份下载中断，请检查网络后重试", e)
+            } ?: throw ApiException("备份下载失败：内容为空")
             val disposition = it.header("Content-Disposition").orEmpty()
             val fileName = Regex("filename=\"?([^\";]+)\"?").find(disposition)?.groupValues?.get(1)
                 ?: "suinian-backup.zip"
@@ -575,17 +608,21 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             .setType(MultipartBody.FORM)
             .addFormDataPart("file", fileName, bytes.toRequestBody("application/zip".toMediaType()))
             .build()
-        val client300 = client.newBuilder()
-            .readTimeout(300, TimeUnit.SECONDS)
-            .writeTimeout(300, TimeUnit.SECONDS)
-            .build()
         val resp = try {
-            client300.newCall(request("/api/backup/restore").post(body).build()).execute()
+            backupRestoreClient.newCall(request("/api/backup/restore").post(body).build()).execute()
+        } catch (e: InterruptedIOException) {
+            throw ApiException(BACKUP_RESTORE_TIMEOUT_MESSAGE, e)
         } catch (e: IOException) {
             throw ApiException("网络连接失败，请检查网络后重试", e)
         }
         resp.use {
-            val text = it.body?.string().orEmpty()
+            val text = try {
+                it.body?.string().orEmpty()
+            } catch (e: InterruptedIOException) {
+                throw ApiException(BACKUP_RESTORE_TIMEOUT_MESSAGE, e)
+            } catch (e: IOException) {
+                throw ApiException("恢复结果读取中断：服务端可能已完成导入，请刷新列表确认；重新上传同一备份会自动跳过已导入的笔记", e)
+            }
             if (!it.isSuccessful) throw httpError(it.code, text)
             try {
                 json.decodeFromString(RestoreStats.serializer(), text)
