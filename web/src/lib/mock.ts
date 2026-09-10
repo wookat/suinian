@@ -305,27 +305,60 @@ export async function mockPatchNote(
   return notes[idx]
 }
 
+/** 演示问答的问句框架词：去掉后剩下的才是话题词（「我最近在想什么」→ 空 → 走「最近想法」意图） */
+const ASK_FRAME_RE =
+  /我|你|的|了|吗|呢|啊|是|在|有|过|把|被|和|与|或|关于|对于|最近|近期|之前|上次|那个|哪些|哪个|哪|什么|怎么|怎样|如何|为什么|多少|几|记|想|看法|想法|点子|要点|内容|东西|一下|一次|曾经|以前|现在|目前/g
+
+function askTopicGrams(question: string): string[] {
+  const stripped = question.toLowerCase().replace(ASK_FRAME_RE, " ")
+  const grams = new Set<string>()
+  for (const seg of stripped.split(/[^\p{L}\p{N}]+/u).filter(Boolean)) {
+    if (/^[\p{Script=Han}]+$/u.test(seg)) {
+      if (seg.length === 1) grams.add(seg)
+      for (let i = 0; i + 2 <= seg.length; i++) grams.add(seg.slice(i, i + 2))
+    } else if (seg.length >= 2) {
+      grams.add(seg)
+    }
+  }
+  return [...grams]
+}
+
+function askExcerpt(n: Note): string {
+  if (n.is_sensitive) return "（敏感卡片，原文只在你点开时显示）"
+  const head = n.url_title ?? (n.title && n.title !== n.content ? n.title : null)
+  const main = n.url_title ? (n.url_summary ?? "") : n.content
+  const text = (head ? `${head}${main ? `：${main}` : ""}` : main).replace(/\s+/g, " ")
+  return text.length > 60 ? `${text.slice(0, 60)}…` : text
+}
+
 export async function mockAsk(question: string): Promise<AskResponse> {
   await delay(700)
   const notes = loadMockNotes()
-  const words = question
-    .toLowerCase()
-    .split(/[\s,，。？?!]+/)
-    .filter((w) => w.length >= 2)
+  const grams = askTopicGrams(question)
   const scored = notes
     .map((n) => {
-      const text = `${n.content} ${n.url_title ?? ""} ${n.tags.join(" ")}`.toLowerCase()
-      const score = words.reduce((s, w) => s + (text.includes(w) ? 1 : 0), 0)
+      const text = `${n.title ?? ""} ${n.content} ${n.url_title ?? ""} ${n.tags.join(" ")}`.toLowerCase()
+      const score = grams.reduce((s, g) => s + (text.includes(g) ? 1 : 0), 0)
       return { n, score }
     })
     .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || b.n.created_at.localeCompare(a.n.created_at))
     .slice(0, 3)
-  const hits = scored.map((x) => x.n)
-  const answer =
-    hits.length > 0
-      ? `（Mock 回答）根据你的笔记，与「${question}」相关的记录有 ${hits.length} 条。其中最相关的一条提到：「${hits[0].content.slice(0, 60)}…」。连接真实后端后，这里会由 DeepSeek 结合检索结果生成完整回答。`
-      : `（Mock 回答）没有在你的笔记里找到与「${question}」直接相关的内容。连接真实后端后会使用向量召回获得更好的效果。`
+  let hits = scored.map((x) => x.n)
+  let lead: string
+  if (hits.length > 0) {
+    lead = `根据你的笔记，与「${question}」最相关的有 ${hits.length} 条：`
+  } else if (grams.length === 0 || /最近|近期|想什么|在想/.test(question)) {
+    hits = notes
+      .filter((n) => n.category === "idea")
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .slice(0, 3)
+    lead = hits.length > 0 ? `你最近记下的想法有 ${hits.length} 条：` : "你还没有记下想法类的碎念。"
+  } else {
+    lead = `没有在你的笔记里找到与「${question}」直接相关的内容。演示模式只做关键词匹配；连接真实后端后会用语义召回，并由 AI 结合笔记生成回答。`
+  }
+  const body = hits.map((n, i) => `${askExcerpt(n)} [${i + 1}]`).join("；")
+  const answer = `（演示回答）${lead}${body}${hits.length > 0 ? "。连接真实后端后，这里会由 AI 结合检索结果生成完整回答。" : ""}`
   return {
     answer,
     references: hits.map((n, i) => ({ index: i + 1, note_id: n.id })),
