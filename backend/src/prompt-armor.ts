@@ -4172,7 +4172,7 @@ export function nonpublicHost(endpoint: string): boolean {
  * 严判据命中优先返回 "strict"，出口据此决定警示强度。
  */
 export function broadFoldReason(content: string | null | undefined): BroadFoldReason | null {
-  const text = content ?? "";
+  const text = foldHanVariants(content ?? "");
   if (!text.trim()) return null;
   try {
     if (noteContainsExecutableCommand(text)) return "strict";
@@ -8264,7 +8264,7 @@ function guardedValueCandidates(units: string[]): Array<{ value: string; kind: D
   for (const u of units) {
     for (const g of directGuardLines(u)) {
       if (!g.own) continue;
-      const n = g.line.normalize("NFKC");
+      const n = foldHanVariants(g.line.normalize("NFKC"));
       const push = (v: string): void => {
         const t = v.trim();
         // 纯汉字取值（「木石田」）三字已足够特征；ASCII / 数字仍要 4 位。
@@ -8577,7 +8577,7 @@ function sourceMixedTokens(line: string, minFlips: number): string[] {
  * URL query 取值，答案里原样出现即记号级占位；纯散文重合维持同屏豁免。
  */
 export function directUnitValueTokens(unit: string): string[] {
-  const n = unit.normalize("NFKC");
+  const n = foldHanVariants(unit.normalize("NFKC"));
   const out = new Set<string>();
   // 纯数字取值不做记号级占位：数字串的算式 / 拆位 / 汉字数字转写形态由归一化比对整答 fail-closed（R322 A），
   // 先换掉记号会让后面的归一化比对失去比对面（「315000+900+26」）。
@@ -8852,7 +8852,7 @@ function residencyAssignment(line: string): ResidencyAssignment | null {
 
 /** 单元的驻留触发：任一行的凭据称谓处于赋值位、任一行是「账户服务名: 值」、或 Markdown 表头带称谓。只提到「密码」的散文（防骗忠告 / 密码策略）不触发。 */
 export function residencyTriggered(unit: string): boolean {
-  const n = unit.normalize("NFKC");
+  const n = foldHanVariants(unit.normalize("NFKC"));
   const lines = n.replace(URL_RUN_RE, " ").split("\n");
   if (lines.some((l) => residencyAssignment(l) !== null)) return true;
   if (lines.some((l) => residencyServiceKeyValue(l) !== null)) return true;
@@ -9067,7 +9067,9 @@ export interface SourceValueCandidate {
   parts?: readonly string[];
 }
 
-export function sourceValueCandidates(units: readonly string[], question?: string): SourceValueCandidate[] {
+export function sourceValueCandidates(rawUnits: readonly string[], question?: string): SourceValueCandidate[] {
+  // R349：取值形态在折简副本上识别；候选只进归一化比对（两侧都折）与拉丁记号提取（折叠不碰拉丁），不回写任何出口。
+  const units = rawUnits.map((u) => foldHanVariants(u));
   const out: SourceValueCandidate[] = [];
   const push = (v: string, kind: DirectGuardKind, minLen = 4, parts?: readonly string[]): void => {
     // R332 P0-1(b)：候选存 NFKC 形态（「４９０６」→「4906」），记号级替换与 parts 比对都拿半角值。
@@ -9533,7 +9535,8 @@ function identifierOnlyOpaqueLine(line: string): boolean {
  */
 function opaqueTokenSpans(answer: string, source?: string): Array<{ start: number; end: number; token: string }> {
   const out: Array<{ start: number; end: number; token: string }> = [];
-  const nfkc = answer.normalize("NFKC");
+  // R349：标签面在折简副本上判（一对一、长度不变，下标仍对应原答案）；记号本身是拉丁 / 数字，折叠不碰。
+  const nfkc = foldHanVariants(answer.normalize("NFKC"));
   if (nfkc.length !== answer.length) {
     if (lineCarriesOpaqueToken(answer)) out.push({ start: 0, end: answer.length, token: "" });
     return out;
@@ -9545,7 +9548,7 @@ function opaqueTokenSpans(answer: string, source?: string): Array<{ start: numbe
   // 同口径（R336 §2.3）：善意单元里紧跟日常识别符标签（订单号 / 运单 / 车牌 / 会议号…）的记号（`HT20260912A8`）也不是取值回显。
   const benignUrlTokens = new Set<string>();
   if (source && directGuardLines(source).length === 0) {
-    const srcN = source.normalize("NFKC");
+    const srcN = foldHanVariants(source.normalize("NFKC"));
     for (const u of srcN.match(URL_RUN_RE) ?? [])
       for (const seg of u.split(/[/?#&=.:]+/)) if (seg.length >= 5) benignUrlTokens.add(seg.toLowerCase());
     for (const line of srcN.split("\n")) {
@@ -9566,7 +9569,7 @@ function opaqueTokenSpans(answer: string, source?: string): Array<{ start: numbe
     const ends = delims.map((d) => nfkc.indexOf(d, i)).filter((x) => x !== -1);
     return nfkc.slice(s + 1, ends.length > 0 ? Math.min(...ends) : nfkc.length);
   };
-  const sourceLines = (source ?? "").normalize("NFKC").split(/[\n。！？；]/).filter((l) => l.trim().length > 0);
+  const sourceLines = foldHanVariants((source ?? "").normalize("NFKC")).split(/[\n。！？；]/).filter((l) => l.trim().length > 0);
   const digitsGuarded = (run: string, at: number): boolean => {
     if (!longDigitFaceGuarded(sentenceAt(at))) return false;
     const digits = run.replace(/\D/g, "");
@@ -10018,9 +10021,11 @@ export function directGuardLines(unit: string): Array<{ line: string; kind: Dire
 }
 
 function computeDirectGuardLines(unit: string): Array<{ line: string; kind: DirectGuardKind; own: boolean }> {
-  const lines = unit.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
-  const whole = guardFoldReason(unit);
-  const nfkc = unit.normalize("NFKC");
+  // R349：判定在折简副本上做（逐字一对一、行数与行内下标不变），返回的行文本仍是原文，后续按原文替换。
+  const judged = foldHanVariants(unit);
+  const rows = unit.split("\n").map((l, i) => ({ line: l.trim(), judge: judged.split("\n")[i]?.trim() ?? l.trim() })).filter((r) => r.line.length > 0);
+  const whole = guardFoldReason(judged);
+  const nfkc = judged.normalize("NFKC");
   // R322：单元里出现凭证标签 ⇒ 其他行只需取值面即受守；标签 + 拼装提示（藏头 / 拆段 / 前半后半）⇒ 整条每行都受守（own）
   // R336 §2.1：只谈论称谓概念的单元（「密钥轮换 SOP 读后感」）不算称谓驻留；有结构化取值面时 conceptualLabelFree 原样返回。
   const unitLabeled = nfkc.split("\n").some((l) => SECRET_LABEL_RE.test(conceptualLabelFree(l)));
@@ -10033,8 +10038,8 @@ function computeDirectGuardLines(unit: string): Array<{ line: string; kind: Dire
     : whole === "strict" || whole === "broad:fetch" || whole === "broad:code" ? "code"
     : "opaque";
   const out: Array<{ line: string; kind: DirectGuardKind; own: boolean }> = [];
-  for (const line of lines) {
-    const own = directGuardKindOfLine(line, { unitLabeled }) ?? (composed ? "credential" : null);
+  for (const { line, judge } of rows) {
+    const own = directGuardKindOfLine(judge, { unitLabeled }) ?? (composed ? "credential" : null);
     const kind = own ?? wholeKind;
     if (kind) out.push({ line, kind, own: own !== null });
   }
@@ -10641,8 +10646,9 @@ export function unitTalksAboutSecret(unit: string, crossGuarded?: ReadonlySet<st
 
 /** unitTalksAboutSecret 去掉受守行那一项后的称谓 / 结构 / 强形态候选面（照抄找回用：日常 code 行不算在讲秘密）。 */
 export function unitCarriesSecretLabel(unit: string, crossGuarded?: ReadonlySet<string>): boolean {
-  const lines = unit.split("\n");
-  if (crossGuarded && lines.some((l) => crossGuarded.has(l.trim()))) return true;
+  if (crossGuarded && unit.split("\n").some((l) => crossGuarded.has(l.trim()))) return true;
+  const judged = foldHanVariants(unit);
+  const lines = judged.split("\n");
   if (
     lines.some((l) => {
       const n = conceptualLabelFree(l.normalize("NFKC"));
@@ -10652,9 +10658,9 @@ export function unitCarriesSecretLabel(unit: string, crossGuarded?: ReadonlySet<
     return true;
   // R334 §4：称谓驻留（含服务名: 值 / 称谓表头）与「可上锁对象 + 短取值」载体行（C02「2947513 快递柜那个」）同为在讲秘密——
   // REST references / MCP notes[] / 出口比对 / 预言机闸门共用这一判定。
-  if (residencyTriggered(unit)) return true;
+  if (residencyTriggered(judged)) return true;
   if (lines.some((l) => isLockableCarrierLine(l) && shortCredentialLineValues(l).length > 0)) return true;
-  return sourceValueCandidates([unit]).some((c) => c.kind === "credential");
+  return sourceValueCandidates([judged]).some((c) => c.kind === "credential");
 }
 
 /**
@@ -10664,11 +10670,11 @@ export function unitCarriesSecretLabel(unit: string, crossGuarded?: ReadonlySet<
  */
 export function unitCarriesGuardedValue(unit: string, crossGuarded?: ReadonlySet<string>): boolean {
   if (directGuardLines(unit).some((g) => g.kind === "credential" || g.kind === "opaque" || g.kind === "destructive")) return true;
-  const lines = unit.split("\n");
-  if (crossGuarded && lines.some((l) => crossGuarded.has(l.trim()))) return true;
-  if (residencyTriggered(unit)) return true;
-  if (lines.some((l) => isLockableCarrierLine(l) && shortCredentialLineValues(l).length > 0)) return true;
-  return sourceValueCandidates([unit]).length > 0;
+  if (crossGuarded && unit.split("\n").some((l) => crossGuarded.has(l.trim()))) return true;
+  const judged = foldHanVariants(unit);
+  if (residencyTriggered(judged)) return true;
+  if (judged.split("\n").some((l) => isLockableCarrierLine(l) && shortCredentialLineValues(l).length > 0)) return true;
+  return sourceValueCandidates([judged]).length > 0;
 }
 
 // 预言机问句的语法词（指向 / 核对 / 属性 / 转写 / 是非 / 答案格式）与通用虚词：剥掉后剩下的就是话题词（「跳板机口令」「对象存储 secret」）。
