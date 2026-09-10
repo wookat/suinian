@@ -3460,7 +3460,8 @@ app.get("/api/notes/:id/file", async (c) => {
   // 加密对象无密钥/密钥不符时 fail-closed 拒绝吐密文
   const bytes = await loadOriginal(c.env, att.r2_key);
   if (!bytes) return c.json({ error: "attachment missing" }, 404);
-  const fileName = parseNoteMeta(note.meta)?.file_name || att.r2_key.split("/").pop() || "file";
+  const fileName =
+    parseNoteMeta(note.meta)?.file_name || (att.r2_key.split("/").pop() || "file").replace(/^\d{10,}-/, "") || "file";
   const mime = att.mime || "application/octet-stream";
   // inline rendering (R144 P1-1) only for safe media types the clients embed
   // (<img>/<audio>); everything else keeps forced download semantics
