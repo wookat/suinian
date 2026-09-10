@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { AnimatePresence, LazyMotion, m, MotionConfig } from "motion/react"
 import {
   Home,
@@ -19,6 +19,9 @@ import { PageCopyGuard } from "@/components/exec-guard"
 import { PageHeader } from "@/components/page-header"
 import { RightRail } from "@/components/right-rail"
 import { COMMAND_PALETTE_EVENT, openCommandPalette } from "@/lib/command-palette"
+import { ChunkBoundary } from "@/components/chunk-boundary"
+import { lazyRetry } from "@/lib/lazy-retry"
+import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { loadSettings, saveSettings, SETTINGS_CHANGED_EVENT } from "@/lib/settings"
@@ -26,10 +29,14 @@ import { syncTimezone } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 // non-home pages are code-split: keeps the first-paint bundle to the timeline
-const CommandPalette = lazy(() =>
-  import("@/components/command-palette").then((mod) => ({ default: mod.CommandPalette })),
+const CommandPalette = lazyRetry(
+  () => import("@/components/command-palette"),
+  (m) => m.CommandPalette,
 )
-const Toaster = lazy(() => import("@/components/ui/sonner").then((mod) => ({ default: mod.Toaster })))
+const Toaster = lazyRetry(
+  () => import("@/components/ui/sonner"),
+  (m) => m.Toaster,
+)
 // 动效特性包（motion domMax）不占首屏带宽：等 load 事件后再拉，之前 m.* 按静态元素渲染
 const loadMotionFeatures = () =>
   new Promise<void>((resolve) => {
@@ -37,13 +44,34 @@ const loadMotionFeatures = () =>
     else window.addEventListener("load", () => window.setTimeout(resolve, 300), { once: true })
   }).then(() => import("@/lib/motion-features").then((mod) => mod.default))
 
-const TodosPage = lazy(() => import("@/pages/todos").then((m) => ({ default: m.TodosPage })))
-const ThreadsPage = lazy(() => import("@/pages/threads").then((m) => ({ default: m.ThreadsPage })))
-const ReportsPage = lazy(() => import("@/pages/reports").then((m) => ({ default: m.ReportsPage })))
-const InsightsPage = lazy(() => import("@/pages/insights").then((m) => ({ default: m.InsightsPage })))
-const SettingsPage = lazy(() => import("@/pages/settings").then((m) => ({ default: m.SettingsPage })))
-const AuthPage = lazy(() => import("@/pages/auth").then((m) => ({ default: m.AuthPage })))
-const TrashPage = lazy(() => import("@/pages/trash").then((m) => ({ default: m.TrashPage })))
+const TodosPage = lazyRetry(
+  () => import("@/pages/todos"),
+  (m) => m.TodosPage,
+)
+const ThreadsPage = lazyRetry(
+  () => import("@/pages/threads"),
+  (m) => m.ThreadsPage,
+)
+const ReportsPage = lazyRetry(
+  () => import("@/pages/reports"),
+  (m) => m.ReportsPage,
+)
+const InsightsPage = lazyRetry(
+  () => import("@/pages/insights"),
+  (m) => m.InsightsPage,
+)
+const SettingsPage = lazyRetry(
+  () => import("@/pages/settings"),
+  (m) => m.SettingsPage,
+)
+const AuthPage = lazyRetry(
+  () => import("@/pages/auth"),
+  (m) => m.AuthPage,
+)
+const TrashPage = lazyRetry(
+  () => import("@/pages/trash"),
+  (m) => m.TrashPage,
+)
 
 const ROUTES = [
   {
@@ -208,6 +236,37 @@ function PageSkeleton() {
       <Skeleton className="h-9 w-full max-w-sm" />
       <Skeleton className="h-9 w-full max-w-sm" />
       <Skeleton className="h-24 w-full" />
+    </div>
+  )
+}
+
+/** 页面分包下载失败（多半是断网 / 切网时切页）或页面渲染抛错时的可恢复占位 */
+function PageLoadError({ chunk, retry }: { chunk: boolean; retry: () => void }) {
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false
+  return (
+    <div role="alert" className="space-y-3 rounded-xl border bg-card p-5 text-sm">
+      <p className="font-medium">{chunk ? "这个页面的代码没能下载完成" : "这个页面出错了"}</p>
+      <p className="text-muted-foreground">
+        {chunk
+          ? offline
+            ? "当前处于离线状态，且这个页面尚未缓存到本机。联网后点「重新加载」即可。"
+            : "多半是网络刚刚中断或切换过。浏览器要整页重新加载才能补下这部分代码，点「重新加载」即可。"
+          : "可以重试一次；若持续出错，请刷新页面。"}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {chunk ? (
+          <Button size="sm" onClick={() => window.location.reload()}>
+            重新加载
+          </Button>
+        ) : (
+          <Button size="sm" onClick={retry}>
+            重试
+          </Button>
+        )}
+        <Button size="sm" variant="outline" onClick={() => (window.location.hash = "#/")}>
+          回到首页
+        </Button>
+      </div>
     </div>
   )
 }
@@ -387,9 +446,14 @@ export function AppShell() {
                     className="min-w-0 flex-1 space-y-6 outline-none xl:max-w-3xl"
                   >
                     <PageHeader title={active.title} description={active.description} />
-                    <Suspense fallback={<PageSkeleton />}>
-                      <Page />
-                    </Suspense>
+                    <ChunkBoundary
+                      resetKey={active.path}
+                      fallback={({ chunk, retry }) => <PageLoadError chunk={chunk} retry={retry} />}
+                    >
+                      <Suspense fallback={<PageSkeleton />}>
+                        <Page />
+                      </Suspense>
+                    </ChunkBoundary>
                   </m.main>
                 </AnimatePresence>
                 <aside aria-label="辅助信息栏" className="hidden w-72 shrink-0 pt-1 xl:block print:hidden">
@@ -437,10 +501,13 @@ export function AppShell() {
             </nav>
 
             {deferredReady && (
-              <Suspense fallback={null}>
-                <CommandPalette routes={ROUTES} />
-                <Toaster />
-              </Suspense>
+              // 命令面板 / toast 是增强件：分包拉不下来就静默不渲染，不能拖垮整个外壳
+              <ChunkBoundary fallback={() => null}>
+                <Suspense fallback={null}>
+                  <CommandPalette routes={ROUTES} />
+                  <Toaster />
+                </Suspense>
+              </ChunkBoundary>
             )}
             <ReloadPrompt />
             <PageCopyGuard />
