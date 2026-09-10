@@ -80,8 +80,22 @@ internal const val BACKUP_RESTORE_TIMEOUT_MESSAGE =
 /** 上传进度回调（已写入字节 / 请求体总字节），在 OkHttp 写线程回调 */
 typealias UploadProgress = (sent: Long, total: Long) -> Unit
 
-/** 下载进度回调（已接收字节 / Content-Length；服务端流式打包 zip 时没有 Content-Length，total = -1），在 IO 线程回调 */
-typealias DownloadProgress = (received: Long, total: Long) -> Unit
+/**
+ * 下载进度回调，在 IO 线程回调。total = Content-Length（精确；服务端流式打包 zip 时没有，为 -1）；
+ * estimate = [BACKUP_ESTIMATE_HEADER] 预估总长（没有为 -1），只用于显示「约 n%」——原件缺失被跳过时实际会少于预估、
+ * size 未知时可能超出，不得据此判断下载是否完整
+ */
+typealias DownloadProgress = (received: Long, total: Long, estimate: Long) -> Unit
+
+/** 服务端 GET /api/backup 的预估总长头（CORS 已暴露；非数字 / 非正数按没有处理） */
+const val BACKUP_ESTIMATE_HEADER = "X-Suinian-Backup-Estimate"
+
+internal fun positiveHeaderLong(value: String?): Long {
+    val t = value?.trim() ?: return -1
+    if (t.isEmpty() || !t.all { it in '0'..'9' }) return -1
+    val n = t.toLongOrNull() ?: return -1
+    return if (n > 0) n else -1
+}
 
 private const val DOWNLOAD_CHUNK = 64 * 1024
 
@@ -664,6 +678,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             val fileName = Regex("filename=\"?([^\";]+)\"?").find(disposition)?.groupValues?.get(1)
                 ?: "suinian-backup.zip"
             val total = body.contentLength()
+            val estimate = if (total >= 0) -1L else positiveHeaderLong(it.header(BACKUP_ESTIMATE_HEADER))
             var received = 0L
             coroutineScope {
                 // 读体是阻塞 IO：协程取消时由这个哨兵 cancel() Call，让阻塞中的 read 立刻抛出而不是等到 readTimeout
@@ -685,7 +700,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
                             if (n < 0) break
                             out.write(buf, 0, n)
                             received += n
-                            onProgress?.invoke(received, total)
+                            onProgress?.invoke(received, total, estimate)
                         }
                         out.flush()
                     }
