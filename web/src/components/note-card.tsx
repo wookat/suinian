@@ -367,8 +367,10 @@ export function NoteCard({
   const sensitive = note.is_sensitive === 1
   // R334：未标注但驻留口令 / 密钥称谓的问答引用卡只带占位体（guarded + content_withheld），与敏感卡同一条点开取回路径
   const guardedCard = !sensitive && note.content_withheld === true
-  // 敏感预检命中但尚待模型复判（R312 P0-3：R311 T2「加密卡→明文卡」的翻转就是这个状态被当成定论展示）
-  const sensitiveRejudging = sensitive && note.meta?.needs_retriage === true
+  // 敏感预检命中但尚待模型复判（R312 P0-3：R311 T2「加密卡→明文卡」的翻转就是这个状态被当成定论展示）；
+  // 用户手动定的敏感位服务端锁住降级方向（manual_override.is_sensitive），复判不会恢复明文，不按待复判展示
+  const sensitiveRejudging =
+    sensitive && note.meta?.needs_retriage === true && note.meta?.manual_override?.is_sensitive !== true
   // 可执行载荷折叠（R304 P0-A → R312 P0-3）：数据面标记 → strict/broad 默认折叠 + 警示，
   // code（日常命令备忘）展示但复制前确认。敏感遮罩优先（遮罩本身已隐藏原文）；编辑态直接编辑原文不折叠。
   const foldLevel = sensitive ? null : noteFoldLevel(note)

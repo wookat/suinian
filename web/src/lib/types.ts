@@ -23,7 +23,7 @@ export interface NoteMeta {
   /** 图片文字识别存疑（R212 P3-3）：卡片提示核对原图，编辑正文后清除 */
   ocr_suspect?: boolean
   finance_merchant?: string
-  manual_override?: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean }
+  manual_override?: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean; is_sensitive?: boolean }
   /** 问答写回：由「存为笔记」保存的问答结论 */
   from_ask?: boolean
   import_source?: string
