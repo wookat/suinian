@@ -2,6 +2,7 @@ package com.zalize.suinian.ui
 
 import android.app.Application
 import android.content.ContentValues
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -18,7 +19,11 @@ import com.zalize.suinian.data.parseInlineCommand
 import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.RestoreStats
 import com.zalize.suinian.data.SendResult
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -70,6 +75,8 @@ data class NotesUiState(
 const val SAMPLE_TAG = "示例"
 /** 上传体积上限（与后端 MAX_MEDIA_BYTES 同值） */
 const val MAX_MEDIA_BYTES = 10 * 1024 * 1024
+/** 备份 zip 上限（与后端 MAX_RESTORE_BYTES 同值） */
+const val MAX_RESTORE_BYTES = 200 * 1024 * 1024
 
 /** 上传前超限的统一友好文案（R154 P2-1）：明确上限 + 当前大小，与 Web 同口径 */
 fun mediaTooLargeToast(kind: String, size: Int): String =
@@ -576,11 +583,52 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         return fileName
     }
 
-    /** 从备份 zip 恢复，返回恢复统计 */
-    suspend fun restoreFromBackup(bytes: ByteArray, fileName: String): RestoreStats {
-        val stats = repo.restoreBackup(bytes, fileName)
-        refresh()
-        return stats
+    private val _restore = MutableStateFlow<RestoreState>(RestoreState.Idle)
+    /** 备份恢复进度 / 结果：挂在 ViewModel 上，离开设置页不中断上传、回来仍能看到 */
+    val restore: StateFlow<RestoreState> = _restore
+    private var restoreJob: Job? = null
+
+    /** 读取所选 zip 并上传恢复；同时只允许一次 */
+    fun startRestore(uri: Uri) {
+        if (restoreJob?.isActive == true) return
+        _restore.value = RestoreState.Reading
+        restoreJob = viewModelScope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    getApplication<Application>().contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                } ?: throw IllegalStateException("无法读取所选文件")
+                if (bytes.size > MAX_RESTORE_BYTES) {
+                    _restore.value = RestoreState.Failed("备份文件过大：最大支持 ${MAX_RESTORE_BYTES / 1024 / 1024}MB")
+                    return@launch
+                }
+                _restore.value = RestoreState.Running(0, bytes.size.toLong())
+                var lastPercent = -1
+                val stats = repo.restoreBackup(bytes, "backup.zip") { sent, total ->
+                    val next = RestoreState.Running(sent, total)
+                    val percent = restorePercent(next)
+                    if (percent != lastPercent || next.uploaded) {
+                        lastPercent = percent
+                        _restore.update { if (it is RestoreState.Running) next else it }
+                    }
+                }
+                _restore.value = RestoreState.Done(stats)
+                refresh()
+            } catch (e: CancellationException) {
+                _restore.update { RestoreState.Failed(restoreCancelledMessage(it)) }
+                throw e
+            } catch (e: Exception) {
+                _restore.value = RestoreState.Failed(e.message ?: "恢复失败，请稍后重试")
+            }
+        }
+    }
+
+    /** 中断恢复：上传未完成则服务端不会导入；已上传完则只是不再等结果 */
+    fun cancelRestore() {
+        restoreJob?.cancel()
+    }
+
+    fun dismissRestoreResult() {
+        if (restoreJob?.isActive != true) _restore.value = RestoreState.Idle
     }
 
     fun showToast(message: String) {
