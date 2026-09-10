@@ -10291,11 +10291,30 @@ function guardedLabelAnchor(text: string): boolean {
   return SECRET_LABEL_RE.test(t) || CODE_LABEL_RE.test(t) || ORACLE_LABEL_RE.test(t);
 }
 /**
+ * R346 问句侧汉字变体折叠：繁体 / 港台写法（「wifi 密碼是多少」「密碼箱多少錢」「怎麼辦」）逐字折成简体后再过
+ * 取值 / 预言机 / 非取值问法正则。笔记侧标签正则（SECRET_LABEL_RE / RESIDENCY_LABEL_RE）早已内联繁体变体，问句侧
+ * 的十几条正则（称谓 / 问法 / 时间价钱排除 / 追问 / 省略句 / 锁具实物）只有简体——半边繁体会同时漏判（取值问走普通生成）
+ * 与误判（「密碼箱多少錢」的「錢」不在实物词表里 ⇒ 被判取值）。逐字一对一替换，长度与下标不变，只用于判定，不改任何回显文本。
+ */
+const HAN_VARIANT_PAIRS =
+  "萬万兩两個个為为舉举書书買买於于麼么價价會会餘余儲储關关內内寫写準准減减幾几憑凭凱凯則则剛刚別别辦办動动區区歷历發发變变隻只號号後后嗎吗員员園园圍围圖图壞坏塊块處处備备復复複复頭头對对爾尔層层帶带幫帮應应開开強强當当錄录憶忆態态戲戏戶户報报撥拨換换據据數数無无時时機机權权條条來来櫃柜樣样樓楼沒没遊游點点現现電电畫画盤盘著着碼码禮礼積积豎竖筆笔約约紋纹組组終终結结給给繼继續续編编縮缩網网範范裝装規规視视議议記记講讲設设證证訴诉詞词譯译話话該该誤误說说讀读調调諧谐賬账帳账購购貼贴貴贵費费資资車车轉转輸输過过運运還还這这進进連连選选裡里裏里鑰钥錢钱鐵铁銀银鏈链鎖锁錯错鍵键長长門门閉闭間间閘闸險险順顺顏颜顛颠飯饭驗验誰谁們们甚什兒儿邊边頁页銷销認认單单聯联線线鑑鉴雙双節节賣卖種种類类廳厅鐘钟週周歲岁學学課课腦脑飛飞護护郵邮訊讯問问題题麗丽東东醫医藥药體体檔档檢检貸贷響响聲声見见覽览聽听麵面遠远達达釋释從从與与並并雖虽級级織织統统經经營营業业務务場场廠厂廣广導导師师團团隊队陸陆陽阳陰阴際际齊齐齡龄亞亚亂乱幹干乾干傳传傷伤僅仅盡尽優优償偿冊册凍冻劇剧劃划勞劳勢势勵励勸劝協协嚴严圓圆執执壓压夠够夢梦奧奥婦妇媽妈孫孙實实寧宁審审寶宝專专尋寻屆届屬属島岛幣币廢废彙汇徵征憲宪懶懒戰战擁拥擇择擊击擔担擴扩擺摆攝摄敵敌斷断舊旧曆历曬晒極极標标樂乐樹树橋桥歡欢歸归殺杀毀毁氣气決决況况淚泪測测滅灭漢汉潔洁濟济熱热燒烧燈灯爭争牆墙獨独獲获產产畢毕異异瘋疯療疗皺皱監监眾众確确礎础稱称穩稳築筑簡简籤签糧粮紅红納纳純纯紙纸紹绍細细絡络綜综綠绿維维緊紧練练緣缘總总績绩罰罚聞闻職职肅肃臉脸臨临艙舱藝艺蘋苹蟲虫補补製制親亲覺觉觀观計计訂订語语誠诚談谈請请諸诸謝谢識识讓让讚赞貝贝負负財财貨货責责賓宾賞赏質质贈赠較较輕轻辭辞農农遲迟適适遺遗鏡镜閱阅陣阵階阶隨随雜杂離离難难靈灵靜静頂顶項项須须預预領领頻频顆颗額额願愿顯显風风館馆驚惊髮发鬆松魚鱼鳥鸟鹽盐麥麦黃黄齒齿龍龙絲丝丟丢箇个爲为義义習习鄉乡瞭了雲云産产億亿倉仓衆众偽伪僞伪側侧脩修剋克兌兑蘭兰沖冲衝冲凈净淨净湊凑齣出創创刪删彆别剝剥韆千昇升陞升華华佔占衛卫卽即卻却捲卷厤历叄叁參参蔘参敘叙疊叠檯台臺台颱台嘆叹歎叹喫吃閤合衕同嚮向曏向嚇吓啓启啟启諮咨嗶哔餵喂迴回糰团國国墊垫墻墙殻壳殼壳夾夹奪夺甯宁寵宠傢家寬宽寢寝將将嘗尝嚐尝儘尽侷局屜屉嵗岁峯峰佈布簾帘幟帜蓆席冪幂榦干併并庫库棄弃張张彈弹噹当彔录録录徑径禦御誌志唸念恆恒懸悬慣惯纔才託托釦扣掃扫揚扬摺折拋抛摳抠攏拢揀拣攔拦掛挂擋挡揮挥撈捞損损撿捡摻掺蒐搜攜携敎教斂敛旂旗旣既晉晋暫暂闇暗朮术術术樸朴槓杠闆板構构楓枫査查棟栋欄栏覈核棊棋檻槛橫横殘残燬毁譭毁匯汇滙汇汙污湯汤滬沪洩泄氾泛汎泛註注濁浊瀏浏漲涨溫温泝溯遡溯滾滚滿满潛潜災灾煩烦爺爷狀状猶犹獻献環环瓊琼畵画蓋盖眞真榘矩俬私鞦秋祕秘稅税竪竖篩筛簽签粵粤醣糖繫系纍累紀纪縱纵綫线綁绑絨绒繞绕絕绝絶绝緑绿綴缀緩缓縫缝繳缴羅罗羣群脹胀脅胁臟脏髒脏腳脚脫脱臘腊騰腾緻致捨舍囌苏甦苏蘇苏薦荐穫获懞蒙濛蒙矇蒙藍蓝虛虚錶表觸触討讨訓训許许論论訪访評评詐诈診诊試试詩诗詢询詳详誘诱説说諾诺謂谓諺谚譜谱貢贡敗败貪贪貫贯貳贰賦赋賠赔賴赖賺赚贛赣踐践蹤踪輪轮軟软載载輯辑遼辽遷迁跡迹蹟迹遞递邏逻遙遥鄰邻埰采寀采採采鑒鉴針针鍼针釘钉釣钓鈡钟鍾钟鈅钥鈕钮鉛铅鋪铺鍋锅錨锚閩闽閲阅閾阈陳陈陝陕隱隐彫雕琱雕鵰雕靚靓麪面麫面韓韩韻韵鬚须顧顾頓顿顔颜飾饰餓饿舘馆馬马驅驱駐驻駝驼駕驾騙骗驟骤魯鲁鯨鲸鷗鸥鵝鹅";
+const HAN_VARIANT_MAP: ReadonlyMap<string, string> = (() => {
+  const chars = [...HAN_VARIANT_PAIRS];
+  const map = new Map<string, string>();
+  for (let i = 0; i + 1 < chars.length; i += 2) if (chars[i] !== chars[i + 1]) map.set(chars[i], chars[i + 1]);
+  return map;
+})();
+const HAN_VARIANT_RE = new RegExp(`[${[...HAN_VARIANT_MAP.keys()].join("")}]`, "gu");
+/** 逐字把繁体 / 异体折成简体（一对一，长度不变）；只供问句判定使用。 */
+export function foldHanVariants(text: string): string {
+  return text.replace(HAN_VARIANT_RE, (c) => HAN_VARIANT_MAP.get(c) ?? c);
+}
+/**
  * `anchored`（召回前的整体短路用）：纯属性 / 转写形态还须带指向锚，避免「8000 以上的支出」这类普通问法只因召回里
  * 碰巧有一条受守笔记就被中和；出口层（直答单元已确定是受守单元）不需要锚。
  */
 export function isOracleProbeQuestion(question: string, opts?: { anchored?: boolean }): boolean {
-  const q = question.normalize("NFKC").trim();
+  const q = foldHanVariants(question.normalize("NFKC").trim());
   if (questionCarriesOpaqueToken(q) || isYesNoQuestion(q)) return true;
   if (ORACLE_ENUMERATE_SELF_ANCHORED_RE.test(q)) return true;
   if (!ORACLE_PROBE_RE.test(q) && !ORACLE_ENUMERATE_RE.test(q)) return false;
@@ -10361,7 +10380,7 @@ const LENGTH_CANDIDATE_RE = /[\d零〇一二两三四五六七八九十百]+\s*(
  * 「能列一下吗」）仍走常规召回：它们的答案不是固定中性指引，召回质量直接影响答案。
  */
 export function isDeterministicRecallProbe(question: string, historyText = ""): boolean {
-  const q = conceptualLabelFree(question.normalize("NFKC").trim());
+  const q = conceptualLabelFree(foldHanVariants(question.normalize("NFKC").trim()));
   if (questionCarriesOpaqueToken(q)) return true;
   if (SECRET_LABEL_RE.test(q) || CODE_LABEL_RE.test(q)) return true;
   const probeShape = ORACLE_PROBE_RE.test(q) || LENGTH_CANDIDATE_RE.test(q);
@@ -10393,7 +10412,7 @@ const VALUE_ASK_RE =
  * 直答一律走「占位 + 点开卡片」，不进生成。是非 / 属性形态另走预言机中和（isOracleProbeQuestion）。
  */
 export function isSecretValueQuestion(question: string, historyText = ""): boolean {
-  const q = conceptualLabelFree(question.normalize("NFKC").trim());
+  const q = conceptualLabelFree(foldHanVariants(question.normalize("NFKC").trim()));
   if (!q) return false;
   // 多轮里标签可能只在上一轮（「保险柜那串先念 1、3、5 位」→「再念 2、4、6 位」）：历史非空时锚从整段对话里找。
   // R336 §2.6：只在本轮是追问形态（指代 / 再 / 第 N 位 / 变换…）时才向上文借称谓——否则上一轮问过密码后，
@@ -10406,7 +10425,7 @@ export function isSecretValueQuestion(question: string, historyText = ""): boole
     (RESIDENCY_QUESTION_LABEL_RE.test(q) && !LOCK_OBJECT_TALK_RE.test(q)) ||
     (historyText.length > 0 &&
       HISTORY_FOLLOWUP_RE.test(q) &&
-      (conversationAnchorsGuarded(historyText) || CREDENTIAL_VALUE_LABEL_RE.test(historyText.normalize("NFKC"))));
+      (conversationAnchorsGuarded(historyText) || CREDENTIAL_VALUE_LABEL_RE.test(foldHanVariants(historyText.normalize("NFKC")))));
   if (!labeled) return false;
   // 「什么时候改的密码 / why did I change it」问的是时间 / 原因，不是取值：剥掉时间 / 原因问法后再判。
   const qv = q.replace(NON_VALUE_ASK_RE, " ");
