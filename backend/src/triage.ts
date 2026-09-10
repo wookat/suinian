@@ -746,10 +746,12 @@ function normalizeOffset(raw: string | undefined, defaultOffset: string): string
  * "YYYY-MM-DDTHH:mm:00+HH:mm" (timed; bare local times take `defaultOffset`,
  * the user's timezone offset, Asia/Shanghai by default).
  */
-export function normalizeTodoDue(v: unknown, defaultOffset = "+08:00"): string | null {
+export function normalizeTodoDue(v: unknown, defaultOffset = "+08:00", strict = false): string | null {
   if (typeof v !== "string") return null;
-  const m = v.trim().match(TODO_DUE_RE);
-  if (!m) return null;
+  const s = v.trim();
+  const m = s.match(TODO_DUE_RE);
+  // strict：整串必须是一个到期值（"2026-09-12 6pm" 前缀匹配只剩日期、丢掉时刻，手输场景要报错而不是静默截断）
+  if (!m || (strict && m[0].length !== s.length)) return null;
   if (!m[2]) return m[1];
   return `${m[1]}T${m[2]}:00${normalizeOffset(m[3], defaultOffset)}`;
 }
