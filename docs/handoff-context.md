@@ -1,7 +1,7 @@
 # 碎念 Suinian · 交接上下文（handoff-context）
 
 > 目的：换会话/换负责人时注入本文档即可接手。**每轮迭代结束时更新本文档**。
-> 最后更新：2026-09-10（R356；R330–R336 见 docs/decision-r330/r332/r334/r336.md 与 audit-r331/r332/r333/r335.md；R337–R349 见 docs/decision-r337/r338/r340/r341/r342/r343/r344/r346/r347/r348/r349/r350.md）
+> 最后更新：2026-09-10（R357；R330–R336 见 docs/decision-r330/r332/r334/r336.md 与 audit-r331/r332/r333/r335.md；R337–R349 见 docs/decision-r337/r338/r340/r341/r342/r343/r344/r346/r347/r348/r349/r350.md）
 
 ## 一句话
 开源可自部署的 AI 收件箱：微信/Web/Android/浏览器剪藏/MCP 什么都能丢，AI 自动分拣（想法/待办/收藏/资料）、把碎片聚成思考线索，每周一出周报、每天出今日回顾。
@@ -90,6 +90,8 @@
 - R354 **web PR #416（基于 #415）**：生产演示一手复现 时间流「选择」→ 勾 2 条 → 删除 → 确认后 toast「演示模式不支持批量操作，请先配置真实 API」，打标签 / 移除标签 / 改分类同一出口全部抛错（批量栏四个按钮可点却全失败，与 #412 同族）。修法 = mock 端新增 `mockBatchNotes`，与 backend `runBatchAction` 同语义（delete 软删进本地回收站回传目标 ids；add/remove_tags 只回传实际变更 ids + manual_override.tags；set_category 回传 prev 快照；restore_categories 按 entries 还原；filter 目标复用 `filterMockNotes`，remaining 恒 0）；api.ts 批量请求体收紧为 `BatchBody`，`useMock` 走 mock 仍经 `mutated()` 广播右栏重拉；真实分支与 NDJSON 解析不改。本机 Playwright 四类操作 + 撤销 + 按筛选全部匹配删除 → 回收站 2 条 全部正确，page errors 0。未移植 backend 敏感行 tags 的 `sanitizeSensitiveTags`（本地演示数据不出浏览器）。
 - R355 **web PR #417（基于 #416）**：生产演示一手复现 设置 → 标签管理 整卡红字「演示模式不支持标签管理，请先配置真实 API」（右栏标签云 / 时间流标签行却正常）。修法 = mock 端新增 `mockGetTags`（与 `GET /api/tags` 同口径：敏感行标签不进标签面、次数降序 + 字典序）与 `retagMock`（与 `retagUser` 同语义：只计实际含标签的行、改到已有标签即合并去重、回收站行一并改写、不写 meta），`mockRenameTag/mockDeleteTag` 复用 backend 入参校验；api 层三处 `useMock` 改走 mock、仍经 `mutated()`。本机 Playwright 重命名 / 合并（3→5 与右栏同步）/ 删除 / 回收站行改写（影响 2+1=3）全部正确，page errors 0。未移植 `batch_write` 限流与 `sanitizeSensitiveTags`。
 - R356 **web PR #418（基于 #417）**：生产演示一手复现 设置 → 数据 卡「下载完整备份 / 导出 JSON / 导出 Markdown / 选择文件导入 / 选择备份 zip 恢复」五个按钮可点、点后才在卡内报「演示模式不支持…」。判断这四项**不移植** mock（演示数据只在本浏览器，注册 / 登录后 `auth.tsx#continueAfterAuth` 已提示一键导入演示期笔记；本地导出会重复 backend 脱敏口径）。修法 = `DemoDataNotice`（role=status）说明 + 五按钮 disabled，`useSettingsVersion()` 切数据源即时重算；api.ts throw 保留兜底。本机 Playwright：演示 5 disabled + 3 提示 + 链接跳 `#/auth`；真实 API 0 提示 5 可用；page errors 0。
+- R357 **web PR #419（基于 main，独立）**：生产可访问性巡检——axe-core 4.10（wcag2a+aa+best-practice）对演示模式 8 路由 × 1280/375 × 浅/深色 共 32 次扫描。生产基线：`#/reports` critical `aria-valid-attr-value`（周报/月报切换用 Radix Tabs 只有 TabsList 没 TabsContent ⇒ `aria-controls` 指向不存在的 id）、`#/threads` moderate `heading-order`（列表卡 h3 直接跟在 h1 后）；其余 6 路由 0。修法：reports 切换改用仓库已有 `Segmented`（radiogroup 语义，与「列表筛选」用法一致），threads 列表卡 h3→h2。本机 preview 复扫 32 次全 0，Playwright 点选/方向键切换正常，page errors 0。洞察页浅色首轮一条 `color-contrast` 是 motion 淡入中途采样的瞬时值（等 1.5s 复扫 0），未改。演示模式其余「不支持」出口（媒体预览/下载、重新抓取/重试）巡检结论：mock 建的媒体笔记无 attachments/meta.file_name/link_status，卡片不会渲染这些按钮，UI 不可达 ⇒ 不需改。
+  - axe 扫生产的坑：生产 CSP `script-src 'self'` 拒绝 `page.addScriptTag({content})`，要 `ctx.newCDPSession(page)` → `Page.setBypassCSP {enabled:true}` 再 `page.evaluate(axeSrc)`；motion 淡入动画会让 color-contrast 出瞬时假阳，扫前等 ≥1.5s。脚本 `~/qa-r336-untracked/r357-prod-axe.mjs`（axe-core 装在 `~/qa-r336-untracked/axe`，不进仓库依赖）。
 - web 观察项（未改）：`review-bus`（今日回顾卡）与 `notes-bus`（右栏）两套相似事件并存，后续可合并；`getThreads()` NetworkFirst 缓存在写后重拉是否总读到新值未单独验证；洞察页「近 30 天趋势」x 轴末刻度是最后一个 7 天格而非今天（视觉上像少一天，未改）。
 - 静态复测已知边界（均有意 fail-closed，未改）：R350 §3.3「京东订单号 2024091812345678，明天到」整行在模型上下文被替换（≥12 位数字口径）⇒「订单什么时候到」答不出「明天」；R336 K07（PIN 讲座 1234/0000）/ K09（Password 简史 1961）/ L03 / L09（19 位淘宝订单号，R320 ≥12 位数字口径）；R340 Y02/Y11；R335 G17 取件码在模型视图仍占位（ask 出口按 known-issues 豁免直答）
 - 同期 UI 线（另一会话，#384–#386）：设计系统 + shadcn/Radix + motion/recharts/cmdk 重排版、首屏拆包（移动 Lighthouse Perf 99）、设置页 ConfirmDialog
