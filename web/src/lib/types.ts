@@ -18,6 +18,8 @@ export interface NoteMeta {
   file_excerpt?: string
   file_status?: "ok" | "extract_failed"
   media_status?: "ok" | "extract_failed"
+  /** 备份恢复后原件没跟上（超过上限 / 存档失败 / 备份包里没有）：不再给下载 / 原地重试，提示重新上传 */
+  attachment_missing?: "oversized" | "failed" | "missing"
   /** 语音转写低置信（R212 P2-1）：卡片提示核对并给纠错入口，编辑正文后清除 */
   transcript_suspect?: boolean
   /** 图片文字识别存疑（R212 P3-3）：卡片提示核对原图，编辑正文后清除 */

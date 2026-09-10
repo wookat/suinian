@@ -497,6 +497,12 @@ export function NoteCard({
     (note.raw_type === "image" && (note.meta?.media_status === "extract_failed" || note.content.startsWith("【图片】文字提取失败"))) ||
     (note.raw_type === "file" && note.meta?.file_status === "extract_failed")
 
+  // 备份恢复后原件没跟上：服务端没有 attachment 行，下载 / 原地重试必然 404，只给原因与重新上传提示
+  const attachmentMissing = note.meta?.attachment_missing
+  const attachmentMissingText = attachmentMissing
+    ? `原件未随备份恢复（${attachmentMissing === "oversized" ? "超过单文件大小上限" : attachmentMissing === "failed" ? "存档失败" : "备份包里没有这个文件"}），需要原件请重新上传`
+    : null
+
   async function retryMediaExtract() {
     if (retryingMedia) return
     setRetryingMedia(true)
@@ -1100,7 +1106,13 @@ export function NoteCard({
             )}
             {imageAtt && <NoteImage noteId={note.id} attachment={imageAtt} alt={note.title || "笔记图片"} />}
             {audioAtt && <NoteAudio noteId={note.id} attachment={audioAtt} className="mt-2" />}
-            {mediaFailed && (
+            {attachmentMissingText && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <CircleAlert className="size-3.5 shrink-0" />
+                <span>{attachmentMissingText}</span>
+              </div>
+            )}
+            {mediaFailed && !attachmentMissingText && (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <CircleAlert className="size-3.5 shrink-0" />
                 <span>{note.raw_type === "voice" ? "转写失败，原件已存档" : note.raw_type === "image" ? "文字提取失败，原件已存档" : "文本提取失败，原件已存档"}</span>
@@ -1115,7 +1127,7 @@ export function NoteCard({
                 {retryMediaError && <span className="w-full text-destructive">{retryMediaError}</span>}
               </div>
             )}
-            {!mediaFailed && mediaSuspect && (
+            {!mediaFailed && !attachmentMissingText && mediaSuspect && (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-700 dark:text-amber-500">
                 <CircleAlert className="size-3.5 shrink-0" />
                 <span>{note.raw_type === "voice" ? "转写可能不准，建议核对" : "文字识别可能不准，建议核对原图"}</span>
@@ -1149,15 +1161,17 @@ export function NoteCard({
                       {fileMeta.file_kind}
                     </span>
                   )}
-                  <button
-                    onClick={() => void downloadFile()}
-                    disabled={downloading}
-                    aria-label="下载原件"
-                    title="下载原件"
-                    className="-my-2 shrink-0 rounded-md p-3.5 text-muted-foreground hover:bg-accent hover:text-foreground md:-my-0.5 md:p-1.5"
-                  >
-                    {downloading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-                  </button>
+                  {!attachmentMissingText && (
+                    <button
+                      onClick={() => void downloadFile()}
+                      disabled={downloading}
+                      aria-label="下载原件"
+                      title="下载原件"
+                      className="-my-2 shrink-0 rounded-md p-3.5 text-muted-foreground hover:bg-accent hover:text-foreground md:-my-0.5 md:p-1.5"
+                    >
+                      {downloading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+                    </button>
+                  )}
                 </div>
                 {downloadError && <p className="mt-1 text-xs text-destructive">{downloadError}</p>}
                 {fileMeta.file_excerpt && (

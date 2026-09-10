@@ -2,7 +2,7 @@
 // (all fields) + threads/reports + media/ (R2 originals), and the reverse
 // restore path (dedup, media re-upload, background pipeline backfill).
 import { Zip, ZipDeflate, ZipPassThrough, Unzip, UnzipInflate, strToU8, strFromU8 } from "fflate";
-import type { Env, NoteMeta, NoteRow, ThreadRow, WeeklyReportRow } from "./types";
+import type { AttachmentMissingReason, Env, NoteMeta, NoteRow, ThreadRow, WeeklyReportRow } from "./types";
 import { decryptContent, decryptBytes, isEncryptedAttachment, ENC_PLACEHOLDER } from "./crypto";
 import { prepareNoteInsert } from "./note-store";
 import { backfillEmbeddings } from "./semantic";
@@ -487,7 +487,14 @@ export interface RestoreStats {
   /** 单个文件超过大小上限，主动跳过未导入（区别于真正的导入失败） */
   media_oversized: number;
   media_failed: number;
+  /** notes.json 声明了附件、zip 里却没有对应条目（手工改过 / 不完整的备份包） */
+  media_missing: number;
+  /** 原件未随笔记恢复的附件（每个附件一条，≤ MEDIA_MISSING_LIST_MAX 条）：笔记已入库并打上
+   * meta.attachment_missing，前端据此定位补传而不是给一个 404 的下载 / 重试按钮 */
+  media_missing_notes: { note_id: string; name: string; reason: AttachmentMissingReason }[];
 }
+
+const MEDIA_MISSING_LIST_MAX = 50;
 
 function sanitizeMetaForRestore(meta: NoteMeta | null): NoteMeta | null {
   if (!meta) return null;
@@ -549,6 +556,8 @@ export async function restoreBackup(
     media_skipped: 0,
     media_oversized: 0,
     media_failed: 0,
+    media_missing: 0,
+    media_missing_notes: [],
   };
 
   // old note id -> new note id (only for imported, non-duplicate notes)
@@ -558,6 +567,10 @@ export async function restoreBackup(
   const ideaIds: string[] = [];
   // zip path -> attachment info from notes.json
   const attByPath = new Map<string, { oldNoteId: string; att: BackupAttachment }>();
+  // zip 条目路径 → 结局，恢复结束后与 attByPath 对账找出原件没跟上的笔记
+  const importedPaths = new Set<string>();
+  const oversizedPaths = new Set<string>();
+  const failedPaths = new Set<string>();
   let notesSeen = false;
   let unzipError: string | null = null;
   const completed: ZipEntry[] = [];
@@ -569,8 +582,11 @@ export async function restoreBackup(
     const isNotes = name === "notes.json";
     const isMedia = name.startsWith("media/");
     if (!isNotes && !isMedia && name !== "reports.json" && name !== "threads.json") return;
+    // 手工重新打包的 zip 带目录条目（media/、media/<id>/）：不是附件，不计 skipped
+    if (name.endsWith("/")) return;
     if (isMedia && file.originalSize !== undefined && file.originalSize > MAX_MEDIA_ENTRY_BYTES) {
       stats.media_oversized++;
+      oversizedPaths.add(name);
       return;
     }
     const bufs: Uint8Array[] = [];
@@ -584,6 +600,7 @@ export async function restoreBackup(
       if (isMedia && size > MAX_MEDIA_ENTRY_BYTES) {
         // oversized single media: drop it, keep going
         stats.media_oversized++;
+        oversizedPaths.add(name);
         file.terminate();
         return;
       }
@@ -749,6 +766,7 @@ export async function restoreBackup(
     }
     if (!env.MEDIA) {
       stats.media_failed++;
+      failedPaths.add(entry.name);
       return;
     }
     // 恢复路径统一走 storeOriginal 入库管道（mime 兜底、敏感加密信封均在边界内）
@@ -760,8 +778,43 @@ export async function restoreBackup(
       mime,
       fileName: restoreFileName(info.att),
     });
-    if (key) stats.media_imported++;
-    else stats.media_failed++;
+    if (key) {
+      stats.media_imported++;
+      importedPaths.add(entry.name);
+    } else {
+      stats.media_failed++;
+      failedPaths.add(entry.name);
+    }
+  };
+
+  // 笔记已入库、声明的原件却没跟上（超限 / 存档失败 / 包里根本没有）：
+  // 不改正文（用户数据），只在 meta 打标并列进统计，避免恢复后卡片挂着
+  // 一个必然 404 的「下载原件 / 原地重试」按钮而用户不知道该补传哪条
+  const markMissingMedia = async (): Promise<void> => {
+    const byNote = new Map<string, { name: string; reason: AttachmentMissingReason }[]>();
+    for (const [path, info] of attByPath) {
+      const newNoteId = idMap.get(info.oldNoteId);
+      if (!newNoteId || importedPaths.has(path)) continue;
+      const reason: AttachmentMissingReason = oversizedPaths.has(path) ? "oversized" : failedPaths.has(path) ? "failed" : "missing";
+      if (reason === "missing") stats.media_missing++;
+      const list = byNote.get(newNoteId) ?? [];
+      list.push({ name: restoreFileName(info.att), reason });
+      byNote.set(newNoteId, list);
+    }
+    if (byNote.size === 0) return;
+    const stmts: D1PreparedStatement[] = [];
+    for (const [noteId, items] of byNote) {
+      const first = items[0];
+      stmts.push(
+        env.DB.prepare("UPDATE notes SET meta = json_patch(coalesce(meta, '{}'), ?) WHERE id = ? AND user_id = ?")
+          .bind(JSON.stringify({ attachment_missing: first.reason }), noteId, userId)
+      );
+      for (const item of items) {
+        if (stats.media_missing_notes.length >= MEDIA_MISSING_LIST_MAX) break;
+        stats.media_missing_notes.push({ note_id: noteId, name: item.name, reason: item.reason });
+      }
+    }
+    await env.DB.batch(stmts);
   };
 
   const drain = async (): Promise<{ error: string; status: 400 | 413 } | null> => {
@@ -820,6 +873,7 @@ export async function restoreBackup(
   const err = await drain();
   if (err) return err;
   if (!notesSeen) return { error: "备份包里没有 notes.json，请确认是碎念导出的完整备份 zip", status: 400 };
+  await markMissingMedia();
 
   // kick the pipeline for a first batch right away; the 10-minute cron
   // backfills (embeddings / graph / link extracts) cover the rest gradually

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { unzipSync, strFromU8, zipSync, strToU8 } from "fflate";
-import { buildBackupZip, restoreBackup, restoreFileName, BACKUP_FORMAT, type BackupNote, type BackupManifest } from "../src/backup";
+import { buildBackupZip, restoreBackup, restoreFileName, BACKUP_FORMAT, type BackupNote, type BackupManifest, type RestoreStats } from "../src/backup";
 import { SENSITIVE_EXPORT_PLACEHOLDER } from "../src/constants";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "../src/crypto";
 import type { Env } from "../src/types";
@@ -334,6 +334,107 @@ describe("restoreBackup", () => {
     expect(result).toMatchObject({ notes_imported: 1, media_imported: 1 });
     const key = [...store.keys()][0];
     expect(key).toMatch(/\/\d+-voice\.ogg$/);
+  });
+
+  it("marks notes whose declared original did not make it (missing / oversized / failed) and lists them", async () => {
+    const mkEnv = (store: Map<string, Uint8Array> | null, inserted: Recorded[]) =>
+      ({
+        DB: fakeDb({ inserted }),
+        ...(store ? { MEDIA: fakeR2(store) } : {}),
+        DEEPSEEK_API_KEY: "",
+        DEEPSEEK_BASE_URL: "https://api.deepseek.com",
+      }) as unknown as Env;
+    const notes: Partial<BackupNote>[] = [
+      {
+        id: "old1",
+        raw_type: "file",
+        content: "【文件】已存档原件：blob.bin（暂不支持文本提取）",
+        is_sensitive: false,
+        meta: { file_name: "blob.bin", file_status: "extract_failed" } as BackupNote["meta"],
+        created_at: "2026-08-03 00:00:00",
+        attachments: [{ path: "media/old1/0-blob.bin", name: "blob.bin", mime: "application/octet-stream", size: 1 }],
+      },
+      {
+        id: "old2",
+        raw_type: "image",
+        content: "图片里的文字",
+        is_sensitive: false,
+        created_at: "2026-08-03 00:00:01",
+        attachments: [{ path: "media/old2/0-pic.png", name: "pic.png", mime: "image/png", size: 4 }],
+      },
+      {
+        id: "old3",
+        raw_type: "voice",
+        content: "语音转写",
+        is_sensitive: false,
+        created_at: "2026-08-03 00:00:02",
+        attachments: [{ path: "media/old3/0-voice.ogg", name: "voice.ogg", mime: "audio/ogg", size: 2 }],
+      },
+      {
+        id: "old4",
+        raw_type: "file",
+        content: "两个附件",
+        is_sensitive: false,
+        created_at: "2026-08-03 00:00:03",
+        attachments: [
+          { path: "media/old4/0-a.txt", name: "a.txt", mime: "text/plain", size: 1 },
+          { path: "media/old4/1-b.txt", name: "b.txt", mime: "text/plain", size: 1 },
+        ],
+      },
+    ];
+    // old1's entry is absent from the zip; old2's is over the per-file cap; old3 restores fine;
+    // old4 declares two originals of which only the first arrived.
+    // Directory entries (hand re-zipped backups) must not count as skipped media.
+    const zip = zipSync({
+      "manifest.json": strToU8(JSON.stringify({ format: BACKUP_FORMAT, version: 1 })),
+      "notes.json": strToU8(JSON.stringify(notes)),
+      "media/": new Uint8Array(0),
+      "media/old2/": new Uint8Array(0),
+      "media/old2/0-pic.png": new Uint8Array(15 * 1024 * 1024 + 1),
+      "media/old3/0-voice.ogg": new Uint8Array([1, 2]),
+      "media/old4/0-a.txt": new Uint8Array([1]),
+    });
+
+    const inserted: Recorded[] = [];
+    const store = new Map<string, Uint8Array>();
+    const tasks: Promise<unknown>[] = [];
+    const result = await restoreBackup(mkEnv(store, inserted), "u9", streamOf(zip), (p) => tasks.push(p));
+    await Promise.all(tasks);
+    expect(result).toMatchObject({
+      notes_imported: 4,
+      media_imported: 2,
+      media_skipped: 0,
+      media_oversized: 1,
+      media_failed: 0,
+      media_missing: 2,
+    });
+    const stats = result as RestoreStats;
+    const byName = Object.fromEntries(stats.media_missing_notes.map((m) => [m.name, m]));
+    expect(Object.keys(byName).sort()).toEqual(["b.txt", "blob.bin", "pic.png"]);
+    expect(byName["blob.bin"].reason).toBe("missing");
+    expect(byName["pic.png"].reason).toBe("oversized");
+    expect(byName["b.txt"].reason).toBe("missing");
+    const noteIds = inserted.filter((r) => r.sql.includes("INSERT INTO notes")).map((r) => r.binds[0]);
+    expect(noteIds).toContain(byName["blob.bin"].note_id);
+    expect(noteIds).toContain(byName["pic.png"].note_id);
+    const marks = inserted.filter((r) => r.sql.includes("json_patch") && r.sql.includes("UPDATE notes"));
+    expect(marks.map((r) => [r.binds[1], r.binds[2], JSON.parse(String(r.binds[0]))])).toEqual(
+      expect.arrayContaining([
+        [byName["blob.bin"].note_id, "u9", { attachment_missing: "missing" }],
+        [byName["pic.png"].note_id, "u9", { attachment_missing: "oversized" }],
+        [byName["b.txt"].note_id, "u9", { attachment_missing: "missing" }],
+      ])
+    );
+    expect(marks).toHaveLength(3);
+
+    // no MEDIA bucket at all: every entry that arrived is a storage failure
+    const inserted2: Recorded[] = [];
+    const tasks2: Promise<unknown>[] = [];
+    const result2 = await restoreBackup(mkEnv(null, inserted2), "u9", streamOf(zip), (p) => tasks2.push(p));
+    await Promise.all(tasks2);
+    expect(result2).toMatchObject({ media_imported: 0, media_failed: 2, media_oversized: 1, media_missing: 2 });
+    const reasons = (result2 as RestoreStats).media_missing_notes.map((m) => m.reason).sort();
+    expect(reasons).toEqual(["failed", "failed", "missing", "missing", "oversized"]);
   });
 
   it("skips duplicates (same content + created_at) including their media", async () => {
