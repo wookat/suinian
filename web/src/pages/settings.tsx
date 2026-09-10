@@ -119,6 +119,26 @@ function PendingConfirmDialog({
   )
 }
 
+/** 演示数据只在本浏览器：导出 / 备份 / 导入 / 恢复四个真实账号能力在演示模式先说明、不留可点却必失败的按钮 */
+function DemoDataNotice({ action }: { action: string }) {
+  return (
+    <p className="flex items-start gap-1.5 text-sm text-muted-foreground" role="status">
+      <CircleAlert className="mt-0.5 size-4 shrink-0" />
+      <span>
+        演示数据只保存在当前浏览器，{action}需要登录真实账号；
+        <button
+          type="button"
+          onClick={() => (window.location.hash = "#/auth")}
+          className="font-medium text-primary underline underline-offset-2"
+        >
+          注册 / 登录
+        </button>
+        后，演示期间记的笔记可一键导入
+      </span>
+    </p>
+  )
+}
+
 function SettingsGroup({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-3" aria-label={title}>
@@ -907,6 +927,8 @@ export function SettingsPage() {
   const [lastUsedAt, setLastUsedAt] = useState<string | null>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
   const restoreInputRef = useRef<HTMLInputElement>(null)
+  useSettingsVersion()
+  const demoOnly = loadSettings().useMock
 
   useEffect(() => {
     const s = loadSettings()
@@ -1397,10 +1419,11 @@ export function SettingsPage() {
             ? "包含敏感内容明文（完整灾备/搬家包）"
             : "敏感内容已脱敏（正文为占位符、附件不打包）——用作唯一灾备或迁移敏感笔记请先勾选上方「包含敏感内容」"}
         </p>
+        {demoOnly && <DemoDataNotice action="导出与完整备份" />}
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <Button
             onClick={() => void handleExport("backup")}
-            disabled={exporting !== null}
+            disabled={demoOnly || exporting !== null}
             className="w-full sm:w-auto"
           >
             {exporting === "backup" ? (
@@ -1416,7 +1439,7 @@ export function SettingsPage() {
           <Button
             variant="outline"
             onClick={() => void handleExport("json")}
-            disabled={exporting !== null}
+            disabled={demoOnly || exporting !== null}
             className="w-full sm:w-auto"
           >
             {exporting === "json" ? (
@@ -1432,7 +1455,7 @@ export function SettingsPage() {
           <Button
             variant="outline"
             onClick={() => void handleExport("markdown")}
-            disabled={exporting !== null}
+            disabled={demoOnly || exporting !== null}
             className="w-full sm:w-auto"
           >
             {exporting === "markdown" ? (
@@ -1501,6 +1524,7 @@ export function SettingsPage() {
         <p className="text-xs text-muted-foreground">
           {IMPORT_SOURCES.find((o) => o.value === importSource)?.hint}
         </p>
+        {demoOnly && <DemoDataNotice action="导入" />}
         <input
           ref={importInputRef}
           type="file"
@@ -1549,7 +1573,7 @@ export function SettingsPage() {
         <Button
           variant="outline"
           onClick={() => importInputRef.current?.click()}
-          disabled={importing}
+          disabled={demoOnly || importing}
           className="w-full sm:w-auto"
         >
           {importing ? (
@@ -1612,6 +1636,7 @@ export function SettingsPage() {
             导入「下载完整备份」导出的 zip：笔记保留原时间/标签/分类，语音/图片/文件原件重新入库；已存在的同一条笔记（按备份内的笔记 ID）自动跳过，可安心重复恢复（最大 200MB）。注意：未勾选敏感内容的脱敏备份只含占位符，恢复时会跳过这些敏感笔记——迁移请用包含敏感内容的完整备份
           </p>
         </div>
+        {demoOnly && <DemoDataNotice action="从备份恢复" />}
         <input
           ref={restoreInputRef}
           type="file"
@@ -1627,7 +1652,7 @@ export function SettingsPage() {
         <Button
           variant="outline"
           onClick={() => restoreInputRef.current?.click()}
-          disabled={restoring}
+          disabled={demoOnly || restoring}
           className="w-full sm:w-auto"
         >
           {restoring ? (
