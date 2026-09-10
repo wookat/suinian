@@ -35,6 +35,17 @@ class RestoreSummaryTest {
            {"note_id":"3022692d-6da2-4fc3-8570-d400efc4c7d4","name":"pic.png","reason":"missing"}]}
     """.trimIndent()
 
+    /** 本机 Worker（R388 代码）实录：notes.json 里两条待办的 todo_due 是「明天下午」「2026/09/12 18:00」 */
+    private val invalidDueRestore = """
+        {"notes_total":5,"notes_imported":5,"notes_skipped":0,"sensitive_skipped":0,
+         "reports_imported":0,"reports_skipped":0,"threads_rebuilt":0,
+         "media_imported":0,"media_skipped":0,"media_oversized":0,"media_failed":0,
+         "media_missing":0,"media_missing_notes":[],
+         "todo_due_invalid":2,"todo_due_invalid_notes":[
+           {"note_id":"84963456-f95a-4fac-b325-227b8a0e4e88","value":"明天下午"},
+           {"note_id":"d8e6d92f-4d0b-491d-8c17-adbf70c0b8c1","value":"2026/09/12 18:00"}]}
+    """.trimIndent()
+
     @Test
     fun `decodes new restore stats fields`() {
         val stats = json.decodeFromString<RestoreStats>(mixedRestore)
@@ -53,6 +64,8 @@ class RestoreSummaryTest {
         assertEquals(0, stats.sensitiveSkipped)
         assertEquals(0, stats.mediaMissing)
         assertTrue(stats.mediaMissingNotes.isEmpty())
+        assertEquals(0, stats.todoDueInvalid)
+        assertTrue(stats.todoDueInvalidNotes.isEmpty())
         assertEquals(
             "恢复完成：笔记 3/3 条（跳过重复 0 条），媒体 1 个。AI 分拣/线索/图谱会在后台陆续补全",
             restoreSummary(stats),
@@ -87,6 +100,44 @@ class RestoreSummaryTest {
         val text = restoreSummary(stats)
         assertTrue(text, text.contains("存档失败 7 个"))
         assertTrue(text, text.contains("7 个原件没跟上（f1.png、f2.png、f3.png、f4.png、f5.png 等）"))
+    }
+
+    @Test
+    fun `summary lists unrecognized due values and tells user to reset`() {
+        val stats = json.decodeFromString<RestoreStats>(invalidDueRestore)
+        assertEquals(2, stats.todoDueInvalid)
+        assertEquals(listOf("明天下午", "2026/09/12 18:00"), stats.todoDueInvalidNotes.map { it.value })
+        val text = restoreSummary(stats)
+        assertTrue(text, text.contains("笔记 5/5 条"))
+        assertTrue(text, text.contains("。2 条待办的到期时间无法识别（「明天下午」「2026/09/12 18:00」），已按无到期时间恢复"))
+        assertTrue(text, text.contains("重新设置"))
+        assertFalse(text, text.contains("原件没跟上"))
+        assertTrue(text, text.endsWith("AI 分拣/线索/图谱会在后台陆续补全"))
+    }
+
+    @Test
+    fun `summary caps listed due values at three and appends etc`() {
+        val stats = RestoreStats(
+            notesTotal = 4, notesImported = 4, todoDueInvalid = 4,
+            todoDueInvalidNotes = (1..4).map { com.zalize.suinian.data.RestoreInvalidDue("n$it", "v$it") },
+        )
+        assertTrue(restoreSummary(stats).contains("4 条待办的到期时间无法识别（「v1」「v2」「v3」 等）"))
+    }
+
+    @Test
+    fun `note meta todo_due_invalid decodes and hint only while due is still empty`() {
+        // 本机 Worker GET /api/notes 实录（R388 代码，恢复后的那条「明天下午」待办）
+        val note = json.decodeFromString<Note>(
+            """{"id":"8407e3e5-c369-4427-a696-49a25ac8b606","raw_type":"text","content":"garbage cn","category":"todo",
+                "todo_due":null,"todo_done":false,"meta":{"todo_due_invalid":"明天下午"},"created_at":"2026-09-01 00:00:02"}"""
+        )
+        assertEquals("明天下午", note.meta?.todoDueInvalid)
+        assertEquals("备份里的到期时间「明天下午」无法识别，已按无到期时间恢复，请重新设置", todoDueInvalidText(note))
+        // 用户重新设了到期（meta 不清）→ 不再提示
+        assertNull(todoDueInvalidText(note.copy(todoDue = "2026-09-12T18:00:00+08:00")))
+        // 非待办 / 无 meta → 不提示
+        assertNull(todoDueInvalidText(note.copy(category = "idea")))
+        assertNull(todoDueInvalidText(note.copy(meta = null)))
     }
 
     @Test

@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import com.zalize.suinian.data.Note
 import com.zalize.suinian.data.UrlTitle
 import com.zalize.suinian.ui.attachmentMissingText
+import com.zalize.suinian.ui.todoDueInvalidText
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -505,6 +506,15 @@ fun NoteCard(
                         color = MaterialTheme.colorScheme.tertiary,
                     )
                 }
+            }
+            val dueInvalidHint = todoDueInvalidText(note)
+            if (dueInvalidHint != null && !masked) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    dueInvalidHint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
 
             // 链接卡片（多链接 ≤3）：首卡显站点 + AI 摘要（可展开）+ 正文摘录（可展开）

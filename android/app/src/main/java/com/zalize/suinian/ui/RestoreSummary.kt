@@ -1,8 +1,10 @@
 package com.zalize.suinian.ui
 
+import com.zalize.suinian.data.Note
 import com.zalize.suinian.data.RestoreStats
 
 private const val MISSING_NAMES_SHOWN = 5
+private const val INVALID_DUE_SHOWN = 3
 
 /** 备份恢复结果的一句话总结（与 web 设置页恢复文案同口径）：只在有值时展开各类跳过 / 缺失原因。 */
 fun restoreSummary(stats: RestoreStats): String {
@@ -29,6 +31,14 @@ fun restoreSummary(stats: RestoreStats): String {
         }
         sb.append("：对应笔记已恢复并在卡片上标出「原件未随备份恢复」，需要原件的话请重新上传")
     }
+    if (stats.todoDueInvalid > 0) {
+        val values = stats.todoDueInvalidNotes.take(INVALID_DUE_SHOWN).map { it.value }.filter { it.isNotBlank() }
+        sb.append("。${stats.todoDueInvalid} 条待办的到期时间无法识别")
+        if (values.isNotEmpty()) {
+            sb.append("（${values.joinToString("") { "「$it」" }}${if (stats.todoDueInvalid > values.size) " 等" else ""}）")
+        }
+        sb.append("，已按无到期时间恢复并在卡片上标出，请到待办里重新设置")
+    }
     sb.append("。AI 分拣/线索/图谱会在后台陆续补全")
     return sb.toString()
 }
@@ -42,4 +52,11 @@ fun attachmentMissingText(reason: String?): String? {
         else -> "备份包里没有这个文件"
     }
     return "原件未随备份恢复（$why），需要原件请重新上传"
+}
+
+/** 卡片提示：备份里的到期时间无法识别。只对仍没有到期的待办显示；非该态返回 null。 */
+fun todoDueInvalidText(note: Note): String? {
+    val raw = note.meta?.todoDueInvalid
+    if (note.category != "todo" || !note.todoDue.isNullOrBlank() || raw.isNullOrBlank()) return null
+    return "备份里的到期时间「$raw」无法识别，已按无到期时间恢复，请重新设置"
 }

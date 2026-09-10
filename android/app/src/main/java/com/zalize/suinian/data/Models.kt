@@ -53,6 +53,8 @@ data class NoteMeta(
     @SerialName("finance_merchant") val financeMerchant: String? = null,
     /** 备份恢复时原件没跟上：oversized|failed|missing（服务端无 attachment 行，/file 必 404） */
     @SerialName("attachment_missing") val attachmentMissing: String? = null,
+    /** 备份恢复时 todo_due 解析不出的原文（≤40 字）：到期已清空，提示重新设置；设了到期后不再提示 */
+    @SerialName("todo_due_invalid") val todoDueInvalid: String? = null,
 )
 
 /** 附件元信息（不含 R2 key）；原件通过 GET /api/notes/:id/file?att= 鉴权获取 */
@@ -314,6 +316,16 @@ data class RestoreStats(
     @SerialName("media_failed") val mediaFailed: Int = 0,
     @SerialName("media_missing") val mediaMissing: Int = 0,
     @SerialName("media_missing_notes") val mediaMissingNotes: List<RestoreMissingMedia> = emptyList(),
+    /** notes.json 里 todo_due 解析不出的待办条数：笔记已入库、到期清空并打上 meta.todo_due_invalid */
+    @SerialName("todo_due_invalid") val todoDueInvalid: Int = 0,
+    @SerialName("todo_due_invalid_notes") val todoDueInvalidNotes: List<RestoreInvalidDue> = emptyList(),
+)
+
+/** 到期时间无法识别的待办：value 为备份里的原文（≤40 字） */
+@Serializable
+data class RestoreInvalidDue(
+    @SerialName("note_id") val noteId: String,
+    val value: String = "",
 )
 
 /** 原件未随笔记恢复的附件：笔记已入库并打上 meta.attachment_missing */
