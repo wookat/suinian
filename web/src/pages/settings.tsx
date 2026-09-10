@@ -37,6 +37,9 @@ import {
   getTags,
   importData,
   downloadBackup,
+  formatMB,
+  TransferCancelledError,
+  type TransferProgress,
   restoreBackup,
   MAX_RESTORE_BYTES,
   renameTag,
@@ -889,6 +892,8 @@ export function SettingsPage() {
   const [includeSensitive, setIncludeSensitive] = useState(false)
   const [exporting, setExporting] = useState<"json" | "markdown" | "backup" | null>(null)
   const [exportMsg, setExportMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [backupProgress, setBackupProgress] = useState<TransferProgress | null>(null)
+  const backupAbortRef = useRef<AbortController | null>(null)
   const [importSource, setImportSource] = useState<ImportSource>("cubox")
   const [guideOpen, setGuideOpen] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -982,10 +987,20 @@ export function SettingsPage() {
     }
     setExporting(format)
     setExportMsg(null)
+    const abort = format === "backup" ? new AbortController() : null
+    backupAbortRef.current = abort
+    let lastReported = -1
     try {
       const { blob, filename } =
         format === "backup"
-          ? await downloadBackup(includeSensitive, password)
+          ? await downloadBackup(includeSensitive, password, {
+              signal: abort?.signal,
+              onProgress: (p) => {
+                if (p.received - lastReported < 256 * 1024 && lastReported >= 0) return
+                lastReported = p.received
+                setBackupProgress(p)
+              },
+            })
           : await exportData(format, includeSensitive, password)
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
@@ -995,10 +1010,22 @@ export function SettingsPage() {
       URL.revokeObjectURL(url)
       setExportMsg({ ok: true, text: `已导出 ${filename}${includeSensitive ? "（含敏感内容明文）" : "（敏感内容已脱敏）"}` })
     } catch (e) {
-      setExportMsg({ ok: false, text: e instanceof Error ? e.message : "导出失败，请稍后重试" })
+      if (e instanceof TransferCancelledError) {
+        setExportMsg({ ok: false, text: "已取消下载，未生成备份文件" })
+      } else {
+        setExportMsg({ ok: false, text: e instanceof Error ? e.message : "导出失败，请稍后重试" })
+      }
     } finally {
+      backupAbortRef.current = null
+      setBackupProgress(null)
       setExporting(null)
     }
+  }
+
+  function backupButtonLabel(p: TransferProgress | null): string {
+    if (!p || p.received === 0) return "打包中，请勿关闭页面…"
+    if (p.total) return `下载中 ${formatMB(p.received)} / ${formatMB(p.total)}（${Math.min(100, Math.round((p.received / p.total) * 100))}%）`
+    return `下载中，已接收 ${formatMB(p.received)}`
   }
 
   async function copyCurl() {
@@ -1388,7 +1415,7 @@ export function SettingsPage() {
           >
             {exporting === "backup" ? (
               <>
-                <Loader2 className="animate-spin" /> 打包中，请勿关闭页面…
+                <Loader2 className="animate-spin" /> {backupButtonLabel(backupProgress)}
               </>
             ) : (
               <>
@@ -1396,6 +1423,15 @@ export function SettingsPage() {
               </>
             )}
           </Button>
+          {exporting === "backup" && (
+            <Button
+              variant="outline"
+              onClick={() => backupAbortRef.current?.abort()}
+              className="w-full sm:w-auto"
+            >
+              取消下载
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => void handleExport("json")}
@@ -1429,6 +1465,13 @@ export function SettingsPage() {
             )}
           </Button>
         </div>
+        {exporting === "backup" && backupProgress?.total ? (
+          <Progress
+            className="h-1.5"
+            aria-label="备份下载进度"
+            value={Math.min(100, Math.round((backupProgress.received / backupProgress.total) * 100))}
+          />
+        ) : null}
         <p className="text-xs text-muted-foreground">
           完整备份包含全部笔记字段、历史周报/月报与语音/图片/文件原件（敏感笔记的附件原件仅在勾选敏感内容时打包），可在下方「从完整备份恢复」搬家到新账号/新实例；线索归组不随包迁移，恢复后由后台聚类自动重建
         </p>
