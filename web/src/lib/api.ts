@@ -800,6 +800,9 @@ export interface RestoreStats {
   media_missing?: number
   /** 原件未随笔记恢复的笔记（最多 50 条）：笔记已入库并打上 meta.attachment_missing */
   media_missing_notes?: { note_id: string; name: string; reason: "oversized" | "failed" | "missing" }[]
+  /** 备份里到期时间解析不出的待办条数：笔记已入库、到期清空并打上 meta.todo_due_invalid */
+  todo_due_invalid?: number
+  todo_due_invalid_notes?: { note_id: string; value: string }[]
 }
 
 export const MAX_RESTORE_BYTES = 200 * 1024 * 1024

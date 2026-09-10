@@ -492,9 +492,39 @@ export interface RestoreStats {
   /** 原件未随笔记恢复的附件（每个附件一条，≤ MEDIA_MISSING_LIST_MAX 条）：笔记已入库并打上
    * meta.attachment_missing，前端据此定位补传而不是给一个 404 的下载 / 重试按钮 */
   media_missing_notes: { note_id: string; name: string; reason: AttachmentMissingReason }[];
+  /** notes.json 里 todo_due 解析不出（手工改过 / 外来包）的笔记条数：笔记仍导入、到期清空并打上
+   * meta.todo_due_invalid，与 PATCH 的 400 同一口径，不让非法值落库后在所有客户端显示成 Invalid Date */
+  todo_due_invalid: number;
+  todo_due_invalid_notes: { note_id: string; value: string }[];
 }
 
 const MEDIA_MISSING_LIST_MAX = 50;
+const TODO_DUE_INVALID_LIST_MAX = 50;
+const TODO_DUE_INVALID_VALUE_MAX = 40;
+
+const RESTORE_DUE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const RESTORE_DUE_BARE_RE = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?$/;
+const RESTORE_DUE_OFFSET_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/**
+ * 备份里的 todo_due：纯日期 / 带偏移时刻原样；无偏移历史时刻按 Asia/Shanghai 补 +08:00
+ * （与 normalizeStoredTodoDue 读路径同口径，落库后不再有裸值）；其余形态 invalid。
+ */
+export function restoreTodoDue(v: unknown): { due: string | null; invalid: string | null } {
+  if (typeof v !== "string" || v.trim() === "") return { due: null, invalid: null };
+  const s = v.trim();
+  const bare = s.match(RESTORE_DUE_BARE_RE);
+  const candidate = RESTORE_DUE_DATE_RE.test(s)
+    ? s
+    : bare
+      ? `${bare[1]}T${bare[2]}:00+08:00`
+      : RESTORE_DUE_OFFSET_RE.test(s)
+        ? s.replace(" ", "T")
+        : null;
+  if (candidate === null || Number.isNaN(Date.parse(candidate)))
+    return { due: null, invalid: s.slice(0, TODO_DUE_INVALID_VALUE_MAX) };
+  return { due: candidate, invalid: null };
+}
 
 function sanitizeMetaForRestore(meta: NoteMeta | null): NoteMeta | null {
   if (!meta) return null;
@@ -558,6 +588,8 @@ export async function restoreBackup(
     media_failed: 0,
     media_missing: 0,
     media_missing_notes: [],
+    todo_due_invalid: 0,
+    todo_due_invalid_notes: [],
   };
 
   // old note id -> new note id (only for imported, non-duplicate notes)
@@ -680,6 +712,14 @@ export async function restoreBackup(
         const newId = crypto.randomUUID();
         if (typeof n.id === "string") idMap.set(n.id, newId);
         if (n.category === "idea") ideaIds.push(newId);
+        const due = restoreTodoDue(n.todo_due);
+        let meta = sanitizeMetaForRestore(typeof n.meta === "object" ? n.meta : null);
+        if (due.invalid !== null) {
+          stats.todo_due_invalid++;
+          if (stats.todo_due_invalid_notes.length < TODO_DUE_INVALID_LIST_MAX)
+            stats.todo_due_invalid_notes.push({ note_id: newId, value: due.invalid });
+          meta = { ...(meta ?? {}), todo_due_invalid: due.invalid };
+        }
         for (const a of n.attachments ?? []) {
           if (a && typeof a.path === "string") attByPath.set(a.path, { oldNoteId: n.id, att: a });
         }
@@ -700,12 +740,12 @@ export async function restoreBackup(
           tags: Array.isArray(n.tags) ? n.tags.filter((t): t is string => typeof t === "string").slice(0, 6) : [],
           title: typeof n.title === "string" ? n.title : null,
           is_sensitive: n.is_sensitive === true,
-          todo_due: typeof n.todo_due === "string" ? n.todo_due : null,
+          todo_due: due.due,
           todo_done: n.todo_done === true,
           done_at: typeof n.done_at === "string" ? n.done_at : null,
           amount: typeof n.amount === "number" ? n.amount : null,
           currency: typeof n.currency === "string" ? n.currency : null,
-          meta: sanitizeMetaForRestore(typeof n.meta === "object" ? n.meta : null),
+          meta,
           created_at: n.created_at,
           updated_at: DATETIME_RE.test(n.updated_at ?? "") ? n.updated_at : n.created_at,
         });
