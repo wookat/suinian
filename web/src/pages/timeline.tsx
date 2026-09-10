@@ -206,6 +206,7 @@ export function TimelinePage() {
   const [notes, setNotes] = useState<Note[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [loadMoreError, setLoadMoreError] = useState<{ message: string; network: boolean } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<LoadError | null>(null)
   const [category, setCategory] = useState("")
@@ -693,6 +694,7 @@ export function TimelinePage() {
     abortRef.current = controller
     setLoading(true)
     setError(null)
+    setLoadMoreError(null)
     try {
       const res = await getNotes(
         {
@@ -729,6 +731,7 @@ export function TimelinePage() {
   const loadMore = useCallback(async () => {
     if (!cursor || loadingMore || loading) return
     setLoadingMore(true)
+    setLoadMoreError(null)
     try {
       const res = await getNotes({
         category: category || undefined,
@@ -744,12 +747,17 @@ export function TimelinePage() {
         return [...ns, ...res.notes.filter((n) => !seen.has(n.id))]
       })
       setCursor(res.cursor)
-    } catch {
-      // 滚动加载失败静默处理，下次进入视口重试
+    } catch (e) {
+      setLoadMoreError({
+        message: e instanceof Error ? e.message : String(e),
+        network: e instanceof NetworkError,
+      })
     } finally {
       setLoadingMore(false)
     }
   }, [cursor, loadingMore, loading, category, tag, search, sourceFilter, fromDate, toDate])
+
+  useRetryOnReconnect(!loadingMore && loadMoreError?.network === true, loadMore)
 
   const sentinelRef = useRef<HTMLDivElement | null>(null)
   const loadMoreRef = useRef(loadMore)
@@ -1428,6 +1436,17 @@ export function TimelinePage() {
           {loadingMore && (
             <div className="flex justify-center py-3">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            </div>
+          )}
+          {loadMoreError && !loadingMore && (
+            <div className="flex flex-col items-center gap-2 py-3 text-center" role="status">
+              <p className="text-xs text-muted-foreground">
+                后面的记录没加载出来：{loadMoreError.message}
+                {loadMoreError.network ? "（会自动重试）" : ""}
+              </p>
+              <Button size="sm" variant="outline" onClick={() => void loadMore()}>
+                <RefreshCw className="size-3.5" /> 继续加载
+              </Button>
             </div>
           )}
         </div>
