@@ -4,6 +4,7 @@ import { escapeSwWedgeForAuth } from "./sw-control"
 import { mutated } from "./notes-bus"
 import {
   mockAsk,
+  mockBatchNotes,
   mockCreateNote,
   mockDeleteNote,
   mockEmptyTrash,
@@ -456,20 +457,31 @@ export interface BatchResult {
   prev?: PrevCategory[]
 }
 
+/** 批量请求体：ids 或 filter 二选一指定目标；restore_categories 用 entries */
+export interface BatchBody {
+  action: BatchAction
+  ids?: string[]
+  filter?: BatchFilter
+  entries?: PrevCategory[]
+  tags?: string[]
+  category?: string
+}
+
 /** NDJSON 批量流：{done,total} 进度行 + 最终 {ok,affected,remaining,ids?}（或 {error}） */
 function batchStream(
-  body: Record<string, unknown>,
+  body: BatchBody,
   onProgress?: (done: number, total: number) => void,
 ): Promise<BatchResult> {
   return mutated(batchStreamRaw(body, onProgress))
 }
 
 async function batchStreamRaw(
-  body: Record<string, unknown>,
+  body: BatchBody,
   onProgress?: (done: number, total: number) => void,
 ): Promise<BatchResult> {
   const { apiBaseUrl, apiToken, useMock } = loadSettings()
-  if (useMock || !apiBaseUrl) throw new Error("演示模式不支持批量操作，请先配置真实 API")
+  if (useMock) return mockBatchNotes(body, onProgress)
+  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
   let res: Response
   try {
     res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/notes/batch?stream=1`, {

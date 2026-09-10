@@ -5,6 +5,7 @@ import type {
   Note,
   NotesQuery,
   NotesResponse,
+  PrevCategory,
   ReportsResponse,
   Thread,
   ThreadDetail,
@@ -15,6 +16,7 @@ import type {
   TrashResponse,
   WeeklyReport,
 } from "./types"
+import type { BatchBody, BatchResult } from "./api"
 
 const MOCK_KEY = "suinian.mock.notes.v2"
 const MOCK_TRASH_KEY = "suinian.mock.trash.v1"
@@ -248,9 +250,8 @@ function utcSqlToMs(s: string, endOfDay: boolean): number | null {
   return Number.isNaN(ms) ? null : ms
 }
 
-export async function mockGetNotes(query: NotesQuery): Promise<NotesResponse> {
-  await delay()
-  let notes = loadMockNotes()
+function filterMockNotes(all: Note[], query: NotesQuery): Note[] {
+  let notes = all
   if (query.category) notes = notes.filter((n) => n.category === query.category)
   if (query.tag) notes = notes.filter((n) => n.tags.includes(query.tag!))
   if (query.source) notes = notes.filter((n) => n.source === query.source)
@@ -268,8 +269,90 @@ export async function mockGetNotes(query: NotesQuery): Promise<NotesResponse> {
         n.tags.some((t) => t.toLowerCase().includes(q)),
     )
   }
+  return notes
+}
+
+export async function mockGetNotes(query: NotesQuery): Promise<NotesResponse> {
+  await delay()
+  const notes = filterMockNotes(loadMockNotes(), query)
   notes.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
   return { notes, cursor: null }
+}
+
+/**
+ * 批量操作（与服务端 /api/notes/batch 同语义）：delete 软删进回收站并回传目标 ids；
+ * add_tags / remove_tags 只回传实际变更的 ids；set_category 回传每条原分类快照 prev；
+ * restore_categories 按 prev 逐条还原。target 传 ids 或筛选条件（筛选=全部匹配项）。
+ */
+export async function mockBatchNotes(
+  body: BatchBody,
+  onProgress?: (done: number, total: number) => void,
+): Promise<BatchResult> {
+  await delay(150)
+  const { action } = body
+  const notes = loadMockNotes()
+  if (action === "restore_categories") {
+    const entries = body.entries ?? []
+    const byId = new Map(entries.map((e) => [e.id, e]))
+    const ids: string[] = []
+    for (const n of notes) {
+      const e = byId.get(n.id)
+      if (!e) continue
+      const { category: _c, ...rest } = n.meta?.manual_override ?? {}
+      n.category = e.category as Note["category"]
+      n.meta = { ...n.meta, manual_override: e.manual ? { ...rest, category: true } : rest }
+      n.updated_at = new Date().toISOString()
+      ids.push(n.id)
+    }
+    saveMockNotes(notes)
+    onProgress?.(entries.length, entries.length)
+    return { affected: ids.length, remaining: 0, ids }
+  }
+  const targetIds = body.filter ? filterMockNotes(notes, body.filter).map((n) => n.id) : (body.ids ?? [])
+  const want = new Set(targetIds)
+  onProgress?.(0, targetIds.length)
+  if (action === "delete") {
+    const hit = notes.filter((n) => want.has(n.id))
+    if (hit.length) {
+      const now = Date.now()
+      const trash = loadMockTrash().filter((n) => !want.has(n.id))
+      for (const note of hit) {
+        trash.unshift({
+          ...note,
+          deleted_at: new Date(now).toISOString(),
+          purge_at: new Date(now + MOCK_TRASH_RETENTION_DAYS * 86_400_000).toISOString(),
+        })
+      }
+      saveMockTrash(trash)
+      saveMockNotes(notes.filter((n) => !want.has(n.id)))
+    }
+    onProgress?.(targetIds.length, targetIds.length)
+    return { affected: hit.length, remaining: 0, ids: targetIds }
+  }
+  const tags = body.tags ?? []
+  const ids: string[] = []
+  const prev: PrevCategory[] = []
+  for (const n of notes) {
+    if (!want.has(n.id)) continue
+    if (action === "set_category") {
+      prev.push({ id: n.id, category: n.category, manual: n.meta?.manual_override?.category === true })
+      n.category = (body.category as Note["category"] | undefined) ?? n.category
+      n.meta = { ...n.meta, manual_override: { ...n.meta?.manual_override, category: true } }
+    } else {
+      const next =
+        action === "add_tags" ? [...new Set([...n.tags, ...tags])] : n.tags.filter((t) => !tags.includes(t))
+      if (next.length === n.tags.length && next.every((t, i) => t === n.tags[i])) continue
+      n.tags = next
+      n.meta = { ...n.meta, manual_override: { ...n.meta?.manual_override, tags: true } }
+    }
+    n.updated_at = new Date().toISOString()
+    ids.push(n.id)
+  }
+  saveMockNotes(notes)
+  onProgress?.(targetIds.length, targetIds.length)
+  return action === "set_category"
+    ? { affected: ids.length, remaining: 0, ids, prev }
+    : { affected: ids.length, remaining: 0, ids }
 }
 
 const URL_RE = /^https?:\/\/\S+$/i
