@@ -5,6 +5,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.zalize.suinian.data.NoteAttachment
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -66,15 +69,25 @@ fun NoteImageAttachment(
 ) {
     var bitmap by remember(noteId, attachment.id) { mutableStateOf<ImageBitmap?>(null) }
     var failed by remember(noteId, attachment.id) { mutableStateOf(false) }
+    var failReason by remember(noteId, attachment.id) { mutableStateOf<String?>(null) }
+    var loadAttempt by remember(noteId, attachment.id) { mutableIntStateOf(0) }
     var fullscreen by remember { mutableStateOf(false) }
 
-    LaunchedEffect(noteId, attachment.id) {
+    LaunchedEffect(noteId, attachment.id, loadAttempt) {
         if (bitmap != null || failed) return@LaunchedEffect
         try {
             val (bytes, _) = fetchMedia(noteId, attachment.id)
             val bmp = withContext(Dispatchers.Default) { decodeSampledBitmap(bytes) }
-            if (bmp != null) bitmap = bmp.asImageBitmap() else failed = true
-        } catch (_: Exception) {
+            if (bmp != null) {
+                bitmap = bmp.asImageBitmap()
+            } else {
+                failReason = "图片格式无法解码"
+                failed = true
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failReason = mediaLoadFailureReason(e)
             failed = true
         }
     }
@@ -114,10 +127,14 @@ fun NoteImageAttachment(
                 }
             }
         }
-        failed -> Text(
-            "图片加载失败",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.error,
+        failed -> MediaLoadFailed(
+            label = "图片加载失败",
+            reason = failReason,
+            onRetry = {
+                failed = false
+                failReason = null
+                loadAttempt++
+            },
             modifier = modifier,
         )
         else -> Box(
@@ -143,6 +160,7 @@ fun NoteAudioAttachment(
 ) {
     var audioFile by remember(noteId, attachment.id) { mutableStateOf<File?>(null) }
     var failed by remember(noteId, attachment.id) { mutableStateOf(false) }
+    var failReason by remember(noteId, attachment.id) { mutableStateOf<String?>(null) }
     var loadAttempt by remember(noteId, attachment.id) { mutableIntStateOf(0) }
     var playing by remember { mutableStateOf(false) }
     val player = remember { MediaPlayer() }
@@ -151,7 +169,10 @@ fun NoteAudioAttachment(
         if (audioFile != null || failed) return@LaunchedEffect
         try {
             audioFile = fetchMediaFile(noteId, attachment.id)
-        } catch (_: Exception) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failReason = mediaLoadFailureReason(e)
             failed = true
         }
     }
@@ -176,10 +197,15 @@ fun NoteAudioAttachment(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
             when {
-                failed -> Text(
-                    "语音加载失败",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
+                failed -> MediaLoadFailed(
+                    label = "语音加载失败",
+                    reason = failReason,
+                    onRetry = {
+                        failed = false
+                        failReason = null
+                        audioFile = null
+                        loadAttempt++
+                    },
                 )
                 audioFile == null -> {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -218,6 +244,8 @@ fun NoteAudioAttachment(
                                     playing = true
                                 }
                             } catch (_: Exception) {
+                                playing = false
+                                failReason = "这段语音无法播放，格式可能不受支持"
                                 failed = true
                             }
                         },
@@ -236,6 +264,45 @@ fun NoteAudioAttachment(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+        }
+    }
+}
+
+/** 附件加载失败态：原因（网络 / 服务端 / 缓存的可读文案）+ 点击整行重试，不用等滑出屏幕再滑回来 */
+@Composable
+private fun MediaLoadFailed(
+    label: String,
+    reason: String?,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onRetry)
+            .padding(vertical = 2.dp),
+    ) {
+        Icon(
+            Icons.Outlined.Refresh,
+            contentDescription = "重试加载",
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(14.dp),
+        )
+        Spacer(Modifier.width(4.dp))
+        Column {
+            Text(
+                "$label，点击重试",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            if (reason != null) {
+                Text(
+                    reason,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
