@@ -92,6 +92,13 @@ describe("normalizeTodoDue", () => {
     expect(normalizeTodoDue("2026-08-07T15:30:00-05:00")).toBe("2026-08-07T15:30:00-05:00");
   });
 
+  it("keeps the offset when seconds carry a fraction (Date#toISOString output)", () => {
+    expect(normalizeTodoDue("2026-08-07T07:30:00.000Z")).toBe("2026-08-07T07:30:00+00:00");
+    expect(normalizeTodoDue("2026-08-07T15:30:00.5+08:00")).toBe("2026-08-07T15:30:00+08:00");
+    expect(normalizeTodoDue("2026-08-07T15:30:00.123456-05:00")).toBe("2026-08-07T15:30:00-05:00");
+    expect(normalizeTodoDue("2026-08-07T15:30:00.000")).toBe("2026-08-07T15:30:00+08:00");
+  });
+
   it("keeps date-only values as YYYY-MM-DD", () => {
     expect(normalizeTodoDue("2026-08-10")).toBe("2026-08-10");
   });
