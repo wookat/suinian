@@ -18,12 +18,18 @@ fun sampleSizeFor(width: Int, height: Int, maxDim: Int): Int {
     return sample
 }
 
-/** 先只读尺寸，再按 inSampleSize 解码；解码失败返回 null */
-fun decodeSampledBitmap(bytes: ByteArray, maxDim: Int = MEDIA_DECODE_MAX_DIM): Bitmap? {
+/** 只读原图尺寸（不分配像素）；读不出为 (0, 0) */
+fun decodeImageBounds(bytes: ByteArray): Pair<Int, Int> {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    return bounds.outWidth to bounds.outHeight
+}
+
+/** 先只读尺寸，再按 inSampleSize 解码；解码失败返回 null */
+fun decodeSampledBitmap(bytes: ByteArray, maxDim: Int = MEDIA_DECODE_MAX_DIM): Bitmap? {
+    val (w, h) = decodeImageBounds(bytes)
     val opts = BitmapFactory.Options().apply {
-        inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, maxDim)
+        inSampleSize = sampleSizeFor(w, h, maxDim)
     }
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
 }

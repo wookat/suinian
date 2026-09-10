@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Pause
@@ -48,6 +49,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -144,25 +146,11 @@ fun NoteImageAttachment(
                     .clickable { fullscreen = true },
             )
             if (fullscreen) {
-                Dialog(
-                    onDismissRequest = { fullscreen = false },
-                    properties = DialogProperties(usePlatformDefaultWidth = false),
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.92f))
-                            .clickable { fullscreen = false },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Image(
-                            bitmap = bmp,
-                            contentDescription = "笔记图片（大图）",
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier.fillMaxSize().padding(12.dp),
-                        )
-                    }
-                }
+                FullscreenImage(
+                    cardBitmap = bmp,
+                    fetchBytes = { fetchMedia(noteId, attachment.id).first },
+                    onDismiss = { fullscreen = false },
+                )
             }
         }
         failed -> MediaLoadFailed(
@@ -316,6 +304,56 @@ fun NoteAudioAttachment(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * 全屏看图：可双指缩放 / 拖动 / 双击放大，单击或右上角关闭。
+ * 卡片那张按长边 2048 采样，放大看不清；原图被采样过时按屏幕长边 2 倍（≤ 4096）从缓存字节再解一张，解好前先显示卡片那张。
+ */
+@Composable
+private fun FullscreenImage(
+    cardBitmap: ImageBitmap,
+    fetchBytes: suspend () -> ByteArray,
+    onDismiss: () -> Unit,
+) {
+    val metrics = LocalContext.current.resources.displayMetrics
+    var fullBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(Unit) {
+        try {
+            val bytes = fetchBytes()
+            val fullDim = fullscreenDecodeMaxDim(metrics.widthPixels, metrics.heightPixels)
+            val (w, h) = withContext(Dispatchers.Default) { decodeImageBounds(bytes) }
+            if (!fullscreenNeedsRedecode(w, h, MEDIA_DECODE_MAX_DIM, fullDim)) return@LaunchedEffect
+            fullBitmap = withContext(Dispatchers.Default) { decodeSampledBitmap(bytes, fullDim) }?.asImageBitmap()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // 再解失败就一直用卡片那张
+        }
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.92f)),
+        ) {
+            ZoomableImage(
+                bitmap = fullBitmap ?: cardBitmap,
+                contentDescription = "笔记图片（大图，双指缩放，单击关闭）",
+                onTap = onDismiss,
+                modifier = Modifier.fillMaxSize(),
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+            ) {
+                Icon(Icons.Outlined.Close, contentDescription = "关闭大图", tint = Color.White)
             }
         }
     }
