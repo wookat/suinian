@@ -137,7 +137,7 @@ type PendingUndo = {
 
 type LoadError =
   | { kind: "auth"; notLoggedIn: boolean }
-  | { kind: "network" }
+  | { kind: "network"; message: string }
   | { kind: "other"; message: string }
 
 function dayLabel(iso: string): string {
@@ -707,7 +707,7 @@ export function TimelinePage() {
       if (controller.signal.aborted) return
       if (e instanceof ApiError && (e.status === 401 || e.status === 403))
         setError({ kind: "auth", notLoggedIn: !loadSettings().apiToken })
-      else if (e instanceof NetworkError) setError({ kind: "network" })
+      else if (e instanceof NetworkError) setError({ kind: "network", message: e.message })
       else setError({ kind: "other", message: e instanceof Error ? e.message : String(e) })
     } finally {
       if (!controller.signal.aborted) setLoading(false)
@@ -1271,9 +1271,7 @@ export function TimelinePage() {
             </>
           ) : error.kind === "network" ? (
             <>
-              <p className="text-sm text-muted-foreground">
-                网络连接失败，请检查网络后重试。
-              </p>
+              <p className="text-sm text-muted-foreground">{error.message}</p>
               <Button size="sm" variant="outline" onClick={() => void load()}>
                 <RefreshCw className="size-3.5" /> 重试
               </Button>

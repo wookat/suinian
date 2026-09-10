@@ -323,7 +323,7 @@ export function InsightsPage() {
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.status === 403))
         setError("未连接或 token 失效，请到设置页检查连接")
-      else if (e instanceof NetworkError) setError("网络连接失败，请检查网络或 API 地址")
+      else if (e instanceof NetworkError) setError(e.message)
       else setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
