@@ -614,11 +614,26 @@ fun SettingsScreen(
                     Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "已保存到系统下载：${d.fileName}",
+                            backupDoneLabel(d),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.weight(1f),
                         )
+                        val shareUri = d.shareUri
+                        if (shareUri != null) {
+                            TextButton(onClick = {
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = "application/zip"
+                                    putExtra(Intent.EXTRA_STREAM, shareUri)
+                                    putExtra(Intent.EXTRA_SUBJECT, d.fileName)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                try {
+                                    context.startActivity(Intent.createChooser(send, "分享备份 ${d.fileName}"))
+                                } catch (_: Exception) {
+                                }
+                            }) { Text("分享") }
+                        }
                         TextButton(onClick = { vm.dismissBackupDownloadResult() }) { Text("知道了") }
                     }
                 }

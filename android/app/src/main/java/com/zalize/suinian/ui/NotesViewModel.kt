@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zalize.suinian.SuinianApp
@@ -596,7 +597,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 StaleDownloadCleaner.ensureCleaned(getApplication())
                 var lastStep = -1L
-                val fileName = repo.downloadBackup(
+                repo.downloadBackup(
                     includeSensitive,
                     password,
                     onProgress = { received, total ->
@@ -610,9 +611,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                     },
                     open = { name -> openDownload(name, "application/zip").also { target = it }.stream },
                 )
-                target?.commit()
+                val saved = target?.commit() ?: throw IllegalStateException("备份下载失败，请稍后重试")
                 target = null
-                _backupDownload.value = BackupDownloadState.Done(fileName)
+                _backupDownload.value = saved
             } catch (e: CancellationException) {
                 target?.discard()
                 _backupDownload.value = BackupDownloadState.Failed(BACKUP_DOWNLOAD_CANCELLED)
@@ -632,24 +633,37 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         if (backupDownloadJob?.isActive != true) _backupDownload.value = BackupDownloadState.Idle
     }
 
-    /** 下载目录里一个正在写的文件：Q+ 是 IS_PENDING 的 MediaStore 行（对其他应用不可见），旧系统是应用外部目录下的 .part 文件、完成后才改成最终名 */
+    /**
+     * 下载目录里一个正在写的文件：Q+ 是 IS_PENDING 的 MediaStore 行（对其他应用不可见），旧系统是应用外部目录下的 .part 文件、完成后才改成最终名。
+     * commit 返回实际落盘的文件名（同名时系统 / 本地都改成「name (1).zip」，不覆盖上一份）与可分享的 content Uri
+     */
     private inner class DownloadTarget(
         val stream: OutputStream,
         private val uri: Uri?,
         private val file: java.io.File?,
-        private val finalFile: java.io.File? = null,
+        private val requestedName: String,
     ) {
-        fun commit() {
+        fun commit(): BackupDownloadState.Done {
+            val context = getApplication<Application>()
             val u = uri
             if (u != null) {
+                val resolver = context.contentResolver
                 val values = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
-                getApplication<Application>().contentResolver.update(u, values, null, null)
-                return
+                resolver.update(u, values, null, null)
+                val actualName = runCatching {
+                    resolver.query(u, arrayOf(MediaStore.Downloads.DISPLAY_NAME), null, null, null)?.use { c ->
+                        if (c.moveToFirst()) c.getString(0) else null
+                    }
+                }.getOrNull()
+                return BackupDownloadState.Done(actualName ?: requestedName, u, inAppDir = false)
             }
-            val part = file ?: return
-            val dest = finalFile ?: return
-            if (dest.exists()) dest.delete()
+            val part = file ?: throw IllegalStateException("无法保存下载文件")
+            val dest = java.io.File(part.parentFile, uniqueDownloadName(requestedName) { java.io.File(part.parentFile, it).exists() })
             if (!part.renameTo(dest)) throw IllegalStateException("无法保存下载文件")
+            val shareUri = runCatching {
+                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", dest)
+            }.getOrNull()
+            return BackupDownloadState.Done(dest.name, shareUri, inAppDir = true)
         }
 
         fun discard() {
@@ -673,12 +687,12 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 ?: throw IllegalStateException("无法创建下载文件")
             val stream = resolver.openOutputStream(uri)
                 ?: run { resolver.delete(uri, null, null); throw IllegalStateException("无法写入下载文件") }
-            return DownloadTarget(stream, uri, null)
+            return DownloadTarget(stream, uri, null, fileName)
         }
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
             ?: throw IllegalStateException("存储不可用")
         val part = java.io.File(dir, fileName + StaleDownloadCleaner.PART_SUFFIX)
-        return DownloadTarget(part.outputStream(), null, part, java.io.File(dir, fileName))
+        return DownloadTarget(part.outputStream(), null, part, fileName)
     }
 
     private val _restore = MutableStateFlow<RestoreState>(RestoreState.Idle)
