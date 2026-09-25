@@ -22,9 +22,9 @@
     "silk-wasm": "3.7.1"
   },
   "devDependencies": {
-    "@types/node": "26.4.0",
+    "@types/node": "26.6.2",
     "@types/qrcode-terminal": "0.12.2",
-    "tsx": "4.23.13",
+    "tsx": "4.23.15",
     "typescript": "7.0.2",
     "vitest": "4.1.11"
   }
