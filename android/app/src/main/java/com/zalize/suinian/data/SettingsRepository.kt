@@ -34,6 +34,7 @@ class SettingsRepository(private val context: Context) {
         val TOUR_SEEN = booleanPreferencesKey("tour_seen")
         val USER_NAME = stringPreferencesKey("user_name")
         val ASK_CHAT = stringPreferencesKey("ask_chat_v1")
+        val TZ_SYNCED = stringPreferencesKey("tz_synced")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
@@ -69,6 +70,10 @@ class SettingsRepository(private val context: Context) {
         it[Keys.ONBOARDING_DONE] = false
     }
     suspend fun setAskChatJson(v: String) = context.dataStore.edit { it[Keys.ASK_CHAT] = v }
+
+    /** 已同步到服务端的时区标记（"token前8位:IANA id"），同 token 同时区不重复 PATCH */
+    val tzSyncedMarker: Flow<String> = context.dataStore.data.map { it[Keys.TZ_SYNCED] ?: "" }
+    suspend fun setTzSyncedMarker(v: String) = context.dataStore.edit { it[Keys.TZ_SYNCED] = v }
 
     /** 首启引导完成：单事务写入，避免分步写时 token 先落库触发重组、后续写入被取消 */
     suspend fun completeOnboarding(baseUrl: String, token: String, userName: String?, showTour: Boolean = false) =

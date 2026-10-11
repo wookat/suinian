@@ -37,7 +37,68 @@ export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promis
  */
 const DEFAULT_FALLBACK_MODEL = "workers-ai:@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
-type AiEnv = Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL" | "AI_FALLBACK_MODEL">;
+type AiEnv = Pick<Env, "AI" | "DEEPSEEK_API_KEY" | "DEEPSEEK_BASE_URL" | "AI_MODEL" | "AI_BASE_URL" | "AI_FALLBACK_MODEL" | "AI_BREAKER_MS">;
+
+/**
+ * Provider call outcome. `slow` marks failures that cost the caller the full
+ * timeout / a network round-trip (timeout, connection error, 429/5xx after the
+ * in-provider retry) as opposed to fast configuration failures (missing key,
+ * 401/402/4xx) — only slow failures trip the primary breaker below.
+ */
+type RunResult = { text: string | null; slow: boolean };
+const ok = (text: string): RunResult => ({ text, slow: false });
+const FAST_FAIL: RunResult = { text: null, slow: false };
+const SLOW_FAIL: RunResult = { text: null, slow: true };
+
+/**
+ * R338 primary breaker (per isolate, in memory). Production tail on the
+ * swe-1.7 relay showed outage windows of 1–11 min in which every /api/ask
+ * waited out the 20s primary timeout before falling back (114 requests in
+ * 25 min). After one slow primary failure the chain goes straight to the
+ * fallback for AI_BREAKER_MS (default 60s), then probes the primary again on
+ * the next call (half-open); any primary success closes the breaker. Only
+ * consulted when a fallback exists — with the chain disabled the primary is
+ * always tried. `aiProbe` bypasses the breaker so /health reports the real
+ * primary state (a probe success closes it, a probe failure never trips it).
+ */
+const DEFAULT_BREAKER_MS = 60_000;
+let primaryOpenUntil = 0;
+let primaryTrips = 0;
+
+function breakerMs(env: AiEnv): number {
+  const raw = env.AI_BREAKER_MS?.trim();
+  if (!raw) return DEFAULT_BREAKER_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_BREAKER_MS;
+}
+
+function primaryBreakerOpen(env: AiEnv): boolean {
+  return breakerMs(env) > 0 && Date.now() < primaryOpenUntil;
+}
+
+function tripPrimaryBreaker(env: AiEnv, model: string, site: string): void {
+  const ms = breakerMs(env);
+  if (ms <= 0) return;
+  primaryOpenUntil = Date.now() + ms;
+  primaryTrips++;
+  console.error(`${site}: primary ${model} breaker open for ${ms}ms (trip #${primaryTrips})`);
+}
+
+function closePrimaryBreaker(): void {
+  primaryOpenUntil = 0;
+}
+
+/** Observability for /health (admin view): whether the chain is currently skipping the primary. */
+export function primaryBreakerState(): { open: boolean; until: number | null; trips: number } {
+  const open = Date.now() < primaryOpenUntil;
+  return { open, until: open ? primaryOpenUntil : null, trips: primaryTrips };
+}
+
+/** Test hook: forget breaker state between cases. */
+export function resetPrimaryBreaker(): void {
+  primaryOpenUntil = 0;
+  primaryTrips = 0;
+}
 
 /**
  * Deterministic offline responses for local development (`AI_MODEL=mock`):
@@ -69,8 +130,8 @@ function mockChatResponse(opts: ChatOptions): string {
   return "（本地 mock AI 回复：未配置真实模型，设置 DEEPSEEK_API_KEY 或 AI_MODEL 后可获得真实回答。）";
 }
 
-async function runWorkersAi(env: AiEnv, model: string, opts: ChatOptions): Promise<string | null> {
-  if (!env.AI) return null;
+async function runWorkersAi(env: AiEnv, model: string, opts: ChatOptions): Promise<RunResult> {
+  if (!env.AI) return FAST_FAIL;
   // same retry policy as the fetch path: transient failures get one retry,
   // timeouts don't (a second slow attempt would double the latency)
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -85,22 +146,22 @@ async function runWorkersAi(env: AiEnv, model: string, opts: ChatOptions): Promi
         `workers-ai ${model}`
       )) as { response?: unknown; choices?: { message?: { content?: unknown } }[] };
       const content = out.choices?.[0]?.message?.content;
-      if (typeof content === "string") return content;
+      if (typeof content === "string") return ok(content);
       // `response` is not always a string (see extractWorkersAiDelta): only
       // trust it after a type check, never stringify structured values
-      return typeof out.response === "string" ? out.response : null;
+      return typeof out.response === "string" ? ok(out.response) : FAST_FAIL;
     } catch (err) {
       console.error("chatComplete: workers-ai failed", model, err);
       const timedOut = err instanceof Error && err.message.includes("timed out");
       if (attempt === 0 && !timedOut) continue;
-      return null;
+      return SLOW_FAIL;
     }
   }
-  return null;
+  return SLOW_FAIL;
 }
 
-async function runOpenAiCompat(env: AiEnv, model: string, opts: ChatOptions): Promise<string | null> {
-  if (!env.DEEPSEEK_API_KEY) return null;
+async function runOpenAiCompat(env: AiEnv, model: string, opts: ChatOptions): Promise<RunResult> {
+  if (!env.DEEPSEEK_API_KEY) return FAST_FAIL;
   // transient provider failures (429/5xx, network errors) get one retry;
   // timeouts don't retry — a second slow attempt would double the latency
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -118,22 +179,24 @@ async function runOpenAiCompat(env: AiEnv, model: string, opts: ChatOptions): Pr
       });
       if (!res.ok) {
         console.error("chatComplete: provider error", res.status, (await res.text()).slice(0, 200));
-        if (attempt === 0 && (res.status === 429 || res.status >= 500)) continue;
-        return null;
+        const transient = res.status === 429 || res.status >= 500;
+        if (attempt === 0 && transient) continue;
+        return transient ? SLOW_FAIL : FAST_FAIL;
       }
       const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-      return data.choices?.[0]?.message?.content ?? null;
+      const content = data.choices?.[0]?.message?.content;
+      return typeof content === "string" ? ok(content) : FAST_FAIL;
     } catch (err) {
       console.error("chatComplete: failed", err);
       const timedOut = err instanceof DOMException && err.name === "TimeoutError";
       if (attempt === 0 && !timedOut) continue;
-      return null;
+      return SLOW_FAIL;
     }
   }
-  return null;
+  return SLOW_FAIL;
 }
 
-function runModel(env: AiEnv, model: string, opts: ChatOptions): Promise<string | null> {
+function runModel(env: AiEnv, model: string, opts: ChatOptions): Promise<RunResult> {
   if (model.startsWith(WORKERS_AI_PREFIX)) return runWorkersAi(env, model.slice(WORKERS_AI_PREFIX.length), opts);
   return runOpenAiCompat(env, model, opts);
 }
@@ -162,12 +225,20 @@ function fallbackModelFor(env: AiEnv, primary: string): string | null {
 export async function chatComplete(env: AiEnv, opts: ChatOptions): Promise<string | null> {
   const model = env.AI_MODEL || "deepseek-chat";
   if (model === MOCK_MODEL) return mockChatResponse(opts);
-  const primary = await runModel(env, model, opts);
-  if (primary !== null) return primary;
   const fallback = fallbackModelFor(env, model);
+  if (fallback && primaryBreakerOpen(env)) {
+    console.error(`chatComplete: primary ${model} breaker open, using ${fallback}`);
+    return (await runModel(env, fallback, opts)).text;
+  }
+  const primary = await runModel(env, model, opts);
+  if (primary.text !== null) {
+    closePrimaryBreaker();
+    return primary.text;
+  }
   if (!fallback) return null;
+  if (primary.slow) tripPrimaryBreaker(env, model, "chatComplete");
   console.error(`chatComplete: primary ${model} failed, falling back to ${fallback}`);
-  return runModel(env, fallback, opts);
+  return (await runModel(env, fallback, opts)).text;
 }
 
 /** Parse one provider SSE body, feeding text chunks to onDelta; returns full text or null. */
@@ -241,8 +312,8 @@ const extractWorkersAiDelta = (data: string): string | null => {
   }
 };
 
-async function runWorkersAiStream(env: AiEnv, model: string, opts: ChatOptions, onDelta: (t: string) => void): Promise<string | null> {
-  if (!env.AI) return null;
+async function runWorkersAiStream(env: AiEnv, model: string, opts: ChatOptions, onDelta: (t: string) => void): Promise<RunResult> {
+  if (!env.AI) return FAST_FAIL;
   try {
     const stream = (await withTimeout(
       env.AI.run(model as Parameters<Ai["run"]>[0], {
@@ -254,15 +325,16 @@ async function runWorkersAiStream(env: AiEnv, model: string, opts: ChatOptions, 
       opts.timeout_ms ?? 20_000,
       `workers-ai stream ${model}`
     )) as ReadableStream<Uint8Array>;
-    return await consumeSseBody(stream, extractWorkersAiDelta, onDelta);
+    const text = await consumeSseBody(stream, extractWorkersAiDelta, onDelta);
+    return text !== null ? ok(text) : SLOW_FAIL;
   } catch (err) {
     console.error("chatCompleteStream: workers-ai failed", model, err);
-    return null;
+    return SLOW_FAIL;
   }
 }
 
-async function runOpenAiCompatStream(env: AiEnv, model: string, opts: ChatOptions, onDelta: (t: string) => void): Promise<string | null> {
-  if (!env.DEEPSEEK_API_KEY) return null;
+async function runOpenAiCompatStream(env: AiEnv, model: string, opts: ChatOptions, onDelta: (t: string) => void): Promise<RunResult> {
+  if (!env.DEEPSEEK_API_KEY) return FAST_FAIL;
   try {
     const res = await fetch(`${env.AI_BASE_URL || env.DEEPSEEK_BASE_URL}/chat/completions`, {
       method: "POST",
@@ -278,16 +350,17 @@ async function runOpenAiCompatStream(env: AiEnv, model: string, opts: ChatOption
     });
     if (!res.ok || !res.body) {
       console.error("chatCompleteStream: provider error", res.status, (await res.text()).slice(0, 200));
-      return null;
+      return res.status === 429 || res.status >= 500 ? SLOW_FAIL : FAST_FAIL;
     }
-    return await consumeSseBody(res.body, extractOpenAiDelta, onDelta);
+    const text = await consumeSseBody(res.body, extractOpenAiDelta, onDelta);
+    return text !== null ? ok(text) : SLOW_FAIL;
   } catch (err) {
     console.error("chatCompleteStream: failed", err);
-    return null;
+    return SLOW_FAIL;
   }
 }
 
-function runModelStream(env: AiEnv, model: string, opts: ChatOptions, onDelta: (t: string) => void): Promise<string | null> {
+function runModelStream(env: AiEnv, model: string, opts: ChatOptions, onDelta: (t: string) => void): Promise<RunResult> {
   if (model.startsWith(WORKERS_AI_PREFIX)) return runWorkersAiStream(env, model.slice(WORKERS_AI_PREFIX.length), opts, onDelta);
   return runOpenAiCompatStream(env, model, opts, onDelta);
 }
@@ -308,12 +381,20 @@ export async function chatCompleteStream(env: AiEnv, opts: ChatOptions, onDelta:
     onDelta(text);
     return text;
   }
-  const primary = await runModelStream(env, model, opts, onDelta);
-  if (primary !== null) return primary;
   const fallback = fallbackModelFor(env, model);
+  if (fallback && primaryBreakerOpen(env)) {
+    console.error(`chatCompleteStream: primary ${model} breaker open, using ${fallback}`);
+    return (await runModelStream(env, fallback, opts, onDelta)).text;
+  }
+  const primary = await runModelStream(env, model, opts, onDelta);
+  if (primary.text !== null) {
+    closePrimaryBreaker();
+    return primary.text;
+  }
   if (!fallback) return null;
+  if (primary.slow) tripPrimaryBreaker(env, model, "chatCompleteStream");
   console.error(`chatCompleteStream: primary ${model} failed, falling back to ${fallback}`);
-  return runModelStream(env, fallback, opts, onDelta);
+  return (await runModelStream(env, fallback, opts, onDelta)).text;
 }
 
 /**
@@ -333,8 +414,11 @@ export async function aiProbe(env: AiEnv): Promise<{ ok: boolean; provider: "pri
     timeout_ms: 8_000,
     messages: [{ role: "user", content: "reply with: ok" }],
   };
-  if ((await runModel(env, model, opts)) !== null) return { ok: true, provider: "primary", model };
+  if ((await runModel(env, model, opts)).text !== null) {
+    closePrimaryBreaker();
+    return { ok: true, provider: "primary", model };
+  }
   const fallback = fallbackModelFor(env, model);
-  if (fallback && (await runModel(env, fallback, opts)) !== null) return { ok: true, provider: "fallback", model: fallback };
+  if (fallback && (await runModel(env, fallback, opts)).text !== null) return { ok: true, provider: "fallback", model: fallback };
   return { ok: false, provider: null, model: null };
 }

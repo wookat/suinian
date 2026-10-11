@@ -1,5 +1,9 @@
-import { Toaster as Sonner, type ToasterProps } from "sonner"
+import { Toaster as Sonner, toast, type ToasterProps } from "sonner"
 import { CircleAlert, CircleCheck, Info, Loader2, TriangleAlert } from "lucide-react"
+import { registerToastImpl } from "@/lib/toast"
+
+// 本分包一到就接管 @/lib/toast 的排队提示（见 lib/toast.ts 头注）
+registerToastImpl(toast)
 
 function Toaster(props: ToasterProps) {
   return (

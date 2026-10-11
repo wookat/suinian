@@ -82,6 +82,18 @@ export function zonedDate(now: Date, tz: string, offsetDays = 0): { iso: string;
   return { iso: local.toISOString().slice(0, 10), weekday: WEEKDAYS_ZH[local.getUTCDay()] };
 }
 
+/**
+ * todo_due 在时区 `tz` 的本地日期（YYYY-MM-DD）。纯日期原样返回；带偏移的时刻按该瞬间换算到 `tz`；
+ * 无偏移的历史值按 Asia/Shanghai 本地时间（与 normalizeStoredTodoDue 同口径）。解析不出返回 null。
+ */
+export function todoDueLocalDate(due: string, tz: string): string | null {
+  const s = due.trim().replace(" ", "T");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const v = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(s) ? `${s}+08:00` : s;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? null : zonedDate(new Date(t), tz).iso;
+}
+
 /** Date in Asia/Shanghai (offset by `offsetDays`) as { iso: "YYYY-MM-DD", weekday: "周X" }. */
 export function shanghaiDate(now: Date = new Date(), offsetDays = 0): { iso: string; weekday: string } {
   return zonedDate(now, DEFAULT_TZ, offsetDays);
@@ -685,7 +697,8 @@ export function demoteEventLog(content: string, triage: TriageResult): TriageRes
   return triage;
 }
 
-const TODO_DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::\d{2})?\s*(Z|[+-]\d{2}:?\d{2})?)?/;
+// 秒后可带小数（JS `Date#toISOString()` 恒输出 `.000Z`）：小数不进结果，但其后的偏移必须照常识别
+const TODO_DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d{1,9})?)?\s*(Z|[+-]\d{2}:?\d{2})?)?/;
 
 // ---- 裸「周X」相对日期确定性后校验（R208 P2-2，audit-r207 §3）----
 // LLM 对裸「周X」（无「下/上」修饰）的星期算术会系统性 +1 天（R207 实测
@@ -746,10 +759,12 @@ function normalizeOffset(raw: string | undefined, defaultOffset: string): string
  * "YYYY-MM-DDTHH:mm:00+HH:mm" (timed; bare local times take `defaultOffset`,
  * the user's timezone offset, Asia/Shanghai by default).
  */
-export function normalizeTodoDue(v: unknown, defaultOffset = "+08:00"): string | null {
+export function normalizeTodoDue(v: unknown, defaultOffset = "+08:00", strict = false): string | null {
   if (typeof v !== "string") return null;
-  const m = v.trim().match(TODO_DUE_RE);
-  if (!m) return null;
+  const s = v.trim();
+  const m = s.match(TODO_DUE_RE);
+  // strict：整串必须是一个到期值（"2026-09-12 6pm" 前缀匹配只剩日期、丢掉时刻，手输场景要报错而不是静默截断）
+  if (!m || (strict && m[0].length !== s.length)) return null;
   if (!m[2]) return m[1];
   return `${m[1]}T${m[2]}:00${normalizeOffset(m[3], defaultOffset)}`;
 }

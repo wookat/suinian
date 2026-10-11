@@ -7,7 +7,7 @@
  */
 import { buildPushPayload, type PushSubscription as WirePushSubscription } from "@block65/webcrypto-web-push";
 import type { Env, NoteRow } from "./types";
-import { getTodayReview, writeCronHeartbeat, shanghaiDate } from "./review";
+import { getTodayReview, writeCronHeartbeat, shanghaiDate, todoDueInstantMs } from "./review";
 import { DEFAULT_TZ, loadUserTz, tzOffsetString } from "./triage";
 import { noteRowBroadFoldReason, closeAggregateOutlet, defaultFoldedReason, type BroadFoldReason } from "./prompt-armor";
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
@@ -137,16 +137,14 @@ function parseInTz(local: string, tz: string): number {
 }
 
 /**
- * Due-time of a todo in epoch ms. `todo_due` is either a bare date
- * (YYYY-MM-DD, treated as 09:00 local in the user's timezone), a datetime
- * with a UTC offset, or a legacy offset-less datetime (user-local).
+ * Due-time of a todo in epoch ms: bare date = 09:00 in the user's timezone,
+ * datetime with offset literal, legacy offset-less datetime = Asia/Shanghai
+ * (same reading as normalizeStoredTodoDue / todos-today / review, so the
+ * reminder fires for the instant every client displays).
  */
 export function todoDueEpochMs(due: string | null, tz: string = DEFAULT_TZ): number | null {
   if (!due) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(due)) return parseInTz(`${due}T09:00`, tz);
-  const m = due.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2})?$/);
-  const t = m ? parseInTz(`${m[1]}T${m[2]}`, tz) : Date.parse(due);
-  return Number.isNaN(t) ? null : t;
+  return todoDueInstantMs(due, tz);
 }
 
 const REMINDER_LOOKBACK_MS = 24 * 3600 * 1000;

@@ -28,6 +28,10 @@ import com.zalize.suinian.data.TagCount
 import com.zalize.suinian.data.TagsPage
 import com.zalize.suinian.data.ThreadsPage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.json.Json
@@ -41,17 +45,106 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.addJsonObject
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MultipartBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okio.Buffer
+import okio.BufferedSink
+import okio.ForwardingSink
+import okio.buffer
 import java.io.IOException
+import java.io.InterruptedIOException
+import java.io.OutputStream
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 
-/** 面向用户的可读错误（网络/解析/HTTP 统一人话文案） */
-class ApiException(message: String, cause: Throwable? = null) : Exception(message, cause)
+/** 备份 zip 最大 200MB（服务端 MAX_RESTORE_BYTES），按 ~0.5MB/s 慢网估算整包传输上限 */
+internal const val BACKUP_DOWNLOAD_CALL_TIMEOUT_SECONDS = 600L
+/** 恢复 = 上传整包 + 服务端逐条导入并归档媒体，比下载多一段服务端处理时间 */
+internal const val BACKUP_RESTORE_CALL_TIMEOUT_SECONDS = 900L
+internal const val BACKUP_DOWNLOAD_TIMEOUT_MESSAGE =
+    "备份下载超时：备份包较大或网络较慢，请在网络较好时重试"
+internal const val BACKUP_RESTORE_TIMEOUT_MESSAGE =
+    "恢复超时：备份包较大或网络较慢，服务端可能仍在导入，请稍后刷新列表确认；重新上传同一备份会自动跳过已导入的笔记"
+
+/** 上传进度回调（已写入字节 / 请求体总字节），在 OkHttp 写线程回调 */
+typealias UploadProgress = (sent: Long, total: Long) -> Unit
+
+/**
+ * 下载进度回调，在 IO 线程回调。total = Content-Length（精确；服务端流式打包 zip 时没有，为 -1）；
+ * estimate = [BACKUP_ESTIMATE_HEADER] 预估总长（没有为 -1），只用于显示「约 n%」——原件缺失被跳过时实际会少于预估、
+ * size 未知时可能超出，不得据此判断下载是否完整
+ */
+typealias DownloadProgress = (received: Long, total: Long, estimate: Long) -> Unit
+
+/** 服务端 GET /api/backup 的预估总长头（CORS 已暴露；非数字 / 非正数按没有处理） */
+const val BACKUP_ESTIMATE_HEADER = "X-Suinian-Backup-Estimate"
+
+internal fun positiveHeaderLong(value: String?): Long {
+    val t = value?.trim() ?: return -1
+    if (t.isEmpty() || !t.all { it in '0'..'9' }) return -1
+    val n = t.toLongOrNull() ?: return -1
+    return if (n > 0) n else -1
+}
+
+private const val DOWNLOAD_CHUNK = 64 * 1024
+
+/** 包一层请求体，把写入 socket 的字节数报给 [onProgress]（每次 writeTo 从 0 重新计） */
+private class ProgressRequestBody(
+    private val delegate: RequestBody,
+    private val onProgress: UploadProgress,
+) : RequestBody() {
+    override fun contentType(): MediaType? = delegate.contentType()
+    override fun contentLength(): Long = delegate.contentLength()
+    override fun writeTo(sink: BufferedSink) {
+        val total = contentLength()
+        var sent = 0L
+        val counting = object : ForwardingSink(sink) {
+            override fun write(source: Buffer, byteCount: Long) {
+                super.write(source, byteCount)
+                sent += byteCount
+                onProgress(sent, total)
+            }
+        }.buffer()
+        delegate.writeTo(counting)
+        counting.flush()
+    }
+}
+
+/** 挂起等待响应；协程取消时 cancel() 整个 Call（阻塞式 execute() 不响应取消，上传会在 IO 线程继续跑完） */
+private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            if (!cont.isCancelled) cont.resumeWithException(e)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            if (cont.isActive) cont.resume(response) else response.close()
+        }
+    })
+    cont.invokeOnCancellation { cancel() }
+}
+
+/**
+ * 面向用户的可读错误（网络/解析/HTTP 统一人话文案）。
+ * status：HTTP 状态码（非 HTTP 层失败为 null）；network：连接级失败（连不上 / 传输中断），换网后重试有意义。
+ */
+class ApiException(
+    message: String,
+    cause: Throwable? = null,
+    val status: Int? = null,
+    val network: Boolean = false,
+) : Exception(message, cause)
 
 /** 乐观锁冲突（409）：笔记已被其他设备修改；latest 为服务器最新副本（409 响应体携带），供调用方展示对照合并 */
 class ConflictException(message: String, val latest: Note? = null) : Exception(message)
@@ -67,6 +160,22 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         .callTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    // 备份下载 / 恢复上传是整包传输（≤200MB），总耗时随包体与网速线性增长：readTimeout 只管单次读的空闲，
+    // callTimeout 才是整次调用的上限，newBuilder() 会继承基础 client 的 30s，必须一起放宽
+    internal val backupDownloadClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(120, TimeUnit.SECONDS)
+            .callTimeout(BACKUP_DOWNLOAD_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .build()
+    }
+    internal val backupRestoreClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(300, TimeUnit.SECONDS)
+            .writeTimeout(300, TimeUnit.SECONDS)
+            .callTimeout(BACKUP_RESTORE_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .build()
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         coerceInputValues = true
@@ -77,7 +186,7 @@ class ApiClient(private val baseUrl: String, private val token: String) {
 
     private fun httpError(code: Int, body: String? = null): ApiException {
         val serverMsg = body?.let { parseErrorMessage(it) }
-        if (serverMsg != null) return ApiException(serverMsg)
+        if (serverMsg != null) return ApiException(serverMsg, status = code)
         return defaultHttpError(code)
     }
 
@@ -88,11 +197,11 @@ class ApiClient(private val baseUrl: String, private val token: String) {
     }
 
     private fun defaultHttpError(code: Int): ApiException = when (code) {
-        401, 403 -> ApiException("Token 无效或没有权限，请在设置中检查 API Token")
-        404 -> ApiException("内容不存在或已被删除")
-        413 -> ApiException("内容过长：最多 20000 字符，请拆成多条或精简后再发")
-        in 500..599 -> ApiException("服务器开小差了（$code），请稍后重试")
-        else -> ApiException("请求失败（$code），请稍后重试")
+        401, 403 -> ApiException("Token 无效或没有权限，请在设置中检查 API Token", status = code)
+        404 -> ApiException("内容不存在或已被删除", status = code)
+        413 -> ApiException("内容过长：最多 20000 字符，请拆成多条或精简后再发", status = code)
+        in 500..599 -> ApiException("服务器开小差了（$code），请稍后重试", status = code)
+        else -> ApiException("请求失败（$code），请稍后重试", status = code)
     }
 
     private fun <T> execute(request: Request, deserializer: DeserializationStrategy<T>): T {
@@ -350,6 +459,21 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
     }
 
+    /** POST /api/notes/:id/retry-media：用 R2 存档原件原地重跑转写 / 识别 / 提取，返回更新后的笔记（无需重传） */
+    suspend fun retryMedia(id: String): Note? = withContext(Dispatchers.IO) {
+        val body = "{}".toRequestBody(jsonMedia)
+        val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS).build()
+        val resp = try {
+            client60.newCall(request("/api/notes/$id/retry-media").post(body).build()).awaitResponse()
+        } catch (e: IOException) {
+            throw ApiException("网络连接失败，请检查网络后重试", e)
+        }
+        resp.use {
+            if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
+            parseNoteLenient(it.body?.string().orEmpty())
+        }
+    }
+
     /** GET /api/notes/:id/file：下载原件字节（附件不超 10MB，直接读入内存） */
     suspend fun downloadNoteFile(id: String): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
         val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS).build()
@@ -374,15 +498,22 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             .build()
         val client60 = client.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS).build()
         val req = Request.Builder().url(url).header("Authorization", "Bearer $token").get().build()
+        // 卡片滑出屏幕即取消协程：必须真正中断传输，否则每张滑过的原图都会在 IO 线程收完再丢掉
+        val call = client60.newCall(req)
         val resp = try {
-            client60.newCall(req).execute()
+            call.awaitResponse()
         } catch (e: IOException) {
-            throw ApiException("网络连接失败，请检查网络后重试", e)
+            throw ApiException("网络连接失败，请检查网络后重试", e, network = true)
         }
         resp.use {
             if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
-            val bytes = it.body?.bytes() ?: throw ApiException("加载失败：附件内容为空")
+            val body = it.body ?: throw ApiException("加载失败：附件内容为空")
             val mime = it.header("Content-Type") ?: "application/octet-stream"
+            val bytes = try {
+                body.bytesCancellable(call)
+            } catch (e: IOException) {
+                throw ApiException("附件加载中断，请检查网络后重试", e, network = true)
+            }
             bytes to mime
         }
     }
@@ -449,12 +580,17 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         execute(request("/api/preferences").get().build(), PushPreferences.serializer())
     }
 
-    /** PATCH /api/preferences：更新推送偏好 */
-    suspend fun updatePreferences(dailyReviewPush: Boolean? = null, todoReminderPush: Boolean? = null): PushPreferences =
+    /** PATCH /api/preferences：更新推送偏好 / 用户时区（IANA id，服务端分拣、待办到期、今日待办、周月报边界都按它算） */
+    suspend fun updatePreferences(
+        dailyReviewPush: Boolean? = null,
+        todoReminderPush: Boolean? = null,
+        tz: String? = null,
+    ): PushPreferences =
         withContext(Dispatchers.IO) {
             val body = buildJsonObject {
                 if (dailyReviewPush != null) put("daily_review_push", dailyReviewPush)
                 if (todoReminderPush != null) put("todo_reminder_push", todoReminderPush)
+                if (tz != null) put("tz", tz)
             }.toString().toRequestBody(jsonMedia)
             execute(request("/api/preferences").patch(body).build(), PushPreferences.serializer())
         }
@@ -544,9 +680,17 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         }
     }
 
-    /** GET /api/backup：全量备份 zip（笔记全字段 + 线索/周报 + 媒体原件），返回字节与文件名。敏感笔记默认脱敏，includeSensitive=true 时含明文 */
-    suspend fun downloadBackup(includeSensitive: Boolean = false, password: String? = null): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
-        val client120 = client.newBuilder().readTimeout(120, TimeUnit.SECONDS).build()
+    /**
+     * GET /api/backup：全量备份 zip（笔记全字段 + 线索/周报 + 媒体原件）。敏感笔记默认脱敏，includeSensitive=true 时含明文。
+     * 响应体边收边写进 [open] 打开的输出流（≤200MB 的包不整包进内存），返回文件名；[open] 只在 2xx 且拿到文件名后调用，
+     * 4xx/5xx 不会创建文件。[onProgress] 报已接收字节；协程取消会 cancel() 底层 Call、立刻中断接收（调用方负责清理半个文件）。
+     */
+    suspend fun downloadBackup(
+        includeSensitive: Boolean = false,
+        password: String? = null,
+        onProgress: DownloadProgress? = null,
+        open: (fileName: String) -> OutputStream,
+    ): String = withContext(Dispatchers.IO) {
         val path = if (includeSensitive) "/api/backup?include_sensitive=true" else "/api/backup"
         val builder = request(path).get()
         // 敏感明文导出需密码复核；URLEncoder 编码以通过 HTTP 头 ASCII 限制（服务端解码）
@@ -554,38 +698,87 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             // URLEncoder 把空格编成 +，而服务端 decodeURIComponent 不还原 +，改用 %20
             builder.header("X-Suinian-Password", java.net.URLEncoder.encode(password, "UTF-8").replace("+", "%20"))
         }
+        val call = backupDownloadClient.newCall(builder.build())
         val resp = try {
-            client120.newCall(builder.build()).execute()
+            call.await()
+        } catch (e: InterruptedIOException) {
+            throw ApiException(BACKUP_DOWNLOAD_TIMEOUT_MESSAGE, e)
         } catch (e: IOException) {
             throw ApiException("网络连接失败，请检查网络后重试", e)
         }
         resp.use {
             if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
-            val bytes = it.body?.bytes() ?: throw ApiException("备份下载失败：内容为空")
+            val body = it.body ?: throw ApiException("备份下载失败：内容为空")
             val disposition = it.header("Content-Disposition").orEmpty()
             val fileName = Regex("filename=\"?([^\";]+)\"?").find(disposition)?.groupValues?.get(1)
                 ?: "suinian-backup.zip"
-            bytes to fileName
+            val total = body.contentLength()
+            val estimate = if (total >= 0) -1L else positiveHeaderLong(it.header(BACKUP_ESTIMATE_HEADER))
+            var received = 0L
+            coroutineScope {
+                // 读体是阻塞 IO：协程取消时由这个哨兵 cancel() Call，让阻塞中的 read 立刻抛出而不是等到 readTimeout
+                var finished = false
+                val watcher = launch {
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        if (!finished) call.cancel()
+                    }
+                }
+                try {
+                    open(fileName).use { out ->
+                        val buf = ByteArray(DOWNLOAD_CHUNK)
+                        val input = body.byteStream()
+                        while (true) {
+                            ensureActive()
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            received += n
+                            onProgress?.invoke(received, total, estimate)
+                        }
+                        out.flush()
+                    }
+                    finished = true
+                } catch (e: InterruptedIOException) {
+                    throw ApiException(BACKUP_DOWNLOAD_TIMEOUT_MESSAGE, e)
+                } catch (e: IOException) {
+                    ensureActive()
+                    throw ApiException("备份下载中断，请检查网络后重试", e)
+                } finally {
+                    watcher.cancel()
+                }
+            }
+            if (total >= 0 && received < total) throw ApiException("备份下载中断，请检查网络后重试")
+            fileName
         }
     }
 
-    /** POST /api/backup/restore：上传备份 zip 恢复（multipart file），返回恢复统计 */
-    suspend fun restoreBackup(bytes: ByteArray, fileName: String): RestoreStats = withContext(Dispatchers.IO) {
-        val body = MultipartBody.Builder()
+    /**
+     * POST /api/backup/restore：上传备份 zip 恢复（multipart file），返回恢复统计。
+     * [onProgress] 报上传进度；协程取消会中断上传（未传完的包服务端不会导入）
+     */
+    suspend fun restoreBackup(bytes: ByteArray, fileName: String, onProgress: UploadProgress? = null): RestoreStats = withContext(Dispatchers.IO) {
+        val multipart = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("file", fileName, bytes.toRequestBody("application/zip".toMediaType()))
             .build()
-        val client300 = client.newBuilder()
-            .readTimeout(300, TimeUnit.SECONDS)
-            .writeTimeout(300, TimeUnit.SECONDS)
-            .build()
+        val body: RequestBody = if (onProgress != null) ProgressRequestBody(multipart, onProgress) else multipart
         val resp = try {
-            client300.newCall(request("/api/backup/restore").post(body).build()).execute()
+            backupRestoreClient.newCall(request("/api/backup/restore").post(body).build()).await()
+        } catch (e: InterruptedIOException) {
+            throw ApiException(BACKUP_RESTORE_TIMEOUT_MESSAGE, e)
         } catch (e: IOException) {
             throw ApiException("网络连接失败，请检查网络后重试", e)
         }
         resp.use {
-            val text = it.body?.string().orEmpty()
+            val text = try {
+                it.body?.string().orEmpty()
+            } catch (e: InterruptedIOException) {
+                throw ApiException(BACKUP_RESTORE_TIMEOUT_MESSAGE, e)
+            } catch (e: IOException) {
+                throw ApiException("恢复结果读取中断：服务端可能已完成导入，请刷新列表确认；重新上传同一备份会自动跳过已导入的笔记", e)
+            }
             if (!it.isSuccessful) throw httpError(it.code, text)
             try {
                 json.decodeFromString(RestoreStats.serializer(), text)

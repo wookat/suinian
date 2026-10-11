@@ -13,6 +13,15 @@ export interface Settings {
 
 const OFFICIAL_API_BASE = "https://suinian-api.zalize.com"
 
+/** True when `url` points at the official hosted instance. */
+export function isOfficialApiBase(url: string): boolean {
+  try {
+    return new URL(url).host === new URL(OFFICIAL_API_BASE).host
+  } catch {
+    return false
+  }
+}
+
 /** Build-time API base (e.g. VITE_API_BASE=http://127.0.0.1:8787 for local dev).
  * A localhost value is honored only when the page itself is served from
  * localhost, so a stray .env.local can never leak into a deployed build. */
@@ -23,14 +32,15 @@ const ENV_API_BASE = (() => {
   return isLocalUrl && !onLocalhost ? "" : v
 })()
 
-/** Suggested API base for register/login forms: saved value, build-time env,
- * or the official instance when the page is served from the hosted domain. */
+/** API base used when nothing is saved: build-time env, or the official
+ * instance when the page is served from the hosted domain. */
+const FALLBACK_API_BASE =
+  ENV_API_BASE || (window.location.hostname.endsWith("zalize.com") ? OFFICIAL_API_BASE : "")
+
+/** Effective API base for register/login forms and every real-API request:
+ * saved value, else the hosted/build-time fallback. */
 export function defaultApiBase(): string {
-  const saved = loadSettings().apiBaseUrl.trim()
-  if (saved) return saved
-  if (ENV_API_BASE) return ENV_API_BASE
-  if (window.location.hostname.endsWith("zalize.com")) return OFFICIAL_API_BASE
-  return ""
+  return loadSettings().apiBaseUrl.trim()
 }
 
 const KEY = "suinian.settings"
@@ -41,7 +51,7 @@ export function loadSettings(): Settings {
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<Settings>
       return {
-        apiBaseUrl: parsed.apiBaseUrl || ENV_API_BASE,
+        apiBaseUrl: parsed.apiBaseUrl || FALLBACK_API_BASE,
         apiToken: parsed.apiToken ?? "",
         useMock: parsed.useMock ?? true,
         // existing installs with a token already made their choice
@@ -53,7 +63,7 @@ export function loadSettings(): Settings {
   } catch {
     // ignore corrupted settings
   }
-  return { apiBaseUrl: ENV_API_BASE, apiToken: "", useMock: true, onboarded: false, tourSeen: true }
+  return { apiBaseUrl: FALLBACK_API_BASE, apiToken: "", useMock: true, onboarded: false, tourSeen: true }
 }
 
 export const SETTINGS_CHANGED_EVENT = "suinian:settings-changed"

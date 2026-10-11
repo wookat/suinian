@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { AnimatePresence, m } from "motion/react"
-import { CheckCircle2, ChevronDown, ListTodo } from "lucide-react"
+import { CheckCircle2, ChevronDown, ListTodo, RefreshCw } from "lucide-react"
 import { NoteCard } from "@/components/note-card"
 import type { EditResult } from "@/components/note-card"
 import { NoteListSkeleton } from "@/components/ui/skeleton"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { EmptyState } from "@/components/empty-state"
 import { cn, parseDue, dueHasTime } from "@/lib/utils"
-import { getNotes, getNote, patchNote, deleteNote, ApiError } from "@/lib/api"
+import { getNotes, getNote, patchNote, deleteNote, ApiError, NetworkError } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 import type { Note, NotePatch } from "@/lib/types"
 
 type DueGroup = "overdue" | "today" | "week" | "later" | "none"
@@ -50,6 +52,7 @@ export function TodosPage() {
   const [notes, setNotes] = useState<Note[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [loadFailed, setLoadFailed] = useState<{ unreachable: boolean } | null>(null)
   const [doneExpanded, setDoneExpanded] = useState(false)
   const [sensitivePendingIds, setSensitivePendingIds] = useState<Set<string>>(() => new Set())
   const settingsVersion = useSettingsVersion()
@@ -57,11 +60,13 @@ export function TodosPage() {
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setLoadFailed(null)
     try {
       const res = await getNotes({ category: "todo" })
       setNotes(res.notes)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      setLoadFailed({ unreachable: e instanceof NetworkError })
     } finally {
       setLoading(false)
     }
@@ -70,6 +75,8 @@ export function TodosPage() {
   useEffect(() => {
     void load()
   }, [load, settingsVersion])
+
+  useRetryOnReconnect(!loading && loadFailed?.unreachable === true, load)
 
   async function toggleTodo(note: Note) {
     const next = note.todo_done === 1 ? 0 : 1
@@ -166,9 +173,20 @@ export function TodosPage() {
   return (
     <div className="space-y-6">
       {error && (
-        <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {error}
-        </p>
+        <div
+          role="alert"
+          className="flex flex-col items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+        >
+          <p>
+            {error}
+            {loadFailed?.unreachable ? "（会自动重试）" : ""}
+          </p>
+          {loadFailed && (
+            <Button size="sm" variant="outline" onClick={() => void load()}>
+              <RefreshCw className="size-3.5" /> 重试
+            </Button>
+          )}
+        </div>
       )}
       {openCount > 0 && (
         <p className="text-sm text-muted-foreground">

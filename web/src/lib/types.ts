@@ -18,12 +18,16 @@ export interface NoteMeta {
   file_excerpt?: string
   file_status?: "ok" | "extract_failed"
   media_status?: "ok" | "extract_failed"
+  /** 备份恢复后原件没跟上（超过上限 / 存档失败 / 备份包里没有）：不再给下载 / 原地重试，提示重新上传 */
+  attachment_missing?: "oversized" | "failed" | "missing"
+  /** 备份恢复时到期时间解析不出的原文：到期已清空，卡片提示重新设置（设了到期后不再提示） */
+  todo_due_invalid?: string
   /** 语音转写低置信（R212 P2-1）：卡片提示核对并给纠错入口，编辑正文后清除 */
   transcript_suspect?: boolean
   /** 图片文字识别存疑（R212 P3-3）：卡片提示核对原图，编辑正文后清除 */
   ocr_suspect?: boolean
   finance_merchant?: string
-  manual_override?: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean }
+  manual_override?: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean; is_sensitive?: boolean }
   /** 问答写回：由「存为笔记」保存的问答结论 */
   from_ask?: boolean
   import_source?: string
@@ -145,6 +149,8 @@ export interface AskResponse {
   isolated_refs?: number[]
   /** 危险代码判别器不可用，本轮按保守隔离处理（R288 P2-1：与「已确认危险」区分展示并可重试） */
   exec_guard_degraded?: boolean
+  /** 模型暂不可用，answer 为「已找到相关记录」类兜底（R339：服务端不缓存该答案，可重试） */
+  ai_unavailable?: boolean
 }
 
 export interface NotePatch {

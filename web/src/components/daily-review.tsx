@@ -3,9 +3,10 @@ import { CalendarClock, ChevronDown, ChevronRight, Eye, EyeOff, Sparkles } from 
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ExecGuard } from "@/components/exec-guard"
-import { getTodayReview } from "@/lib/api"
+import { getTodayReview, NetworkError } from "@/lib/api"
 import { onReviewNotesChanged } from "@/lib/review-bus"
 import { useSettingsVersion } from "@/lib/settings"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 import { cn, noteFoldLevel, parseServerTime, titleEchoesContent } from "@/lib/utils"
 import type { DailyReviewItem } from "@/lib/types"
 
@@ -41,6 +42,8 @@ export function DailyReview({
   const settingsVersion = useSettingsVersion()
 
   const [refreshKey, setRefreshKey] = useState(0)
+  const [unreachable, setUnreachable] = useState(false)
+  const retry = useCallback(() => setRefreshKey((k) => k + 1), [])
   const onSettledRef = useRef(onSettled)
   useEffect(() => {
     onSettledRef.current = onSettled
@@ -53,9 +56,11 @@ export function DailyReview({
         if (cancelled) return
         setItems(res.items)
         setIndex(0)
+        setUnreachable(false)
       })
-      .catch(() => {
-        /* 回顾是锦上添花：加载失败时静默隐藏 */
+      .catch((e: unknown) => {
+        /* 回顾是锦上添花：加载失败时静默隐藏；连不上服务端则等恢复后自动重拉 */
+        if (!cancelled) setUnreachable(e instanceof NetworkError)
       })
       .finally(() => {
         if (!cancelled) setLoaded(true)
@@ -65,6 +70,8 @@ export function DailyReview({
       cancelled = true
     }
   }, [settingsVersion, refreshKey])
+
+  useRetryOnReconnect(unreachable, retry)
 
   // 删除笔记（含一键清除示例）时即时剔除引用已删除笔记的回顾条目，避免横幅残留
   useEffect(() => {
