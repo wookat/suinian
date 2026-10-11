@@ -82,6 +82,9 @@ class AskViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value = _ui.value.copy(input = v)
     }
 
+    /** 引用卡是敏感 / 受守占位时，点开按登录态取回原文（GET /api/notes/:id） */
+    suspend fun fetchNote(noteId: String): Note? = repo.getNote(noteId)
+
     fun clearChat() {
         _ui.value = _ui.value.copy(messages = emptyList())
         viewModelScope.launch { settingsRepo.setAskChatJson("") }

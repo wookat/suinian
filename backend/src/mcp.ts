@@ -410,6 +410,7 @@ export function buildMcpServer(
         instruction_isolated?: unknown;
         trust_tier?: unknown;
         verbatim_closed_spans?: unknown;
+        compound_split?: unknown;
       };
       // R324 C1：notes[] 里的受守条目整条占位 + guarded 标记；answer 再过同源闭合的末端复核。
       // R330：拼接候选面对齐 /api/ask 的全部召回（recall_units 只在 mcp 出口回传，不含敏感笔记），不透传给宿主。
@@ -434,6 +435,8 @@ export function buildMcpServer(
         ...(askFlagged.anyExec ? { exec_notice: MCP_EXEC_DATA_NOTICE } : {}),
         // R278 P1-4/P2：隔离结构化字段同样透传给 MCP 客户端
         ...(body.instruction_isolated === true ? { instruction_isolated: true } : {}),
+        // R337：复合问句拆句元数据（三载体同口径，审计可逐载体核对）
+        ...(body.compound_split !== undefined ? { compound_split: body.compound_split } : {}),
         // R278 P2-4：MCP 的 Streamable HTTP 响应头先于工具执行外发，无法事后
         // 补 Server-Timing 响应头；改在工具结果里透传内部 /api/ask 的
         // Server-Timing（含 conaud 收口阶段），审计可从 MCP 通道直接验证。

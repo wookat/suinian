@@ -7,6 +7,7 @@ import com.zalize.suinian.data.local.AppDatabase
 import com.zalize.suinian.notif.QuickNoteNotification
 import com.zalize.suinian.reminder.ReminderNotifier
 import com.zalize.suinian.reminder.ReminderWorker
+import com.zalize.suinian.sync.TimezoneChangeReceiver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,6 +30,7 @@ class SuinianApp : Application() {
         QuickNoteNotification.createChannel(this)
         ReminderNotifier.createChannels(this)
         ReminderWorker.schedule(this)
+        TimezoneChangeReceiver.register(this, appScope)
         appScope.launch {
             if (settings.settings.first().notificationShortcut) {
                 QuickNoteNotification.show(this@SuinianApp)

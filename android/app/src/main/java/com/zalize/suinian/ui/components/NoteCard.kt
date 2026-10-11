@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.MoreVert
@@ -42,6 +43,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,7 +55,11 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.zalize.suinian.data.Note
+import com.zalize.suinian.data.NoteAttachment
 import com.zalize.suinian.data.UrlTitle
+import com.zalize.suinian.ui.attachmentMissingText
+import com.zalize.suinian.ui.todoDueInvalidText
+import java.io.File
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -61,6 +68,7 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.launch
 
 private val categories = listOf(
     null to "全部",
@@ -213,18 +221,63 @@ fun NoteCard(
     sensitivePending: Boolean = false,
     onRetryLink: ((Note) -> Unit)? = null,
     retryingLink: Boolean = false,
+    /** 语音 / 图片 / 文件提取失败或存疑时的原地重试（POST retry-media） */
+    onRetryMedia: ((Note) -> Unit)? = null,
+    retryingMedia: Boolean = false,
     onDownloadFile: ((Note) -> Unit)? = null,
+    /** 语音卡「下载原件」；图片全屏「保存原图」 */
+    onDownloadAttachment: ((Note, NoteAttachment) -> Unit)? = null,
+    /** 语音卡 / 图片全屏「分享」原件给其他应用 */
+    onShareAttachment: ((Note, NoteAttachment) -> Unit)? = null,
     onEdit: ((Note) -> Unit)? = null,
     selectable: Boolean = false,
     selected: Boolean = false,
     onSelectToggle: ((Note) -> Unit)? = null,
     onLongPress: ((Note) -> Unit)? = null,
     fetchMedia: (suspend (noteId: String, attachmentId: String) -> Pair<ByteArray, String>)? = null,
+    fetchMediaFile: (suspend (noteId: String, attachmentId: String) -> File)? = null,
+    /** 列表刷新成功 / 网络恢复时递增：附件因断网 / 5xx 失败的卡片自动重拉 */
+    mediaReloadKey: Int = 0,
+    /** 搜索命中 / 问答引用的占位卡（content_withheld）点开时按 id 取回原文；不传则点开只能看到占位句 */
+    fetchNote: (suspend (noteId: String) -> Note?)? = null,
 ) {
+    // 占位卡取回原文后整卡按取回的笔记渲染（标题 / 附件 / 标签也随之回来）
+    var fetched by remember(note.id) { mutableStateOf<Note?>(null) }
+    @Suppress("NAME_SHADOWING")
+    val note = fetched ?: note
     var confirmDelete by rememberSaveable(note.id) { mutableStateOf(false) }
     // 敏感遮罩：点击临时查看，可再隐藏（对齐 Web）；遮罩时标题/链接卡/文件摘录/图片描述/金额一律不露出
     var revealed by rememberSaveable(note.id) { mutableStateOf(false) }
-    val masked = note.isSensitive && !revealed
+    var revealing by remember(note.id) { mutableStateOf(false) }
+    var revealError by remember(note.id) { mutableStateOf<String?>(null) }
+    // revealed 跨 Activity 重建保存而 fetched 不保存：占位卡重建后回到遮罩重取，不把占位句当原文摆出来
+    val masked = shouldMask(note, revealed && (fetched != null || fetchNote == null || !needsFetchToReveal(note)))
+    val maskKind = maskKind(note)
+    val scope = rememberCoroutineScope()
+    fun reveal() {
+        if (revealing) return
+        if (!needsFetchToReveal(note) || fetchNote == null) {
+            revealed = true
+            return
+        }
+        revealing = true
+        revealError = null
+        scope.launch {
+            try {
+                val full = fetchNote(note.id)
+                if (full == null) {
+                    revealError = "这条笔记已不存在或已删除"
+                } else {
+                    fetched = full
+                    revealed = true
+                }
+            } catch (e: Exception) {
+                revealError = e.message?.takeIf { it.isNotBlank() } ?: "网络错误"
+            } finally {
+                revealing = false
+            }
+        }
+    }
     if (confirmDelete && onDelete != null) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -384,7 +437,7 @@ fun NoteCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
-                        .clickable { revealed = true },
+                        .clickable(enabled = !revealing) { reveal() },
                 ) {
                     Text(
                         "••••••••",
@@ -392,24 +445,29 @@ fun NoteCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.width(8.dp))
-                    Icon(
-                        Icons.Outlined.Visibility,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.secondary,
-                        modifier = Modifier.size(14.dp),
-                    )
+                    if (revealing) {
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            Icons.Outlined.Visibility,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
                     Spacer(Modifier.width(3.dp))
                     Text(
-                        "敏感内容，点击查看",
+                        maskChipText(maskKind, revealing),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.secondary,
                     )
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "检测到密码/凭据类信息，已自动加密保护：搜索仍能搜到、问答仍会引用这张卡片，但 AI 只拿到占位符，原文只在你点开时显示；若属误判，可在菜单中取消敏感标记",
+                    maskHintText(maskKind, revealError),
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                    color = if (revealError != null) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                 )
             } else if (note.category == "todo" && onToggleTodo != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -504,6 +562,15 @@ fun NoteCard(
                         color = MaterialTheme.colorScheme.tertiary,
                     )
                 }
+            }
+            val dueInvalidHint = todoDueInvalidText(note)
+            if (dueInvalidHint != null && !masked) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    dueInvalidHint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
 
             // 链接卡片（多链接 ≤3）：首卡显站点 + AI 摘要（可展开）+ 正文摘录（可展开）
@@ -616,6 +683,9 @@ fun NoteCard(
                 }
             }
 
+            // 备份恢复后原件没跟上：服务端没有 attachment 行，下载必然 404，只给原因与重新上传提示
+            val attachmentMissingHint = attachmentMissingText(note.meta?.attachmentMissing)
+
             // 文件笔记卡：文件名/类型/大小 + 正文摘录（可展开）+ 下载原件
             val fileMeta = note.meta?.takeIf { note.rawType == "file" && it.fileName != null }
             if (fileMeta != null && !masked) {
@@ -649,7 +719,7 @@ fun NoteCard(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            if (onDownloadFile != null) {
+                            if (onDownloadFile != null && attachmentMissingHint == null) {
                                 IconButton(onClick = { onDownloadFile(note) }, modifier = Modifier.size(32.dp)) {
                                     Icon(
                                         Icons.Outlined.Download,
@@ -659,10 +729,10 @@ fun NoteCard(
                                 }
                             }
                         }
-                        if (fileMeta.fileStatus == "extract_failed") {
+                        if (attachmentMissingHint != null) {
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "文本提取失败，已存档原件",
+                                attachmentMissingHint,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
@@ -694,17 +764,49 @@ fun NoteCard(
             }
 
             // 附件原件：图片缩略图+点击大图 / 语音可播放（敏感遮罩时不加载不展示）
-            if (fetchMedia != null && !masked) {
-                val imageAtt = if (note.rawType == "image") note.attachments?.firstOrNull(::isImageAttachment) else null
-                val audioAtt = if (note.rawType == "voice") note.attachments?.firstOrNull(::isAudioAttachment) else null
-                if (imageAtt != null) {
+            if (!masked) {
+                val imageAtt = if (fetchMedia != null && note.rawType == "image") note.attachments?.firstOrNull(::isImageAttachment) else null
+                val audioAtt = if (fetchMediaFile != null && note.rawType == "voice") note.attachments?.firstOrNull(::isAudioAttachment) else null
+                if (imageAtt != null && fetchMedia != null) {
                     Spacer(Modifier.height(8.dp))
-                    NoteImageAttachment(note.id, imageAtt, fetchMedia)
+                    NoteImageAttachment(
+                        note.id,
+                        imageAtt,
+                        fetchMedia,
+                        reloadKey = mediaReloadKey,
+                        onDownload = onDownloadAttachment?.let { dl -> { dl(note, imageAtt) } },
+                        onShare = onShareAttachment?.let { sh -> { sh(note, imageAtt) } },
+                    )
                 }
-                if (audioAtt != null) {
+                if (audioAtt != null && fetchMediaFile != null) {
                     Spacer(Modifier.height(8.dp))
-                    NoteAudioAttachment(note.id, audioAtt, fetchMedia)
+                    NoteAudioAttachment(
+                        note.id,
+                        audioAtt,
+                        fetchMediaFile,
+                        reloadKey = mediaReloadKey,
+                        onDownload = onDownloadAttachment?.let { dl -> { dl(note, audioAtt) } },
+                        onShare = onShareAttachment?.let { sh -> { sh(note, audioAtt) } },
+                    )
                 }
+                val mediaStatus = mediaStatusLine(note)
+                if (mediaStatus != null) {
+                    Spacer(Modifier.height(4.dp))
+                    MediaStatusRow(
+                        status = mediaStatus,
+                        retrying = retryingMedia,
+                        onRetry = onRetryMedia?.let { cb -> { cb(note) } },
+                        onEdit = if (!mediaStatus.failed) onEdit?.let { cb -> { cb(note) } } else null,
+                    )
+                }
+            }
+            if (attachmentMissingHint != null && fileMeta == null && !masked) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    attachmentMissingHint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
 
             // 图片笔记：视觉模型完整描述可展开（文字优先，描述作补充）
@@ -792,4 +894,70 @@ fun CategoryBadge(category: String?) {
             .background(MaterialTheme.colorScheme.primaryContainer)
             .padding(horizontal = 6.dp, vertical = 2.dp),
     )
+}
+
+/** 原件提取失败 / 存疑状态行：文案 + 「原地重试」（存疑另给「纠错」进编辑页），对齐 web 卡片 */
+@Composable
+private fun MediaStatusRow(
+    status: MediaStatusLine,
+    retrying: Boolean,
+    onRetry: (() -> Unit)?,
+    onEdit: (() -> Unit)?,
+) {
+    val color = if (status.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Icon(
+            Icons.Outlined.Info,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(14.dp),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            status.text,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            modifier = Modifier.weight(1f),
+        )
+        if (onEdit != null) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClick = onEdit)
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.Edit,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(2.dp))
+                Text("纠错", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+        if (onRetry != null) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(enabled = !retrying, onClick = onRetry)
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.Refresh,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(2.dp))
+                Text(
+                    if (retrying) "重试中…" else "原地重试",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
 }

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { BellRing } from "lucide-react"
-import { getTodosToday } from "@/lib/api"
+import { getTodosToday, NetworkError } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 
 /**
  * 时间流顶部的今日待办提醒条：打开应用必然看到，作为 Web Push（依赖授权且
@@ -9,7 +10,10 @@ import { useSettingsVersion } from "@/lib/settings"
  */
 export function DueTodosBanner({ onSettled }: { onSettled?: () => void } = {}) {
   const [counts, setCounts] = useState<{ due: number; overdue: number } | null>(null)
+  const [unreachable, setUnreachable] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const settingsVersion = useSettingsVersion()
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
   const onSettledRef = useRef(onSettled)
   useEffect(() => {
     onSettledRef.current = onSettled
@@ -20,17 +24,22 @@ export function DueTodosBanner({ onSettled }: { onSettled?: () => void } = {}) {
     getTodosToday()
       .then((res) => {
         if (cancelled) return
-        const overdue = res.items.filter((i) => i.overdue).length
-        setCounts({ due: res.items.length - overdue, overdue })
+        const overdueShown = res.items.filter((i) => i.overdue).length
+        // 列表有上限，逾期总数以服务端计数为准（老服务端无该字段时退回列表内计数）
+        setCounts({ due: res.items.length - overdueShown, overdue: res.overdue_total ?? overdueShown })
+        setUnreachable(false)
       })
-      .catch(() => {
-        /* 提醒条是兜底能力：加载失败时静默隐藏 */
+      .catch((e: unknown) => {
+        /* 提醒条是兜底能力：加载失败时静默隐藏；连不上服务端则等恢复后自动重拉 */
+        if (!cancelled) setUnreachable(e instanceof NetworkError)
       })
       .finally(() => onSettledRef.current?.())
     return () => {
       cancelled = true
     }
-  }, [settingsVersion])
+  }, [settingsVersion, attempt])
+
+  useRetryOnReconnect(unreachable, retry)
 
   if (!counts || counts.due + counts.overdue === 0) return null
   return (

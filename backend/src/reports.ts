@@ -10,7 +10,7 @@ import {
   noteRowContainsExecutableCommand,
   noteRowBroadFoldReason,
   closeAggregateOutlet,
-  redactGuardedLinesForModel,
+  redactGuardedViewForModel,
   EXEC_OUTLET_WARN_TAG,
   BROAD_OUTLET_FOLD_TAG,
 } from "./prompt-armor";
@@ -22,11 +22,11 @@ function rowTitle(n: Pick<NoteRow, "title" | "content" | "meta">, max: number): 
   return (reason !== null ? foldDisplayTitle(n, reason) : n.title || n.content).slice(0, max);
 }
 
-/** R322 A：喂给叙述模型的行标题：受守行先换成占位（与 /api/ask 同一套 redactGuardedLinesForModel）再截长。 */
+/** R322 A：喂给叙述模型的行标题：受守行先换成占位（与 /api/ask 同一套替换 + 归一化比对 fail-closed）再截长。 */
 function modelRowTitle(n: Pick<NoteRow, "title" | "content" | "meta">, max: number): string {
   const reason = noteRowBroadFoldReason(n);
   const shown = reason !== null ? foldDisplayTitle(n, reason) : n.title || n.content;
-  return redactGuardedLinesForModel(shown, `${n.title ?? ""}\n${n.content}`).text.slice(0, max);
+  return redactGuardedViewForModel(shown, `${n.title ?? ""}\n${n.content}`).text.slice(0, max);
 }
 
 /** R306 P0-1：周报/月报行级危险标注（audit-r305 §3：周报原样带出 curl|bash 无警示）；R310 宽判据行带折叠短标。 */

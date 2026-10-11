@@ -8,7 +8,7 @@
 import type { NoteMeta, TriageResult } from "./types";
 import { sensitiveIngestGate, scrubDerivedMeta, DERIVED_PLAINTEXT_META_KEYS, type GatedNoteFields } from "./ingest";
 import { sanitizeSensitiveTags } from "./triage";
-import { syncAttachmentEncryption } from "./media";
+import { syncAttachmentEncryption, stripImageCredentialGapNotice } from "./media";
 import { encryptContent, decryptContent, contentFingerprint, ENC_PLACEHOLDER, IMPORT_FP_VERSION } from "./crypto";
 
 export function parseNoteMeta(raw: string | null): NoteMeta | null {
@@ -216,14 +216,15 @@ export async function applyNotePatch(
         binds.push(ENC_PLACEHOLDER, await encryptContent(env.SUINIAN_ENC_KEY, existing.content));
       }
     } else {
-      // 解除敏感：从密文恢复明文（无法解密则保留现存内容）
+      // 解除敏感：从密文恢复明文（无法解密则保留现存内容）；视觉判敏的图片笔记连带撤掉正文里系统附加的「图中含密码/凭证」标注
       sensitive = false;
       const plain =
         existing.content_enc && env.SUINIAN_ENC_KEY
           ? await decryptContent(env.SUINIAN_ENC_KEY, existing.content_enc)
           : null;
+      const restored = plain ?? existing.content;
       sets.push("content = ?", "content_enc = ?");
-      binds.push(plain ?? existing.content, null);
+      binds.push(parseNoteMeta(existing.meta)?.vision_sensitive ? stripImageCredentialGapNotice(restored) : restored, null);
     }
   } else if (typeof p.is_sensitive === "boolean") {
     sensitive = p.is_sensitive;
