@@ -42,6 +42,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.zalize.suinian.ui.components.AudioPlayback
 
 private data class Tab(
     val route: String,
@@ -69,6 +70,12 @@ class MainActivity : ComponentActivity() {
 
     private var focusQuickNoteSignal by mutableStateOf(0)
     private var navigateRouteSignal by mutableStateOf<Pair<String, Int>?>(null)
+
+    override fun onDestroy() {
+        // 语音播放器是进程级单例，跟随 Activity 真正销毁（非旋转重建）释放
+        if (!isChangingConfigurations) AudioPlayback.release()
+        super.onDestroy()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

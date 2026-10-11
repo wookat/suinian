@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AnimatePresence, m } from "motion/react"
 import { toast as sonnerToast } from "@/lib/toast"
 import {
@@ -39,15 +39,21 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { getNotes, getNote, createNote, patchNote, deleteNote, restoreNotes, batchNotes, batchNotesByFilter, restoreCategories, getThreads, getStats, ApiError, NetworkError } from "@/lib/api"
 import type { BatchFilter } from "@/lib/api"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 import { notifyNotesDeleted, notifyReviewRefresh } from "@/lib/review-bus"
-import { loadSettings, useSettingsVersion } from "@/lib/settings"
+import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
 import { PENDING_UNDO_KEY } from "@/lib/pending-undo"
+import { ChunkBoundary } from "@/components/chunk-boundary"
+import { lazyRetry } from "@/lib/lazy-retry"
 import { FirstRunTour } from "@/components/first-run-tour"
 import { cn, parseServerTime } from "@/lib/utils"
 import type { Note, NoteCategory, NotePatch, PrevCategory } from "@/lib/types"
 
 // ask mode is opt-in: keep its chat UI out of the first-paint bundle
-const AskChat = lazy(() => import("@/components/ask-chat").then((m) => ({ default: m.AskChat })))
+const AskChat = lazyRetry(
+  () => import("@/components/ask-chat"),
+  (m) => m.AskChat,
+)
 
 const CATEGORY_OPTIONS: { value: NoteCategory; label: string }[] = [
   { value: "idea", label: "想法" },
@@ -136,8 +142,8 @@ type PendingUndo = {
 }
 
 type LoadError =
-  | { kind: "auth" }
-  | { kind: "network" }
+  | { kind: "auth"; notLoggedIn: boolean }
+  | { kind: "network"; message: string }
   | { kind: "other"; message: string }
 
 function dayLabel(iso: string): string {
@@ -200,6 +206,7 @@ export function TimelinePage() {
   const [notes, setNotes] = useState<Note[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [loadMoreError, setLoadMoreError] = useState<{ message: string; network: boolean } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<LoadError | null>(null)
   const [category, setCategory] = useState("")
@@ -687,6 +694,7 @@ export function TimelinePage() {
     abortRef.current = controller
     setLoading(true)
     setError(null)
+    setLoadMoreError(null)
     try {
       const res = await getNotes(
         {
@@ -706,8 +714,8 @@ export function TimelinePage() {
       if (e instanceof DOMException && e.name === "AbortError") return
       if (controller.signal.aborted) return
       if (e instanceof ApiError && (e.status === 401 || e.status === 403))
-        setError({ kind: "auth" })
-      else if (e instanceof NetworkError) setError({ kind: "network" })
+        setError({ kind: "auth", notLoggedIn: !loadSettings().apiToken })
+      else if (e instanceof NetworkError) setError({ kind: "network", message: e.message })
       else setError({ kind: "other", message: e instanceof Error ? e.message : String(e) })
     } finally {
       if (!controller.signal.aborted) setLoading(false)
@@ -718,9 +726,12 @@ export function TimelinePage() {
     void load()
   }, [load, settingsVersion])
 
+  useRetryOnReconnect(!loading && error?.kind === "network", load)
+
   const loadMore = useCallback(async () => {
     if (!cursor || loadingMore || loading) return
     setLoadingMore(true)
+    setLoadMoreError(null)
     try {
       const res = await getNotes({
         category: category || undefined,
@@ -736,12 +747,17 @@ export function TimelinePage() {
         return [...ns, ...res.notes.filter((n) => !seen.has(n.id))]
       })
       setCursor(res.cursor)
-    } catch {
-      // 滚动加载失败静默处理，下次进入视口重试
+    } catch (e) {
+      setLoadMoreError({
+        message: e instanceof Error ? e.message : String(e),
+        network: e instanceof NetworkError,
+      })
     } finally {
       setLoadingMore(false)
     }
   }, [cursor, loadingMore, loading, category, tag, search, sourceFilter, fromDate, toDate])
+
+  useRetryOnReconnect(!loadingMore && loadMoreError?.network === true, loadMore)
 
   const sentinelRef = useRef<HTMLDivElement | null>(null)
   const loadMoreRef = useRef(loadMore)
@@ -1135,24 +1151,40 @@ export function TimelinePage() {
       )}
 
       {askMode && (
-        <Suspense
-          // 问答面板是懒加载分包：慢网/请求在途时 fallback 为空会让点击「问答」
-          // 毫无反馈（R228 P3-5），先给一个可见的加载占位
-          fallback={
-            <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground" role="status">
-              问答面板加载中…
+        <ChunkBoundary
+          fallback={({ chunk }) => (
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-4 text-sm" role="alert">
+              <span className="text-muted-foreground">
+                {chunk ? "问答面板的代码没能下载完成（多半是网络中断），联网后重新加载即可" : "问答面板出错了"}
+              </span>
+              <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+                重新加载
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setAskMode(false)}>
+                关闭
+              </Button>
             </div>
-          }
+          )}
         >
-          <AskChat
-            onTagClick={setTag}
-            initialQuestion={askPrefill}
-            onInitialQuestionConsumed={() => setAskPrefill(null)}
-            initialInput={askInputPrefill}
-            onInitialInputConsumed={() => setAskInputPrefill(null)}
-            onClose={() => setAskMode(false)}
-          />
-        </Suspense>
+          <Suspense
+            // 问答面板是懒加载分包：慢网/请求在途时 fallback 为空会让点击「问答」
+            // 毫无反馈（R228 P3-5），先给一个可见的加载占位
+            fallback={
+              <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground" role="status">
+                问答面板加载中…
+              </div>
+            }
+          >
+            <AskChat
+              onTagClick={setTag}
+              initialQuestion={askPrefill}
+              onInitialQuestionConsumed={() => setAskPrefill(null)}
+              initialInput={askInputPrefill}
+              onInitialInputConsumed={() => setAskInputPrefill(null)}
+              onClose={() => setAskMode(false)}
+            />
+          </Suspense>
+        </ChunkBoundary>
       )}
 
       <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1 [scrollbar-width:none]">
@@ -1229,7 +1261,32 @@ export function TimelinePage() {
         <NoteListSkeleton />
       ) : error ? (
         <Card className="flex flex-col items-center gap-3 border-dashed p-8 text-center">
-          {error.kind === "auth" ? (
+          {error.kind === "auth" && error.notLoggedIn ? (
+            <>
+              <p className="text-sm text-muted-foreground">
+                尚未登录，登录后才能看到你自己的碎念。
+              </p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    window.location.hash = "#/auth"
+                  }}
+                >
+                  登录 / 注册
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    saveSettings({ ...loadSettings(), useMock: true })
+                  }}
+                >
+                  先看演示
+                </Button>
+              </div>
+            </>
+          ) : error.kind === "auth" ? (
             <>
               <p className="text-sm text-muted-foreground">
                 登录已失效或 Token 不正确，无法读取你的碎念。
@@ -1246,9 +1303,7 @@ export function TimelinePage() {
             </>
           ) : error.kind === "network" ? (
             <>
-              <p className="text-sm text-muted-foreground">
-                网络连接失败，请检查网络后重试。
-              </p>
+              <p className="text-sm text-muted-foreground">{error.message}</p>
               <Button size="sm" variant="outline" onClick={() => void load()}>
                 <RefreshCw className="size-3.5" /> 重试
               </Button>
@@ -1381,6 +1436,17 @@ export function TimelinePage() {
           {loadingMore && (
             <div className="flex justify-center py-3">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            </div>
+          )}
+          {loadMoreError && !loadingMore && (
+            <div className="flex flex-col items-center gap-2 py-3 text-center" role="status">
+              <p className="text-xs text-muted-foreground">
+                后面的记录没加载出来：{loadMoreError.message}
+                {loadMoreError.network ? "（会自动重试）" : ""}
+              </p>
+              <Button size="sm" variant="outline" onClick={() => void loadMore()}>
+                <RefreshCw className="size-3.5" /> 继续加载
+              </Button>
             </div>
           )}
         </div>

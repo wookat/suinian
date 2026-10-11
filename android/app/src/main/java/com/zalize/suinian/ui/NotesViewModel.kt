@@ -2,9 +2,12 @@ package com.zalize.suinian.ui
 
 import android.app.Application
 import android.content.ContentValues
+import android.net.Uri
+import android.content.Intent
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zalize.suinian.SuinianApp
@@ -14,19 +17,33 @@ import com.zalize.suinian.data.CreateNoteRequest
 import com.zalize.suinian.data.DailyReviewItem
 import com.zalize.suinian.data.InlineCommand
 import com.zalize.suinian.data.Note
+import com.zalize.suinian.data.NoteAttachment
 import com.zalize.suinian.data.parseInlineCommand
 import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.RestoreStats
 import com.zalize.suinian.data.SendResult
+import com.zalize.suinian.data.StaleDownloadCleaner
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import com.zalize.suinian.ui.components.AudioPlayback
+import com.zalize.suinian.ui.components.attachmentDownloadName
+import com.zalize.suinian.ui.components.attachmentShareTitle
+import com.zalize.suinian.ui.components.mediaStatusLine
 import kotlinx.coroutines.flow.MutableStateFlow
+import java.io.OutputStream
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 删除后可撤销：服务端软删进「最近删除」，保留 30 天后真删，期间可恢复 */
 data class UndoDelete(
@@ -51,6 +68,10 @@ data class NotesUiState(
     val cursor: String? = null,
     val loadingMore: Boolean = false,
     val retryingLinkIds: Set<String> = emptySet(),
+    /** 语音 / 图片 / 文件原地重试在途的笔记 */
+    val retryingMediaIds: Set<String> = emptySet(),
+    /** 列表刷新成功 / 网络恢复时递增，卡片附件因断网 / 5xx 失败的据此自动重拉 */
+    val mediaReloadKey: Int = 0,
     /** 敏感标记 PATCH 在途的笔记：菜单项禁用防连发（R206 P2-2） */
     val sensitivePendingIds: Set<String> = emptySet(),
     val reviewItems: List<DailyReviewItem> = emptyList(),
@@ -70,6 +91,8 @@ data class NotesUiState(
 const val SAMPLE_TAG = "示例"
 /** 上传体积上限（与后端 MAX_MEDIA_BYTES 同值） */
 const val MAX_MEDIA_BYTES = 10 * 1024 * 1024
+/** 备份 zip 上限（与后端 MAX_RESTORE_BYTES 同值） */
+const val MAX_RESTORE_BYTES = 200 * 1024 * 1024
 
 /** 上传前超限的统一友好文案（R154 P2-1）：明确上限 + 当前大小，与 Web 同口径 */
 fun mediaTooLargeToast(kind: String, size: Int): String =
@@ -104,6 +127,13 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
         loadReview()
         loadTags()
+        // 启动 / 登录 / 换地址 / 关 Mock 后把设备时区同步到服务端偏好（Repository 内去重、失败静默）
+        viewModelScope.launch {
+            settingsRepo.settings
+                .map { Triple(it.token, it.baseUrl, it.mockMode) }
+                .distinctUntilChanged()
+                .collect { repo.syncTimezone() }
+        }
     }
 
     /** 筛选用标签列表：锦上添花，失败静默隐藏 */
@@ -144,12 +174,27 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                     source = s.filterSource,
                     from = s.filterTime?.fromParam(),
                 )
-                _ui.value = _ui.value.copy(notes = page.notes, loading = false, cursor = page.cursor)
+                _ui.value = _ui.value.copy(
+                    notes = page.notes,
+                    loading = false,
+                    cursor = page.cursor,
+                    mediaReloadKey = _ui.value.mediaReloadKey + 1,
+                )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(loading = false, error = e.message ?: "加载失败")
             }
+        }
+    }
+
+    /** 系统网络恢复（新网络变为默认）：列表处于错误态则重拉列表（成功后附件随之重拉），否则只让断网时失败的附件重拉 */
+    fun onNetworkAvailable() {
+        val s = _ui.value
+        if (s.error != null && !s.loading) {
+            refresh()
+        } else {
+            _ui.value = s.copy(mediaReloadKey = s.mediaReloadKey + 1)
         }
     }
 
@@ -255,7 +300,16 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         repo.updatePreferences(dailyReviewPush, todoReminderPush)
 
     /** 永久注销账号：删除云端全部数据并清本机登录状态 */
-    suspend fun deleteAccount() = repo.deleteAccount()
+    suspend fun deleteAccount() {
+        AudioPlayback.stop()
+        repo.deleteAccount()
+    }
+
+    /** 退出登录：清登录态与本机缓存的私有附件 */
+    suspend fun logout() {
+        AudioPlayback.stop()
+        repo.logout()
+    }
 
     /** 最近删除列表（软删且未彻底清理，含剩余保留时间） */
     suspend fun listTrash() = repo.listTrash()
@@ -348,6 +402,29 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 语音 / 图片 / 文件卡原地重试：服务端用存档原件重跑，成功后用返回的笔记替换；失败保留失败态、toast 服务端原因（频率 / 仍失败 / 原件不在） */
+    fun retryMedia(note: Note) {
+        if (note.id in _ui.value.retryingMediaIds) return
+        _ui.value = _ui.value.copy(retryingMediaIds = _ui.value.retryingMediaIds + note.id)
+        viewModelScope.launch {
+            try {
+                val updated = repo.retryMedia(note.id)
+                _ui.value = _ui.value.copy(
+                    notes = if (updated != null) {
+                        _ui.value.notes.map { if (it.id == note.id) updated else it }
+                    } else _ui.value.notes,
+                    retryingMediaIds = _ui.value.retryingMediaIds - note.id,
+                    toast = mediaStatusLine(note)?.doneToast ?: "已重试",
+                )
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(
+                    retryingMediaIds = _ui.value.retryingMediaIds - note.id,
+                    toast = e.message ?: "重试失败",
+                )
+            }
+        }
+    }
+
     /** 从文件选择器上传文档：POST /api/ingest/media type=file */
     fun uploadFile(bytes: ByteArray, mime: String, fileName: String) {
         if (bytes.size > MAX_MEDIA_BYTES) {
@@ -409,45 +486,86 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun fetchMedia(noteId: String, attachmentId: String): Pair<ByteArray, String> =
         repo.fetchNoteMedia(noteId, attachmentId)
 
+    /** 语音附件的落盘缓存文件，直接喂 MediaPlayer */
+    suspend fun fetchMediaFile(noteId: String, attachmentId: String): java.io.File =
+        repo.fetchNoteMediaFile(noteId, attachmentId)
+
     /** 下载文件笔记原件到系统下载目录 */
     fun downloadFile(note: Note) {
-        val fileName = note.meta?.fileName ?: "suinian-file"
+        val fileName = safeDownloadName(note.meta?.fileName)
         _ui.value = _ui.value.copy(toast = "开始下载…")
         viewModelScope.launch {
+            var target: DownloadTarget? = null
             try {
                 val (bytes, mime) = repo.downloadNoteFile(note.id)
-                saveToDownloads(fileName, mime, bytes)
-                _ui.value = _ui.value.copy(toast = "已保存到下载：$fileName")
+                StaleDownloadCleaner.ensureCleaned(getApplication())
+                target = openDownload(fileName, mime)
+                target.stream.use { it.write(bytes) }
+                val saved = target.commit()
+                target = null
+                _ui.value = _ui.value.copy(toast = savedToLabel(saved.fileName, saved.inAppDir))
             } catch (e: Exception) {
+                target?.discard()
+                if (e is CancellationException) throw e
                 _ui.value = _ui.value.copy(toast = e.message ?: "下载失败")
             }
         }
     }
 
-    private fun saveToDownloads(fileName: String, mime: String, bytes: ByteArray) {
-        val context = getApplication<Application>()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                put(MediaStore.Downloads.MIME_TYPE, mime.substringBefore(';'))
-                put(MediaStore.Downloads.IS_PENDING, 1)
+    /** 语音 / 图片附件原件存到系统下载目录（语音卡「下载原件」；图片全屏「保存原图」）；命中落盘缓存不发网 */
+    fun downloadAttachment(note: Note, att: NoteAttachment) {
+        val fileName = safeDownloadName(attachmentDownloadName(att.name, att.mime, note.id, if (note.rawType == "image") "image" else "voice"))
+        _ui.value = _ui.value.copy(toast = "开始下载…")
+        viewModelScope.launch {
+            var target: DownloadTarget? = null
+            try {
+                val file = repo.fetchNoteMediaFile(note.id, att.id)
+                StaleDownloadCleaner.ensureCleaned(getApplication())
+                target = openDownload(fileName, att.mime ?: "application/octet-stream")
+                withContext(Dispatchers.IO) { file.inputStream().use { input -> target.stream.use { input.copyTo(it) } } }
+                val saved = target.commit()
+                target = null
+                _ui.value = _ui.value.copy(toast = savedToLabel(saved.fileName, saved.inAppDir))
+            } catch (e: Exception) {
+                target?.discard()
+                if (e is CancellationException) throw e
+                _ui.value = _ui.value.copy(toast = e.message ?: "下载失败")
             }
-            val resolver = context.contentResolver
-            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: throw IllegalStateException("无法创建下载文件")
-            resolver.openOutputStream(uri)?.use { it.write(bytes) }
-                ?: throw IllegalStateException("无法写入下载文件")
-            values.clear()
-            values.put(MediaStore.Downloads.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
-        } else {
-            val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                ?: throw IllegalStateException("存储不可用")
-            java.io.File(dir, fileName).writeBytes(bytes)
+        }
+    }
+
+    /**
+     * 把附件原件分享给其他应用（ACTION_SEND 系统选择器）：缓存文件按真实文件名复制到 cacheDir/share 再经 FileProvider 授权，
+     * 接收方拿到的是带正确后缀的名字而不是缓存键 .bin。拿到 Intent 后由界面层 [launch]。
+     */
+    fun shareAttachment(note: Note, att: NoteAttachment, launch: (Intent) -> Unit) {
+        val context = getApplication<Application>()
+        val fileName = attachmentDownloadName(att.name, att.mime, note.id, if (note.rawType == "image") "image" else "voice")
+        val mime = (att.mime ?: "application/octet-stream").substringBefore(';')
+        viewModelScope.launch {
+            try {
+                val cached = repo.fetchNoteMediaFile(note.id, att.id)
+                val shared = withContext(Dispatchers.IO) {
+                    val dir = java.io.File(context.cacheDir, "share").apply { mkdirs() }
+                    val stale = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
+                    dir.listFiles()?.filter { it.name != fileName && it.lastModified() < stale }?.forEach { it.delete() }
+                    java.io.File(dir, fileName).also { cached.copyTo(it, overwrite = true) }
+                }
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", shared)
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = mime
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                launch(Intent.createChooser(send, attachmentShareTitle(note.rawType)))
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(toast = e.message ?: "分享失败")
+            }
         }
     }
 
     fun deleteNote(note: Note) {
+        AudioPlayback.stopIfNote(note.id)
         val prev = _ui.value.notes
         _ui.value = _ui.value.copy(notes = prev.filter { it.id != note.id })
         viewModelScope.launch {
@@ -569,18 +687,167 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 下载全量备份 zip 到系统下载目录，返回文件名。includeSensitive=true 时敏感笔记含明文 */
-    suspend fun downloadBackupToDownloads(includeSensitive: Boolean = false, password: String? = null): String {
-        val (bytes, fileName) = repo.downloadBackup(includeSensitive, password)
-        saveToDownloads(fileName, "application/zip", bytes)
-        return fileName
+    private val _backupDownload = MutableStateFlow<BackupDownloadState>(BackupDownloadState.Idle)
+    /** 备份下载进度 / 结果：挂在 ViewModel 上，离开设置页不中断下载、回来仍能看到 */
+    val backupDownload: StateFlow<BackupDownloadState> = _backupDownload
+    private var backupDownloadJob: Job? = null
+
+    /**
+     * 下载全量备份 zip 到系统下载目录，边收边写（不整包进内存）；同时只允许一次。
+     * includeSensitive=true 时敏感笔记含明文。取消 / 失败都删掉半个文件，下载目录不会留下打不开的 zip
+     */
+    fun startBackupDownload(includeSensitive: Boolean = false, password: String? = null) {
+        if (backupDownloadJob?.isActive == true) return
+        _backupDownload.value = BackupDownloadState.Running(0, -1)
+        backupDownloadJob = viewModelScope.launch {
+            var target: DownloadTarget? = null
+            try {
+                StaleDownloadCleaner.ensureCleaned(getApplication())
+                var lastStep = -1L
+                repo.downloadBackup(
+                    includeSensitive,
+                    password,
+                    onProgress = { received, total, estimate ->
+                        val step = backupDownloadStep(received, total, estimate)
+                        if (step != lastStep) {
+                            lastStep = step
+                            _backupDownload.update {
+                                if (it is BackupDownloadState.Running) BackupDownloadState.Running(received, total, estimate) else it
+                            }
+                        }
+                    },
+                    open = { name -> openDownload(name, "application/zip").also { target = it }.stream },
+                )
+                val saved = target?.commit() ?: throw IllegalStateException("备份下载失败，请稍后重试")
+                target = null
+                _backupDownload.value = saved
+            } catch (e: CancellationException) {
+                target?.discard()
+                _backupDownload.value = BackupDownloadState.Failed(BACKUP_DOWNLOAD_CANCELLED)
+                throw e
+            } catch (e: Exception) {
+                target?.discard()
+                _backupDownload.value = BackupDownloadState.Failed(e.message ?: "备份下载失败，请稍后重试")
+            }
+        }
     }
 
-    /** 从备份 zip 恢复，返回恢复统计 */
-    suspend fun restoreFromBackup(bytes: ByteArray, fileName: String): RestoreStats {
-        val stats = repo.restoreBackup(bytes, fileName)
-        refresh()
-        return stats
+    fun cancelBackupDownload() {
+        backupDownloadJob?.cancel()
+    }
+
+    fun dismissBackupDownloadResult() {
+        if (backupDownloadJob?.isActive != true) _backupDownload.value = BackupDownloadState.Idle
+    }
+
+    /**
+     * 下载目录里一个正在写的文件：Q+ 是 IS_PENDING 的 MediaStore 行（对其他应用不可见），旧系统是应用外部目录下的 .part 文件、完成后才改成最终名。
+     * commit 返回实际落盘的文件名（同名时系统 / 本地都改成「name (1).zip」，不覆盖上一份）与可分享的 content Uri
+     */
+    private inner class DownloadTarget(
+        val stream: OutputStream,
+        private val uri: Uri?,
+        private val file: java.io.File?,
+        private val requestedName: String,
+    ) {
+        fun commit(): BackupDownloadState.Done {
+            val context = getApplication<Application>()
+            val u = uri
+            if (u != null) {
+                val resolver = context.contentResolver
+                val values = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                resolver.update(u, values, null, null)
+                val actualName = runCatching {
+                    resolver.query(u, arrayOf(MediaStore.Downloads.DISPLAY_NAME), null, null, null)?.use { c ->
+                        if (c.moveToFirst()) c.getString(0) else null
+                    }
+                }.getOrNull()
+                return BackupDownloadState.Done(actualName ?: requestedName, u, inAppDir = false)
+            }
+            val part = file ?: throw IllegalStateException("无法保存下载文件")
+            val dest = java.io.File(part.parentFile, uniqueDownloadName(requestedName) { java.io.File(part.parentFile, it).exists() })
+            if (!part.renameTo(dest)) throw IllegalStateException("无法保存下载文件")
+            val shareUri = runCatching {
+                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", dest)
+            }.getOrNull()
+            return BackupDownloadState.Done(dest.name, shareUri, inAppDir = true)
+        }
+
+        fun discard() {
+            runCatching { stream.close() }
+            val u = uri
+            if (u != null) runCatching { getApplication<Application>().contentResolver.delete(u, null, null) }
+            file?.delete()
+        }
+    }
+
+    private fun openDownload(fileName: String, mime: String): DownloadTarget {
+        val context = getApplication<Application>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, mime.substringBefore(';'))
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("无法创建下载文件")
+            val stream = resolver.openOutputStream(uri)
+                ?: run { resolver.delete(uri, null, null); throw IllegalStateException("无法写入下载文件") }
+            return DownloadTarget(stream, uri, null, fileName)
+        }
+        val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            ?: throw IllegalStateException("存储不可用")
+        val part = java.io.File(dir, fileName + StaleDownloadCleaner.PART_SUFFIX)
+        return DownloadTarget(part.outputStream(), null, part, fileName)
+    }
+
+    private val _restore = MutableStateFlow<RestoreState>(RestoreState.Idle)
+    /** 备份恢复进度 / 结果：挂在 ViewModel 上，离开设置页不中断上传、回来仍能看到 */
+    val restore: StateFlow<RestoreState> = _restore
+    private var restoreJob: Job? = null
+
+    /** 读取所选 zip 并上传恢复；同时只允许一次 */
+    fun startRestore(uri: Uri) {
+        if (restoreJob?.isActive == true) return
+        _restore.value = RestoreState.Reading
+        restoreJob = viewModelScope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    getApplication<Application>().contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                } ?: throw IllegalStateException("无法读取所选文件")
+                if (bytes.size > MAX_RESTORE_BYTES) {
+                    _restore.value = RestoreState.Failed("备份文件过大：最大支持 ${MAX_RESTORE_BYTES / 1024 / 1024}MB")
+                    return@launch
+                }
+                _restore.value = RestoreState.Running(0, bytes.size.toLong())
+                var lastPercent = -1
+                val stats = repo.restoreBackup(bytes, "backup.zip") { sent, total ->
+                    val next = RestoreState.Running(sent, total)
+                    val percent = restorePercent(next)
+                    if (percent != lastPercent || next.uploaded) {
+                        lastPercent = percent
+                        _restore.update { if (it is RestoreState.Running) next else it }
+                    }
+                }
+                _restore.value = RestoreState.Done(stats)
+                refresh()
+            } catch (e: CancellationException) {
+                _restore.update { RestoreState.Failed(restoreCancelledMessage(it)) }
+                throw e
+            } catch (e: Exception) {
+                _restore.value = RestoreState.Failed(e.message ?: "恢复失败，请稍后重试")
+            }
+        }
+    }
+
+    /** 中断恢复：上传未完成则服务端不会导入；已上传完则只是不再等结果 */
+    fun cancelRestore() {
+        restoreJob?.cancel()
+    }
+
+    fun dismissRestoreResult() {
+        if (restoreJob?.isActive != true) _restore.value = RestoreState.Idle
     }
 
     fun showToast(message: String) {
@@ -623,6 +890,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun batchDelete() {
+        AudioPlayback.stop()
         val s = _ui.value
         if (s.allMatching) {
             _ui.value = s.copy(batchBusy = true, batchProgress = null)

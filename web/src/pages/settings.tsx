@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   Check,
   Loader2,
@@ -37,6 +37,10 @@ import {
   getTags,
   importData,
   downloadBackup,
+  transferLabel,
+  transferPercent,
+  TransferCancelledError,
+  type TransferProgress,
   restoreBackup,
   MAX_RESTORE_BYTES,
   renameTag,
@@ -56,12 +60,14 @@ import {
   type WechatBindingStatus,
   type PushPreferences,
   type TestConnectionResult,
+  NetworkError,
 } from "@/lib/api"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 import { detectPushSupport, currentSubscription, enablePush, disablePush, forgetPushIntent, rememberPushIntent } from "@/lib/push"
 import { detachServiceWorker, isOfflineCacheEnabled, setOfflineCacheEnabled } from "@/lib/sw-control"
 import { RecoveryCodeCard } from "@/pages/auth"
 import type { TagCount } from "@/lib/types"
-import { loadSettings, saveSettings, useSettingsVersion } from "@/lib/settings"
+import { defaultApiBase, loadSettings, saveSettings, useSettingsVersion, type Settings } from "@/lib/settings"
 import { loadFontSize, loadTheme, setFontSize, setTheme, type FontSize, type ThemeMode } from "@/lib/theme"
 import { cn, KNOWN_ISSUES_URL } from "@/lib/utils"
 import { SafetyPromise } from "@/components/safety-promise"
@@ -76,9 +82,16 @@ const IMPORT_SOURCES: { value: ImportSource; label: string; hint: string; accept
   { value: "text", label: "纯文本", hint: "按空行拆条，每段一条笔记", accept: ".txt,.md" },
 ]
 
+const EXAMPLE_API_BASE = "https://suinian-api.example.workers.dev"
+
+/** 未填 API 地址时的默认值：托管域上是官方实例，自部署时留空由占位提示 */
+function apiBasePlaceholder(): string {
+  return defaultApiBase() || EXAMPLE_API_BASE
+}
+
 /** memos 式可复制 curl 示例；withToken=true 时把真实 token 写进剪贴板文本（不在页面展示） */
 function buildCurlExample(apiBaseUrl: string, withToken: boolean): string {
-  const base = (apiBaseUrl || "https://suinian-api.example.workers.dev").trim().replace(/\/$/, "")
+  const base = (apiBaseUrl || apiBasePlaceholder()).trim().replace(/\/$/, "")
   const token = withToken ? loadSettings().apiToken || "YOUR_API_TOKEN" : "YOUR_API_TOKEN"
   return [
     `curl -X POST '${base}/api/notes' \\`,
@@ -109,6 +122,26 @@ function PendingConfirmDialog({
       }}
       onCancel={onClose}
     />
+  )
+}
+
+/** 演示数据只在本浏览器：导出 / 备份 / 导入 / 恢复四个真实账号能力在演示模式先说明、不留可点却必失败的按钮 */
+function DemoDataNotice({ action }: { action: string }) {
+  return (
+    <p className="flex items-start gap-1.5 text-sm text-muted-foreground" role="status">
+      <CircleAlert className="mt-0.5 size-4 shrink-0" />
+      <span>
+        演示数据只保存在当前浏览器，{action}需要登录真实账号；
+        <button
+          type="button"
+          onClick={() => (window.location.hash = "#/auth")}
+          className="font-medium text-primary underline underline-offset-2"
+        >
+          注册 / 登录
+        </button>
+        后，演示期间记的笔记可一键导入
+      </span>
+    </p>
   )
 }
 
@@ -318,28 +351,39 @@ function TagManagerCard() {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [showLongTail, setShowLongTail] = useState(false)
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null)
+  const [unreachable, setUnreachable] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const settingsVersion = useSettingsVersion()
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
     let cancelled = false
     setError(null)
+    setUnreachable(false)
     getTags()
       .then((t) => {
         if (!cancelled) setTags(t)
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : String(e))
+        setUnreachable(e instanceof NetworkError)
       })
     return () => {
       cancelled = true
     }
-  }, [settingsVersion])
+  }, [settingsVersion, attempt])
+
+  useRetryOnReconnect(error !== null && unreachable, retry)
 
   async function refresh() {
     try {
       setTags(await getTags())
+      setError(null)
+      setUnreachable(false)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      setUnreachable(e instanceof NetworkError)
     }
   }
 
@@ -407,7 +451,15 @@ function TagManagerCard() {
         </p>
       </div>
       {error ? (
-        <p className="text-sm text-destructive">{error}</p>
+        <div className="flex flex-col items-start gap-2">
+          <p className="text-sm text-destructive">
+            {error}
+            {unreachable ? "（会自动重试）" : ""}
+          </p>
+          <Button size="sm" variant="outline" onClick={retry}>
+            <RefreshCw className="size-3.5" /> 重试
+          </Button>
+        </div>
       ) : tags === null ? (
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" /> 加载中…
@@ -640,19 +692,25 @@ function PushPreferencesCard() {
   const [busy, setBusy] = useState(false)
   // fail closed like WechatBindingCard: only mention WeChat when a channel is live
   const [wechatOn, setWechatOn] = useState(false)
+  const [loadFailed, setLoadFailed] = useState<{ unreachable: boolean } | null>(null)
+  const [attempt, setAttempt] = useState(0)
   const settingsVersion = useSettingsVersion()
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
     let cancelled = false
     const s = loadSettings()
     if (s.useMock || !s.apiBaseUrl || !s.apiToken) return
     setError(null)
+    setLoadFailed(null)
     getPreferences()
       .then((p) => {
         if (!cancelled) setPrefs(p)
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : String(e))
+        setLoadFailed({ unreachable: e instanceof NetworkError })
       })
     getWechatBinding()
       .then((st) => {
@@ -662,7 +720,9 @@ function PushPreferencesCard() {
     return () => {
       cancelled = true
     }
-  }, [settingsVersion])
+  }, [settingsVersion, attempt])
+
+  useRetryOnReconnect(loadFailed?.unreachable === true, retry)
 
   const s = loadSettings()
   if (s.useMock || !s.apiBaseUrl || !s.apiToken) return null
@@ -708,7 +768,19 @@ function PushPreferencesCard() {
         <h3 className="text-[15px] font-semibold leading-snug">推送偏好</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{`控制浏览器通知${wechatOn ? "与微信 bot" : ""}的主动推送，默认全开；关闭后当天即生效`}</p>
       </div>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && (
+        <div className="flex flex-col items-start gap-2">
+          <p className="text-sm text-destructive">
+            {error}
+            {loadFailed?.unreachable ? "（会自动重试）" : ""}
+          </p>
+          {loadFailed && (
+            <Button size="sm" variant="outline" onClick={retry}>
+              <RefreshCw className="size-3.5" /> 重试
+            </Button>
+          )}
+        </div>
+      )}
       {prefs === null && !error ? (
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" /> 加载中…
@@ -738,28 +810,32 @@ function PushPreferencesCard() {
 
 function WechatBindingCard() {
   const [status, setStatus] = useState<WechatBindingStatus | null>(null)
-  const [loadFailed, setLoadFailed] = useState(false)
+  const [loadFailed, setLoadFailed] = useState<{ unreachable: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [bindCode, setBindCode] = useState<{ code: string; ttl_minutes: number } | null>(null)
+  const [attempt, setAttempt] = useState(0)
   const settingsVersion = useSettingsVersion()
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
     let cancelled = false
     const s = loadSettings()
     if (s.useMock || !s.apiBaseUrl || !s.apiToken) return
-    setLoadFailed(false)
+    setLoadFailed(null)
     getWechatBinding()
       .then((st) => {
         if (!cancelled) setStatus(st)
       })
-      .catch(() => {
-        if (!cancelled) setLoadFailed(true)
+      .catch((e: unknown) => {
+        if (!cancelled) setLoadFailed({ unreachable: e instanceof NetworkError })
       })
     return () => {
       cancelled = true
     }
-  }, [settingsVersion])
+  }, [settingsVersion, attempt])
+
+  useRetryOnReconnect(status === null && loadFailed?.unreachable === true, retry)
 
   const s = loadSettings()
   if (s.useMock || !s.apiBaseUrl || !s.apiToken) return null
@@ -882,6 +958,7 @@ export function SettingsPage() {
   const [regenerating, setRegenerating] = useState(false)
   const [newRecoveryCode, setNewRecoveryCode] = useState<string | null>(null)
   const [accountMsg, setAccountMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [deleteMsg, setDeleteMsg] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleteConfirmText, setDeleteConfirmText] = useState("")
@@ -889,6 +966,8 @@ export function SettingsPage() {
   const [includeSensitive, setIncludeSensitive] = useState(false)
   const [exporting, setExporting] = useState<"json" | "markdown" | "backup" | null>(null)
   const [exportMsg, setExportMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [backupProgress, setBackupProgress] = useState<TransferProgress | null>(null)
+  const backupAbortRef = useRef<AbortController | null>(null)
   const [importSource, setImportSource] = useState<ImportSource>("cubox")
   const [guideOpen, setGuideOpen] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -900,6 +979,12 @@ export function SettingsPage() {
   const [lastUsedAt, setLastUsedAt] = useState<string | null>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
   const restoreInputRef = useRef<HTMLInputElement>(null)
+  const deleteMsgRef = useRef<HTMLParagraphElement>(null)
+  useSettingsVersion()
+  const persisted = loadSettings()
+  const demoOnly = persisted.useMock
+  /** token 相关操作与注销只对已登录真实账号有意义；演示访客 / 未填 token 时不展示必失败的按钮 */
+  const signedIn = !demoOnly && persisted.apiToken.trim() !== ""
 
   useEffect(() => {
     const s = loadSettings()
@@ -959,9 +1044,22 @@ export function SettingsPage() {
     setRestoreMsg(null)
     try {
       const stats: RestoreStats = await restoreBackup(file)
+      const missingNotes = stats.media_missing_notes ?? []
+      const missingTotal = (stats.media_oversized ?? 0) + stats.media_failed + (stats.media_missing ?? 0)
+      const missingNames = missingNotes.slice(0, 5).map((m) => m.name)
+      const missingDetail =
+        missingTotal > 0
+          ? `。${missingTotal} 个原件没跟上${missingNames.length > 0 ? `（${missingNames.join("、")}${missingTotal > missingNames.length ? " 等" : ""}）` : ""}：对应笔记已恢复并在卡片上标出「原件未随备份恢复」，需要原件的话请重新上传`
+          : ""
+      const badDue = stats.todo_due_invalid ?? 0
+      const badDueValues = (stats.todo_due_invalid_notes ?? []).slice(0, 3).map((m) => `「${m.value}」`)
+      const badDueDetail =
+        badDue > 0
+          ? `。${badDue} 条待办的到期时间无法识别${badDueValues.length > 0 ? `（${badDueValues.join("")}${badDue > badDueValues.length ? " 等" : ""}）` : ""}，已按无到期时间恢复并在卡片上标出，请到待办里重新设置`
+          : ""
       setRestoreMsg({
         ok: true,
-        text: `恢复完成：笔记 ${stats.notes_imported}/${stats.notes_total} 条（跳过重复 ${stats.notes_skipped} 条）${(stats.sensitive_skipped ?? 0) > 0 ? `，跳过脱敏占位的敏感笔记 ${stats.sensitive_skipped} 条（迁移敏感内容请用勾选「包含敏感内容」的完整备份）` : ""}，媒体 ${stats.media_imported} 个${(stats.media_oversized ?? 0) > 0 ? `，超过大小上限跳过 ${stats.media_oversized} 个` : ""}${stats.media_failed > 0 ? `，导入失败 ${stats.media_failed} 个` : ""}${(stats.reports_imported ?? 0) > 0 || (stats.reports_skipped ?? 0) > 0 ? `，历史报告导入 ${stats.reports_imported} 份${(stats.reports_skipped ?? 0) > 0 ? `（跳过重复/无效 ${stats.reports_skipped} 份）` : ""}` : ""}${(stats.threads_rebuilt ?? 0) > 0 ? `，${stats.threads_rebuilt} 条线索归组将由后台聚类重建` : ""}。AI 分拣/线索/图谱会在后台陆续补全`,
+        text: `恢复完成：笔记 ${stats.notes_imported}/${stats.notes_total} 条（跳过重复 ${stats.notes_skipped} 条）${(stats.sensitive_skipped ?? 0) > 0 ? `，跳过脱敏占位的敏感笔记 ${stats.sensitive_skipped} 条（迁移敏感内容请用勾选「包含敏感内容」的完整备份）` : ""}，媒体 ${stats.media_imported} 个${(stats.media_oversized ?? 0) > 0 ? `，超过大小上限跳过 ${stats.media_oversized} 个` : ""}${stats.media_failed > 0 ? `，存档失败 ${stats.media_failed} 个` : ""}${(stats.media_missing ?? 0) > 0 ? `，备份包里缺少 ${stats.media_missing} 个` : ""}${(stats.reports_imported ?? 0) > 0 || (stats.reports_skipped ?? 0) > 0 ? `，历史报告导入 ${stats.reports_imported} 份${(stats.reports_skipped ?? 0) > 0 ? `（跳过重复/无效 ${stats.reports_skipped} 份）` : ""}` : ""}${(stats.threads_rebuilt ?? 0) > 0 ? `，${stats.threads_rebuilt} 条线索归组将由后台聚类重建` : ""}${missingDetail}${badDueDetail}。AI 分拣/线索/图谱会在后台陆续补全`,
       })
     } catch (e) {
       setRestoreMsg({ ok: false, text: e instanceof Error ? e.message : "恢复失败，请稍后重试" })
@@ -982,10 +1080,20 @@ export function SettingsPage() {
     }
     setExporting(format)
     setExportMsg(null)
+    const abort = format === "backup" ? new AbortController() : null
+    backupAbortRef.current = abort
+    let lastReported = -1
     try {
       const { blob, filename } =
         format === "backup"
-          ? await downloadBackup(includeSensitive, password)
+          ? await downloadBackup(includeSensitive, password, {
+              signal: abort?.signal,
+              onProgress: (p) => {
+                if (p.received - lastReported < 256 * 1024 && lastReported >= 0) return
+                lastReported = p.received
+                setBackupProgress(p)
+              },
+            })
           : await exportData(format, includeSensitive, password)
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
@@ -995,11 +1103,23 @@ export function SettingsPage() {
       URL.revokeObjectURL(url)
       setExportMsg({ ok: true, text: `已导出 ${filename}${includeSensitive ? "（含敏感内容明文）" : "（敏感内容已脱敏）"}` })
     } catch (e) {
-      setExportMsg({ ok: false, text: e instanceof Error ? e.message : "导出失败，请稍后重试" })
+      if (e instanceof TransferCancelledError) {
+        setExportMsg({ ok: false, text: "已取消下载，未生成备份文件" })
+      } else {
+        setExportMsg({ ok: false, text: e instanceof Error ? e.message : "导出失败，请稍后重试" })
+      }
     } finally {
+      backupAbortRef.current = null
+      setBackupProgress(null)
       setExporting(null)
     }
   }
+
+  function backupButtonLabel(p: TransferProgress | null): string {
+    if (!p || p.received === 0) return "打包中，请勿关闭页面…"
+    return transferLabel(p)
+  }
+  const backupPercent = exporting === "backup" && backupProgress ? transferPercent(backupProgress) : null
 
   async function copyCurl() {
     try {
@@ -1093,7 +1213,7 @@ export function SettingsPage() {
   async function handleDeleteAccount() {
     if (deleting || deleteConfirmText !== "注销") return
     setDeleting(true)
-    setAccountMsg(null)
+    setDeleteMsg(null)
     try {
       await deleteAccount()
       forgetPushIntent()
@@ -1110,16 +1230,28 @@ export function SettingsPage() {
         window.location.reload()
         return
       }
-      setAccountMsg({ ok: false, text: e instanceof Error ? e.message : "注销失败，请稍后重试" })
+      setDeleteMsg(e instanceof Error ? e.message : "注销失败，请稍后重试")
       setDeleting(false)
     }
   }
 
+  /** 切到真实 API 但没填地址时，托管域自动补官方实例地址（与注册/登录页同一默认值） */
+  function withDefaultBase(s: Settings): Settings {
+    if (s.useMock || s.apiBaseUrl.trim()) return s
+    const base = defaultApiBase()
+    return base ? { ...s, apiBaseUrl: base } : s
+  }
+
+  useEffect(() => {
+    if (deleteMsg) deleteMsgRef.current?.scrollIntoView({ block: "center" })
+  }, [deleteMsg])
+
   function save() {
+    const filled = withDefaultBase(settings)
     const next =
-      settings.useMock && settings.apiBaseUrl.trim() && settings.apiToken.trim()
-        ? { ...settings, useMock: false }
-        : settings
+      filled.useMock && filled.apiBaseUrl.trim() && filled.apiToken.trim()
+        ? { ...filled, useMock: false }
+        : filled
     setSettings(next)
     saveSettings(next)
     setSaved(true)
@@ -1128,7 +1260,9 @@ export function SettingsPage() {
 
   async function handleTest() {
     if (testing) return
-    saveSettings(settings)
+    const filled = withDefaultBase(settings)
+    setSettings(filled)
+    saveSettings(filled)
     setTesting(true)
     setTestResult(null)
     try {
@@ -1171,7 +1305,7 @@ export function SettingsPage() {
             autoCorrect="off"
             autoCapitalize="none"
             spellCheck={false}
-            placeholder="https://suinian-api.example.workers.dev"
+            placeholder={apiBasePlaceholder()}
             value={settings.apiBaseUrl}
             onChange={(e) => {
               setTestResult(null)
@@ -1259,69 +1393,79 @@ export function SettingsPage() {
         <div>
           <h3 className="text-[15px] font-semibold leading-snug">账号</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            还没有账号？支持用户名 + 密码自助注册，注册后自动配置 token
+            {demoOnly
+              ? "当前是演示模式，数据只在本浏览器。注册 / 登录后自动配置 token，演示期间记的笔记可一键导入"
+              : "还没有账号？支持用户名 + 密码自助注册，注册后自动配置 token"}
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <Button variant="outline" onClick={() => (window.location.hash = "#/auth")} className="w-full sm:w-auto">
             <UserPlus /> 注册 / 登录
           </Button>
-          <Button variant="outline" onClick={() => void copyToken()} className="w-full sm:w-auto">
-            {copied ? (
-              <>
-                <Check /> 已复制
-              </>
-            ) : (
-              <>
-                <Copy /> 复制我的 API token
-              </>
-            )}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={handleRotate}
-            disabled={rotating}
-            className="w-full sm:w-auto"
-          >
-            {rotating ? (
-              <>
-                <Loader2 className="animate-spin" /> 轮换中…
-              </>
-            ) : (
-              <>
-                <RefreshCw /> 轮换 token
-              </>
-            )}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={handleRegenerateRecovery}
-            disabled={regenerating}
-            className="w-full sm:w-auto"
-          >
-            {regenerating ? (
-              <>
-                <Loader2 className="animate-spin" /> 生成中…
-              </>
-            ) : (
-              <>
-                <KeyRound /> 重新生成恢复码
-              </>
-            )}
-          </Button>
-          <Button variant="outline" onClick={handleLogout} className="w-full sm:w-auto">
-            <LogOut /> 退出登录
-          </Button>
+          {signedIn && (
+            <>
+            <Button variant="outline" onClick={() => void copyToken()} className="w-full sm:w-auto">
+              {copied ? (
+                <>
+                  <Check /> 已复制
+                </>
+              ) : (
+                <>
+                  <Copy /> 复制我的 API token
+                </>
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleRotate}
+              disabled={rotating}
+              className="w-full sm:w-auto"
+            >
+              {rotating ? (
+                <>
+                  <Loader2 className="animate-spin" /> 轮换中…
+                </>
+              ) : (
+                <>
+                  <RefreshCw /> 轮换 token
+                </>
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleRegenerateRecovery}
+              disabled={regenerating}
+              className="w-full sm:w-auto"
+            >
+              {regenerating ? (
+                <>
+                  <Loader2 className="animate-spin" /> 生成中…
+                </>
+              ) : (
+                <>
+                  <KeyRound /> 重新生成恢复码
+                </>
+              )}
+            </Button>
+            <Button variant="outline" onClick={handleLogout} className="w-full sm:w-auto">
+              <LogOut /> 退出登录
+            </Button>
+            </>
+          )}
         </div>
         {newRecoveryCode && (
           <RecoveryCodeCard code={newRecoveryCode} onDone={() => setNewRecoveryCode(null)} />
         )}
-        <p className="text-xs text-muted-foreground">
-          恢复码是忘记密码时找回账号的唯一方式，丢失或泄露时可在这里重新生成（旧码同时作废）。用恢复码找回账号会同时作废所有旧 token：其他设备、浏览器扩展、MCP/API 集成需重新登录或重新配置
-        </p>
-        <p className="text-xs text-muted-foreground">
-          退出登录仅清除本机登录状态，云端数据不受影响，重新登录即可找回全部笔记
-        </p>
+        {signedIn && (
+          <>
+            <p className="text-xs text-muted-foreground">
+              恢复码是忘记密码时找回账号的唯一方式，丢失或泄露时可在这里重新生成（旧码同时作废）。用恢复码找回账号会同时作废所有旧 token：其他设备、浏览器扩展、MCP/API 集成需重新登录或重新配置
+            </p>
+            <p className="text-xs text-muted-foreground">
+              退出登录仅清除本机登录状态，云端数据不受影响，重新登录即可找回全部笔记
+            </p>
+          </>
+        )}
         {lastUsedAt && (
           <p className="text-xs text-muted-foreground">
             token 上次使用时间：{formatLastUsed(lastUsedAt)}（若非本人操作，建议立即轮换 token）
@@ -1380,15 +1524,16 @@ export function SettingsPage() {
             ? "包含敏感内容明文（完整灾备/搬家包）"
             : "敏感内容已脱敏（正文为占位符、附件不打包）——用作唯一灾备或迁移敏感笔记请先勾选上方「包含敏感内容」"}
         </p>
+        {demoOnly && <DemoDataNotice action="导出与完整备份" />}
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <Button
             onClick={() => void handleExport("backup")}
-            disabled={exporting !== null}
+            disabled={demoOnly || exporting !== null}
             className="w-full sm:w-auto"
           >
             {exporting === "backup" ? (
               <>
-                <Loader2 className="animate-spin" /> 打包中，请勿关闭页面…
+                <Loader2 className="animate-spin" /> {backupButtonLabel(backupProgress)}
               </>
             ) : (
               <>
@@ -1396,10 +1541,19 @@ export function SettingsPage() {
               </>
             )}
           </Button>
+          {exporting === "backup" && (
+            <Button
+              variant="outline"
+              onClick={() => backupAbortRef.current?.abort()}
+              className="w-full sm:w-auto"
+            >
+              取消下载
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => void handleExport("json")}
-            disabled={exporting !== null}
+            disabled={demoOnly || exporting !== null}
             className="w-full sm:w-auto"
           >
             {exporting === "json" ? (
@@ -1415,7 +1569,7 @@ export function SettingsPage() {
           <Button
             variant="outline"
             onClick={() => void handleExport("markdown")}
-            disabled={exporting !== null}
+            disabled={demoOnly || exporting !== null}
             className="w-full sm:w-auto"
           >
             {exporting === "markdown" ? (
@@ -1429,6 +1583,13 @@ export function SettingsPage() {
             )}
           </Button>
         </div>
+        {backupPercent ? (
+          <Progress
+            className="h-1.5"
+            aria-label={backupPercent.approx ? "备份下载进度（按预估总长）" : "备份下载进度"}
+            value={backupPercent.value}
+          />
+        ) : null}
         <p className="text-xs text-muted-foreground">
           完整备份包含全部笔记字段、历史周报/月报与语音/图片/文件原件（敏感笔记的附件原件仅在勾选敏感内容时打包），可在下方「从完整备份恢复」搬家到新账号/新实例；线索归组不随包迁移，恢复后由后台聚类自动重建
         </p>
@@ -1484,6 +1645,7 @@ export function SettingsPage() {
         <p className="text-xs text-muted-foreground">
           {IMPORT_SOURCES.find((o) => o.value === importSource)?.hint}
         </p>
+        {demoOnly && <DemoDataNotice action="导入" />}
         <input
           ref={importInputRef}
           type="file"
@@ -1532,7 +1694,7 @@ export function SettingsPage() {
         <Button
           variant="outline"
           onClick={() => importInputRef.current?.click()}
-          disabled={importing}
+          disabled={demoOnly || importing}
           className="w-full sm:w-auto"
         >
           {importing ? (
@@ -1595,6 +1757,7 @@ export function SettingsPage() {
             导入「下载完整备份」导出的 zip：笔记保留原时间/标签/分类，语音/图片/文件原件重新入库；已存在的同一条笔记（按备份内的笔记 ID）自动跳过，可安心重复恢复（最大 200MB）。注意：未勾选敏感内容的脱敏备份只含占位符，恢复时会跳过这些敏感笔记——迁移请用包含敏感内容的完整备份
           </p>
         </div>
+        {demoOnly && <DemoDataNotice action="从备份恢复" />}
         <input
           ref={restoreInputRef}
           type="file"
@@ -1610,7 +1773,7 @@ export function SettingsPage() {
         <Button
           variant="outline"
           onClick={() => restoreInputRef.current?.click()}
-          disabled={restoring}
+          disabled={demoOnly || restoring}
           className="w-full sm:w-auto"
         >
           {restoring ? (
@@ -1696,6 +1859,7 @@ export function SettingsPage() {
       </Card>
       </SettingsGroup>
 
+      {signedIn && (
       <SettingsGroup title="危险操作">
       <Card className="space-y-4 border-destructive/40 bg-destructive/[0.03] p-5">
         <div>
@@ -1737,12 +1901,19 @@ export function SettingsPage() {
                 onClick={() => {
                   setDeleteConfirmOpen(false)
                   setDeleteConfirmText("")
+                  setDeleteMsg(null)
                 }}
                 disabled={deleting}
               >
                 取消
               </Button>
             </div>
+            {deleteMsg && (
+              <p ref={deleteMsgRef} role="alert" className="flex items-center gap-1.5 text-sm text-destructive">
+                <CircleAlert className="size-4 shrink-0" />
+                {deleteMsg}
+              </p>
+            )}
           </div>
         ) : (
           <Button
@@ -1755,6 +1926,7 @@ export function SettingsPage() {
         )}
       </Card>
       </SettingsGroup>
+      )}
       <PendingConfirmDialog pending={pendingConfirm} onClose={() => setPendingConfirm(null)} />
     </div>
   )

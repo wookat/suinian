@@ -1,49 +1,89 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { Hash, BarChart3, GitBranch } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { getStats, getThreads } from "@/lib/api"
+import { getStats, getThreads, NetworkError } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
+import { onNotesMutated } from "@/lib/notes-bus"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 import type { Thread } from "@/lib/types"
 
 const MAX_RAIL_THREADS = 3
 
 const MAX_RAIL_TAGS = 20
 
+/** 连续写操作（批量删除 / 撤销恢复）合并成一次重拉 */
+const REFRESH_DEBOUNCE_MS = 400
+
 export function RightRail() {
   const [threads, setThreads] = useState<Thread[]>([])
   const [globalStats, setGlobalStats] = useState<{ total: number; days: number } | null>(null)
   const [topTags, setTopTags] = useState<{ tag: string; count: number }[]>([])
   const settingsVersion = useSettingsVersion()
+  const [mutationVersion, setMutationVersion] = useState(0)
+  const [unreachable, setUnreachable] = useState(false)
+  const retry = useCallback(() => setMutationVersion((v) => v + 1), [])
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const off = onNotesMutated(() => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        setMutationVersion((v) => v + 1)
+      }, REFRESH_DEBOUNCE_MS)
+    })
+    return () => {
+      off()
+      if (timer) clearTimeout(timer)
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
+    let netFail = false
+    let settled = 0
+    const settle = (e?: unknown) => {
+      if (e instanceof NetworkError) netFail = true
+      settled += 1
+      if (settled === 2 && !cancelled) setUnreachable(netFail)
+    }
     getStats()
-      .then((res) => {
-        if (cancelled) return
-        setGlobalStats({
-          total: res.total_notes,
-          days: res.active_days ?? res.daily.filter((d) => d.count > 0).length,
-        })
-        setTopTags(res.top_tags ?? [])
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setGlobalStats(null)
-          setTopTags([])
-        }
-      })
+      .then(
+        (res) => {
+          if (cancelled) return
+          setGlobalStats({
+            total: res.total_notes,
+            days: res.active_days ?? res.daily.filter((d) => d.count > 0).length,
+          })
+          setTopTags(res.top_tags ?? [])
+        },
+        (e: unknown) => {
+          if (!cancelled) {
+            setGlobalStats(null)
+            setTopTags([])
+          }
+          return e
+        },
+      )
+      .then(settle)
     getThreads()
-      .then((res) => {
-        if (!cancelled) setThreads(res.threads.slice(0, MAX_RAIL_THREADS))
-      })
-      .catch(() => {
-        if (!cancelled) setThreads([])
-      })
+      .then(
+        (res) => {
+          if (!cancelled) setThreads(res.threads.slice(0, MAX_RAIL_THREADS))
+        },
+        (e: unknown) => {
+          if (!cancelled) setThreads([])
+          return e
+        },
+      )
+      .then(settle)
     return () => {
       cancelled = true
     }
-  }, [settingsVersion])
+  }, [settingsVersion, mutationVersion])
+
+  useRetryOnReconnect(unreachable, retry)
 
   // 全局聚合的 top_tags，而非前 100 条采样计数
   const tags = useMemo(

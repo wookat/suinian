@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Segmented } from "@/components/ui/segmented"
 import { Progress } from "@/components/ui/progress"
-import { createNote, fetchRegisterPolicy, login, recoverAccount, register, type RegisterPolicy } from "@/lib/api"
+import { createNote, fetchRegisterPolicy, login, recoverAccount, register, NetworkError, type RegisterPolicy } from "@/lib/api"
 import { clearDemoNotes, userDemoNotes } from "@/lib/mock"
 import { defaultApiBase, loadSettings, saveSettings } from "@/lib/settings"
 import { cn, KNOWN_ISSUES_URL } from "@/lib/utils"
@@ -210,6 +210,8 @@ export function AuthPage() {
   // 尝试已超时，客户端正自动换新连接重试），给出预期时长而非无限 spinner
   const [slowStage, setSlowStage] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // 连接级失败（请求没到达服务端）：附带「先看演示」出口
+  const [unreachable, setUnreachable] = useState(false)
   const [mismatch, setMismatch] = useState(false)
   const [demoNotes, setDemoNotes] = useState<Note[] | null>(null)
   const [recoveryInput, setRecoveryInput] = useState("")
@@ -249,6 +251,7 @@ export function AuthPage() {
   async function submit() {
     if (busy) return
     setError(null)
+    setUnreachable(false)
     setMismatch(false)
     setSlowStage(0)
     const base = apiBaseUrl.trim()
@@ -298,7 +301,11 @@ export function AuthPage() {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "请求失败，请稍后重试"
-      setError(mode === "register" ? `${msg}。可直接用相同用户名密码重试，不会重复创建账号。` : msg)
+      // 连接都没建立的失败不存在「服务端可能已建号」，不附幂等重试说明
+      const neverReached = e instanceof NetworkError && !e.timeout
+      setUnreachable(neverReached)
+      const addIdempotentHint = mode === "register" && !neverReached && !msg.includes("不会重复创建账号")
+      setError(addIdempotentHint ? `${msg}。可直接用相同用户名密码重试，不会重复创建账号。` : msg)
     } finally {
       window.clearTimeout(slowTimer)
       window.clearTimeout(slowTimer2)
@@ -543,6 +550,20 @@ export function AuthPage() {
               <CircleAlert className="mt-0.5 size-4 shrink-0" />
               {error}
             </p>
+          )}
+          {error && unreachable && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={() => {
+                saveSettings({ ...loadSettings(), useMock: true, onboarded: true })
+                window.location.hash = "#/"
+              }}
+            >
+              先看演示（本地示例数据，无需账号）
+            </Button>
           )}
 
           {busy && slowStage === 1 && (

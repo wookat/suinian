@@ -387,6 +387,22 @@ describe("sweepTodoReminders", () => {
     expect(stats.reminded).toBe(1);
   });
 
+  it("reminds legacy offset-less todos at the Asia/Shanghai instant the API displays, even for a New York user", async () => {
+    // row stored as "2026-08-08T14:30" → every client shows 14:30+08:00 = 06:30Z
+    const state = makeState({
+      notes: [todoNote("legacy", "u1", "2026-08-08T14:30")],
+      prefs: new Map([["u1", { daily_review_push: 1, todo_reminder_push: 1, tz: "America/New_York" }]]),
+    });
+    const env = fakeEnv(state, vapid);
+    // 05:55Z = 35 min before the displayed due: not yet
+    const early = await sweepTodoReminders(env, new Date("2026-08-08T05:55:00Z"));
+    expect(early.candidates).toBe(0);
+    // 06:05Z = 25 min before the displayed due: reminder fires now (previously 14:30 New York = 18:30Z, 12h late)
+    const stats = await sweepTodoReminders(env, new Date("2026-08-08T06:05:00Z"));
+    expect(stats.reminded).toBe(1);
+    expect(stats.delivered).toBe(1);
+  });
+
   it("hides sensitive todo content in the notification body", async () => {
     const now = new Date("2026-08-08T02:00:00Z");
     const state = makeState({

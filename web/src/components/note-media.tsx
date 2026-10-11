@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { CircleAlert, Download, Loader2, RefreshCw, Share2, X } from "lucide-react"
+import { ImageLightbox } from "@/components/image-lightbox"
 import { fetchNoteMediaUrl } from "@/lib/api"
 import { loadSettings } from "@/lib/settings"
 import { cn } from "@/lib/utils"
@@ -114,15 +115,7 @@ export function NoteImage({
   const demo = loadSettings().useMock
   const { url, error, failureText, retry } = useMediaUrl(noteId, attachment.id, !demo)
   const [open, setOpen] = useState(false)
-
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false)
-    }
-    document.addEventListener("keydown", onKey)
-    return () => document.removeEventListener("keydown", onKey)
-  }, [open])
+  const close = useCallback(() => setOpen(false), [])
 
   if (demo) return null
   if (error !== null) return <MediaLoadFailed label="原图加载失败" reason={failureText} onRetry={retry} className="mt-2" />
@@ -150,26 +143,7 @@ export function NoteImage({
           className="max-h-56 max-w-full cursor-zoom-in object-contain transition-opacity hover:opacity-90"
         />
       </button>
-      {open && (
-        <div
-          role="dialog"
-          aria-label="图片大图"
-          onClick={(e) => {
-            e.stopPropagation()
-            setOpen(false)
-          }}
-          className="fixed inset-0 z-50 flex cursor-zoom-out items-center justify-center bg-black/80 p-4"
-        >
-          <img src={url} alt={alt} className="max-h-full max-w-full rounded-lg object-contain" />
-          <button
-            onClick={() => setOpen(false)}
-            aria-label="关闭大图"
-            className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
-          >
-            <X className="size-5" />
-          </button>
-        </div>
-      )}
+      {open && <ImageLightbox src={url} alt={alt} downloadName={attachment.name} mime={attachment.mime} onClose={close} />}
     </>
   )
 }

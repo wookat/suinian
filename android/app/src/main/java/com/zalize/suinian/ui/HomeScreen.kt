@@ -85,6 +85,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.zalize.suinian.data.InlineCommand
 import com.zalize.suinian.data.NotesViewLimits
 import com.zalize.suinian.data.parseInlineCommand
@@ -93,10 +95,12 @@ import com.zalize.suinian.ui.components.VoiceRecorderController
 import kotlinx.coroutines.delay
 import java.io.File
 import androidx.compose.foundation.border
+import com.zalize.suinian.ui.components.AudioPlayback
 import com.zalize.suinian.ui.components.DailyReviewCard
 import com.zalize.suinian.ui.components.FirstRunTour
 import com.zalize.suinian.ui.components.NoteCard
 import com.zalize.suinian.ui.components.NoteEditSheet
+import com.zalize.suinian.ui.components.OnNetworkAvailable
 import kotlinx.coroutines.launch
 
 /** 时间流加载骨架屏：首登/切账号时代替菜单圈，不闪任何旧数据 */
@@ -178,6 +182,9 @@ fun HomeScreen(
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
+    OnNetworkAvailable { vm.onNetworkAvailable() }
+    // 退到后台 / 离开首页时暂停语音（笔记应用不做后台播放），回来仍可从暂停处继续
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { AudioPlayback.pause() }
 
     // 文件选择器：PDF/txt/md/docx → 上传入库
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -857,13 +864,19 @@ fun HomeScreen(
                                 sensitivePending = note.id in ui.sensitivePendingIds,
                                 onRetryLink = { vm.retryLink(it) },
                                 retryingLink = note.id in ui.retryingLinkIds,
+                                onRetryMedia = { vm.retryMedia(it) },
+                                retryingMedia = note.id in ui.retryingMediaIds,
                                 onDownloadFile = { vm.downloadFile(it) },
+                                onDownloadAttachment = { n, att -> vm.downloadAttachment(n, att) },
+                                onShareAttachment = { n, att -> vm.shareAttachment(n, att) { context.startActivity(it) } },
                                 onEdit = { vm.openEditor(it) },
                                 selectable = ui.selectionMode,
                                 selected = note.id in ui.selectedIds,
                                 onSelectToggle = { vm.toggleSelect(it) },
                                 onLongPress = { vm.enterSelection(it) },
                                 fetchMedia = vm::fetchMedia,
+                                fetchMediaFile = vm::fetchMediaFile,
+                                mediaReloadKey = ui.mediaReloadKey,
                             )
                         }
                         if (ui.loadingMore) {

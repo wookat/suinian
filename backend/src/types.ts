@@ -10,6 +10,8 @@ export type Env = {
   AI_BASE_URL?: string;
   /** Fallback model when the primary provider fails (default: Workers AI llama-3.3-70b); "none" disables the chain. */
   AI_FALLBACK_MODEL?: string;
+  /** 主模型熔断窗口 ms（R338）：主模型慢失败（超时/网络/429/5xx）后本隔离实例在此窗口内直走 fallback；"0" 关闭（默认 60000）。 */
+  AI_BREAKER_MS?: string;
   SUINIAN_ENC_KEY?: string;
   /** "false"/"0"/"off" disables /api/auth/register (default: enabled). */
   REGISTRATION_ENABLED?: string;
@@ -92,10 +94,17 @@ export interface TriageResult {
   is_question?: boolean;
 }
 
+/** 备份恢复时原件为何没跟上：超过单文件上限 / 存档失败 / 备份包里没有该条目 */
+export type AttachmentMissingReason = "oversized" | "failed" | "missing";
+
 /** Optional per-note metadata stored as JSON in notes.meta. */
 export interface NoteMeta {
   /** Client-generated idempotency key for media re-uploads (outbox replays). */
   client_id?: string;
+  /** 备份恢复后原件缺失（voice/image/file notes）：客户端不再提供下载 / 原地重试入口，提示重新上传。 */
+  attachment_missing?: AttachmentMissingReason;
+  /** 备份恢复时 todo_due 解析不出的原文（≤40 字）：到期已清空，客户端提示重新设置。 */
+  todo_due_invalid?: string;
   /** Original Whisper transcript before LLM correction (audio notes). */
   raw_transcript?: string;
   /** Result of the last transcription/extraction attempt (voice/image notes). */

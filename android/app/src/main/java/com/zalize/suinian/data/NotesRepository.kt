@@ -2,14 +2,22 @@ package com.zalize.suinian.data
 
 import android.content.Context
 import com.zalize.suinian.data.api.ApiClient
+import com.zalize.suinian.data.api.DownloadProgress
+import com.zalize.suinian.data.api.UploadProgress
+import java.io.OutputStream
+import com.zalize.suinian.data.api.ApiException
 import com.zalize.suinian.data.local.PendingNote
 import com.zalize.suinian.data.local.PendingNoteDao
 import com.zalize.suinian.sync.SyncWorker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import java.util.TimeZone
+import java.io.File
 
 sealed class SendResult {
     data class Sent(val note: Note?) : SendResult()
@@ -27,6 +35,7 @@ class NotesRepository(
 
     private val json = Json { ignoreUnknownKeys = true }
     private val tagsSerializer = ListSerializer(String.serializer())
+    private val mediaCache = MediaCache(java.io.File(context.cacheDir, "media"))
 
     private suspend fun api(): Pair<ApiClient, Boolean> {
         val s = settingsRepo.settings.first()
@@ -188,6 +197,23 @@ class NotesRepository(
         return client.updatePreferences(dailyReviewPush, todoReminderPush)
     }
 
+    /**
+     * 把设备时区同步到服务端偏好（与 web syncTimezone 同口径）：服务端分拣的裸时刻、PATCH 手输到期、
+     * 今日待办 / 周月报边界都按 user_preferences.tz 算，没同步过的非东八区用户会按默认 +08:00 落库。
+     * Mock / 未登录跳过；同 token 同时区只发一次；失败静默、下次启动再试。
+     */
+    suspend fun syncTimezone(zoneId: String = TimeZone.getDefault().id) {
+        val s = settingsRepo.settings.first()
+        if (s.mockMode || s.token.isBlank() || zoneId.isBlank()) return
+        val marker = tzSyncMarker(s.token, zoneId)
+        if (settingsRepo.tzSyncedMarker.first() == marker) return
+        try {
+            ApiClient(s.baseUrl, s.token).updatePreferences(tz = zoneId)
+            settingsRepo.setTzSyncedMarker(marker)
+        } catch (_: Exception) {
+        }
+    }
+
     /** 当天到期 + 已过期的未完成待办 */
     suspend fun getTodosToday(): TodosTodayResponse {
         val (client, mock) = api()
@@ -235,7 +261,7 @@ class NotesRepository(
         val (client, mock) = api()
         if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
         client.deleteAccount()
-        settingsRepo.logout()
+        logout()
     }
 
     /** 链接笔记重试抓取 */
@@ -245,6 +271,13 @@ class NotesRepository(
         return client.refetchLink(id)
     }
 
+    /** 语音 / 图片 / 文件笔记原地重跑转写 / 识别 / 提取 */
+    suspend fun retryMedia(id: String): Note? {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.retryMedia(id)
+    }
+
     /** 下载文件笔记原件：返回字节 + mime */
     suspend fun downloadNoteFile(id: String): Pair<ByteArray, String> {
         val (client, mock) = api()
@@ -252,25 +285,59 @@ class NotesRepository(
         return client.downloadNoteFile(id)
     }
 
-    /** 鉴权取附件原件字节（图片/语音内联展示）：返回字节 + mime */
+    /** 鉴权取附件原件字节（图片/语音内联展示）：返回字节 + mime；命中本机缓存不发网 */
     suspend fun fetchNoteMedia(noteId: String, attachmentId: String): Pair<ByteArray, String> {
-        val (client, mock) = api()
-        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
-        return client.fetchNoteMedia(noteId, attachmentId)
+        val s = settingsRepo.settings.first()
+        if (s.mockMode) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        val key = MediaCache.key(s.token, noteId, attachmentId)
+        withContext(Dispatchers.IO) { mediaCache.get(key) }?.let { return it.bytes to it.mime }
+        val (bytes, mime) = ApiClient(s.baseUrl, s.token).fetchNoteMedia(noteId, attachmentId)
+        withContext(Dispatchers.IO) { mediaCache.put(key, bytes, mime) }
+        return bytes to mime
     }
 
-    /** 下载全量备份 zip：返回字节 + 文件名。includeSensitive=true 时敏感笔记含明文 */
-    suspend fun downloadBackup(includeSensitive: Boolean = false, password: String? = null): Pair<ByteArray, String> {
-        val (client, mock) = api()
-        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
-        return client.downloadBackup(includeSensitive, password)
+    /**
+     * 鉴权取附件原件的落盘文件（语音直接喂 MediaPlayer）：命中磁盘缓存不发网也不进内存；
+     * 未命中拉取后只落盘不占内存 LRU。文件属于缓存，调用方不删。
+     */
+    suspend fun fetchNoteMediaFile(noteId: String, attachmentId: String): File {
+        val s = settingsRepo.settings.first()
+        if (s.mockMode) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        val key = MediaCache.key(s.token, noteId, attachmentId)
+        withContext(Dispatchers.IO) { mediaCache.file(key) }?.let { return it }
+        val (bytes, mime) = ApiClient(s.baseUrl, s.token).fetchNoteMedia(noteId, attachmentId)
+        return withContext(Dispatchers.IO) {
+            mediaCache.put(key, bytes, mime, keepInMemory = false)
+            mediaCache.file(key) ?: throw ApiException("语音无法写入本机缓存，请清理存储空间后重试")
+        }
     }
 
-    /** 从备份 zip 恢复：返回恢复统计 */
-    suspend fun restoreBackup(bytes: ByteArray, fileName: String): RestoreStats {
+    /** 退出登录：清本机登录态 + 已缓存的私有原件 */
+    suspend fun logout() {
+        withContext(Dispatchers.IO) { mediaCache.clear() }
+        settingsRepo.logout()
+    }
+
+    /**
+     * 下载全量备份 zip：响应体边收边写进 [open] 打开的输出流，返回文件名。includeSensitive=true 时敏感笔记含明文；
+     * [onProgress] 报已接收字节，协程取消会中断接收
+     */
+    suspend fun downloadBackup(
+        includeSensitive: Boolean = false,
+        password: String? = null,
+        onProgress: DownloadProgress? = null,
+        open: (fileName: String) -> OutputStream,
+    ): String {
         val (client, mock) = api()
         if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
-        return client.restoreBackup(bytes, fileName)
+        return client.downloadBackup(includeSensitive, password, onProgress, open)
+    }
+
+    /** 从备份 zip 恢复：返回恢复统计；[onProgress] 报上传进度，协程取消会中断上传 */
+    suspend fun restoreBackup(bytes: ByteArray, fileName: String, onProgress: UploadProgress? = null): RestoreStats {
+        val (client, mock) = api()
+        if (mock) throw IllegalStateException("Mock 模式下不可用，请在设置中关闭 Mock")
+        return client.restoreBackup(bytes, fileName, onProgress)
     }
 
     suspend fun delete(id: String) {
@@ -378,3 +445,6 @@ class NotesRepository(
         return allOk
     }
 }
+
+/** 时区同步去重标记：换账号（token 前缀变）或换时区都会重新同步 */
+fun tzSyncMarker(token: String, zoneId: String): String = "${token.take(8)}:$zoneId"

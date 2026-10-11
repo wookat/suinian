@@ -10,6 +10,7 @@ import {
   describeImage,
   withTimeout,
   resolveAttachmentMime,
+  attachmentDisplayName,
 } from "../src/media";
 
 /** Minimal Workers-AI-style env whose chat model returns `response`. */
@@ -95,6 +96,36 @@ describe("resolveAttachmentMime", () => {
   it("falls back to octet-stream for unknown or missing extensions", () => {
     expect(resolveAttachmentMime("", "data.xyz", "file")).toBe("application/octet-stream");
     expect(resolveAttachmentMime("application/octet-stream", undefined, "audio")).toBe("application/octet-stream");
+  });
+});
+
+describe("attachmentDisplayName", () => {
+  const key = (safeName: string) => `media/u_1/n_1/1757000000000-${safeName}`;
+
+  it("strips the storeOriginal timestamp and keeps a named file as is", () => {
+    expect(attachmentDisplayName(key("voice-20260908-1000.m4a"), "audio/mp4")).toBe("voice-20260908-1000.m4a");
+    expect(attachmentDisplayName(key("白板 会议纪要.png"), "image/png")).toBe("白板 会议纪要.png");
+    expect(attachmentDisplayName(key("rec.webm"), "audio/webm")).toBe("rec.webm");
+  });
+
+  it("appends an extension from the mime when the stored name has none (WeChat / JSON ingest)", () => {
+    expect(attachmentDisplayName(key("audio"), "audio/amr")).toBe("audio.amr");
+    expect(attachmentDisplayName(key("audio"), "audio/mp4")).toBe("audio.m4a");
+    expect(attachmentDisplayName(key("audio"), "audio/ogg; codecs=opus")).toBe("audio.ogg");
+    expect(attachmentDisplayName(key("audio"), "audio/webm")).toBe("audio.webm");
+    expect(attachmentDisplayName(key("image"), "image/jpeg")).toBe("image.jpg");
+    expect(attachmentDisplayName(key("image"), "IMAGE/PNG")).toBe("image.png");
+  });
+
+  it("leaves the bare name when the mime is unknown or missing", () => {
+    expect(attachmentDisplayName(key("audio"), null)).toBe("audio");
+    expect(attachmentDisplayName(key("file"), "application/octet-stream")).toBe("file");
+    expect(attachmentDisplayName(key("blob"), "application/x-unknown")).toBe("blob");
+  });
+
+  it("only strips a Date.now()-sized prefix, not a leading number that is part of the name", () => {
+    expect(attachmentDisplayName(key("2024-report.pdf"), "application/pdf")).toBe("2024-report.pdf");
+    expect(attachmentDisplayName("media/u_1/n_1/", "audio/amr")).toBe("file.amr");
   });
 });
 
