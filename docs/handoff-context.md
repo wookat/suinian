@@ -18,12 +18,12 @@
 | `docs/` | SPEC、自部署、导入迁移、图谱设计等 | — |
 
 ## 线上资源（生产）
-- **API**：https://suinian-api.zalize.com （worker `suinian-api`）——**2026-09-09 15:00 UTC 起被账户级批量 `script_delete` 删除（同批约 40 个 Worker，actor 为账户主体、非本项目会话），DNS NXDOMAIN；截至 18:02 UTC 未恢复**。恢复条件见「等老板事项」；恢复前所有生产验证【未验证】，只能做本机 / 静态
-- **Web**：https://suinian.zalize.com （Pages 项目 `suinian`，deploy 必须 `--branch main`）
-- Cloudflare 账号 ID 见密钥库（`CLOUDFLARE_ACCOUNT_ID`）；worker 部署用 secret `CLOUDFLARE_WORKERS_API_TOKEN`，Pages 用 `CLOUDFLARE_GLOBAL_API_TOKEN`（zone routes 报错可忽略）
-- D1 数据库 `suinian`（迁移 `backend/migrations/`，remote 用 `npx wrangler d1 migrations apply suinian --remote`）
-- R2 桶 `suinian-media`（媒体/文件原件）；Workers AI（bge-m3 嵌入）；Vectorize 未启用（D1 暴力余弦兜底）
-- Worker secrets：`DEEPSEEK_API_KEY`（分拣/摘要/问答）、`SUINIAN_ENC_KEY`（敏感内容 AES-256-GCM + 敏感附件 SNE1 + 导入指纹 HMAC；**丢失即既有加密数据不可解，重部署禁止用新值代替**）、`ADMIN_TOKEN`（admin 端点）、`AI_BASE_URL`/`AI_MODEL`/`AI_FALLBACK_MODEL`（provider 覆盖）、`BRIDGE_TOKEN`、`REGISTRATION_INVITE_CODES`、VAPID×3、微信/企微；Worker 被删时 secrets 一并丢失
+- **API**：https://suinian-api.zalize.com （worker `suinian-api`）。**2026-09-09 15:00 UTC 被旧账户级批量 `script_delete` 删除；2026-10-11 在新 Cloudflare 账户（Jikemiry@gmail.com，Workers Paid，zalize.com zone 所在账户）重建**——事故/迁移记录见 §202
+- **Web**：https://suinian.zalize.com （新账户 Pages 项目 `suinian`，即 `suinian-b6h.pages.dev`，deploy 必须 `--branch main`）
+- **2026-10-11 起资源全部在新账户**（账号 `583090ace6fb9a02db3f2625487ed865`）：worker/Pages 部署用 `CLOUDFLARE_NEW_ACCOUNT_API_TOKEN` 或 `CLOUDFLARE_NEW_ACCOUNT_GLOBAL_API_KEY`/`CLOUDFLARE_NEW_GLOBAL_API_KEY`；旧账户（ddff52d2，`CLOUDFLARE_*` 老 token）只剩冻结旧数据，勿再部署
+- D1 数据库 `suinian`（新账户 id `c221a7f1-5d9c-48d1-816f-be1ad773e5cb`，28 表全量数据已迁；旧账户 id `8a0a1fc0-…` 仍在但停用。迁移 `backend/migrations/`，remote 用 `npx wrangler d1 migrations apply suinian --remote`）
+- R2 桶 `suinian-media`（新账户同名新建，旧账户 R2 被停用、旧对象不可得）；Workers AI（bge-m3 嵌入）；Vectorize 未启用（D1 暴力余弦兜底）
+- Worker secrets：`DEEPSEEK_API_KEY`（分拣/摘要/问答）、`SUINIAN_ENC_KEY`（敏感内容 AES-256-GCM + 敏感附件 SNE1 + 导入指纹 HMAC；**丢失即既有加密数据不可解**——原值生成于 2026-08-06 R3 会话的一次性 VM 文件，随 Worker 删除已永久不可复得；2026-10-11 重建注入新值，旧账户 2 条 is_sensitive 笔记的密文暂不可解、原值若再现可换回来）、`ADMIN_TOKEN`（admin 端点）、`AI_BASE_URL`/`AI_MODEL`/`AI_FALLBACK_MODEL`（provider 覆盖，生产走 api.aicdks.com swe-1.7）、`BRIDGE_TOKEN`、`REGISTRATION_INVITE_CODES`、VAPID×3、微信/企微；Worker 被删时 secrets 一并丢失
 - cron（wrangler.toml）：周一 00:00 UTC 周报；每月 1 日 00:00 UTC 月报；每日 20:00 UTC 今日回顾+线索重整；每 10 分钟 兜底补处理（重分拣/链接抓取/嵌入/图谱）
 - GitHub Actions 因账号付款问题**不运行**，交付前本地全量测试即可（汇报注明）
 
@@ -219,7 +219,7 @@
 - 【R142 归因】导入后聚类覆盖率低（R141 观察 21 条仅 1 线索）：代码路径完备——导入即 `resetThreadBackfill` 重置游标，10 分钟 cron `backfillThreadClusters` 全量回扫（frugal：embedding 预筛 + 至多一次 LLM 边界确认）。低覆盖为设计内保守行为的叠加：a) 导入笔记先经异步分拣，仅 idea/collect 参与聚类（todo/记账/资料不参与）；b) 直并阈值 SIM_JOIN=0.76 较严，0.62-0.76 需 LLM 确认（此前确认回复带前缀会解析失败而放弃——R142 已健壮化，预期边界并线索率提升）；c) frugal 路径不走 DeepSeek 兜底。属「宁散勿错并」取向，非缺陷；R142 QA 用生产 flomo 样本导入实测覆盖率，后续轮次如仍偏低再评估阈值
 
 ## 等老板事项
-- **恢复 `suinian-api`**：①Cloudflare 账户恢复 Workers Paid + 启用 R2；②运行时注入原 Worker secrets（至少 `SUINIAN_ENC_KEY`、`DEEPSEEK_API_KEY`、`REGISTRATION_INVITE_CODES`、`ADMIN_TOKEN`、`BRIDGE_TOKEN`、VAPID×3；微信/企微可后补）；③合并全部开放 PR——**最省事：用 merge commit 合并集成 PR #475（= #392–#474 全部 82 支按序合并、冲突已解、三端全绿，见 R414），再合 #476（R415，基于 #472）+ #477（R416，基于 #467）+ #478（R417，基于 #449）→ #479（R418）→ #480（R419）+ #481（R420，基于 main）+ #482（R421 web，基于 main）+ #483（R422 Android，基于 #476）+ #484（R423 web，基于 #477 并合并 #474）**；或按原链顺序逐个合并 #392→…→#411（#407、#412→#413→#414 独立）（2026-09-09 22:30 UTC 本机 worktree 按此顺序合并前 13 支全部无冲突、合并态 typecheck 绿、全量 vitest 4698/4698；22:55 UTC 再叠 #406 delta 全量 4705/4705；23:30 UTC 再叠 #408 delta 全量 4710/4710；09-10 再叠 #409/#410/#411 delta 全量 4724/4724）后由负责人 deploy-sync，并补跑 R337–R344 生产验证（qa-r337 矩阵、tail 核对熔断窗口、同问兜底不命中缓存、qa-r340 语料 REST/SSE/MCP 出口、R341/R342 报告/线程/复盘模型视图与 E13 直答、R343/R344 锁具/省略句/设备动作问句 REST 出口）
+- **恢复 `suinian-api`（2026-10-11 已在新账户重建，事项 ①–③ 完成）**：①新账户（Jikemiry@gmail.com）Workers Paid + R2 就位；②Worker secrets 已重新注入——`SUINIAN_ENC_KEY` 原值不可复得改用新值（两条旧敏感笔记密文暂不可解，原值若再现可换回来），微信/企微 secret 未补（ingest bridge 暂时不可用，待老板提供公众号/企微凭据）；③**全部 suinian PR 已合并**：#475（merge commit）→ #395 → #476/#477/#478 → #479/#480/#481/#482/#483/#484（squash；#477/#482/#484/#480 冲突已按 union 解），#392–#474 中 41 个堆叠 PR 确认提交均在 main 后关闭；仅剩 5 个 dependabot（#486–#489、#493，vitest5 主版本待本机全绿验证后再合）。后续：deploy-sync 锁 main HEAD → health/meta/Pages 三同核验 → 补跑 R337–R344 生产验证（qa-r337 矩阵、tail 核对熔断窗口、同问兜底不命中缓存、qa-r340 语料 REST/SSE/MCP 出口、R341/R342 报告/线程/复盘模型视图与 E13 直答、R343/R344 锁具/省略句/设备动作问句 REST 出口）
 - GitHub Actions 付款问题（恢复后 CI 才会跑）
 - DeepSeek 账户充值（2026-09-09 余额 -0.35 CNY / 402）或决定主模型 provider（见已知问题【provider】）
 - 扩展是否上架 Chrome Web Store（需开发者账号 $5）
