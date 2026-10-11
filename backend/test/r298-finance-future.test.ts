@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { parseTimeRange, eventTimeWindow, inEventTimeRange, futureEventNotes } from "../src/ask";
 import { financeStats } from "../src/reports";
 import type { NoteRow } from "../src/types";
@@ -8,6 +8,15 @@ import type { NoteRow } from "../src/types";
  * 否则同一笔在问「9月/12月」时又各自出现一次 = 重复计入。
  */
 const NOW = new Date("2026-08-30T04:00:00Z"); // 上海 2026-08-30 12:00
+
+// inEventTimeRange/futureEventNotes 的「此刻」默认取 new Date()（真实时钟）：
+// 不冻结系统时间，fixture 里「未来」的事件日期会随真实时间推移变成过去，
+// 测试在 2026-09-15 后自己变红（2026-10-11 实测）。统一把系统时间钉在 NOW。
+beforeAll(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW);
+});
+afterAll(() => vi.useRealTimers());
 
 const note = (id: string, content: string, createdAt: string, amount: number): NoteRow =>
   ({

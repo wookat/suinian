@@ -4,6 +4,7 @@
 import { describe, it, expect } from "vitest";
 import { unzipSync } from "fflate";
 import { buildBackupZip, BACKUP_ESTIMATE_HEADER, zipStoredEntryBytes, estimateBackupBytes } from "../src/backup";
+import { attachmentDisplayName } from "../src/media";
 import type { Env } from "../src/types";
 
 const BASE_NOTE = {
@@ -169,7 +170,9 @@ describe("R398 backup size estimate header", () => {
     const { estimate, actual, entries } = await run(envWith(store, [ATT_PIC, ATT_VOICE]));
     const mediaPaths = Object.keys(entries).filter((k) => k.startsWith("media/"));
     expect(mediaPaths).toHaveLength(1);
-    const missingPath = "media/n1/1-voice.ogg";
+    // zip 条目名与生产同口径（attachmentDisplayName：r2_key 的 200- 是序号
+    // 不是时间戳前缀，不会被剥掉）——写死 "1-voice.ogg" 会差 8 字节假失败。
+    const missingPath = `media/n1/1-${attachmentDisplayName(ATT_VOICE.r2_key, ATT_VOICE.mime)}`;
     expect(entries[missingPath]).toBeUndefined();
     expect(estimate - actual).toBe(zipStoredEntryBytes(missingPath, VOICE.length));
     expect(actual).toBeLessThan(estimate);
