@@ -486,6 +486,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun fetchMedia(noteId: String, attachmentId: String): Pair<ByteArray, String> =
         repo.fetchNoteMedia(noteId, attachmentId)
 
+    /** 搜索命中的敏感占位卡点开时取回原文（GET /api/notes/:id） */
+    suspend fun fetchNote(noteId: String): Note? = repo.getNote(noteId)
+
     /** 语音附件的落盘缓存文件，直接喂 MediaPlayer */
     suspend fun fetchMediaFile(noteId: String, attachmentId: String): java.io.File =
         repo.fetchNoteMediaFile(noteId, attachmentId)

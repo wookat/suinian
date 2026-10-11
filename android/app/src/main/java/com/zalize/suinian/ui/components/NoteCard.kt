@@ -43,6 +43,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,6 +68,7 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.launch
 
 private val categories = listOf(
     null to "全部",
@@ -235,11 +238,46 @@ fun NoteCard(
     fetchMediaFile: (suspend (noteId: String, attachmentId: String) -> File)? = null,
     /** 列表刷新成功 / 网络恢复时递增：附件因断网 / 5xx 失败的卡片自动重拉 */
     mediaReloadKey: Int = 0,
+    /** 搜索命中 / 问答引用的占位卡（content_withheld）点开时按 id 取回原文；不传则点开只能看到占位句 */
+    fetchNote: (suspend (noteId: String) -> Note?)? = null,
 ) {
+    // 占位卡取回原文后整卡按取回的笔记渲染（标题 / 附件 / 标签也随之回来）
+    var fetched by remember(note.id) { mutableStateOf<Note?>(null) }
+    @Suppress("NAME_SHADOWING")
+    val note = fetched ?: note
     var confirmDelete by rememberSaveable(note.id) { mutableStateOf(false) }
     // 敏感遮罩：点击临时查看，可再隐藏（对齐 Web）；遮罩时标题/链接卡/文件摘录/图片描述/金额一律不露出
     var revealed by rememberSaveable(note.id) { mutableStateOf(false) }
-    val masked = note.isSensitive && !revealed
+    var revealing by remember(note.id) { mutableStateOf(false) }
+    var revealError by remember(note.id) { mutableStateOf<String?>(null) }
+    // revealed 跨 Activity 重建保存而 fetched 不保存：占位卡重建后回到遮罩重取，不把占位句当原文摆出来
+    val masked = shouldMask(note, revealed && (fetched != null || fetchNote == null || !needsFetchToReveal(note)))
+    val maskKind = maskKind(note)
+    val scope = rememberCoroutineScope()
+    fun reveal() {
+        if (revealing) return
+        if (!needsFetchToReveal(note) || fetchNote == null) {
+            revealed = true
+            return
+        }
+        revealing = true
+        revealError = null
+        scope.launch {
+            try {
+                val full = fetchNote(note.id)
+                if (full == null) {
+                    revealError = "这条笔记已不存在或已删除"
+                } else {
+                    fetched = full
+                    revealed = true
+                }
+            } catch (e: Exception) {
+                revealError = e.message?.takeIf { it.isNotBlank() } ?: "网络错误"
+            } finally {
+                revealing = false
+            }
+        }
+    }
     if (confirmDelete && onDelete != null) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -399,7 +437,7 @@ fun NoteCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
-                        .clickable { revealed = true },
+                        .clickable(enabled = !revealing) { reveal() },
                 ) {
                     Text(
                         "••••••••",
@@ -407,24 +445,29 @@ fun NoteCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.width(8.dp))
-                    Icon(
-                        Icons.Outlined.Visibility,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.secondary,
-                        modifier = Modifier.size(14.dp),
-                    )
+                    if (revealing) {
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            Icons.Outlined.Visibility,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
                     Spacer(Modifier.width(3.dp))
                     Text(
-                        "敏感内容，点击查看",
+                        maskChipText(maskKind, revealing),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.secondary,
                     )
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "检测到密码/凭据类信息，已自动加密保护：搜索仍能搜到、问答仍会引用这张卡片，但 AI 只拿到占位符，原文只在你点开时显示；若属误判，可在菜单中取消敏感标记",
+                    maskHintText(maskKind, revealError),
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                    color = if (revealError != null) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                 )
             } else if (note.category == "todo" && onToggleTodo != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {

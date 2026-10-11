@@ -39,6 +39,10 @@ object FlexibleBooleanSerializer : KSerializer<Boolean> {
 /** notes.meta JSON：语音原稿 / 图片描述 / 链接站点与正文摘录 / 文件原件信息 */
 @Serializable
 data class NoteMeta(
+    /** 疑似敏感先加密、等 cron 文本复判（复判为普通内容会自动恢复明文） */
+    @SerialName("needs_retriage") val needsRetriage: Boolean? = null,
+    /** 图片笔记：由视觉模型判为「图中含密码 / 凭证类信息」而标敏（文本复判不解；用户「取消敏感标记」时服务端清除） */
+    @SerialName("vision_sensitive") val visionSensitive: Boolean? = null,
     @SerialName("raw_transcript") val rawTranscript: String? = null,
     @SerialName("media_status") val mediaStatus: String? = null, // ok|extract_failed（voice / image）
     @SerialName("transcript_suspect") val transcriptSuspect: Boolean? = null,
@@ -98,6 +102,13 @@ data class Note(
     val attachments: List<NoteAttachment>? = null,
     /** 搜索召回方式（与 Web 一致）：keyword|semantic|both */
     val match: String? = null,
+    /** 搜索命中 / 问答引用的敏感或受守笔记：content 是服务端占位串而非原文，原文需按 id 经 GET /api/notes/:id 取回（与 Web 一致） */
+    @SerialName("content_withheld")
+    @Serializable(with = FlexibleBooleanSerializer::class)
+    val contentWithheld: Boolean? = null,
+    /** 未标注敏感、但正文带口令 / 密钥一类称谓的问答引用卡（content_withheld 同为 true） */
+    @Serializable(with = FlexibleBooleanSerializer::class)
+    val guarded: Boolean? = null,
     @SerialName("deleted_at") val deletedAt: String? = null,
     /** 最近删除列表项：预计彻底清理时间（UTC） */
     @SerialName("purge_at") val purgeAt: String? = null,
