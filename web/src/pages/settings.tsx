@@ -670,7 +670,7 @@ function BrowserNotificationsCard() {
           )}
           {state !== "on" && !isOfflineCacheEnabled() && (
             <p className="basis-full text-xs text-muted-foreground">
-              浏览器通知依赖离线缓存（Service Worker）：请先在上方「离线与更新」开启离线缓存
+              浏览器通知依赖离线缓存（Service Worker）：请先在下方「离线与更新」开启离线缓存
             </p>
           )}
         </div>

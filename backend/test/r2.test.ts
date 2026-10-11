@@ -53,6 +53,12 @@ describe("sanitizeTags", () => {
       "生活",
     ]);
   });
+
+  it("dedupes near-identical spellings (space/case), keeping first", () => {
+    expect(sanitizeTags(["ServiceWorker", "Service Worker", "收藏"])).toEqual(["ServiceWorker", "收藏"]);
+    expect(sanitizeTags(["AI", "ai", "读书"])).toEqual(["AI", "读书"]);
+    expect(sanitizeTags(["产品 思考", "产品思考"])).toEqual(["产品 思考"]);
+  });
 });
 
 describe("parseTriageJson caps tags at 3", () => {
