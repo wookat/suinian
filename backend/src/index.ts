@@ -1644,6 +1644,34 @@ export function askGuardedRefNoteJson(n: NoteRow, unit: string, cross?: Readonly
 }
 
 /**
+ * R426（R425 生产实测）：护栏剥空 / 审计不可用 / 审计剥空的保守文案。
+ * 本轮召回含敏感卡且资料里没有真实指令时（demands 为空或全来自
+ * MODEL_REDACTED_LINE 一类系统占位碎片；抽取器不可用时确定性扫描无
+ * 读者指令）改走敏感卡指引——触发源就是被扣留的占位行，「试图影响回答
+ * 的内容」对普通凭据笔记是误报式措辞；有真实指令时保持原保守文案。
+ */
+export function askConservativeFallbackText(
+  kind: string,
+  notes: Array<{ id: string }>,
+  sensitiveIds: ReadonlySet<string>,
+  demands: string[] | null,
+  dataHasDirective: boolean
+): string {
+  const realDemandsPresent =
+    demands === null ? dataHasDirective : demands.some((d) => !isSystemNoticeFragment(d));
+  const sensitiveRefIdx = notes
+    .map((n, i) => (sensitiveIds.has(n.id) ? i + 1 : 0))
+    .filter((i) => i > 0)
+    .slice(0, 3);
+  if (sensitiveRefIdx.length > 0 && !realDemandsPresent)
+    return sensitiveOnlyAnswer(sensitiveRefIdx.length, sensitiveRefIdx.map((index) => ({ index })));
+  return (
+    `相关笔记中包含试图影响回答的${kind}，为安全起见本次只提供来源引用，请直接查看笔记原文：` +
+    notes.slice(0, 3).map((_n, i) => `[${i + 1}]`).join(" ")
+  );
+}
+
+/**
  * R336 §3.1：一组引用卡的 guarded 序列化——同一响应内各单元互为跨单元语境（crossUnitGuardedLines），
  * no-answer 建议卡 / 时间窗外相近卡 / 财务明细卡与生成出口 refNotes 共用 askGuardedRefNoteJson 判定。
  */
@@ -6024,14 +6052,15 @@ app.post("/api/ask", async (c) => {
     if (g.glyphScrubbed) console.log("ask: data-derived glyph scrubbed from answer");
     if (g.spanScrubbed) console.log("ask: data-derived span scrubbed from answer");
     if (g.directiveScrubbed) console.log("ask: directive-demanded text scrubbed from answer");
+    // R426（R425 生产实测）：本轮召回含敏感卡且资料里没有真实指令时，剥空/保守
+    // 降级改走敏感卡指引——触发源是被扣留的 MODEL_REDACTED_LINE 占位（demands 全
+    // 来自系统提示碎片），「试图影响回答的内容」对普通凭据笔记是误报式措辞。
+    const conservativeAnswer = (kind: string) =>
+      askConservativeFallbackText(kind, notes, sensitiveIds, demands, askGuardDataHasDirective);
     // R274（audit-r273 P1-2）：护栏剥空不再谎称「没找到」（与检索空不可区分，
     // 误导用户以为笔记不存在），改走既有保守口径：只给来源引用。
     if (g.answer.trim() === "") isolateGen("guard:emptied");
-    answer2 =
-      g.answer.trim() === ""
-        ? "相关笔记中包含试图影响回答的内容，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
-          notes.slice(0, 3).map((_n, i) => `[${i + 1}]`).join(" ")
-        : g.answer;
+    answer2 = g.answer.trim() === "" ? conservativeAnswer("内容") : g.answer;
     // R272 来源归因主判（docs/decision-r272.md 支柱 1/2）：独立 LLM 审计对
     // （问题, 资料区, 答案句段）做开放式来源归因，序号确定性剥除。
     // fail-closed：抽取器报告资料含指令（demands>0）而审计不可用时，不再
@@ -6054,9 +6083,7 @@ app.post("/api/ask", async (c) => {
       if (verdict === null && ((demands?.length ?? 0) > 0 || (demands === null && askGuardDataHasDirective))) {
         console.log("ask: fail-closed conservative answer (demands present, audit unavailable)");
         isolateGen(demands === null ? "audit:unavailable+directive-line" : "audit:unavailable+demands");
-        answer2 =
-          "相关笔记中包含试图影响回答的指令，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
-          notes.slice(0, 3).map((_n, i) => `[${i + 1}]`).join(" ");
+        answer2 = conservativeAnswer("指令");
       } else if (verdict && verdict.length > 0) {
         // R272 支柱 3：用户点名索要原文时，忠实回显资料的句段豁免审计剥除
         // （demand 文字已在 guardAskAnswer 的 scrubDirectiveDemands 层剥除，
@@ -6138,9 +6165,7 @@ app.post("/api/ask", async (c) => {
             genIsolated = isolatedBeforeAudit;
             genIsolatedReason = isolatedReasonBeforeAudit;
           } else {
-            answer2 =
-              "相关笔记中包含试图影响回答的内容，为安全起见本次只提供来源引用，请直接查看笔记原文：" +
-              notes.slice(0, 3).map((_n, i) => `[${i + 1}]`).join(" ");
+            answer2 = conservativeAnswer("内容");
           }
         } else {
           answer2 = audited;
