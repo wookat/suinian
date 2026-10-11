@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react"
-import { CircleAlert, Download, Loader2, RefreshCw } from "lucide-react"
+import { useCallback, useEffect, useState, type ReactNode } from "react"
+import { CircleAlert, Download, Loader2, RefreshCw, Share2, X } from "lucide-react"
 import { ImageLightbox } from "@/components/image-lightbox"
 import { fetchNoteMediaUrl } from "@/lib/api"
 import { loadSettings } from "@/lib/settings"
@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils"
 import type { NoteAttachment } from "@/lib/types"
 import { audioFormatLabel, browserCanPlayAudio, unplayableAudioText } from "@/lib/audio-support"
 import { mediaLoadFailureAutoRetries, mediaLoadFailureText } from "@/lib/media-failure"
+import { attachmentDownloadName } from "@/lib/attachment-name"
+import { shareFile, useShareFile } from "@/lib/use-share-file"
 
 /**
  * 附件原件渲染（R144 P1-1）：图片缩略图+点击大图、语音可播放。
@@ -159,6 +161,8 @@ export function NoteAudio({
   const { url, error, failureText, attempt, retry } = useMediaUrl(noteId, attachment.id, !demo)
   const [unplayable, setUnplayable] = useState(() => !browserCanPlayAudio(attachment.mime))
   const [elementFailed, setElementFailed] = useState(false)
+  const downloadName = attachmentDownloadName(attachment.name, attachment.mime, `voice-${noteId.slice(0, 8)}`)
+  const shareable = useShareFile(demo ? null : url, downloadName, attachment.mime)
   if (demo) return null
   if (error !== null || elementFailed)
     return (
@@ -193,30 +197,78 @@ export function NoteAudio({
         <span>{unplayableAudioText(format)}</span>
         <a
           href={url}
-          download={attachment.name}
+          download={downloadName}
           className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-2 hover:opacity-80"
         >
           <Download className="size-3.5" /> 下载原件
         </a>
+        {shareable && (
+          <button
+            type="button"
+            onClick={() => shareFile(shareable, "分享语音")}
+            className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-2 hover:opacity-80"
+          >
+            <Share2 className="size-3.5" /> 分享
+          </button>
+        )}
       </div>
     )
   }
   return (
-    <audio
-      key={attempt}
-      controls
-      preload="metadata"
-      src={url}
-      onClick={(e) => e.stopPropagation()}
-      onError={(e) => {
-        const code = e.currentTarget.error?.code
-        // 3 = MEDIA_ERR_DECODE, 4 = MEDIA_ERR_SRC_NOT_SUPPORTED：格式不受支持（canPlayType 答 maybe 但解封装失败）；其余是加载问题
-        if (code === 3 || code === 4) setUnplayable(true)
-        else setElementFailed(true)
-      }}
-      className={cn("h-10 w-full max-w-sm", className)}
-    >
-      <a href={url}>播放语音</a>
-    </audio>
+    <div className={cn("flex w-full max-w-md items-center gap-1", className)} onClick={(e) => e.stopPropagation()}>
+      <audio
+        key={attempt}
+        controls
+        controlsList="nodownload"
+        preload="metadata"
+        src={url}
+        onError={(e) => {
+          const code = e.currentTarget.error?.code
+          // 3 = MEDIA_ERR_DECODE, 4 = MEDIA_ERR_SRC_NOT_SUPPORTED：格式不受支持（canPlayType 答 maybe 但解封装失败）；其余是加载问题
+          if (code === 3 || code === 4) setUnplayable(true)
+          else setElementFailed(true)
+        }}
+        className="h-10 min-w-0 flex-1"
+      >
+        <a href={url}>播放语音</a>
+      </audio>
+      {shareable && (
+        <AudioExportButton label="分享语音" onClick={() => shareFile(shareable, "分享语音")}>
+          <Share2 className="size-4" />
+        </AudioExportButton>
+      )}
+      <AudioExportButton label="下载原件" href={url} download={downloadName}>
+        <Download className="size-4" />
+      </AudioExportButton>
+    </div>
+  )
+}
+
+const exportButtonClass =
+  "inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+
+function AudioExportButton({
+  label,
+  href,
+  download,
+  onClick,
+  children,
+}: {
+  label: string
+  href?: string
+  download?: string
+  onClick?: () => void
+  children: ReactNode
+}) {
+  if (href !== undefined)
+    return (
+      <a href={href} download={download} aria-label={label} title={label} className={exportButtonClass}>
+        {children}
+      </a>
+    )
+  return (
+    <button type="button" onClick={onClick} aria-label={label} title={label} className={exportButtonClass}>
+      {children}
+    </button>
   )
 }
