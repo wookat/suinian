@@ -67,7 +67,10 @@ fun NoteEditSheet(
     var category by remember(note.id) { mutableStateOf(note.category) }
     var tags by remember(note.id) { mutableStateOf(note.tags) }
     var tagInput by remember(note.id) { mutableStateOf("") }
-    var due by remember(note.id) { mutableStateOf(note.todoDue ?: "") }
+    val initialDue = remember(note.id, note.todoDue) { dueToInput(note.todoDue) }
+    var due by remember(note.id) { mutableStateOf(initialDue) }
+    val dueParsed = if (category == "todo") inputToDue(due) else DueInput.Empty
+    val dueInvalid = dueParsed is DueInput.Invalid
 
     fun addTag() {
         val t = tagInput.trim().removePrefix("#")
@@ -117,7 +120,7 @@ fun NoteEditSheet(
                             title = conflict.title ?: ""
                             category = conflict.category
                             tags = conflict.tags
-                            due = conflict.todoDue ?: ""
+                            due = dueToInput(conflict.todoDue)
                             onDismissConflict()
                         },
                     )
@@ -215,6 +218,10 @@ fun NoteEditSheet(
                     label = { Text("截止时间（可留空清除）") },
                     placeholder = { Text("2026-08-10 或 2026-08-10 18:00") },
                     singleLine = true,
+                    isError = dueInvalid,
+                    supportingText = if (dueInvalid) {
+                        { Text("到期时间格式不支持：$DUE_INPUT_HINT") }
+                    } else null,
                 )
             }
 
@@ -231,11 +238,15 @@ fun NoteEditSheet(
                             title.trim(),
                             category,
                             tags,
-                            if (category == "todo") due.trim().ifBlank { null } else note.todoDue,
+                            when {
+                                category != "todo" || due.trim() == initialDue.trim() -> note.todoDue
+                                dueParsed is DueInput.Value -> dueParsed.due
+                                else -> null
+                            },
                         )
                     },
                     modifier = Modifier.weight(1f),
-                    enabled = !saving && content.isNotBlank() && !overLimit,
+                    enabled = !saving && content.isNotBlank() && !overLimit && !dueInvalid,
                 ) { Text(if (saving) "保存中…" else "保存") }
             }
             Spacer(Modifier.height(24.dp))

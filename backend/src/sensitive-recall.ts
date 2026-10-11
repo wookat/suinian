@@ -8,6 +8,7 @@
 // 序列化、日志都拿不到明文。
 import type { NoteRow } from "./types";
 import { decryptContent } from "./crypto";
+import { foldHanVariants } from "./prompt-armor";
 
 /** 引用卡片 / ask notes[] 里敏感条目的正文占位（前端按 id 点开取原文）。 */
 export const SENSITIVE_CARD_PLACEHOLDER = "[敏感笔记：正文已加密保护，点开卡片查看原文]";
@@ -64,7 +65,7 @@ export function sensitiveTopicTerms(topicTerms: readonly string[]): string[] {
   const strip = (re: RegExp[]) => {
     const out: string[] = [];
     for (const t of topicTerms) {
-      let r = t;
+      let r = foldHanVariants(t);
       for (const x of re) r = r.replace(x, "");
       r = r.trim();
       // 剥掉问句虚词后不足 2 字的不算话题（「主密码多少」剥称谓剩「主多少」，虚词外只剩「主」——按无话题处理，
@@ -95,7 +96,7 @@ export function sensitiveRecallTerms(terms: readonly string[], naiveTerms: reado
 export function attributableTopicTerms(topicTerms: readonly string[]): string[] {
   const out: string[] = [];
   for (const t of topicTerms) {
-    const r = t.replace(SENSITIVE_LABEL_STRIP_RE, "").replace(SENSITIVE_META_STRIP_RE, "").trim();
+    const r = foldHanVariants(t).replace(SENSITIVE_LABEL_STRIP_RE, "").replace(SENSITIVE_META_STRIP_RE, "").trim();
     if (r.length >= 2 && !out.includes(r)) out.push(r);
   }
   return out;
@@ -106,6 +107,10 @@ export function attributableTopicTerms(topicTerms: readonly string[]): string[] 
 const CJK_ADJACENT_SPACE_RE = /(?<=[\u4e00-\u9fff])\s+|\s+(?=[\u4e00-\u9fff])/g;
 function collapseCjkSpace(s: string): string {
   return s.replace(CJK_ADJACENT_SPACE_RE, "");
+}
+// 比对面：繁 / 异体逐字折成简体（与问句判定入口同一张字表，长度不变），只用于归因 / 召回比对，不进任何输出。
+function cmpText(s: string): string {
+  return collapseCjkSpace(foldHanVariants(s)).toLowerCase();
 }
 // 整句型 CJK 检索词（关键词抽取模型不可用 / 降级时 extractAskTerms 会把整问当一个词）
 // 剥掉的问句虚词：疑问尾缀、称谓、结构助词，以及信息试探句式的属性词（字符 / 出现过 / 列出来 / 几位 / 一共…——
@@ -162,7 +167,7 @@ export function sensitiveRecallHaystack(plain: string): string {
  */
 function hasTerm(hay: string, term: string): boolean {
   if (term.length === 0) return false;
-  const t = term.toLowerCase();
+  const t = foldHanVariants(term).toLowerCase();
   if (LATIN_WORD_RE.test(t)) return new RegExp(`(?<![a-z])${t}(?![a-z])`).test(hay);
   if (hay.includes(t)) return true;
   // 虚词剥干后的核心（「把关于icloud」→「icloud」）；纯拉丁核心仍要整词边界
@@ -183,7 +188,7 @@ function hasTerm(hay: string, term: string): boolean {
  */
 function hasTermOrUnlabeled(hay: string, term: string): boolean {
   if (hasTerm(hay, term)) return true;
-  const bare = term.replace(SENSITIVE_LABEL_STRIP_RE, "").trim();
+  const bare = foldHanVariants(term).replace(SENSITIVE_LABEL_STRIP_RE, "").trim();
   return bare !== term && bare.length >= 2 && hasTerm(hay, bare);
 }
 
@@ -194,7 +199,7 @@ function hasTermOrUnlabeled(hay: string, term: string): boolean {
  */
 export function sensitiveTermScore(plain: string, tagsJson: string | null, terms: string[], topicTerms: string[]): number {
   if (terms.length === 0) return 0;
-  const hay = collapseCjkSpace(sensitiveRecallHaystack(`${plain}\n${tagsJson ?? ""}`)).toLowerCase();
+  const hay = cmpText(sensitiveRecallHaystack(`${plain}\n${tagsJson ?? ""}`));
   const hits = terms.filter((t) => hasTermOrUnlabeled(hay, collapseCjkSpace(t)));
   if (hits.length === 0) return 0;
   if (hits.length === terms.length) return hits.length;
@@ -206,7 +211,7 @@ export function sensitiveTermScore(plain: string, tagsJson: string | null, terms
 export function sensitiveTopicHits(plain: string, tagsJson: string | null, terms: string[], topicTerms: string[]): number {
   const topics = topicTerms.length > 0 ? topicTerms : terms;
   if (topics.length === 0) return 0;
-  const hay = collapseCjkSpace(sensitiveRecallHaystack(`${plain}\n${tagsJson ?? ""}`)).toLowerCase();
+  const hay = cmpText(sensitiveRecallHaystack(`${plain}\n${tagsJson ?? ""}`));
   return topics.filter((t) => hasTermOrUnlabeled(hay, collapseCjkSpace(t))).length;
 }
 
@@ -231,10 +236,10 @@ export function topicHitCards<T extends { title: string | null; content: string;
  * 只有「航班」一格可比，仍是同一话题）。比敏感卡归因宽——只用来判断「本轮话题另有所指」，不参与任何敏感卡的召回 / 归因。
  */
 export function plainTopicHitCards<T extends { title: string | null; content: string; tags: string | null }>(cards: readonly T[], topics: readonly string[]): T[] {
-  const tops = topics.map((t) => collapseCjkSpace(t).toLowerCase()).filter((t) => t.length >= 2);
+  const tops = topics.map((t) => cmpText(t)).filter((t) => t.length >= 2);
   if (tops.length === 0) return [];
   return cards.filter((n) => {
-    const hay = collapseCjkSpace(`${n.title ?? ""}\n${n.content}\n${n.tags ?? ""}`).toLowerCase();
+    const hay = cmpText(`${n.title ?? ""}\n${n.content}\n${n.tags ?? ""}`);
     return tops.some((t) => hasTerm(hay, t) || plainBigramCoverage(hay, t) >= 0.5);
   });
 }

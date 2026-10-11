@@ -27,7 +27,7 @@ export interface NoteMeta {
   /** 图片文字识别存疑（R212 P3-3）：卡片提示核对原图，编辑正文后清除 */
   ocr_suspect?: boolean
   finance_merchant?: string
-  manual_override?: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean }
+  manual_override?: { category?: boolean; tags?: boolean; todo_due?: boolean; title?: boolean; is_sensitive?: boolean }
   /** 问答写回：由「存为笔记」保存的问答结论 */
   from_ask?: boolean
   import_source?: string
@@ -43,6 +43,8 @@ export interface NoteMeta {
   is_question?: boolean
   /** 敏感预检仅疑似命中，待模型复判（R312 P0-3：卡片标「复判中」而非定论） */
   needs_retriage?: boolean
+  /** 图片笔记：由视觉模型判为「图中含密码 / 凭证类信息」而标敏（R188 粘性位，文本复判不解；用户「取消敏感标记」时服务端清除） */
+  vision_sensitive?: boolean
 }
 
 /** 附件元数据（R144 P1-1）：仅元信息，取件走鉴权 API，不含任何直链 */
@@ -149,6 +151,8 @@ export interface AskResponse {
   isolated_refs?: number[]
   /** 危险代码判别器不可用，本轮按保守隔离处理（R288 P2-1：与「已确认危险」区分展示并可重试） */
   exec_guard_degraded?: boolean
+  /** 模型暂不可用，answer 为「已找到相关记录」类兜底（R339：服务端不缓存该答案，可重试） */
+  ai_unavailable?: boolean
 }
 
 export interface NotePatch {

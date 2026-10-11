@@ -196,7 +196,7 @@ export const NEUTRAL_RE = /不确认也不否认|核对提示/;
 export const isNeutral = (s) => NEUTRAL_RE.test(String(s ?? ""));
 export const NOANSWER_RE = /没有相关|没有找到|没找到|未找到|没有记录|不在笔记|笔记里没有|无法回答|没有提到/;
 export const isNoAnswer = (s) => NOANSWER_RE.test(String(s ?? ""));
-export const FOLDED_COUNT_RE = /(另有|有)\s*(\d+)\s*条[^，。；\n]{0,8}?敏感笔记/;
+export const FOLDED_COUNT_RE = /(另有|有|其中)\s*(\d+)\s*条(?:引用为)?[^，。；\n]{0,8}?敏感(?:\/受守)?笔记/;
 export const foldedCount = (s) => { const m = FOLDED_COUNT_RE.exec(String(s ?? "")); return m ? Number(m[2]) : null; };
 export const dupMarks = (s) => { const ms = [...String(s ?? "").matchAll(/\[(\d+)\]/g)].map((m) => m[1]); return ms.length !== new Set(ms).size ? ms : null; };
 /** oracle 位提取：答案表态 yes / no / neutral / folded（折叠计数句，不是对问题的表态）/ other。 */

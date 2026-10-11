@@ -21,6 +21,7 @@ import { guardAskNotes, MCP_SENSITIVE_ASK_PLACEHOLDER } from "../src/mcp";
 import { maybeSensitive, detectSensitive } from "../src/triage";
 import { propagateSensitiveContinuation, isDeferredPointer, isBackrefPointer, isContinuationPointer } from "../src/sensitive-continuation";
 import { decryptContent } from "../src/crypto";
+import { IMAGE_CREDENTIAL_GAP_NOTICE, stripImageCredentialGapNotice } from "../src/media";
 import type { Env, NoteRow, TriageResult } from "../src/types";
 
 const KEY = btoa(String.fromCharCode(...new Uint8Array(32).map((_, i) => (i * 7 + 3) & 0xff)));
@@ -450,6 +451,63 @@ describe("R326 §5 取消敏感标记：对模型复判粘性，正文改动后�
     const env = makeEnv(notes);
     await applyTriage(env, "n1", triageSensitive, "小区门禁密码 4821");
     expect(notes[0].is_sensitive).toBe(1);
+  });
+});
+
+describe("R420 取消敏感标记也退掉视觉判敏位：图片笔记取消后改正文不再被 vision_sensitive 锁回去", () => {
+  // 本机经真实 Workers AI 实录：普通会议纪要图（无任何凭据值）被视觉模型判「敏感：是」，正文被附上标注行
+  const ocr = "第三季度产品复盘会议纪要\n1. 用户增长：月活增长增长百分之十二，主要来自微信渠道导流\n2. 下次会议：九月十五日上午十点";
+  const imageNote = (id: string) =>
+    sensitiveNote(id, `${ocr}\n${IMAGE_CREDENTIAL_GAP_NOTICE}`, {
+      raw_type: "image",
+      meta: JSON.stringify({ media_status: "ok", vision_sensitive: true }),
+    });
+  const fullMeta = (row: Row) =>
+    JSON.parse((row.meta as string) ?? "{}") as { vision_sensitive?: boolean; manual_override?: Record<string, boolean> };
+
+  it("PATCH is_sensitive=false ⇒ 明文恢复、vision_sensitive 删除、系统附加的「图中含密码/凭证」标注行撤掉，用户看到的 OCR 文字不动", async () => {
+    const notes = [await imageNote("i1")];
+    const env = makeEnv(notes);
+    const res = await app.request(req("PATCH", "/api/notes/i1", { is_sensitive: false }), undefined, env, ctx);
+    expect(res.status).toBe(200);
+    expect(notes[0].is_sensitive).toBe(0);
+    expect(notes[0].content).toBe(ocr);
+    expect(notes[0].content_enc).toBeNull();
+    expect(fullMeta(notes[0]).vision_sensitive).toBeUndefined();
+    expect(fullMeta(notes[0]).manual_override?.is_sensitive).toBe(true);
+  });
+
+  it("取消后改一处 OCR 错字（放开 manual_override）再经模型复判「非敏感」⇒ 仍是明文；未取消的同形笔记复判照旧粘住（R188 方向不变）", async () => {
+    const notes = [await imageNote("i1"), await imageNote("i2")];
+    const env = makeEnv(notes);
+    await app.request(req("PATCH", "/api/notes/i1", { is_sensitive: false }), undefined, env, ctx);
+    const fixed = ocr.replace("月活增长增长", "月活环比增长");
+    const res = await app.request(req("PATCH", "/api/notes/i1", { content: fixed }), undefined, env, ctx);
+    expect(res.status).toBe(200);
+    expect(fullMeta(notes[0]).manual_override?.is_sensitive).toBeUndefined();
+    expect(notes[0].is_sensitive).toBe(0);
+    expect(notes[0].content).toBe(fixed);
+    await applyTriage(env, "i1", { ...triageSensitive, is_sensitive: false, tags: ["会议"], title: "复盘" }, fixed);
+    expect(notes[0].is_sensitive).toBe(0);
+    expect(notes[0].content).toBe(fixed);
+    expect(notes[0].title).toBe("复盘");
+    // 对照：没取消过的图片笔记，文本复判看不到像素，不能凭「正文无值」解除
+    await applyTriage(env, "i2", { ...triageSensitive, is_sensitive: false }, `${ocr}\n${IMAGE_CREDENTIAL_GAP_NOTICE}`);
+    expect(notes[1].is_sensitive).toBe(1);
+    expect(notes[1].content).toBe(ENC_PLACEHOLDER);
+  });
+
+  it("标注行不在末尾 / 没有标注行 / 非图片笔记取消：只删整行等于标注的行，其余原样", async () => {
+    expect(stripImageCredentialGapNotice(`a\n${IMAGE_CREDENTIAL_GAP_NOTICE}\nb`)).toBe("a\nb");
+    expect(stripImageCredentialGapNotice(`a\n  ${IMAGE_CREDENTIAL_GAP_NOTICE}  \n`)).toBe("a");
+    expect(stripImageCredentialGapNotice(`a ${IMAGE_CREDENTIAL_GAP_NOTICE}`)).toBe(`a ${IMAGE_CREDENTIAL_GAP_NOTICE}`);
+    expect(stripImageCredentialGapNotice("wifi 密码 8899")).toBe("wifi 密码 8899");
+    // 文本笔记正文碰巧含同一行（无 vision_sensitive）：取消标记不碰正文
+    const notes = [await sensitiveNote("t1", `用户反馈原文：\n${IMAGE_CREDENTIAL_GAP_NOTICE}`)];
+    const env = makeEnv(notes);
+    await app.request(req("PATCH", "/api/notes/t1", { is_sensitive: false }), undefined, env, ctx);
+    expect(notes[0].is_sensitive).toBe(0);
+    expect(notes[0].content).toBe(`用户反馈原文：\n${IMAGE_CREDENTIAL_GAP_NOTICE}`);
   });
 });
 

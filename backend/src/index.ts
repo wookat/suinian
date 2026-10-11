@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
 import type { Env, NoteMeta, NoteRow, ThreadRow, TriageResult, WeeklyReportRow } from "./types";
-import { triageNote, triageNoteDetailed, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE, neutralizePromptInjection, scrubModelOutputInjectionArtifacts } from "./triage";
+import { triageNote, triageNoteDetailed, loadTopTags, loadCategoryCorrections, normalizeTodoDue, detectSensitive, maybeSensitive, sanitizeSensitiveTags, isValidTimezone, loadUserTz, tzOffsetString, zonedDate, DEFAULT_TZ, FALLBACK_TRIAGE, neutralizePromptInjection, scrubModelOutputInjectionArtifacts, todoDueLocalDate } from "./triage";
 import { extractUrl, extractUrls, fetchLinkMeta, fallbackTitleFromUrl } from "./linkmeta";
 import { encryptContent, decryptContent, ENC_PLACEHOLDER } from "./crypto";
 import {
@@ -16,7 +16,7 @@ import {
 } from "./note-store";
 export { applyTriage } from "./note-store";
 import { scrubDerivedMeta } from "./ingest";
-import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, stripPhantomRedactionClaims, verbatimRecallEligible, WITHHELD_CARD_POINTER_RE, WITHHELD_CARD_POINTER_NOTICE, isSystemNoticeFragment, isSecretValueQuestion, unitTalksAboutSecret, unitCarriesGuardedValue, unitHasValueCandidates, titleCarriesGuardedValue, GUARDED_TITLE_PLACEHOLDER, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, aggregateCitedBenignUnit, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
+import { makeDataNonce, buildDataBlock, dataChannelRule, guardAskAnswer, resolveAskTrustTier, closeVerbatimForTier, AGGREGATE_TIER, ASK_OUTLET_HEADER, askOutletOf, type TrustTier, type AskOutlet, implicitRelayDemands, echoedDataHasIsolatableContent, scrubAnswerLinks, scrubDirectiveDemands, questionRequestsVerbatim, foldCompact, segmentEchoesData, segmentAnswersQuestion, segmentIsReaderDirective, filterDirectiveDemands, finalizeAskAnswer, sanitizeEnumTitle, sseAnswerChunks, splitSegmentsFenceAware, segmentExecSuspicious, hasExecIntent, normalizeCommandText, execClassifierGateReason, execCodeSurfaceTraceReason, globalExecDangerReason, execDegradedTraceReason, execCombinationGateReason, noteContainsExecutableCommand, noteRowContainsExecutableCommand, noteMetaExecFragment, execSafeTitle, EXEC_TITLE_PLACEHOLDER, judgeSurfaceText, hasRemoteEndpointForm, isMeaninglessQuestion, MEANINGLESS_QUESTION_ANSWER, EXEC_OUTLET_WARN_LINE, INSTRUCTION_ISOLATED_MARK, hasGuardControlMark, isolatedReferenceIndexes, VERBATIM_REDIRECT_NOTICE, VERBATIM_SPAN_PLACEHOLDER, broadFoldReason, closeVerbatimOverlap, noteRowBroadFoldReason, foldSafeTitle, foldDisplayTitle, foldOutletWarnLine, OUTLET_GLOBAL_RISK_NOTICE, OUTLET_GLOBAL_RISK_HEADER, OUTLET_GLOBAL_RISK_HEADER_VALUE, verbatimEchoRatio, VERBATIM_ECHO_DOMINANT, isBareVerbatimNotice, aggregateGuideAnswer, AGGREGATE_VERBATIM_GUIDE, questionCarriesOpaqueToken, isYesNoQuestion, stripOpaqueTokens, directGuardLines, ORACLE_NEUTRAL_NOTICE, DIRECT_GUARD_PLACEHOLDER, ensureDirectGuideCitation, redactGuardedLinesForModel, crossUnitGuardedLines, redactGraphTriplesForModel, isOracleProbeQuestion, isDeterministicRecallProbe, probeRecallTerms, conversationAnchorsGuarded, isBareVerdictAnswer, MODEL_REDACTED_LINE, PHANTOM_REDACTION_CLAIM_RE, stripPhantomRedactionClaims, verbatimRecallEligible, WITHHELD_CARD_POINTER_RE, WITHHELD_CARD_POINTER_NOTICE, isSystemNoticeFragment, isSecretValueQuestion, splitCompoundQuestion, unitTalksAboutSecret, unitCarriesGuardedValue, unitHasValueCandidates, titleCarriesGuardedValue, GUARDED_TITLE_PLACEHOLDER, scopeGuardedByTopic, guardedTopicHits, normalizedGuardedLeak, aggregateCitedBenignUnit, type BroadFoldReason, type DirectGuardKind } from "./prompt-armor";
 import { modelContextNoteText, reconcileDoneAnswer } from "./ask-context";
 import { recallSensitiveNotes, sensitiveOnlyAnswer, foldedRefCountLine, FOLDED_REF_COUNT_RE, sensitiveAnswerLeak, attributableTopicTerms, sensitiveRecallTerms, ownTopicCards, topicHitCards, plainTopicHitCards, SENSITIVE_CARD_PLACEHOLDER, SENSITIVE_MODEL_LINE } from "./sensitive-recall";
 import { extractDirectiveDemands, auditAnswerConduct, applyConductVerdict, classifyDangerousCodeSegments, execSurfaceCacheKey, execClassifyCacheGet, execClassifyCacheSet, markExecClassifierUnavailable, markExecClassifierHealthy, execClassifierRecentlyUnavailable, EXEC_CLASSIFY_BUDGET_MS, EXEC_CLASSIFY_SOFT_BUDGET_MS } from "./answer-guard";
@@ -34,7 +34,7 @@ import {
   REBUILD_SLICE_BUDGET_MS,
   type ThreadJobRow,
 } from "./thread-jobs";
-import { chatComplete, chatCompleteStream, aiProbe, type ChatOptions } from "./ai";
+import { chatComplete, chatCompleteStream, aiProbe, primaryBreakerState, type ChatOptions } from "./ai";
 import {
   hashPassword,
   verifyPassword,
@@ -83,7 +83,7 @@ import { detectFileKind, buildFileNote, buildFileReply, FILE_FAILED_PLACEHOLDER,
 import { parseImportFile, runImport, sweepImportDedupe, IMPORT_SOURCES, ZIP_IMPORT_SOURCES, MAX_IMPORT_ITEMS, type ImportSource, type ImportItem, type ImportFailure } from "./import";
 import { parseImportZip, type ZipImportSource } from "./import-zip";
 import { registerMcpRoute } from "./mcp";
-import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES, BACKUP_AI_DERIVED_NOTICE, closeBackupDerived } from "./backup";
+import { buildBackupZip, restoreBackup, MAX_RESTORE_BYTES, BACKUP_AI_DERIVED_NOTICE, closeBackupDerived, BACKUP_ESTIMATE_HEADER } from "./backup";
 import { recordOutletFoldMarks, recordOutletVerbatimClosed } from "./guard-events";
 import { rejudgeExecFragmentsRecent } from "./exec-fragments";
 import { propagateSensitiveContinuation } from "./sensitive-continuation";
@@ -165,6 +165,8 @@ app.use(
     origin: (origin, c) => corsOrigin(origin, (c.env as Env).CORS_ALLOWED_ORIGINS),
     allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type", "X-Suinian-Password"],
+    // 非 CORS 安全列表的响应头需显式暴露，跨域的 web 端才能读到
+    exposeHeaders: [BACKUP_ESTIMATE_HEADER],
     maxAge: 86400,
   })
 );
@@ -242,6 +244,14 @@ export async function askUserDataVersion(db: D1Database, userId: string): Promis
 
 /** 答案缓存的收口版本：出口收口规则变更时递增，旧规则下产出的答案不会在新版部署后继续从边缘缓存送出。 */
 export const ASK_ANSWER_CACHE_EPOCH = "r322.12";
+
+/**
+ * 答案是否可进边缘缓存：只缓存 200 且非「模型不可用」兜底的答案。兜底（`ai_unavailable`，服务端构造的字段）
+ * 是当下 provider 状态的产物而非用户资料的产物，缓存它会让模型恢复后同问在 TTL 内继续拿旧兜底。
+ */
+export function askAnswerCacheable(body: Record<string, unknown>, status: number): boolean {
+  return status === 200 && body.ai_unavailable !== true;
+}
 
 async function askAnswerCacheKey(auth: string, material: string, dataVersion: string): Promise<Request> {
   const digest = await crypto.subtle.digest(
@@ -399,7 +409,7 @@ app.use("/api/ask", async (c, next) => {
       const finDur = Date.now() - t0;
       const conaudPart = prevTiming?.includes("conaud") ? "" : `conaud;dur=${finDur}, `;
       headers.set("Server-Timing", `${prevTiming ? `${prevTiming}, ` : ""}${conaudPart}detguard;dur=${finDur}`);
-      if (cacheKey && c.res.status === 200) {
+      if (cacheKey && askAnswerCacheable(outBody, c.res.status)) {
         const stored = new Response(JSON.stringify(outBody), {
           headers: { "content-type": "application/json", "cache-control": `max-age=${ASK_ANSWER_CACHE_TTL_S}` },
         });
@@ -576,7 +586,11 @@ app.get("/health", async (c) => {
     // degraded＝主链路失败、由 fallback 层应答（R262 P2-8，audit-r261：主模型
     // 100% 失败在探针上零可见性）：布尔可观测位不泄露 provider/model 配置指纹，
     // ok 口径不变（fallback 是常态基线，外部告警仍只看 ok:false）
-    return c.json({ ok: true, ai: isAdmin ? { ...ai, degraded: ai.provider === "fallback" } : { ok: ai.ok, degraded: ai.provider === "fallback" } }, ai.ok ? 200 : 503);
+    // breaker（R338，仅 admin）：`ai` 描述本次探针结果，`breaker` 描述本隔离实例的
+    // 链状态——是否正在跳过主模型直走 fallback。探针绕过熔断器且成功即闭合，所以
+    // breaker.open:true 只会与 degraded:true 同现；trips 为实例生命周期内累计次数
+    const aiView = isAdmin ? { ...ai, degraded: ai.provider === "fallback" } : { ok: ai.ok, degraded: ai.provider === "fallback" };
+    return c.json(isAdmin ? { ok: true, ai: aiView, breaker: primaryBreakerState() } : { ok: true, ai: aiView }, ai.ok ? 200 : 503);
   }
   // ?probe=bridge reports the WeChat bridge state from its heartbeat so external
   // monitoring sees the real login state (online / waiting_scan / stale) instead
@@ -1650,6 +1664,152 @@ export function withFoldedRefCount(answer: string, references: { index: number; 
 }
 
 /**
+ * R337（decision-r337 §4）：复合问句（普通事实子句 + 凭据取值子句）拆成两段各自走既有的 /api/ask 全链路：
+ * 凭据段落进生成前确定性闸门（预言机中性 / 取值扣留），普通段照常召回 + 生成。两段都是**已存在且经 R333–R336
+ * 矿阵验证的单子句路径**，这里只做子请求编排 + 合并，不新增任何出答案的通道。
+ * 子请求以本隔离实例随机 nonce 头自标（外部无法伪造）：跳过限频重复计数、禁止再次拆句（不递归）。
+ */
+const ASK_COMPOUND_PART_HEADER = "x-suinian-compound-part";
+// Workers 全局作用域禁止取随机数：首个请求进来时才生成，之后本实例内固定。
+let askCompoundPartNonce: string | null = null;
+function askCompoundNonce(): string {
+  if (askCompoundPartNonce === null) askCompoundPartNonce = crypto.randomUUID();
+  return askCompoundPartNonce;
+}
+/** 复合问句子请求的时限：普通段含一次生成，凭据段只有召回 + 闸门。 */
+const ASK_COMPOUND_PART_TIMEOUT_MS = 25_000;
+
+type AskCompoundPartBody = {
+  answer: string;
+  references: Array<{ index: number; note_id: string }>;
+  notes: Array<Record<string, unknown> & { id?: unknown; content_withheld?: boolean }>;
+  no_answer?: boolean;
+  value_withheld?: boolean;
+  oracle_neutral?: boolean;
+  verbatim_closed_spans?: number;
+  instruction_isolated?: boolean;
+  isolated_refs?: number[];
+  recall_units?: unknown[];
+  [k: string]: unknown;
+};
+
+function isAskCompoundPartRequest(c: Context<{ Bindings: Env; Variables: Vars }>): boolean {
+  const got = c.req.header(ASK_COMPOUND_PART_HEADER);
+  return got !== undefined && got === askCompoundNonce();
+}
+
+async function askCompoundPart(
+  c: Context<{ Bindings: Env; Variables: Vars }>,
+  question: string,
+  history: ReturnType<typeof sanitizeAskHistory>,
+  useGraph: boolean
+): Promise<AskCompoundPartBody | null> {
+  const headers = new Headers(c.req.raw.headers);
+  headers.delete("content-length");
+  headers.set("accept", "application/json");
+  headers.set("content-type", "application/json");
+  headers.set(ASK_COMPOUND_PART_HEADER, askCompoundNonce());
+  const req = new Request(new URL("/api/ask", c.req.url), {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ question, history, graph: useGraph }),
+    signal: AbortSignal.timeout(ASK_COMPOUND_PART_TIMEOUT_MS),
+  });
+  let execCtx: Parameters<typeof app.fetch>[2];
+  try {
+    execCtx = c.executionCtx;
+  } catch {
+    execCtx = undefined;
+  }
+  const res = await Promise.resolve()
+    .then(() => app.fetch(req, c.env, execCtx))
+    .catch(() => null);
+  if (!res || res.status !== 200) return null;
+  const body = (await res.json().catch(() => null)) as AskCompoundPartBody | null;
+  if (!body || typeof body.answer !== "string" || !Array.isArray(body.references) || !Array.isArray(body.notes)) return null;
+  return body;
+}
+
+const ASK_CITATION_MARK_RE = /[[［](\d{1,2})[\]］]/g;
+
+/**
+ * 合并普通段 + 凭据段：普通段引用编号不动，凭据段引用顺延（同一笔记两段都引到时复用普通段编号、不重复出卡）；
+ * 两段各自的计数句去掉后按合并引用重算一句（withFoldedRefCount）。安全字段取并（value_withheld / oracle_neutral），
+ * 两段都已各自过唯一安全出口（中间件 finalize），合并体标 guard_finalized 不再二次收口——二次收口会把合并后的
+ * 多引用当聚合层把普通段的单笔记直答再收一遍（正是 R337 要修的过度扣留）。
+ */
+export function mergeAskCompoundParts(plain: AskCompoundPartBody, guarded: AskCompoundPartBody, split: { plain: number; guarded: number }) {
+  const references = plain.references.map((r) => ({ ...r }));
+  const notes = plain.notes.slice();
+  // 引用与卡片按位对应（references[i] ↔ notes[i]，与 withFoldedRefCount 同约定）
+  const posByNoteId = new Map(references.map((r, i) => [r.note_id, i] as const));
+  let nextIndex = references.reduce((m, r) => Math.max(m, r.index), 0) + 1;
+  const remap = new Map<number, number>();
+  for (let i = 0; i < guarded.references.length; i++) {
+    const r = guarded.references[i];
+    const pos = posByNoteId.get(r.note_id);
+    if (pos !== undefined) {
+      remap.set(r.index, references[pos].index);
+      // 同一笔记两段都引到：任一段折叠即取折叠卡（fail-closed）
+      if (guarded.notes[i]?.content_withheld === true && notes[pos]?.content_withheld !== true) notes[pos] = guarded.notes[i];
+      continue;
+    }
+    const index = nextIndex++;
+    remap.set(r.index, index);
+    references.push({ ...r, index });
+    posByNoteId.set(r.note_id, references.length - 1);
+    notes.push(guarded.notes[i] ?? { content_withheld: true });
+  }
+  const stripCount = (a: string) =>
+    a
+      .split("\n")
+      .filter((line) => !FOLDED_REF_COUNT_RE.test(line))
+      .join("\n")
+      .trim();
+  const guardedText = stripCount(guarded.answer).replace(ASK_CITATION_MARK_RE, (m, d: string) => {
+    const to = remap.get(Number(d));
+    return to === undefined ? m : `[${to}]`;
+  });
+  const plainText = stripCount(plain.answer);
+  // 两段各自出口插的隔离标记只保留一枚在答首（同一答案不重复挂横幅）
+  const isolatedMarked = plainText.includes(INSTRUCTION_ISOLATED_MARK) || guardedText.includes(INSTRUCTION_ISOLATED_MARK);
+  const stripMark = (t: string) => t.split(INSTRUCTION_ISOLATED_MARK).join("").trim();
+  const joined = [plainText, guardedText]
+    .map(stripMark)
+    .filter((t) => t.length > 0)
+    .join("\n\n");
+  const answer = withFoldedRefCount(isolatedMarked ? `${INSTRUCTION_ISOLATED_MARK}\n${joined}` : joined, references, notes).trim();
+  const recallUnits =
+    Array.isArray(plain.recall_units) || Array.isArray(guarded.recall_units)
+      ? { recall_units: [...(plain.recall_units ?? []), ...(guarded.recall_units ?? [])] }
+      : {};
+  return {
+    ...plain,
+    answer,
+    references,
+    notes,
+    ...recallUnits,
+    no_answer: plain.no_answer === true && guarded.no_answer === true,
+    ...(guarded.value_withheld === true ? { value_withheld: true } : {}),
+    ...(guarded.oracle_neutral === true ? { oracle_neutral: true } : {}),
+    ...(guarded.instruction_isolated === true ? { instruction_isolated: true } : {}),
+    ...(Array.isArray(plain.isolated_refs) || Array.isArray(guarded.isolated_refs)
+      ? {
+          isolated_refs: [
+            ...new Set([
+              ...(Array.isArray(plain.isolated_refs) ? plain.isolated_refs : []),
+              ...(Array.isArray(guarded.isolated_refs) ? guarded.isolated_refs : []).map((i) => remap.get(i) ?? i),
+            ]),
+          ],
+        }
+      : {}),
+    verbatim_closed_spans: (plain.verbatim_closed_spans ?? 0) + (guarded.verbatim_closed_spans ?? 0),
+    compound_split: split,
+    guard_finalized: true,
+  };
+}
+
+/**
  * R326（decision-r326 §3）：ask / MCP 引用卡片的唯一序列化点。数据层标注为敏感的
  * 笔记只给占位体 + id（title 置空、tags 为库内已洗净的主题词），原文由前端按 id
  * 经登录态 GET /api/notes/:id 点开查看；不解密、不看问句形态。
@@ -2401,8 +2561,16 @@ app.patch("/api/notes/:id", async (c) => {
   // 异步复判静默撤销恢复明文）：与分类/标签同一 manual_override 机制锁住
   if (typeof patch.is_sensitive === "boolean") override.is_sensitive = true;
   if (typeof body.todo_due === "string" || body.todo_due === null) {
+    // 空串 / null 清除；非空必须整串可解析，否则 400（Android 编辑页是自由文本框，手输「2026/09/12 18:00」
+    // 不能被静默清空还打上 manual_override）。裸时刻按用户时区解释，与分拣输出同口径
+    const raw = typeof body.todo_due === "string" ? body.todo_due.trim() : "";
+    let due: string | null = null;
+    if (raw) {
+      due = normalizeTodoDue(raw, tzOffsetString(new Date(), await loadUserTz(c.env, userId)), true);
+      if (!due) return c.json({ error: "到期时间格式不支持：请用 2026-08-10 或 2026-08-10 18:00（可带时区偏移，如 +08:00）" }, 400);
+    }
     extraSets.push("todo_due = ?");
-    extraBinds.push(normalizeTodoDue(body.todo_due));
+    extraBinds.push(due);
     override.todo_due = true;
   }
   // 用户改过正文＝完成人工核对，转写/识别存疑提示随之清除（R212 P2-1/P3-3）；
@@ -2432,8 +2600,12 @@ app.patch("/api/notes/:id", async (c) => {
     // remember the user's hand-set values so AI triage / cron never overwrites them
     const meta = patch.meta ?? parseNoteMeta(existing.meta) ?? {};
     meta.manual_override = { ...meta.manual_override, ...override };
-    // 用户显式取消敏感标记：拆条传播来的标注一并解除（否则 applyTriage 的粘性位会把它标回去）
-    if (patch.is_sensitive === false) delete meta.sensitive_continuation;
+    // 用户显式取消敏感标记：拆条传播来的标注、视觉模型的判敏位一并解除（否则 applyTriage 的粘性位会把它标回去；
+    // 视觉位尤其如此——图片没变，用户看过原图说不敏感，之后改正文放开 manual_override 时不能再由它把卡锁回去）
+    if (patch.is_sensitive === false) {
+      delete meta.sensitive_continuation;
+      delete meta.vision_sensitive;
+    }
     if (override.category) {
       // 手动定分类即离开分拣失败/待复判态（R170 P1-2）
       delete meta.triage_failed;
@@ -3868,7 +4040,9 @@ app.post("/api/ask", async (c) => {
   const userId = c.get("userId");
   // ask is the most expensive authenticated endpoint (several LLM calls per
   // question): a per-user cap bounds cost from a leaked token or runaway client
-  if (!(await checkRateLimit(c.env.DB, "ask", [userId], ASK_RATE_LIMIT_MAX))) {
+  // （R337 复合问句的两段子请求已由外层请求计过一次，不重复计）
+  const compoundPart = isAskCompoundPartRequest(c);
+  if (!compoundPart && !(await checkRateLimit(c.env.DB, "ask", [userId], ASK_RATE_LIMIT_MAX))) {
     return c.json({ error: "提问太频繁了，请稍等一分钟再试", retryable: true }, 429);
   }
   const body = await c.req.json<{ question?: string; history?: unknown; graph?: unknown }>().catch(() => null);
@@ -3902,6 +4076,24 @@ app.post("/api/ask", async (c) => {
   // 归一器 / 关键词抽取器 / 枚举路由器 temperature 0 仍会抽动，剥后逐字相同的对/错候选问句会走出不同召回路径（有引用 / 没找到 /
   // 误入计数路由），路径差异本身就是可区分信号。只保留确定性环节：剥候选 → 剥探问语法词得话题词 + 语义向量。
   const historyText = history.map((m) => m.content).join("\n");
+  // R337（decision-r337 §4）：「普通事实 + 凭据取值」复合问句在任何 LLM 环节之前确定性拆句，两段各自走既有单子句全链路后合并；
+  // 拆不开（全普通 / 全凭据 / 带候选值 / 是非问 / 逐位试探）或任一段子请求失败 ⇒ 原样走下面的整句路径（现状，fail-closed）。
+  if (!compoundPart && !metaQuestion) {
+    const split = splitCompoundQuestion(question, history.length > 0 ? historyText : "");
+    if (split) {
+      const tSplit = Date.now();
+      const [plainPart, guardedPart] = await Promise.all([
+        askCompoundPart(c, split.plain.join("，"), history, useGraph),
+        askCompoundPart(c, split.guarded.join("，"), history, useGraph),
+      ]);
+      if (plainPart && guardedPart) {
+        console.log(`ask: compound question split (plain=${split.plain.length}, guarded=${split.guarded.length})`);
+        c.header("Server-Timing", `compound;dur=${Date.now() - tSplit}`);
+        return c.json(mergeAskCompoundParts(plainPart, guardedPart, { plain: split.plain.length, guarded: split.guarded.length }));
+      }
+      console.log("ask: compound split part failed, falling back to whole-question path");
+    }
+  }
   const deterministicRecall = !metaQuestion && isDeterministicRecallProbe(question, historyText);
   let normQuestion: string | null = null;
   const probeShaped = !metaQuestion && (questionCarriesOpaqueToken(question) || isYesNoQuestion(question) || isOracleProbeQuestion(question));
@@ -6164,7 +6356,7 @@ app.post("/api/ask", async (c) => {
     const fallback = questionRequestsVerbatim(question) && references.length > 0
       ? `已找到相关记录 [1]。${VERBATIM_REDIRECT_NOTICE}`
       : "（AI 暂不可用）已找到相关记录，见 references。";
-    return { answer: fallback, references, notes: refNotes };
+    return { answer: fallback, references, notes: refNotes, ai_unavailable: true };
   }
   // R296 P1-6（audit-r295 §6.1）：财务类问题带时间窗、答案由 LLM 基于召回
   // 生成时，召回可能不全（8 月 3 笔只召回 1 笔）却自信下结论。用 D1 台账
@@ -7071,19 +7263,44 @@ app.post("/api/push/test", async (c) => {
 
 // ---- GET /api/todos/today ----
 // 当天（用户时区）到期 + 已过期的未完成待办，供 bridge 上午推送清单
+const TODOS_TODAY_LIMIT = 50;
 app.get("/api/todos/today", async (c) => {
-  const tz = await loadUserTz(c.env, c.get("userId"));
+  const userId = c.get("userId");
+  const tz = await loadUserTz(c.env, userId);
   const today = zonedDate(new Date(), tz).iso;
-  const { results } = await c.env.DB.prepare(
-    `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL
-       AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0)
-       AND todo_due IS NOT NULL AND date(todo_due) <= ?
-     ORDER BY datetime(todo_due) ASC LIMIT 50`
-  )
-    .bind(c.get("userId"), today)
-    .all<NoteRow>();
-  const items = (results ?? []).map((n) => ({ ...noteToJson(n), overdue: (n.todo_due ?? "").slice(0, 10) < today }));
-  return c.json({ date: today, items });
+  // SQLite date() 先把带偏移的时刻转成 UTC 再取日期，与用户时区的本地日期最多差一天：
+  // SQL 只做按 UTC 日期放宽一天的粗筛，「今天 / 已过期」按 todo_due 在用户时区的本地日期判定。
+  // 当天窗口与更早的过期积压分开取：积压按到期倒序只取最近的，当天到期的不会被历史积压挤出列表。
+  const pendingTodo = `FROM notes WHERE user_id = ? AND deleted_at IS NULL
+       AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0) AND todo_due IS NOT NULL`;
+  const [windowRes, backlogRes, backlogCount] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT * ${pendingTodo} AND date(todo_due) BETWEEN date(?, '-1 day') AND date(?, '+1 day')
+       ORDER BY datetime(todo_due) ASC LIMIT ${TODOS_TODAY_LIMIT * 4}`
+    )
+      .bind(userId, today, today)
+      .all<NoteRow>(),
+    c.env.DB.prepare(
+      `SELECT * ${pendingTodo} AND date(todo_due) < date(?, '-1 day')
+       ORDER BY datetime(todo_due) DESC LIMIT ${TODOS_TODAY_LIMIT}`
+    )
+      .bind(userId, today)
+      .all<NoteRow>(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n ${pendingTodo} AND date(todo_due) < date(?, '-1 day')`)
+      .bind(userId, today)
+      .first<{ n: number }>(),
+  ]);
+  const withLocalDate = (rows: NoteRow[] | undefined) =>
+    (rows ?? []).map((n) => ({ n, due: todoDueLocalDate(n.todo_due ?? "", tz) ?? (n.todo_due ?? "").slice(0, 10) }));
+  const windowRows = withLocalDate(windowRes.results);
+  const dueToday = windowRows.filter(({ due }) => due === today).slice(0, TODOS_TODAY_LIMIT);
+  // UTC 日期早于昨天的行本地日期必然早于今天，全部是过期，且都早于窗口内的过期行
+  const windowOverdue = windowRows.filter(({ due }) => due < today);
+  const overdue = [...withLocalDate(backlogRes.results).reverse(), ...windowOverdue];
+  const overdueTotal = (backlogCount?.n ?? 0) + windowOverdue.length;
+  const overdueShown = overdue.slice(Math.max(0, overdue.length - (TODOS_TODAY_LIMIT - dueToday.length)));
+  const items = [...overdueShown, ...dueToday].map(({ n, due }) => ({ ...noteToJson(n), overdue: due < today }));
+  return c.json({ date: today, items, overdue_total: overdueTotal });
 });
 
 // ---- GET /api/reports ----

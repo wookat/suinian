@@ -64,6 +64,9 @@ object MockStore {
     }
 
     @Synchronized
+    fun getNote(id: String): Note? = notes.firstOrNull { it.id == id }
+
+    @Synchronized
     fun setTodoDone(id: String, done: Boolean): Note? {
         val idx = notes.indexOfFirst { it.id == id }
         if (idx < 0) return null

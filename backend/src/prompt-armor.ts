@@ -4172,7 +4172,7 @@ export function nonpublicHost(endpoint: string): boolean {
  * 严判据命中优先返回 "strict"，出口据此决定警示强度。
  */
 export function broadFoldReason(content: string | null | undefined): BroadFoldReason | null {
-  const text = content ?? "";
+  const text = foldHanVariants(content ?? "");
   if (!text.trim()) return null;
   try {
     if (noteContainsExecutableCommand(text)) return "strict";
@@ -8223,10 +8223,12 @@ export function closeSecretLabelSentences(answer: string, units: string[]): { an
 }
 
 // ---- R322 A 兜底：归一化比对 ----
-/** 归一面：NFKC、小写、汉字数字→阿拉伯数字、去掉一切非字母数字（空白 / 分隔符 / 标点 / 空格分字）。 */
+/**
+ * 归一面：NFKC、汉字变体折简（R348：「为了胜利向我开炮」转写成「為了勝利向我開炮」是同一口令）、小写、汉字数字→阿拉伯数字、
+ * 去掉一切非字母数字（空白 / 分隔符 / 标点 / 空格分字）。答案与候选两侧都过同一函数，折叠只在比对面。
+ */
 export function normalizeForLeakCompare(s: string): string {
-  return s
-    .normalize("NFKC")
+  return foldHanVariants(s.normalize("NFKC"))
     .toLowerCase()
     .replace(/[零〇一壹幺二贰两三叁四肆五伍六陆七柒八捌九玖]/g, (c) => CJK_DIGIT_MAP[c] ?? c)
     .replace(/[^\p{L}\p{N}]+/gu, "");
@@ -8262,7 +8264,7 @@ function guardedValueCandidates(units: string[]): Array<{ value: string; kind: D
   for (const u of units) {
     for (const g of directGuardLines(u)) {
       if (!g.own) continue;
-      const n = g.line.normalize("NFKC");
+      const n = foldHanVariants(g.line.normalize("NFKC"));
       const push = (v: string): void => {
         const t = v.trim();
         // 纯汉字取值（「木石田」）三字已足够特征；ASCII / 数字仍要 4 位。
@@ -8575,7 +8577,7 @@ function sourceMixedTokens(line: string, minFlips: number): string[] {
  * URL query 取值，答案里原样出现即记号级占位；纯散文重合维持同屏豁免。
  */
 export function directUnitValueTokens(unit: string): string[] {
-  const n = unit.normalize("NFKC");
+  const n = foldHanVariants(unit.normalize("NFKC"));
   const out = new Set<string>();
   // 纯数字取值不做记号级占位：数字串的算式 / 拆位 / 汉字数字转写形态由归一化比对整答 fail-closed（R322 A），
   // 先换掉记号会让后面的归一化比对失去比对面（「315000+900+26」）。
@@ -8740,6 +8742,12 @@ const RESIDENCY_NEGATED_ZONE_RE =
   /^\s*(?:还没|没有|没|未|尚未|不再|不是|不|别|待定|待填|待补|[<\[{（(]|自己的|(?:我|你|您|他|她|咱|大家|我们|咱们|你们|他们)(?:的|们的|生日|手机|电话|名字|姓名|工号|学号|车牌|身份证|老婆|老公|孩子|爸|妈|女儿|儿子)|同|跟|和|与|原来|以前|之前|老的|默认的|初始的|生日|手机|电话|身份证|工号|学号|车牌|门牌|房号|出生|结婚|纪念日|xxx|\*{3,}|•{3,}|…|\.{3}|(?:not|never|no|none|nicht|noch|kein|keine|nie|pas|non|нет|не|your|yours|tbd|todo|placeholder|redacted|hidden|omitted|required|needed|optional|mandatory|wrong|incorrect|invalid|expired|correct|same|different|case|stored|saved|shared|changed|updated|encrypted|hashed|unknown|missing|reset|set|unset|too|at|about|the|a|an|only|also|still|already|now|either|probably|usually|always|in|on|for|to|of|with|by|from|that|this|what|where|how|when|which|who)(?![\p{L}\p{N}]))/iu;
 /** 反向赋值（「4218 是工位抽屉密码」「sky云3q 就是路由器的密码」）：值 + 系词 + ≤10 字修饰 + 称谓收句。 */
 const RESIDENCY_REVERSE_RE = /^(.{1,40}?)\s*(?:是|为|就是|作为|当|做|叫|=)\s*(?:[^，。；,;]{0,16}?)$/u;
+/** 转盘组合值区（「保险柜转盘 左30 右15 左5」「safe combination R12 L34 R7」）：≥3 组方向 + 数字（或数字 + 方向）。 */
+const RESIDENCY_DIAL_SEQ_RE =
+  /^\s*(?:[左右LR]\s*\d{1,3}|\d{1,3}\s*[左右LR])(?:\s*[、，,→\-]?\s*(?:[左右LR]\s*\d{1,3}|\d{1,3}\s*[左右LR])){2,}(?![\p{L}\p{N}])/iu;
+/** 称谓 + 空格 / 引导 + 数量 / 日期（「密钥 2026 年 3 月到期」「密码 6 位数」「保险柜是 45 升的」）是计量，不是取值。 */
+const RESIDENCY_MEASURE_LEAD_RE =
+  /^\s*\d+(?:\.\d+)?\s*(?:年|月|日|号|点|分|秒|个|位|次|天|周|块|元|万|千|%|％|折|楼|层|寸|斤|升|米|公里|km|kg|g|ml|gb|mb|到期|过期|失效|以上|以下|左右|左|右)/iu;
 /** 汉数拆读值区（「保险柜密码 五、八、二、零」）：≥3 个汉数字以顿号 / 逗号 / 空白相隔。 */
 const RESIDENCY_HAN_DIGIT_SEQ_RE = /^\s*[零〇一二两三四五六七八九十]{1,2}(?:\s*[、，,]\s*|\s+)[零〇一二两三四五六七八九十]{1,2}(?:(?:\s*[、，,]\s*|\s+)[零〇一二两三四五六七八九十]{1,2})+/u;
 /** 称谓收尾的标题行（「客厅路由器密码」「车库遥控密码」）：≤16 字、无动词修饰，值在其后的裸 token 行里。 */
@@ -8795,6 +8803,7 @@ function residencyAssignment(line: string): ResidencyAssignment | null {
     const forward = (zone: string): ResidencyAssignment | null => {
       const body = zone.replace(RESIDENCY_CONNECTOR_RE, "").trim();
       if (RESIDENCY_NEGATED_ZONE_RE.test(body)) return null;
+      if (!RESIDENCY_DIAL_SEQ_RE.test(body) && RESIDENCY_MEASURE_LEAD_RE.test(body)) return null;
       return body === "" ? { zone: "", led: true, nextLine: true } : { zone, led: true, nextLine: false };
     };
     if (RESIDENCY_CONNECTOR_RE.test(rest)) {
@@ -8807,8 +8816,9 @@ function residencyAssignment(line: string): ResidencyAssignment | null {
     if (spaced) {
       const tok = (spaced[1].split(/[、，。；！？,.;!?：:]/u)[0] ?? "");
       if (!tok) continue;
-      // 称谓 + 空格 + 数量 / 日期（「密钥 2026 年 3 月到期」「密码 6 位数」）是计量，不是取值。
-      if (/^\s*\d+(?:\.\d+)?\s*(?:年|月|日|号|点|分|秒|个|位|次|天|周|块|元|万|千|%|％|折|楼|层|寸|斤|米|公里|km|kg|g|gb|mb|到期|过期|失效|以上|以下|左右|左|右)/iu.test(rest)) continue;
+      // 转盘组合（「左30 右15 左5」）整段是值区
+      if (RESIDENCY_STRONG_LABEL_RE.test(label) && RESIDENCY_DIAL_SEQ_RE.test(rest)) return { zone: clause(rest), led: true, nextLine: false };
+      if (RESIDENCY_MEASURE_LEAD_RE.test(rest)) continue;
       // 汉数拆读（「五、八、二、零」）整段是值区
       if (RESIDENCY_STRONG_LABEL_RE.test(label) && RESIDENCY_HAN_DIGIT_SEQ_RE.test(rest)) return { zone: clause(rest.replace(/、/g, " ")), led: true, nextLine: false };
       // 拉丁称谓 + 空格 + 纯字母词是复合名词（password policy / token bucket），不是赋值；汉字称谓 + 空格 + 汉字词只认强称谓 + 纯汉字短词。
@@ -8842,7 +8852,7 @@ function residencyAssignment(line: string): ResidencyAssignment | null {
 
 /** 单元的驻留触发：任一行的凭据称谓处于赋值位、任一行是「账户服务名: 值」、或 Markdown 表头带称谓。只提到「密码」的散文（防骗忠告 / 密码策略）不触发。 */
 export function residencyTriggered(unit: string): boolean {
-  const n = unit.normalize("NFKC");
+  const n = foldHanVariants(unit.normalize("NFKC"));
   const lines = n.replace(URL_RUN_RE, " ").split("\n");
   if (lines.some((l) => residencyAssignment(l) !== null)) return true;
   if (lines.some((l) => residencyServiceKeyValue(l) !== null)) return true;
@@ -8871,6 +8881,11 @@ function residencyServiceKeyValues(line: string): string[] {
     const classes = [/\p{L}/u.test(v), /\d/.test(v), /[^\p{L}\p{N}]/u.test(v)].filter(Boolean).length;
     if (m[2] === undefined) {
       if (/\p{Script=Han}/u.test(v) || !/\p{L}/u.test(v) || !/\d/.test(v) || v.length < 5) continue;
+      out.push(v);
+    } else if (/^\p{Script=Han}+$/u.test(v)) {
+      // 冒号后的纯汉字串：≥6 字且 ≤12 字（值区口径）；以代词 / 虚词起头的是句子（「账号：我要把微博账号注销掉」）不是值
+      const chars = [...v];
+      if (chars.length < 6 || chars.length > 12 || RESIDENCY_HAN_STOP.has(chars[0]) || RESIDENCY_HAN_STOP.has(chars.slice(0, 2).join(""))) continue;
       out.push(v);
     } else if (classes >= 2 || v.length >= 6) out.push(v);
   }
@@ -9052,7 +9067,9 @@ export interface SourceValueCandidate {
   parts?: readonly string[];
 }
 
-export function sourceValueCandidates(units: readonly string[], question?: string): SourceValueCandidate[] {
+export function sourceValueCandidates(rawUnits: readonly string[], question?: string): SourceValueCandidate[] {
+  // R349：取值形态在折简副本上识别；候选只进归一化比对（两侧都折）与拉丁记号提取（折叠不碰拉丁），不回写任何出口。
+  const units = rawUnits.map((u) => foldHanVariants(u));
   const out: SourceValueCandidate[] = [];
   const push = (v: string, kind: DirectGuardKind, minLen = 4, parts?: readonly string[]): void => {
     // R332 P0-1(b)：候选存 NFKC 形态（「４９０６」→「4906」），记号级替换与 parts 比对都拿半角值。
@@ -9518,7 +9535,8 @@ function identifierOnlyOpaqueLine(line: string): boolean {
  */
 function opaqueTokenSpans(answer: string, source?: string): Array<{ start: number; end: number; token: string }> {
   const out: Array<{ start: number; end: number; token: string }> = [];
-  const nfkc = answer.normalize("NFKC");
+  // R349：标签面在折简副本上判（一对一、长度不变，下标仍对应原答案）；记号本身是拉丁 / 数字，折叠不碰。
+  const nfkc = foldHanVariants(answer.normalize("NFKC"));
   if (nfkc.length !== answer.length) {
     if (lineCarriesOpaqueToken(answer)) out.push({ start: 0, end: answer.length, token: "" });
     return out;
@@ -9530,7 +9548,7 @@ function opaqueTokenSpans(answer: string, source?: string): Array<{ start: numbe
   // 同口径（R336 §2.3）：善意单元里紧跟日常识别符标签（订单号 / 运单 / 车牌 / 会议号…）的记号（`HT20260912A8`）也不是取值回显。
   const benignUrlTokens = new Set<string>();
   if (source && directGuardLines(source).length === 0) {
-    const srcN = source.normalize("NFKC");
+    const srcN = foldHanVariants(source.normalize("NFKC"));
     for (const u of srcN.match(URL_RUN_RE) ?? [])
       for (const seg of u.split(/[/?#&=.:]+/)) if (seg.length >= 5) benignUrlTokens.add(seg.toLowerCase());
     for (const line of srcN.split("\n")) {
@@ -9551,7 +9569,7 @@ function opaqueTokenSpans(answer: string, source?: string): Array<{ start: numbe
     const ends = delims.map((d) => nfkc.indexOf(d, i)).filter((x) => x !== -1);
     return nfkc.slice(s + 1, ends.length > 0 ? Math.min(...ends) : nfkc.length);
   };
-  const sourceLines = (source ?? "").normalize("NFKC").split(/[\n。！？；]/).filter((l) => l.trim().length > 0);
+  const sourceLines = foldHanVariants((source ?? "").normalize("NFKC")).split(/[\n。！？；]/).filter((l) => l.trim().length > 0);
   const digitsGuarded = (run: string, at: number): boolean => {
     if (!longDigitFaceGuarded(sentenceAt(at))) return false;
     const digits = run.replace(/\D/g, "");
@@ -9751,7 +9769,8 @@ const CJK_VALUE_LEAD_RE = /(?:是|叫|为|就是|写成|念出来是|改成|还�
 /** 无标签行（单元其他行带标签）的取值引导只认强形态：「就是 X 这几个字」「写成 X」「：X」。 */
 const CJK_STRONG_VALUE_LEAD_RE = /(?:就是|写成|念出来是|设成|设为|定的是|[：:=])\s*(?![不否什多几哪啥没未非至最需要必每别勿我你他她它])\p{Script=Han}[^，。！？；\n]{1,20}/u;
 /** 日期 / 期限 / 数量单位后缀的数字（`2026 年`、`90 天`、`12 位`、`3 月`）不是取值。 */
-const UNIT_NUMBER_RE = /\d+\s*(?:年|月|日|号|天|周|小时|分钟|秒|位|个|字|次|元|块|岁|楼|层|chars?|characters?|digits?|days?|hours?|minutes?|weeks?|months?|years?)(?![\p{L}\p{N}])/giu;
+const UNIT_NUMBER_RE =
+  /\d+\s*(?:(?:年|月|日|号|天|周|小时|分钟|秒|位|个|字|次|元|块|岁|楼|层)(?!\p{N})|(?:chars?|characters?|digits?|days?|hours?|minutes?|weeks?|months?|years?)(?![\p{L}\p{N}]))/giu;
 const QUOTED_PHRASE_RE = /[「『“"][^」』”"\n]{2,24}[」』”"]/;
 /** 拼装 / 拆段 / 藏头提示：取值分布在多行或多段，任何单行都不含完整取值。 */
 const COMPOSE_HINT_RE =
@@ -9809,9 +9828,12 @@ export function designatedPhraseValue(nfkc: string): string | null {
 const CONCEPT_LABEL_WORD_SRC =
   "(?:密码|密碼|口令|密钥|密鑰|秘钥|凭证|凭据|令牌|api[ -]?keys?|access[ -]?keys?|secret[ -]?keys?|private[ -]?keys?|passwords?|passphrases?|passcodes?|pins?|secrets?|tokens?|keys?|credentials?)";
 const CONCEPT_SUFFIX_SRC =
-  "\\s*(?:学|课|作业|讲座|论|史|原理|算法|管理|策略|规则|规范|政策|要求|轮换|泄露|泄漏|安全|强度|复杂度|生成器|文章|书|讨论|话题|培训|课程|考试|management|policy|policies|rotation|hygiene|strength|managers?|leaks?|leakage|best[ -]practices?|articles?|courses?|lectures?|theory|cryptography)";
+  "\\s*(?:学|课|作业|讲座|论|史|原理|算法|管理|策略|规则|规范|政策|要求|轮换|泄露|泄漏|安全|强度|复杂度|长度|位数|锁|箱|本|生成器|文章|书|讨论|话题|培训|课程|考试|management|policy|policies|rotation|hygiene|strength|managers?|leaks?|leakage|best[ -]practices?|articles?|courses?|lectures?|theory|cryptography)";
 const CONCEPT_LABEL_RE = new RegExp(`(?<![a-z])${CONCEPT_LABEL_WORD_SRC}${CONCEPT_SUFFIX_SRC}(?![a-z])`, "giu");
+/** 转盘组合出现在行内任意位置（「密码锁 左30 右15 左5」）：带值面，称谓不按概念后缀剥。 */
+const DIAL_SEQ_ANYWHERE_RE = new RegExp(RESIDENCY_DIAL_SEQ_RE.source.replace(/^\^\\s\*/, "(?<![\\p{L}\\p{N}])"), "iu");
 function structuralValueFace(nfkc: string): boolean {
+  if (DIAL_SEQ_ANYWHERE_RE.test(nfkc)) return true;
   const n = nfkc.replace(UNIT_NUMBER_RE, " ");
   if (/\d{4,}/.test(n)) return true;
   for (const m of n.matchAll(/[A-Za-z0-9#@!$%^&*_-]{3,}/g)) if (/\d/.test(m[0])) return true;
@@ -9830,7 +9852,12 @@ export function conceptualLabelFree(nfkc: string): string {
   if (!CONCEPT_LABEL_RE.test(text)) return text;
   if (structuralValueFace(text)) return text;
   CONCEPT_LABEL_RE.lastIndex = 0;
-  return text.replace(CONCEPT_LABEL_RE, " ");
+  // 「密码锁 / 密码箱」是装着秘密的实物而不是抽象概念：抹掉称谓词、保留实物名，让锁具取值问（「密码锁的数字是多少」）与
+  // 「行李箱锁是几」同口径由 RESIDENCY_QUESTION_LABEL_RE + LOCK_OBJECT_TALK_RE 判；价钱 / 牌子 / 型号 / 尺寸仍按谈论实物排除。
+  return text.replace(CONCEPT_LABEL_RE, (m) => {
+    const obj = m.match(/[锁箱]$/u);
+    return obj ? ` ${obj[0]}` : " ";
+  });
 }
 const TITLE_LABEL_RE = new RegExp(`《[^《》\\n]{0,12}${CONCEPT_LABEL_WORD_SRC}[^《》\\n]{0,12}》`, "giu");
 
@@ -9857,14 +9884,16 @@ function cjkLeadValue(tail: string, strict: boolean): boolean {
 /** 行里是否有「取值面」：4+ 位数字 / 含数字的 ASCII 记号（≥3 字）/ 汉字数字连读 / 引号短语 / 取值引导 + 汉字短语 / 标签紧接短值。 */
 function secretValueFace(t: string, strict = false): boolean {
   const nfkc = conceptualLabelFree(t.normalize("NFKC"));
+  if (DIAL_SEQ_ANYWHERE_RE.test(nfkc)) return true;
   const n = nfkc.replace(UNIT_NUMBER_RE, " ");
   if (/\d{4,}/.test(n)) return true;
   for (const m of n.replace(SECRET_LABEL_RE, " ").matchAll(/[A-Za-z0-9#@!$%^&*_-]{3,}/g)) if (/\d/.test(m[0])) return true;
   if (CJK_NUMERAL_RUN_RE.test(n)) return true;
   if (QUOTED_PHRASE_RE.test(n)) return true;
   // 取值引导只看标签之后的文本：「防骗忠告：任何机构都不会索要你的…密码」的冒号在标签前，不是取值引导
-  const label = SECRET_LABEL_RE.exec(n);
-  const tail = strict || !label ? n : n.slice(label.index + label[0].length);
+  // 引导判定看未抹计量的原文：「密码是 2026 年改的」抹掉「2026 年」后会剩「是 改的」，不能拿抹后的残句当引导 + 短语
+  const label = SECRET_LABEL_RE.exec(nfkc);
+  const tail = strict || !label ? nfkc : nfkc.slice(label.index + label[0].length);
   if (cjkLeadValue(tail, strict)) return true;
   if (!strict && labelAsciiPhraseValue(n) !== null) return true;
   if (!strict && labelCjkShortValue(nfkc) !== null) return true;
@@ -9881,6 +9910,8 @@ export function secretLabelValueLine(line: string, unitLabeled = false): boolean
   if (!t) return false;
   const labeled = SECRET_LABEL_RE.test(t);
   if (CODE_LABEL_RE.test(t) && /(?<!\d)\d{4,11}(?!\d)/.test(t)) return true;
+  // 强称谓（转盘 / 拨盘 / 保险柜…）+ 转盘组合：与驻留判定同口径（「转盘 左30 右15 左5」）
+  if (RESIDENCY_STRONG_LABEL_RE.test(t) && DIAL_SEQ_ANYWHERE_RE.test(t)) return true;
   if (lockMaterialListLine(t)) return true;
   if (designatedPhraseValue(t) !== null) return true;
   if (!labeled && !unitLabeled) {
@@ -9990,9 +10021,11 @@ export function directGuardLines(unit: string): Array<{ line: string; kind: Dire
 }
 
 function computeDirectGuardLines(unit: string): Array<{ line: string; kind: DirectGuardKind; own: boolean }> {
-  const lines = unit.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
-  const whole = guardFoldReason(unit);
-  const nfkc = unit.normalize("NFKC");
+  // R349：判定在折简副本上做（逐字一对一、行数与行内下标不变），返回的行文本仍是原文，后续按原文替换。
+  const judged = foldHanVariants(unit);
+  const rows = unit.split("\n").map((l, i) => ({ line: l.trim(), judge: judged.split("\n")[i]?.trim() ?? l.trim() })).filter((r) => r.line.length > 0);
+  const whole = guardFoldReason(judged);
+  const nfkc = judged.normalize("NFKC");
   // R322：单元里出现凭证标签 ⇒ 其他行只需取值面即受守；标签 + 拼装提示（藏头 / 拆段 / 前半后半）⇒ 整条每行都受守（own）
   // R336 §2.1：只谈论称谓概念的单元（「密钥轮换 SOP 读后感」）不算称谓驻留；有结构化取值面时 conceptualLabelFree 原样返回。
   const unitLabeled = nfkc.split("\n").some((l) => SECRET_LABEL_RE.test(conceptualLabelFree(l)));
@@ -10005,8 +10038,8 @@ function computeDirectGuardLines(unit: string): Array<{ line: string; kind: Dire
     : whole === "strict" || whole === "broad:fetch" || whole === "broad:code" ? "code"
     : "opaque";
   const out: Array<{ line: string; kind: DirectGuardKind; own: boolean }> = [];
-  for (const line of lines) {
-    const own = directGuardKindOfLine(line, { unitLabeled }) ?? (composed ? "credential" : null);
+  for (const { line, judge } of rows) {
+    const own = directGuardKindOfLine(judge, { unitLabeled }) ?? (composed ? "credential" : null);
     const kind = own ?? wholeKind;
     if (kind) out.push({ line, kind, own: own !== null });
   }
@@ -10098,6 +10131,19 @@ export function redactGuardedLinesForModel(text: string, unit?: string, extraGua
     out.push(raw);
   }
   return { text: out.join("\n"), redacted };
+}
+
+/**
+ * 非 ask 出口（报告行标题 / 线程摘要 / 复盘评语）喂模型的视图：行级替换后再按归一化比对复查一次，
+ * 替换后的文本仍能比对出单元里的受守取值（驻留形态没有 own 行，如「锁改成了 0731」）时整条只留占位——
+ * 与 ask 的 modelContextNoteText 同一判据、同一占位。
+ */
+export function redactGuardedViewForModel(text: string, unit: string, extraGuarded?: ReadonlySet<string>): { text: string; redacted: number; withheld: boolean } {
+  const redacted = redactGuardedLinesForModel(text, unit, extraGuarded);
+  if (redacted.text && normalizedGuardedLeak(redacted.text, [unit]) !== null) {
+    return { text: MODEL_REDACTED_LINE, redacted: redacted.redacted + 1, withheld: true };
+  }
+  return { ...redacted, withheld: false };
 }
 
 /** 跨笔记指代：标签 + 「下面那条 / 另一条 / 前半 / 后半 / 第 N 节」——取值记在别的笔记里。 */
@@ -10252,11 +10298,115 @@ function guardedLabelAnchor(text: string): boolean {
   return SECRET_LABEL_RE.test(t) || CODE_LABEL_RE.test(t) || ORACLE_LABEL_RE.test(t);
 }
 /**
+ * R346 问句侧汉字变体折叠：繁体 / 港台写法（「wifi 密碼是多少」「密碼箱多少錢」「怎麼辦」）逐字折成简体后再过
+ * 取值 / 预言机 / 非取值问法正则。笔记侧标签正则（SECRET_LABEL_RE / RESIDENCY_LABEL_RE）早已内联繁体变体，问句侧
+ * 的十几条正则（称谓 / 问法 / 时间价钱排除 / 追问 / 省略句 / 锁具实物）只有简体——半边繁体会同时漏判（取值问走普通生成）
+ * 与误判（「密碼箱多少錢」的「錢」不在实物词表里 ⇒ 被判取值）。逐字一对一替换，长度与下标不变，只用于判定与归因比对，不改任何回显文本。
+ * 字表：zhconv zh2Hans 单字映射，只取键值均为 BMP 内 CJK 统一表意文字、键不同时是值的对；排除日文标签正则里的字（係 葉 証 効），
+ * 问句专用折叠（著→着 / 甚→什 / 帳→账）覆盖 zhconv 取值。
+ */
+const HAN_VARIANT_PAIRS =
+  "丟丢丣卯並并乗乘乹干乾干亁干亂乱亙亘亝斋亞亚亱夜亷廉亾亡佇伫佈布佔占併并來来侖仑侶侣侷局俁俣俔伣俠侠俥伡俬私俻备倀伥倆俩倈俫倉仓個个倐倏們们倖幸倣仿倫伦倸睬偉伟" +
+  "側侧偵侦偽伪傑杰傖伧傘伞備备傚效傢家傭佣傯偬傳传傴伛債债傷伤傾倾僂偻僅仅僉佥僊仙働动僑侨僕仆僞伪僥侥僨偾僱雇價价儀仪儁俊儂侬億亿儈侩儉俭儌侥儎傤儐傧儔俦儕侪儘尽" +
+  "償偿優优儲储儷俪儺傩儻傥儼俨兇凶兌兑兎兔兒儿兗兖兠兜內内兩两冄冉冊册冐冒冑胄冪幂冺泯凈净凍冻凜凛凢凡凱凯凴凭別别刦劫刧劫刪删刼劫剄刭則则剉锉剋克剎刹剏创剗刬剙创" +
+  "剛刚剝剥剮剐剳札剴剀創创剷铲剹戮劃划劄札劇剧劉刘劊刽劌刿劍剑劑剂劒剑勁劲勅敕勌倦動动務务勛勋勝胜勞劳勢势勦剿勩勚勱劢勳勋勵励勸劝勻匀匟炕匭匦匯汇匱匮匲奁匳奁區区" +
+  "協协卹恤卻却卽即厀膝厙厍厠厕厤历厭厌厰厂厲厉厴厣參参叄叁叢丛吒咤吚咿吳吴吶呐呂吕呌叫呪咒咊和咼呙員员哶咩唄呗唕唣唘启唚吣唸念啎忤問问啑喋啓启啗啖啞哑啟启啢唡啣衔" +
+  "喚唤喪丧喫吃喬乔單单喲哟嗁啼嗆呛嗇啬嗊唝嗎吗嗚呜嗩唢嗶哔嘆叹嘍喽嘑呼嘓啯嘔呕嘖啧嘗尝嘜唛嘠嘎嘩哗嘮唠嘯啸嘰叽嘵哓嘷嗥嘸呒嘽啴噁恶噉啖噓嘘噝咝噠哒噥哝噦哕噯嗳噲哙" +
+  "噴喷噸吨噹当嚀咛嚇吓嚌哜嚐尝嚕噜嚙啮嚥咽嚦呖嚨咙嚮向嚲亸嚳喾嚴严嚶嘤囀啭囁嗫囂嚣囅冁囈呓囉啰囌苏囑嘱囓啮囙因囪囱圅函圇囵國国圍围園园圓圆圖图團团坿附垜垛垻坝埡垭" +
+  "埰采執执堅坚堊垩堖垴堝埚堯尧報报場场塊块塋茔塏垲塒埘塗涂塚冢塟葬塢坞塤埙塲场塵尘塹堑墊垫墖塔墜坠墮堕墰坛墳坟墶垯墻墙墾垦壇坛壋垱壎埙壓压壘垒壙圹壚垆壜坛壞坏壟垄" +
+  "壠垅壢坜壩坝壪塆壯壮壺壶壻婿壼壸壽寿夘卯夠够夢梦夥伙夾夹奐奂奧奥奩奁奪夺奬奖奮奋奼姹妝妆妬妒妳你妷侄姉姊姍姗姙妊姦奸姪侄姸妍娛娱婁娄婣姻婦妇婬淫婭娅媍妇媧娲媯妫" +
+  "媼媪媽妈媿愧嫋袅嫗妪嫰嫩嫵妩嫺娴嫻娴嫿婳嬀妫嬃媭嬈娆嬋婵嬌娇嬙嫱嬝袅嬡嫒嬤嬷嬪嫔嬭奶嬰婴嬸婶嬾懒孃娘孌娈孫孙學学孼孽孿孪宂冗宮宫寀采寃冤寑寝寢寝實实寧宁審审寫写" +
+  "寬宽寳宝寵宠寶宝尅克將将專专尋寻對对導导尒尔尙尚尟鲜尠鲜尷尴屆届屍尸屓屃屛屏屜屉屢屡層层屨屦屬属屭屃岅坂岡冈峝峒峯峰峴岘島岛峽峡崍崃崑昆崗岗崙仑崢峥崬岽嵐岚嵗岁" +
+  "嶁嵝嶃崭嶄崭嶇岖嶔嵚嶗崂嶠峤嶢峣嶧峄嶨峃嶮崄嶸嵘嶺岭嶼屿嶽岳巋岿巒峦巔巅巖岩巰巯巵卮巹卺帀匝帋纸帥帅師师帬裙帳账帶带幀帧幃帏幇帮幑徽幗帼幘帻幙幕幚帮幟帜幣币幫帮" +
+  "幬帱幹干幾几庫库庻庶庽寓廁厕廂厢廄厩廈厦廎庼廐厩廕荫廚厨廝厮廟庙廠厂廡庑廢废廣广廩廪廬庐廳厅廵巡廹迫廻回弒弑弔吊弳弪張张強强彆别彈弹彌弥彎弯彔录彙汇彞彝彠彟彥彦" +
+  "彫雕彲彨彿佛徃往後后徑径從从徠徕徧遍復复徵征徹彻怱匆怳恍恆恒恠怪恡吝恥耻悅悦悞悮悤匆悵怅悶闷悽凄惏婪惡恶惥恿惱恼惲恽惷蠢惻恻愛爱愜惬愨悫愴怆愷恺愽博愾忾慄栗態态" +
+  "慍愠慘惨慙惭慚惭慟恸慣惯慤悫慪怄慫怂慮虑慳悭慴慑慶庆慼戚慽戚慾欲憂忧憇憩憊惫憐怜憑凭憒愦憖慭憚惮憤愤憫悯憮怃憲宪憶忆懇恳應应懌怿懍懔懞蒙懟怼懣懑懨恹懲惩懶懒懷怀" +
+  "懸悬懺忏懼惧懾慑戀恋戇戆戔戋戞戛戧戗戩戬戰战戱戯戲戏戶户戹厄扞捍抝拗拋抛拚拼挩捝挱挲挵弄挾挟捄救捨舍捫扪捱挨捲卷掃扫掄抡掗挜掙挣掛挂採采掽碰揀拣揑捏揚扬換换揫揪" +
+  "揮挥揯搄揷插揹背搆构搇揿搉榷損损搖摇搗捣搤扼搥捶搨拓搯掏搵揾搶抢搾榨摃扛摑掴摜掼摟搂摯挚摳抠摶抟摺折摻掺撈捞撏挦撐撑撓挠撟挢撡操撣掸撥拨撦扯撫抚撲扑撳揿撻挞撾挝" +
+  "撿捡擁拥擄掳擇择擊击擋挡擔担擕携據据擠挤擣捣擧举擬拟擯摈擰拧擱搁擲掷擴扩擷撷擺摆擻擞擼撸擾扰攄摅攆撵攏拢攔拦攖撄攙搀攛撺攜携攝摄攢攒攣挛攤摊攩挡攪搅攬揽攷考敂叩" +
+  "敍叙敎教敓敚敗败敘叙敵敌數数敺驱斂敛斃毙斆敩斕斓斬斩斷断於于旂旗旣既旤祸旹时旾春昇升昬昏時时晉晋晝昼暈晕暉晖暘旸暢畅暫暂暱昵曄晔曆历曇昙曉晓曏向曖暧曠旷曡叠曨昽" +
+  "曬晒書书會会朞期朢望朧胧朮术朶朵東东杴锨枱台枴拐柵栅柺拐査查栁柳栞刊栢柏栰筏桒桑桮杯桺柳桿杆梔栀梘枧條条梟枭梲棁棄弃棊棋棖枨棗枣棟栋棧栈棲栖棶梾椏桠椗碇椶棕椷缄" +
+  "椾笺楊杨楓枫楥楦楨桢業业極极榘矩榦干榪杩榮荣榲榅榿桤構构槍枪槓杠槕桌槤梿槧椠槨椁槮椮槳桨槶椢槼椝樁桩樂乐樅枞樑梁樓楼標标樞枢樣样樧榝樳桪樸朴樹树樺桦樿椫橈桡橋桥" +
+  "橜橛機机橢椭橫横檁檩檉柽檔档檜桧檟槚檢检檣樯檮梼檯台檳槟檸柠檻槛櫃柜櫈凳櫓橹櫚榈櫛栉櫝椟櫞橼櫟栎櫥橱櫧槠櫨栌櫪枥櫫橥櫬榇櫱蘖櫳栊櫸榉櫻樱欄栏欅榉權权欏椤欒栾欖榄" +
+  "欝郁欞棂欵款欽钦歎叹歐欧歛敛歟欤歡欢歲岁歴历歷历歸归歿殁殀夭殘残殞殒殤殇殫殚殭僵殮殓殯殡殲歼殺杀殻壳殼壳毀毁毆殴毧绒毬球毿毵氂牦氈毡氊毡氌氇氣气氫氢氬氩氳氲氷冰" +
+  "氾泛汎泛汙污汚污決决沒没沖冲況况泝溯洩泄洶汹浹浃涇泾涖莅涗涚涼凉淒凄淚泪淛浙淥渌淨净淩凌淪沦淵渊淶涞淺浅渖沈渙涣減减渢沨渦涡測测渾浑湊凑湞浈湧涌湯汤湼涅溈沩準准" +
+  "溝沟溫温溮浉溳涢溼湿滄沧滅灭滌涤滎荥滙汇滛淫滬沪滯滞滲渗滷卤滸浒滻浐滾滚滿满漁渔漊溇漚沤漢汉漣涟漬渍漲涨漵溆漸渐漿浆潁颍潄漱潑泼潔洁潙沩潛潜潤润潯浔潰溃潷滗潿涠" +
+  "澀涩澁涩澆浇澇涝澐沄澗涧澠渑澤泽澦滪澩泶澮浍澱淀濁浊濃浓濇涩濕湿濘泞濚溁濛蒙濜浕濟济濤涛濫滥濰潍濱滨濶阔濺溅濼泺濾滤瀂澛瀅滢瀆渎瀉泻瀋沈瀏浏瀕濒瀘泸瀝沥瀟潇瀠潆" +
+  "瀦潴瀧泷瀨濑瀰弥瀲潋瀾澜灃沣灄滠灋法灑洒灕漓灘滩灝灏灠漤灣湾灤滦灧滟灩滟災灾為为烏乌烖灾烴烃無无煉炼煑煮煒炜煗暖煙烟煢茕煥焕煩烦煬炀熅煴熈熙熒荧熗炝熱热熲颎熾炽" +
+  "燁烨燄焰燈灯燉炖燒烧燙烫燜焖營营燦灿燬毁燭烛燴烩燻熏燼烬燾焘爍烁爐炉爗烨爛烂爭争爲为爺爷爾尔牀床牆墙牋笺牎窗牐闸牓榜牕窗牘牍牠它牴抵牽牵犖荦犛牦犢犊犧牺狀状狥徇" +
+  "狹狭狽狈猂悍猙狰猨猿猶犹猻狲獁犸獃呆獄狱獅狮獎奖獘毙獧狷獨独獪狯獫猃獮狝獰狞獲获獵猎獷犷獸兽獺獭獻献獼猕玀猡玅妙現现琖盏琱雕琺珐琿珲瑇玳瑋玮瑒玚瑣琐瑤瑶瑩莹瑪玛" +
+  "瑯琅瑲玱璉琏璡琎璢瑠璣玑璦瑷璫珰環环璵玙璸瑸璽玺璿璇瓊琼瓏珑瓔璎瓚瓒甌瓯甎砖甕瓮甖罂甚什甞尝產产産产甦苏甯宁畂亩畆亩畝亩畢毕畧略畫画畮亩異异畱留畵画當当疇畴疊叠" +
+  "疎疏疘肛疿痱痐蛔痙痉痠酸痲痳痺痹痾疴瘂痖瘉愈瘋疯瘍疡瘓痪瘖喑瘞瘗瘡疮瘧疟瘮瘆瘲疭瘺瘘瘻瘘療疗癄憔癅瘤癆痨癇痫癈废癉瘅癒愈癘疠癟瘪癡痴癢痒癤疖癥症癧疬癩癞癬癣癭瘿" +
+  "癮瘾癰痈癱瘫癲癫發发皁皂皐皋皚皑皜皓皰疱皷鼓皸皲皺皱盃杯盇盍盌碗盜盗盞盏盡尽監监盤盘盧卢盪荡眎视眞真眡视眥眦眾众睏困睜睁睞睐睠眷睪睾瞇眯瞖翳瞘眍瞞瞒瞭了瞶瞆瞼睑" +
+  "矁瞅矇蒙矓眬矙瞰矚瞩矯矫砲炮硃朱硜硁硤硖硨砗硯砚碕埼碩硕碪砧碭砀碸砜確确碼码磑硙磚砖磟碌磠硵磣碜磧碛磯矶磽硗礄硚礆硷礎础礙碍礦矿礪砺礫砾礬矾礱砻祕秘祘算祿禄禍祸" +
+  "禎祯禕祎禡祃禦御禪禅禮礼禰祢禱祷禿秃秈籼秊年秌秋秖只稅税稈秆稉粳稜棱稟禀稬糯稭秸種种稱称稾稿穀谷穌稣積积穎颖穠秾穡穑穢秽穤糯穨颓穩稳穫获穭穞穽阱窓窗窩窝窪洼窮穷" +
+  "窯窑窰窑窵窎窶窭窺窥窻窗竄窜竅窍竇窦竈灶竊窃竝并竢俟竪竖競竞筆笔筍笋筞策筧笕筩筒筯箸箇个箋笺箏筝箒帚箠棰節节範范築筑篋箧篔筼篛箬篠筿篤笃篩筛篳筚簀箦簍篓簑蓑簒篡" +
+  "簞箪簡简簣篑簫箫簮簪簷檐簹筜簽签簾帘籃篮籌筹籐藤籙箓籛篯籜箨籟籁籠笼籤签籩笾籪簖籬篱籮箩籲吁粃秕粧妆粵粤糉粽糝糁糞粪糧粮糰团糲粝糴籴糶粜糹纟糾纠紀纪紂纣約约紅红" +
+  "紆纡紇纥紈纨紉纫紋纹納纳紐纽紓纾純纯紕纰紖纼紗纱紘纮紙纸級级紛纷紜纭紝纴紡纺紥扎紮扎細细紱绂紲绁紳绅紵纻紹绍紺绀紼绋紿绐絀绌終终絃弦組组絆绊絎绗絏绁結结絕绝絛绦" +
+  "絝绔絞绞絡络絢绚給给絨绒絰绖統统絲丝絳绛絶绝絹绢綁绑綃绡綆绠綈绨綉绣綌绤綏绥綑捆經经綜综綞缍綠绿綢绸綣绻綫线綬绶維维綯绹綰绾綱纲網网綳绷綴缀綵彩綸纶綹绺綺绮綻绽" +
+  "綽绰綾绫綿绵緄绲緇缁緊紧緋绯緐繁緑绿緒绪緓绬緔绱緗缃緘缄緙缂線线緜绵緝缉緞缎締缔緡缗緣缘緥褓緦缌編编緩缓緬缅緯纬緱缑緲缈練练緶缏緹缇緻致緼缊縈萦縉缙縊缢縋缒縐绉" +
+  "縑缣縕缊縗缞縛缚縝缜縞缟縟缛縣县縧绦縫缝縭缡縮缩縱纵縲缧縴纤縵缦縶絷縷缕縹缥總总績绩繃绷繅缫繆缪繒缯織织繕缮繖伞繙翻繚缭繞绕繡绣繢缋繦襁繩绳繪绘繫系繭茧繮缰繯缳" +
+  "繰缲繳缴繹绎繼继繽缤繾缱纇颣纈缬纊纩續续纍累纏缠纓缨纔才纖纤纘缵纜缆缐线缽钵罇樽罈坛罋瓮罌罂罎坛罰罚罵骂罷罢罸罚羅罗羆罴羈羁羋芈羗羌羢绒羣群羥羟羨羡義义羶膻翄翅" +
+  "習习翫玩翬翚翶翱翹翘翽翙耡锄耬耧耮耢聖圣聞闻聯联聰聪聲声聳耸聵聩聶聂職职聹聍聽听聾聋肅肃肎肯肐胳肧胚胷胸脃脆脅胁脇胁脈脉脗吻脛胫脣唇脩修脫脱脹胀腁胼腎肾腖胨腡脶" +
+  "腦脑腫肿腳脚腸肠膃腽膓肠膕腘膚肤膠胶膩腻膽胆膾脍膿脓臈腊臉脸臋臀臍脐臏膑臕膘臘腊臙胭臚胪臝裸臟脏臠脔臢臜臥卧臨临臯皋臺台與与興兴舉举舊旧舖铺舘馆舩船艙舱艢樯艤舣" +
+  "艦舰艪橹艫舻艱艰艷艳芲花芻刍茘荔茲兹荊荆荳豆莊庄莖茎莢荚莧苋華华菴庵菸烟萇苌萊莱萬万萲萱萴荝萵莴葒荭著着葠参葤荮葦苇葯药葷荤蒐搜蒓莼蒔莳蒕蒀蒞莅蒼苍蓀荪蓆席蓋盖" +
+  "蓡参蓮莲蓯苁蓴莼蓽荜蔔卜蔕蒂蔘参蔞蒌蔣蒋蔥葱蔦茑蔭荫蕁荨蕆蒇蕎荞蕒荬蕓芸蕕莸蕘荛蕚萼蕢蒉蕩荡蕪芜蕭萧蕷蓣蕿萱薀蕰薈荟薊蓟薌芗薑姜薔蔷薘荙薟莶薦荐薩萨薴苧薹苔薺荠" +
+  "藍蓝藎荩藝艺藥药藪薮藴蕴藶苈藹蔼藺蔺藼萱蘀萚蘄蕲蘆芦蘇苏蘊蕴蘋苹蘐萱蘓苏蘚藓蘞蔹蘢茏蘤花蘭兰蘺蓠蘿萝虆蔂處处虛虚虜虏號号虧亏虯虬蚘蛔蛕蛔蛺蛱蛻蜕蜆蚬蜋螂蜖蛔蜨蝶" +
+  "蝕蚀蝟猬蝦虾蝨虱蝯猿蝱虻蝸蜗螄蛳螎融螞蚂螡蚊螢萤螻蝼螿螀蟁蚊蟄蛰蟇蟆蟈蝈蟎螨蟣虮蟬蝉蟯蛲蟲虫蟶蛏蟻蚁蠁蚃蠅蝇蠆虿蠍蝎蠏蟹蠐蛴蠑蝾蠒茧蠔蚝蠟蜡蠣蛎蠨蟏蠭蜂蠱蛊蠶蚕" +
+  "蠻蛮衂衄衆众衇脉衊蔑術术衕同衚胡衛卫衝冲衞卫衺邪袞衮袟帙袵衽裊袅裌袷裏里補补裝装裠裙裡里製制複复褌裈褘袆褭袅褲裤褳裢褸褛褻亵襃褒襇裥襉裥襍杂襏袯襖袄襝裣襠裆襤褴" +
+  "襪袜襬摆襯衬襲袭襴襕覇霸覈核覊羁見见覎觃規规覓觅覔觅視视覘觇覡觋覥觍覦觎覩睹親亲覬觊覯觏覲觐覷觑覺觉覽览覿觌觀观觝抵觴觞觶觯觸触訁讠訂订訃讣計计訊讯訌讧討讨訐讦" +
+  "訒讱訓训訕讪訖讫託托記记訛讹訝讶訟讼訣诀訥讷訩讻訪访設设許许訴诉訶诃診诊註注詁诂詆诋詎讵詐诈詒诒詔诏評评詖诐詗诇詘诎詛诅詞词詠咏詡诩詢询詣诣試试詩诗詫诧詬诟詭诡" +
+  "詮诠詰诘話话該该詳详詵诜詶酬詼诙詿诖誄诔誅诛誆诓誇夸誌志認认誑诳誒诶誕诞誖悖誘诱誚诮語语誠诚誡诫誣诬誤误誥诰誦诵誨诲說说説说誰谁課课誶谇誹诽誼谊誾訚調调諂谄諄谆" +
+  "談谈諉诿請请諍诤諏诹諑诼諒谅論论諗谂諛谀諜谍諝谞諞谝諡谥諢诨諤谔諦谛諧谐諫谏諭谕諮咨諱讳諳谙諶谌諷讽諸诸諺谚諼谖諾诺謀谋謁谒謂谓謄誊謅诌謊谎謌歌謎谜謐谧謔谑謖谡" +
+  "謗谤謙谦謚谥講讲謝谢謠谣謡谣謨谟謫谪謬谬謭谫謳讴謹谨謾谩譁哗證证譌讹譎谲譏讥譔撰譖谮識识譙谯譚谭譜谱譟噪譫谵譭毁譯译議议譴谴護护譸诪譽誉譾谫讀读讁谪讅谉變变讋詟" +
+  "讎雠讐雠讒谗讓让讕谰讖谶讚赞讜谠讞谳讬托谘咨豈岂豎竖豐丰豓艳豔艳豬猪豶豮貍狸貓猫貛獾貝贝貞贞貟贠負负財财貢贡貧贫貨货販贩貪贪貫贯責责貯贮貰贳貲赀貳贰貴贵貶贬買买" +
+  "貸贷貺贶費费貼贴貽贻貿贸賀贺賁贲賂赂賃赁賄贿賅赅資资賈贾賉恤賊贼賑赈賒赊賓宾賕赇賙赒賚赉賛赞賜赐賞赏賠赔賡赓賢贤賣卖賤贱賦赋賧赕質质賫赍賬账賭赌賴赖賵赗賷赍賺赚" +
+  "賻赙購购賽赛賾赜贄贽贅赘贇赟贈赠贊赞贋赝贍赡贏赢贐赆贓赃贔赑贖赎贗赝贛赣贜赃赬赪趂趁趕赶趙赵趨趋趲趱跡迹跥跺踁胫踐践踫碰踰逾踴踊蹌跄蹏蹄蹕跸蹟迹蹠跖蹣蹒蹤踪蹧糟" +
+  "蹵蹴蹺跷躂跶躉趸躊踌躋跻躍跃躑踯躒跞躓踬躕蹰躚跹躡蹑躥蹿躦躜躪躏躭耽躳躬躶裸軀躯車车軋轧軌轨軍军軑轪軒轩軔轫軛轭軟软軤轷軫轸軲轱軸轴軹轵軺轺軻轲軼轶軾轼較较輅辂" +
+  "輇辁輈辀載载輊轾輒辄輓挽輔辅輕轻輙辄輛辆輜辎輝辉輞辋輟辍輥辊輦辇輩辈輪轮輬辌輭软輯辑輳辏輸输輻辐輼辒輾辗輿舆轀辒轂毂轄辖轅辕轆辘轉转轍辙轎轿轔辚轟轰轡辔轢轹轤轳" +
+  "辠罪辢辣辤辞辦办辭辞辮辫辯辩農农辳农迴回迻移逈迥逕迳這这連连逥回逩奔逬迸週周進进遉侦遊游運运過过達达違违遙遥遜逊遞递遠远遡溯適适遯遁遲迟遶绕遷迁選选遺遗遼辽邁迈" +
+  "還还邇迩邊边邏逻邐逦郟郏郵邮鄆郓鄉乡鄒邹鄔邬鄖郧鄧邓鄭郑鄰邻鄲郸鄴邺鄶郐鄺邝酇酂酈郦酖鸩酧酬醃腌醆盏醕醇醖酝醜丑醞酝醟蒏醣糖醫医醬酱醯酰醱酦醻酬醼宴釀酿釁衅釃酾" +
+  "釅酽釋释釐厘釒钅釓钆釔钇釕钌釗钊釘钉釙钋針针釣钓釤钐釦扣釧钏釩钒釬焊釵钗釷钍釹钕釺钎鈀钯鈁钫鈃钘鈄钭鈅钥鈈钚鈉钠鈍钝鈎钩鈐钤鈑钣鈒钑鈔钞鈕钮鈞钧鈡钟鈣钙鈥钬鈦钛" +
+  "鈧钪鈮铌鈰铈鈳钶鈴铃鈷钴鈸钹鈹铍鈺钰鈽钸鈾铀鈿钿鉀钾鉄铁鉅巨鉆钻鉈铊鉉铉鉋铇鉍铋鉑铂鉕钷鉗钳鉚铆鉛铅鉞钺鉢钵鉤钩鉦钲鉨鿭鉬钼鉭钽鉳锫鉶铏鉸铰鉺铒鉻铬鉿铪銀银銃铳" +
+  "銅铜銍铚銑铣銓铨銖铢銘铭銚铫銛铦銜衔銠铑銣铷銥铱銦铟銨铵銩铥銪铕銫铯銬铐銱铞銲焊銳锐銷销銹锈銻锑銼锉鋁铝鋃锒鋅锌鋇钡鋌铤鋏铗鋒锋鋙铻鋝锊鋟锓鋣铘鋤锄鋥锃鋦锔鋨锇" +
+  "鋩铓鋪铺鋭锐鋮铖鋯锆鋰锂鋱铽鋶锍鋸锯鋼钢錁锞錄录錆锖錇锫錈锩錏铔錐锥錒锕錕锟錘锤錙锱錚铮錛锛錟锬錠锭錡锜錢钱錦锦錨锚錩锠錫锡錮锢錯错録录錳锰錶表錸铼錼镎鍀锝鍁锨" +
+  "鍃锪鍅钫鍆钔鍇锴鍈锳鍊炼鍋锅鍍镀鍔锷鍘铡鍚钖鍛锻鍠锽鍤锸鍥锲鍩锘鍫锹鍬锹鍰锾鍳鉴鍵键鍶锶鍺锗鍼针鍾钟鎂镁鎄锿鎇镅鎊镑鎌镰鎔镕鎖锁鎗枪鎘镉鎚锤鎛镈鎡镃鎢钨鎣蓥鎦镏" +
+  "鎧铠鎩铩鎪锼鎬镐鎭镇鎮镇鎰镒鎲镋鎳镍鎵镓鎶鿔鎸镌鎻锁鎿镎鏃镞鏇旋鏈链鏌镆鏍镙鏐镠鏑镝鏗铿鏘锵鏜镗鏝镘鏞镛鏟铲鏡镜鏢镖鏤镂鏨錾鏰镚鏵铧鏷镤鏹镪鏽锈鐃铙鐋铴鐐镣鐒铹" +
+  "鐓镦鐔镡鐘钟鐙镫鐝镢鐠镨鐦锎鐧锏鐨镄鐫镌鐮镰鐲镯鐳镭鐵铁鐶镮鐸铎鐺铛鐿镱鑄铸鑈鿭鑊镬鑌镔鑑鉴鑒鉴鑔镲鑕锧鑚钻鑛矿鑞镴鑠铄鑣镳鑤刨鑥镥鑭镧鑰钥鑱镵鑲镶鑵罐鑷镊鑹镩" +
+  "鑼锣鑽钻鑾銮鑿凿钁镢钂镋钜巨锺钟镟旋長长門门閂闩閃闪閆闫閈闬閉闭開开閌闶閎闳閏闰閑闲閒闲間间閔闵閘闸閙闹閡阂閣阁閤合閥阀閧哄閨闺閩闽閫阃閬阆閭闾閱阅閲阅閶阊閹阉" +
+  "閻阎閼阏閽阍閾阈閿阌闃阒闆板闇暗闈闱闊阔闋阕闌阑闍阇闐阗闒阘闓闿闔阖闕阙闖闯闚窥關关闞阚闠阓闡阐闢辟闤阛闥闼阨厄阬坑陗峭陘陉陜陕陝陕陞升陣阵陰阴陳陈陸陆陻堙陽阳" +
+  "陿狭隂阴隄堤隉陧隊队階阶隕陨隖坞際际隣邻隨随險险隯陦隱隐隴陇隷隶隸隶隻只雋隽雖虽雙双雛雏雜杂雞鸡離离難难雲云電电霑沾霢霡霧雾霽霁靂雳靄霭靆叇靈灵靉叆靚靓靜静靝靔" +
+  "靦腼靨靥靭韧靱韧鞀鼗鞏巩鞝绱鞦秋鞵鞋鞽鞒韁缰韃鞑韆千韈袜韉鞯韋韦韌韧韍韨韓韩韙韪韜韬韝鞲韞韫韤袜韮韭韻韵響响頁页頂顶頃顷項项順顺頇顸須须頊顼頌颂頎颀頏颃預预頑顽" +
+  "頒颁頓顿頗颇領领頜颌頟额頡颉頤颐頦颏頭头頮颒頰颊頲颋頴颕頷颔頸颈頹颓頻频頼赖頽颓顆颗顇悴顋腮題题額额顎颚顏颜顒颙顓颛顔颜願愿顙颡顛颠類类顢颟顥颢顦憔顧顾顫颤顬颥" +
+  "顯显顰颦顱颅顳颞顴颧風风颭飐颮飑颯飒颱台颳刮颶飓颸飔颺飏颻飖颼飕飀飗飃飘飄飘飆飙飈飚飛飞飜翻飠饣飢饥飣饤飤饲飥饦飩饨飪饪飫饫飭饬飯饭飱飧飲饮飴饴飼饲飽饱飾饰飿饳" +
+  "餁饪餃饺餄饸餅饼餈糍餉饷養养餌饵餎饹餏饻餑饽餒馁餓饿餕馂餖饾餘余餚肴餛馄餜馃餞饯餡馅館馆餬糊餱糇餳饧餵喂餶馉餷馇餹糖餺馎餻糕餼饩餽馈餾馏餿馊饁馌饃馍饅馒饈馐饉馑" +
+  "饊馓饋馈饌馔饍膳饑饥饒饶饗飨饜餍饝馍饞馋饢馕馀余馬马馭驭馮冯馱驮馳驰馴驯馹驲駁驳駈驱駐驻駑驽駒驹駔驵駕驾駘骀駙驸駛驶駝驼駟驷駡骂駢骈駭骇駰骃駱骆駸骎駿骏騁骋騂骍" +
+  "騅骓騌骔騍骒騎骑騏骐騐验騖骛騙骗騣鬃騤骙騫骞騭骘騮骝騰腾騶驺騷骚騸骟騾骡驀蓦驁骜驂骖驃骠驄骢驅驱驊骅驌骕驍骁驏骣驕骄驗验驘骡驚惊驛驿驟骤驢驴驤骧驥骥驦骦驪骊驫骉" +
+  "骯肮骽腿骾鲠髈膀髏髅髒脏體体髕髌髖髋髥髯髮发鬀剃鬆松鬉鬃鬍胡鬚须鬢鬓鬥斗鬦斗鬧闹鬨哄鬩阋鬪斗鬮阄鬰郁鬱郁鬹鬶魎魉魘魇魚鱼魛鱽魢鱾魨鲀魯鲁魴鲂魷鱿魺鲄鮁鲅鮃鲆鮊鲌" +
+  "鮋鲉鮍鲏鮎鲇鮐鲐鮑鲍鮒鲋鮓鲊鮚鲒鮜鲘鮝鲞鮞鲕鮦鲖鮪鲔鮫鲛鮭鲑鮮鲜鮳鲓鮶鲪鮺鲝鯀鲧鯁鲠鯇鲩鯉鲤鯊鲨鯒鲬鯔鲻鯕鲯鯖鲭鯗鲞鯛鲷鯝鲴鯡鲱鯢鲵鯤鲲鯧鲳鯨鲸鯪鲮鯫鲰鯰鲶鯴鲺" +
+  "鯷鳀鯽鲫鯿鳊鰁鳈鰂鲗鰃鳂鰈鲽鰉鳇鰍鳅鰏鲾鰐鳄鰒鳆鰓鳃鰛鳁鰜鳒鰟鳑鰠鳋鰣鲥鰥鳏鰨鳎鰩鳐鰭鳍鰮鳁鰱鲢鰲鳌鰳鳓鰵鳘鰷鲦鰹鲣鰺鲹鰻鳗鰼鳛鰾鳔鱂鳉鱅鳙鱈鳕鱉鳖鱒鳟鱔鳝鱖鳜" +
+  "鱗鳞鱘鲟鱝鲼鱟鲎鱠鲙鱣鳣鱤鳡鱧鳢鱨鲿鱭鲚鱯鳠鱷鳄鱸鲈鱺鲡鳥鸟鳧凫鳩鸠鳬凫鳲鸤鳳凤鳴鸣鳶鸢鴆鸩鴇鸨鴈雁鴉鸦鴒鸰鴕鸵鴛鸳鴝鸲鴞鸮鴟鸱鴣鸪鴦鸯鴨鸭鴯鸸鴰鸹鴴鸻鴻鸿鴿鸽" +
+  "鵂鸺鵃鸼鵐鹀鵑鹃鵒鹆鵓鹁鵜鹈鵝鹅鵞鹅鵠鹄鵡鹉鵪鹌鵬鹏鵮鹐鵯鹎鵰雕鵲鹊鵶鸦鵷鹓鵾鹍鶇鸫鶉鹑鶊鹒鶓鹋鶖鹙鶘鹕鶚鹗鶡鹖鶥鹛鶩鹜鶬鸧鶯莺鶲鹟鶴鹤鶹鹠鶺鹡鶻鹘鶼鹣鶿鹚鷀鹚" +
+  "鷁鹢鷂鹞鷄鸡鷊鹝鷓鹧鷖鹥鷗鸥鷙鸷鷚鹨鷥鸶鷦鹪鷫鹔鷯鹩鷰燕鷲鹫鷳鹇鷴鹇鷸鹬鷹鹰鷺鹭鷽鸴鸇鹯鸌鹱鸎莺鸏鹲鸕鸬鸘鹴鸚鹦鸛鹳鸝鹂鸞鸾鹵卤鹹咸鹺鹾鹻碱鹼碱鹽盐麗丽麥麦麩麸" +
+  "麪面麫面麯曲麴曲麵面麹曲麺面麼么麽么黃黄黌黉點点黨党黲黪黴霉黶黡黷黩黽黾黿鼋鼂鼌鼃蛙鼇鳌鼈鳖鼉鼍鼕冬鼴鼹齊齐齋斋齎赍齏齑齒齿齔龀齕龁齗龂齙龅齜龇齟龃齠龆齡龄齣出" +
+  "齦龈齧啮齪龊齬龉齲龋齶腭齷龌龍龙龎厐龐庞龔龚龕龛龜龟鿓鿒";
+const HAN_VARIANT_MAP: ReadonlyMap<string, string> = (() => {
+  const chars = [...HAN_VARIANT_PAIRS];
+  const map = new Map<string, string>();
+  for (let i = 0; i + 1 < chars.length; i += 2) if (chars[i] !== chars[i + 1]) map.set(chars[i], chars[i + 1]);
+  return map;
+})();
+const HAN_VARIANT_RE = new RegExp(`[${[...HAN_VARIANT_MAP.keys()].join("")}]`, "gu");
+/** 逐字把繁体 / 异体折成简体（一对一，长度不变）；只供问句判定使用。 */
+export function foldHanVariants(text: string): string {
+  return text.replace(HAN_VARIANT_RE, (c) => HAN_VARIANT_MAP.get(c) ?? c);
+}
+/**
  * `anchored`（召回前的整体短路用）：纯属性 / 转写形态还须带指向锚，避免「8000 以上的支出」这类普通问法只因召回里
  * 碰巧有一条受守笔记就被中和；出口层（直答单元已确定是受守单元）不需要锚。
  */
 export function isOracleProbeQuestion(question: string, opts?: { anchored?: boolean }): boolean {
-  const q = question.normalize("NFKC").trim();
+  const q = foldHanVariants(question.normalize("NFKC").trim());
   if (questionCarriesOpaqueToken(q) || isYesNoQuestion(q)) return true;
   if (ORACLE_ENUMERATE_SELF_ANCHORED_RE.test(q)) return true;
   if (!ORACLE_PROBE_RE.test(q) && !ORACLE_ENUMERATE_RE.test(q)) return false;
@@ -10322,7 +10472,7 @@ const LENGTH_CANDIDATE_RE = /[\d零〇一二两三四五六七八九十百]+\s*(
  * 「能列一下吗」）仍走常规召回：它们的答案不是固定中性指引，召回质量直接影响答案。
  */
 export function isDeterministicRecallProbe(question: string, historyText = ""): boolean {
-  const q = conceptualLabelFree(question.normalize("NFKC").trim());
+  const q = conceptualLabelFree(foldHanVariants(question.normalize("NFKC").trim()));
   if (questionCarriesOpaqueToken(q)) return true;
   if (SECRET_LABEL_RE.test(q) || CODE_LABEL_RE.test(q)) return true;
   const probeShape = ORACLE_PROBE_RE.test(q) || LENGTH_CANDIDATE_RE.test(q);
@@ -10340,21 +10490,21 @@ const CREDENTIAL_VALUE_LABEL_RE =
  * 出现在取值型问句里同样是在问凭据（「健身房柜子的锁是什么」「储物柜转盘多少」）。「锁定 / 锁屏 / 封锁 / 锁具 / 锁匠」不算。
  */
 const RESIDENCY_QUESTION_LABEL_RE =
-  /门禁|門禁|转盘|轉盤|拨盘|撥盤|密码盘|保险柜|保險櫃|保险箱|保險箱|备用码|恢复码|助记词|(?<![连封死闭])锁(?![定屏链具匠车])/u;
-/** 在讲锁具本身（买 / 换 / 修 / 价钱 / 型号）而不是锁的取值——不按凭据取值问处理。 */
-const LOCK_OBJECT_TALK_RE = /钱|价|费|元|牌子|品牌|型号|买|修|坏|安装|撬|钥匙|锁芯|智能锁|指纹锁|电子锁/u;
+  /门禁|門禁|转盘|轉盤|拨盘|撥盤|密码盘|保险柜|保險櫃|保险箱|保險箱|备用码|恢复码|助记词|(?<![连封死闭])锁(?![定屏链具匠车])|(?<=\s)箱(?!子)/u;
+/** 在讲锁具 / 密码箱本身（买 / 换 / 修 / 价钱 / 型号 / 尺寸）而不是锁的取值——不按凭据取值问处理。 */
+const LOCK_OBJECT_TALK_RE = /钱|价|费|元|牌子|品牌|型号|买|修|坏|安装|撬|钥匙|锁芯|智能锁|指纹锁|电子锁|寸|尺寸|大小|容量|多大|多重|重量|颜色/u;
 /** 指代受守取值的代词（召回里有在讲秘密的笔记时，「那串 / 那几个字」指的就是它）。 */
 const VALUE_ANAPHORA_RE = /那串|这串|那组|这组|那几个字|这几个字|那句|这句|那个词|那一?串|that (?:string|phrase|code|word)|the (?:string|phrase)/iu;
 /** 取值型问法：问「是什么 / 是多少 / 告诉我 / 忘了 / 念一下 / what is / 教えて / 뭐야」一类要拿到值的话。 */
 const VALUE_ASK_RE =
-  /是什么|是啥|是多少|多少|是哪|哪个|哪一个|叫什么|什么|啥|几号|是几(?![月年天周点])|告诉我|说一下|说给我|说出|报一下|报给我|给我|发我|发一下|写出|写一下|列出|念|读一下|贴|原样|原文|复述|重复|提醒我|帮我想|想起|回忆|忘了|忘记|记不得|记不清|想不起|查一下|查查|看看|是\s*[？?]|逐字|逐位|逐个|每个字|每一?位|每个字符|第\s*[\d一二三四五六七八九十]+\s*(?:位|个|到)|拆|转写|改写|换成|翻译|译成|变换|编码|倒着|反过来|竖着|做成|映射|大写|拼音|笔画|\bwhat(?:'s|\s+is|\s+was|\s+are|\s+were)?\b|\bwhich\b|tell me|give me|show me|remind me|forgot|forgotten|recall|repeat|read (?:me|out|back)|何(?:です|だ|でしょう|ですか|だった)|なに|なん(?:です|だ)|教えて|忘れ|思い出|뭐|무엇|알려|잊었|기억|как(?:ой|ая|ое|ие)|скажи|напомни|забыл|\bist was\b|was ist|wie lautet|welche[rs]?\b|sag mir|erinner|vergessen|cu[áa]l\b|dime\b|olvid[ée]|quel(?:le)?\s+est|dis-moi|oubli[ée]/iu;
+  /是什么|是啥|是多少|多少|是哪|哪个|哪一个|叫什么|什么|啥|几号|是几(?![月年天周点])|(?:转|拨|调|按|输入|输|键入|敲|设)(?:到|成|的)?是?几(?![月年天周点楼层下次遍圈个块号])|告诉我|说一下|说给我|说出|报一下|报给我|给我|发我|发一下|写出|写一下|列出|念|读一下|贴|原样|原文|复述|重复|提醒我|帮我想|想起|回忆|忘了|忘记|记不得|记不清|想不起|查一下|查查|看看|是\s*[？?]|逐字|逐位|逐个|每个字|每一?位|每个字符|第\s*[\d一二三四五六七八九十]+\s*(?:位|个|到)|拆|转写|改写|换成|翻译|译成|变换|编码|倒着|反过来|竖着|做成|映射|大写|拼音|笔画|\bwhat(?:'s|\s+is|\s+was|\s+are|\s+were)?\b|\bwhich\b|tell me|give me|show me|remind me|forgot|forgotten|recall|repeat|read (?:me|out|back)|何(?:です|だ|でしょう|ですか|だった)|なに|なん(?:です|だ)|教えて|忘れ|思い出|뭐|무엇|알려|잊었|기억|как(?:ой|ая|ое|ие)|скажи|напомни|забыл|\bist was\b|was ist|wie lautet|welche[rs]?\b|sag mir|erinner|vergessen|cu[áa]l\b|dime\b|olvid[ée]|quel(?:le)?\s+est|dis-moi|oubli[ée]/iu;
 /**
  * R324 A（方案 2，decision-r324）：对凭证的**取值型**问题——不看笔记内容长什么样（纯散文口令「木石田」「秋天的枫叶落在桥上」
  * 没有 code 面 / 高熵面），只看问法：问的是某个凭证的值，且召回里有在讲某个秘密的笔记（受守行 / 凭证标签 / 跨笔记指代），
  * 直答一律走「占位 + 点开卡片」，不进生成。是非 / 属性形态另走预言机中和（isOracleProbeQuestion）。
  */
 export function isSecretValueQuestion(question: string, historyText = ""): boolean {
-  const q = conceptualLabelFree(question.normalize("NFKC").trim());
+  const q = conceptualLabelFree(foldHanVariants(question.normalize("NFKC").trim()));
   if (!q) return false;
   // 多轮里标签可能只在上一轮（「保险柜那串先念 1、3、5 位」→「再念 2、4、6 位」）：历史非空时锚从整段对话里找。
   // R336 §2.6：只在本轮是追问形态（指代 / 再 / 第 N 位 / 变换…）时才向上文借称谓——否则上一轮问过密码后，
@@ -10367,17 +10517,102 @@ export function isSecretValueQuestion(question: string, historyText = ""): boole
     (RESIDENCY_QUESTION_LABEL_RE.test(q) && !LOCK_OBJECT_TALK_RE.test(q)) ||
     (historyText.length > 0 &&
       HISTORY_FOLLOWUP_RE.test(q) &&
-      (conversationAnchorsGuarded(historyText) || CREDENTIAL_VALUE_LABEL_RE.test(historyText.normalize("NFKC"))));
+      (conversationAnchorsGuarded(historyText) || CREDENTIAL_VALUE_LABEL_RE.test(foldHanVariants(historyText.normalize("NFKC")))));
   if (!labeled) return false;
   // 「什么时候改的密码 / why did I change it」问的是时间 / 原因，不是取值：剥掉时间 / 原因问法后再判。
   const qv = q.replace(NON_VALUE_ASK_RE, " ");
-  return VALUE_ASK_RE.test(qv) || questionRequestsVerbatim(q);
+  return VALUE_ASK_RE.test(qv) || questionRequestsVerbatim(q) || ellipticalValueAsk(q);
+}
+/**
+ * R344 省略句取值问：「wifi 密码呢」「保险柜密码？」「那个箱子的密码」「wifi password?」——整句就是一个以凭证称谓收尾的名词短语
+ * （尾部语气词 / 标点可有），没有任何动作 / 方式 / 位置 / 概念词，问的只能是那个值。「改密码」「怎么设密码」「密码在哪」不算。
+ */
+const ELLIPTICAL_TAIL_RE = /(?:呢|吗|啊|呀|哈|哦|嘞|来|是)?[\s？?。.！!…~～]*$/u;
+const ELLIPTICAL_NON_VALUE_RE =
+  /怎么|如何|怎样|咋|(?:改|换|重置|设置|设定|修改|重设|设)(?![后过了的])|记一下|记下|记录|保存|存一下|要不要|能不能|可不可以|可以|需要|应该|建议|哪里|在哪|去哪|安全|强度|泄露|泄漏|规则|策略|管理|历史|过期|失效|错误|不对|报错|\b(?:how|change|changed|reset|update|set|where|should|policy|policies|managers?|rotate|rotation|expired|wrong|invalid|error|strength|leaks?|leaked)\b/iu;
+const ELLIPTICAL_LABEL_END_RE = new RegExp(`(?:${CREDENTIAL_VALUE_LABEL_RE.source})$`, "iu");
+function ellipticalValueAsk(q: string): boolean {
+  const core = q.trim().replace(ELLIPTICAL_TAIL_RE, "");
+  if (!core || [...core].length > 24 || ELLIPTICAL_NON_VALUE_RE.test(core)) return false;
+  // 「我什么时候改的密码」以称谓收尾但问的是时间：时间 / 原因 / 价钱问法在句里就不是省略句取值问
+  if (core.search(NON_VALUE_ASK_RE) >= 0) return false;
+  return ELLIPTICAL_LABEL_END_RE.test(core);
 }
 const NON_VALUE_ASK_RE =
-  /什么时候|啥时候|何时|几点|哪天|哪年|哪一天|为什么|为啥|多久|多长时间|忘(?:了|记)?\s*(?:怎么办|怎么处理|该怎么|要怎么|咋办)|怎么办|怎么处理|(?:要|该|得|需要)?(?:做|带|准备|注意|办)(?:些|点)?什么|讲(?:了|的是)?什么|说(?:了|的是)?什么|(?:是)?关于什么|内容是什么|when (?:did|was|do)|why\b|how (?:often|long)|what (?:should|do) i (?:do|bring)|what (?:is|was) it about/giu;
+  /什么时候|啥时候|何时|几点|哪天|哪年|哪一天|为什么|为啥|多久|多长时间|多少钱|几块钱|多贵|什么价|价格|什么牌子|哪个牌子|什么型号|忘(?:了|记)?\s*(?:怎么办|怎么处理|该怎么|要怎么|咋办)|怎么办|怎么处理|(?:要|该|得|需要)?(?:做|带|准备|注意|办)(?:些|点)?什么|讲(?:了|的是)?什么|说(?:了|的是)?什么|(?:是)?关于什么|内容是什么|when (?:did|was|do)|why\b|how (?:often|long)|what (?:should|do) i (?:do|bring)|what (?:is|was) it about/giu;
 /** 追问形态：指代上文 / 再来一遍 / 第 N 位 / 变换写法——只有这些形态才把上一轮的称谓借给本轮问句。 */
 const HISTORY_FOLLOWUP_RE =
   /那|它|这个|上面|刚才|之前|前面|上一|再|还有|呢|一遍|一次|继续|接着|剩下|后面|其余|另外|第\s*[\d一二三四五六七八九十]+|倒着|反过来|拆|逐字|逐位|每位|每个字|大写|小写|拼音|翻译|译成|编码|换成|改写|转写|念|读|\b(?:again|it|that|those|rest|next|remaining|reverse|spell|repeat|more)\b/iu;
+
+/* ── R337（decision-r337 §3.1）：复合问句拆句 ── */
+/** 逐位 / 逐字 / 第 N 位形态：整句是对单一凭据的枚举试探，不拆。 */
+const COMPOUND_NO_SPLIT_RE = /每个字|每一?位|每个字符|逐字|逐位|第\s*[\d一二三四五六七八九十]+\s*(?:位|个字|个字符)|哪几个字|哪些字/u;
+/** 子句间标点（NFKC 已把全角逗号 / 分号 / 问号折成 ASCII）。 */
+const COMPOUND_PUNCT_RE = /[、，,；;？?！!]+/u;
+/** 子句间并列连词：两侧各 ≥ 2 个字（词内的「参与 / 涉及 / 和平」不算）。 */
+const COMPOUND_CONJ_RE = /(?<=[\p{L}\p{N}]{2})(?:以及|还有|另外|顺便说下|顺便问下|顺便|再问下|然后|跟|和|与|及)(?=\s*[\p{L}\p{N}]{2})/u;
+/** 子句开头的接续填充词。 */
+const COMPOUND_LEAD_FILLER_RE = /^(?:以及|还有|另外|顺便说下|顺便问下|顺便|再问下|然后|再|请|麻烦)\s*/u;
+/** 句尾共享谓语（「X 和 Y 分别是什么」的「是什么」）。 */
+const COMPOUND_TAIL_PREDICATE_RE =
+  /(?:分别|各|都|各自)?\s*((?:是|为|叫)?(?:什么|啥|多少|几|哪(?:天|年|个|一个|里|儿)?)|在哪(?:里|儿|个[^\s]{0,4})?|几(?:点|号|楼|斤|次)|(?:是|叫)什么名字|叫什么)\s*[？?。！!]*$/u;
+/** 子句是否自带问法（有则不再分配共享谓语）。 */
+const COMPOUND_HAS_ASK_RE = /什么|啥|多少|哪|几|吗|呢|告诉我|说一下|念|忘了|想不起|记不得/u;
+/** 分类 / 有效性判定时剥掉的功能词。 */
+const COMPOUND_FUNCTION_WORD_RE =
+  /(?:分别|各自|各|都|我的|我|的|吗|呢|请|一下|顺便|另外|以及|还有|再|它|对应的|第\s*[\d一二三四五六七八九十]+\s*(?:个|条|组|串|位)?|另一(?:个|条|组|串)?|其余|剩下|后面|前面|上面|那(?:个|条|串|组)?|这(?:个|条|串|组)?)/gu;
+
+export interface CompoundSplit {
+  /** 凭据取值 / 预言机形态的子句（进闸门，不进生成）。 */
+  guarded: string[];
+  /** 普通子句（照常生成；候选剔除全部受守 / 敏感卡）。 */
+  plain: string[];
+}
+
+/**
+ * R337：把「普通事实 + 凭据取值」的复合问句确定性地拆成子句并逐句分类。纯字符串操作，无 LLM、无随机。
+ * 返回 null ⇒ 不拆（无并列 / 全普通 / 全凭据 / 逐位形态 / 带候选值 / 是非问 / 子句无实词 / 超过 3 段），
+ * 调用方行为与现状逐字相同。凭据子句判定复用 isSecretValueQuestion / isOracleProbeQuestion（含历史借称谓）。
+ */
+export function splitCompoundQuestion(question: string, historyText = ""): CompoundSplit | null {
+  const q = question.normalize("NFKC").trim();
+  if (!q || COMPOUND_NO_SPLIT_RE.test(q)) return null;
+  // 候选值 / 是非问形态：候选值里的标点与连词不参与切分，整句仍走预言机（R320 B1 / O02）。
+  if (questionCarriesOpaqueToken(q) || isYesNoQuestion(q)) return null;
+  const pieces = q
+    .split(COMPOUND_PUNCT_RE)
+    .flatMap((p) => p.split(COMPOUND_CONJ_RE))
+    .map((p) => p.replace(COMPOUND_LEAD_FILLER_RE, "").trim())
+    .filter((p) => p.length > 0);
+  if (pieces.length < 2 || pieces.length > 3) return null;
+  const tail = COMPOUND_TAIL_PREDICATE_RE.exec(pieces[pieces.length - 1]);
+  const sharedPredicate = tail ? tail[1] : null;
+  // 拆开后每个子句只有一个主语：并列副词「分别 / 各 / 都」随共享谓语一并剥掉（「密码分别是什么」→「密码是什么」）。
+  const parts = pieces.map((p) => {
+    if (COMPOUND_HAS_ASK_RE.test(p)) return sharedPredicate ? p.replace(COMPOUND_TAIL_PREDICATE_RE, (_m, pred: string) => pred) : p;
+    return sharedPredicate ? `${p}${sharedPredicate}` : p;
+  });
+  // 每个子句剥掉问法与功能词后须仍有 ≥ 2 个实词字符（「我 / 第二个呢」一类残片 ⇒ 不拆，整句按现状处理）。
+  for (const p of parts) {
+    const core = p
+      .replace(VALUE_ASK_RE, " ")
+      .replace(COMPOUND_TAIL_PREDICATE_RE, " ")
+      .replace(COMPOUND_FUNCTION_WORD_RE, " ")
+      .replace(/[\s\p{P}]+/gu, "");
+    if (core.length < 2) return null;
+  }
+  // 分类用问句：没有共享谓语时补默认「是什么」——「体检报告系统的登录密码」这类无谓语子句按取值问判（fail-closed）。
+  const classifyQ = (p: string) => (COMPOUND_HAS_ASK_RE.test(p) ? p : `${p}是什么`);
+  const guarded: string[] = [];
+  const plain: string[] = [];
+  for (const p of parts) {
+    const cq = classifyQ(p);
+    const isGuarded = isSecretValueQuestion(cq, historyText) || isOracleProbeQuestion(cq, { anchored: true });
+    (isGuarded ? guarded : plain).push(p);
+  }
+  if (guarded.length === 0 || plain.length === 0) return null;
+  return { guarded, plain };
+}
 const SECRET_LABEL_ALL_RE = new RegExp(SECRET_LABEL_RE.source, "giu");
 /**
  * 取值 / 预言机闸门的引用归因（R324 E1，audit-r323 U2「跳板机→财务」错引）：问题主题词剥掉凭证称谓词
@@ -10391,11 +10626,11 @@ export function scopeGuardedByTopic<T>(guarded: readonly T[], topics: readonly s
 /** 只返回命中剩余主题词的候选（没有主题词 / 全不命中 ⇒ 空）：调用方据此区分「问的就是这条秘密」与「问的另有所指」。 */
 export function guardedTopicHits<T>(guarded: readonly T[], topics: readonly string[], textOf: (n: T) => string): T[] {
   const specific = topics
-    .map((t) => t.normalize("NFKC").replace(SECRET_LABEL_ALL_RE, "").trim())
+    .map((t) => foldHanVariants(t.normalize("NFKC")).replace(SECRET_LABEL_ALL_RE, "").trim())
     .filter((t) => t.length >= 2);
   if (specific.length === 0) return [];
   return guarded.filter((n) => {
-    const hay = textOf(n).normalize("NFKC");
+    const hay = foldHanVariants(textOf(n).normalize("NFKC"));
     return specific.some((t) => hay.includes(t));
   });
 }
@@ -10411,8 +10646,9 @@ export function unitTalksAboutSecret(unit: string, crossGuarded?: ReadonlySet<st
 
 /** unitTalksAboutSecret 去掉受守行那一项后的称谓 / 结构 / 强形态候选面（照抄找回用：日常 code 行不算在讲秘密）。 */
 export function unitCarriesSecretLabel(unit: string, crossGuarded?: ReadonlySet<string>): boolean {
-  const lines = unit.split("\n");
-  if (crossGuarded && lines.some((l) => crossGuarded.has(l.trim()))) return true;
+  if (crossGuarded && unit.split("\n").some((l) => crossGuarded.has(l.trim()))) return true;
+  const judged = foldHanVariants(unit);
+  const lines = judged.split("\n");
   if (
     lines.some((l) => {
       const n = conceptualLabelFree(l.normalize("NFKC"));
@@ -10422,9 +10658,9 @@ export function unitCarriesSecretLabel(unit: string, crossGuarded?: ReadonlySet<
     return true;
   // R334 §4：称谓驻留（含服务名: 值 / 称谓表头）与「可上锁对象 + 短取值」载体行（C02「2947513 快递柜那个」）同为在讲秘密——
   // REST references / MCP notes[] / 出口比对 / 预言机闸门共用这一判定。
-  if (residencyTriggered(unit)) return true;
+  if (residencyTriggered(judged)) return true;
   if (lines.some((l) => isLockableCarrierLine(l) && shortCredentialLineValues(l).length > 0)) return true;
-  return sourceValueCandidates([unit]).some((c) => c.kind === "credential");
+  return sourceValueCandidates([judged]).some((c) => c.kind === "credential");
 }
 
 /**
@@ -10434,11 +10670,11 @@ export function unitCarriesSecretLabel(unit: string, crossGuarded?: ReadonlySet<
  */
 export function unitCarriesGuardedValue(unit: string, crossGuarded?: ReadonlySet<string>): boolean {
   if (directGuardLines(unit).some((g) => g.kind === "credential" || g.kind === "opaque" || g.kind === "destructive")) return true;
-  const lines = unit.split("\n");
-  if (crossGuarded && lines.some((l) => crossGuarded.has(l.trim()))) return true;
-  if (residencyTriggered(unit)) return true;
-  if (lines.some((l) => isLockableCarrierLine(l) && shortCredentialLineValues(l).length > 0)) return true;
-  return sourceValueCandidates([unit]).length > 0;
+  if (crossGuarded && unit.split("\n").some((l) => crossGuarded.has(l.trim()))) return true;
+  const judged = foldHanVariants(unit);
+  if (residencyTriggered(judged)) return true;
+  if (judged.split("\n").some((l) => isLockableCarrierLine(l) && shortCredentialLineValues(l).length > 0)) return true;
+  return sourceValueCandidates([judged]).length > 0;
 }
 
 // 预言机问句的语法词（指向 / 核对 / 属性 / 转写 / 是非 / 答案格式）与通用虚词：剥掉后剩下的就是话题词（「跳板机口令」「对象存储 secret」）。
