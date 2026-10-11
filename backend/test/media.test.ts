@@ -7,6 +7,7 @@ import {
   correctTranscript,
   stripMarkdown,
   parseImageExtraction,
+  imageNoteFields,
   describeImage,
   withTimeout,
   resolveAttachmentMime,
@@ -285,6 +286,47 @@ describe("parseImageExtraction", () => {
     const list = parseImageExtraction("文字：\n1. 买菜\n2. 交房租\n3. 打电话\n4. 复盘\n5. 备份\n6. 体检\n\n描述：待办清单。\n敏感：否\n清晰：是");
     expect(list.degenerate).toBeUndefined();
   });
+
+  // R419：以下夹具为 2026-09-10 本机经真实 Workers AI 对「图中文字含以敏 / 描 / 清开头的行」
+  // 的原样输出（每图 5 次一致）：模型把该行认成自己的段标签提前跳段，后面的文字丢失
+  it("R419 段标签在却什么都没抄出来：不拿段标签当正文、不当「无文字」，按抽取失败", () => {
+    // 图：「敏感信息处理规范（草案）/ 什么算敏感信息 / 谁负责审批」，修前正文落「敏感：否」
+    for (const raw of ["文字：\n敏感：否\n清晰：是", "文字：\n敏感：\n清晰：是", "文字：\n敏感：是\n清晰：是"]) {
+      const r = parseImageExtraction(raw);
+      expect(r.malformed).toBe(true);
+      expect(r.content).toBe("");
+      expect(r.sensitive).toBe(false);
+    }
+  });
+
+  it("R419 文字段以「xx：」收尾、敏感段空值：抄出的部分仍入库但标存疑", () => {
+    // 图：「翻译练习 / 原文：The quick brown fox / 译文：敏捷的棕色狐狸 / 文字风格：口语」
+    const r = parseImageExtraction("文字：\nThe quick brown fox\n译文：\n敏感：\n清晰：是");
+    expect(r.malformed).toBeUndefined();
+    expect(r.content).toBe("The quick brown fox\n译文：");
+    expect(r.suspect).toBe(true);
+    expect(r.sensitive).toBe(false);
+  });
+
+  it("R419 描述段缺失时描述留空，不把带段标签的整段输出当描述", () => {
+    // 图：报修单，模型跳过描述段（图中有「问题描述：」行）
+    const raw = "文字：\nNo.20260909\n问题描述：厨房水管漏水\n联系人：壹女士\n预约时间：9月10日上午\n\n敏感：否\n\n清晰：是";
+    const r = parseImageExtraction(raw);
+    expect(r.content).toBe("No.20260909\n问题描述：厨房水管漏水\n联系人：壹女士\n预约时间：9月10日上午");
+    expect(r.description).toBe("");
+    expect(r.suspect).toBe(false);
+    expect(imageNoteFields(r).meta?.image_description).toBeUndefined();
+  });
+
+  it("R419 正常四段输出不误标存疑；「文字：无」无描述也不算脱轨", () => {
+    const ok = parseImageExtraction("文字：\n今天要做\n1. 去银行办储蓄卡\n\n描述：\n清单。\n\n敏感：\n否\n\n清晰：\n是");
+    expect(ok.suspect).toBe(false);
+    expect(ok.content).toBe("今天要做\n1. 去银行办储蓄卡");
+    const none = parseImageExtraction("文字：无\n敏感：否\n清晰：是");
+    expect(none.malformed).toBeUndefined();
+    expect(none.content).toBe("（图片，未识别出文字内容）");
+    expect(none.suspect).toBe(false);
+  });
 });
 
 describe("describeImage", () => {
@@ -304,6 +346,11 @@ describe("describeImage", () => {
 
   it("R418 退化循环输出按抽取失败返回 null（调用方落失败占位 + 原地重试）", async () => {
     const env = aiEnv("文字：\n```\n" + "1.  ".repeat(130));
+    expect(await describeImage(env, new Uint8Array([1]))).toBeNull();
+  });
+
+  it("R419 只有段标签没有内容的输出按抽取失败返回 null", async () => {
+    const env = aiEnv("文字：\n敏感：否\n清晰：是");
     expect(await describeImage(env, new Uint8Array([1]))).toBeNull();
   });
 });

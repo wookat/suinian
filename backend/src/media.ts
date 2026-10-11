@@ -456,6 +456,8 @@ export interface ImageExtraction {
   description: string;
   /** 文字段是模型的生成循环（空白 / 全黑图常见），不是图中文字：调用方按抽取失败处理。 */
   degenerate?: boolean;
+  /** 输出有段标签但文字段与描述段都为空（模型跳段、什么都没抄出来）：调用方按抽取失败处理。 */
+  malformed?: boolean;
   /** 图片含机密值（视觉模型判定 ∪ 文本敏感检测），作为敏感管道的入口提示。 */
   sensitive: boolean;
   /** 文字识别存疑（R212 P3-3）：视觉模型自评「清晰：否」，前端据此提示核对原图。 */
@@ -465,39 +467,42 @@ export interface ImageExtraction {
 /** 视觉判定含凭证但文字段未见凭证值时，正文附加的如实标注（不含任何秘密值）。 */
 export const IMAGE_CREDENTIAL_GAP_NOTICE = "（图中含密码/凭证类信息，文字可能未完整提取，可打开原图查看）";
 
-/** 用户取消敏感标记＝否定了视觉判定，正文里系统附加的那行标注随之撤掉（只删整行等于标注的行，用户自己的文字不动）。 */
-export function stripImageCredentialGapNotice(content: string): string {
-  if (!content.includes(IMAGE_CREDENTIAL_GAP_NOTICE)) return content;
-  return content
-    .split("\n")
-    .filter((line) => line.trim() !== IMAGE_CREDENTIAL_GAP_NOTICE)
-    .join("\n")
-    .replace(/\n+$/, "");
-}
-
 /** Parse the three-section vision output into content (text-first) + description + sensitive. */
 export function parseImageExtraction(raw: string): ImageExtraction {
   const cleaned = stripMarkdown(raw);
-  const textMatch = cleaned.match(/(?:^|\n)\s*文字[:：]\s*([\s\S]*?)(?=\n\s*(?:描述|敏感|清晰)[:：]|$)/);
-  const descMatch = cleaned.match(/(?:^|\n)\s*描述[:：]\s*([\s\S]*?)(?=\n\s*(?:敏感|清晰)[:：]|$)/);
+  // 标签后的空白用懒惰匹配：下一行直接是另一个段标签时（「文字：\n敏感：否」），换行不能被
+  // 吃掉，否则后面的「敏感：否」会被当成文字段的内容
+  const textMatch = cleaned.match(/(?:^|\n)\s*文字[:：]\s*?([\s\S]*?)(?=\n\s*(?:描述|敏感|清晰)[:：]|$)/);
+  const descMatch = cleaned.match(/(?:^|\n)\s*描述[:：]\s*?([\s\S]*?)(?=\n\s*(?:敏感|清晰)[:：]|$)/);
   const flagMatch = cleaned.match(/(?:^|\n)\s*敏感[:：]\s*[<《【「(（\[]*\s*(是|否|yes|no)/i);
   const visionSensitive = /^(是|yes)$/i.test(flagMatch?.[1] ?? "");
   // 清晰段缺失或非「否」时 fail-open 按清晰处理（存疑只加提示，绝不影响入库）
   const clarityMatch = cleaned.match(/(?:^|\n)\s*清晰[:：]\s*[<《【「(（\[]*\s*(是|否|yes|no)/i);
   const text = (textMatch?.[1] ?? "").trim();
+  const desc = (descMatch?.[1] ?? "").trim();
   // 文字段之后一个小节都没有 = 输出在 max_tokens 处被截断：文字可能不完整、
   // 清晰段也没机会输出，按存疑标记（只加提示，不影响入库）
   const truncated = textMatch !== null && !descMatch && !flagMatch && !clarityMatch;
-  const suspect = /^(否|no)$/i.test(clarityMatch?.[1] ?? "") || (truncated && text.length >= 40);
-  const probe = textMatch !== null ? text : cleaned;
-  if (isDegenerateText(probe) || isDegenerateLines(probe)) {
-    return { content: "", description: "", degenerate: true, sensitive: false, suspect: false };
-  }
-  const desc = (descMatch?.[1] ?? "").trim();
   // models often echo the prompt's angle-bracket placeholder (e.g. "<无>");
   // strip wrapping brackets before deciding whether the image really has text
   const bare = text.replace(/^[<《【「(（\[]+/, "").replace(/[>》】」)）\]]+$/, "").trim();
   const hasText = bare.length > 0 && !/^(无|没有|无文字|N\/A|none)。?$/i.test(bare);
+  // 段标签在、值却是空的（「敏感：」下一行直接「清晰：」），或文字段以「xx：」
+  // 收尾 = 模型把图中以「敏 / 描 / 清」开头的行认成了自己的段标签、提前跳段，
+  // 该行之后的文字整段丢失：抄出来的部分仍入库，但标存疑提示核对原图
+  const hasHeader = (label: string) => new RegExp(`(?:^|\n)\\s*${label}[:：]`).test(cleaned);
+  const derailed =
+    hasText &&
+    ((hasHeader("敏感") && !flagMatch) ||
+      (hasHeader("清晰") && !clarityMatch) ||
+      (descMatch !== null && desc === "") ||
+      /[:：]$/.test(bare));
+  const suspect =
+    /^(否|no)$/i.test(clarityMatch?.[1] ?? "") || (truncated && text.length >= 40) || derailed;
+  const probe = textMatch !== null ? text : cleaned;
+  if (isDegenerateText(probe) || isDegenerateLines(probe)) {
+    return { content: "", description: "", degenerate: true, sensitive: false, suspect: false };
+  }
   const finalize = (content: string, description: string): ImageExtraction => {
     // 敏感口径与文本管道同源：视觉判定 ∪ detectSensitive（正文/描述）。
     // 视觉说有凭证但文字段没抽出值（detectSensitive 不命中）＝R187 P1-1 的
@@ -508,11 +513,18 @@ export function parseImageExtraction(raw: string): ImageExtraction {
     }
     return { content, description, sensitive, suspect };
   };
-  if (hasText) return finalize(bare, desc || cleaned);
+  // 有「文字：」标签的结构化输出缺描述段时，描述留空——整段原样输出带着段标签，
+  // 不是描述，落进 meta 会显示在卡片上
+  if (hasText) return finalize(bare, textMatch !== null ? desc : cleaned);
+  // 文字段是空的（不是「无」）且描述也没有：模型有标签却什么都没抄出来，
+  // 不能当「图片无文字」入库，交调用方按抽取失败处理
+  if (textMatch !== null && bare.length === 0 && desc === "") {
+    return { content: "", description: "", malformed: true, sensitive: false, suspect: false };
+  }
   // no text in image: fall back to the first sentence of the description;
   // the fallback itself may be a bracketed placeholder too ("<无>" as the
   // whole output) — never surface it as note content
-  const fallback = desc || cleaned;
+  const fallback = textMatch !== null ? desc : desc || cleaned;
   const bareFallback = fallback.replace(/^[<《【「(（\[]+/, "").replace(/[>》】」)）\]]+$/, "").trim();
   if (bareFallback.length === 0 || /^(无|没有|无文字|N\/A|none)。?$/i.test(bareFallback)) {
     return finalize("（图片，未识别出文字内容）", "");
@@ -559,8 +571,11 @@ export async function describeImage(env: Pick<Env, "AI">, bytes: Uint8Array): Pr
     const text = (out.response ?? "").trim();
     if (!text) return null;
     const extraction = parseImageExtraction(text);
-    if (extraction.degenerate) {
-      console.warn("describeImage: degenerate vision output, dropping", text.slice(0, 120));
+    if (extraction.degenerate || extraction.malformed) {
+      console.warn(
+        `describeImage: ${extraction.degenerate ? "degenerate" : "malformed"} vision output, dropping`,
+        text.slice(0, 120)
+      );
       return null;
     }
     // never let an empty/placeholder-only extraction become note content;
