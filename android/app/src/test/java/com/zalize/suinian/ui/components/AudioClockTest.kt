@@ -61,6 +61,22 @@ class AudioClockTest {
     }
 
     @Test
+    fun share_title_follows_note_raw_type() {
+        assertEquals("分享原图", attachmentShareTitle("image"))
+        assertEquals("分享语音", attachmentShareTitle("voice"))
+        assertEquals("分享原件", attachmentShareTitle("file"))
+        assertEquals("分享原件", attachmentShareTitle(null))
+    }
+
+    @Test
+    fun unplayable_hint_only_promises_exits_that_exist() {
+        assertEquals("，可分享或下载原件用其他应用打开", audioUnplayableHint(canDownload = true, canShare = true))
+        assertEquals("，可分享给其他应用打开", audioUnplayableHint(canDownload = false, canShare = true))
+        assertEquals("，可下载原件用其他应用打开", audioUnplayableHint(canDownload = true, canShare = false))
+        assertEquals("", audioUnplayableHint(canDownload = false, canShare = false))
+    }
+
+    @Test
     fun playback_key_round_trips_note_id() {
         val key = audioPlaybackKey("note-1", "att/with/slash")
         assertEquals("note-1", audioPlaybackNoteId(key))

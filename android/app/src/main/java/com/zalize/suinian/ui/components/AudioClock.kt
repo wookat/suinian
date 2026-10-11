@@ -61,6 +61,21 @@ fun attachmentDownloadName(attachmentName: String, mime: String?, noteId: String
 fun audioDownloadName(attachmentName: String, mime: String?, noteId: String): String =
     attachmentDownloadName(attachmentName, mime, noteId, "voice")
 
+/** ACTION_SEND 系统选择器标题：按笔记原始类型说清分享的是什么 */
+fun attachmentShareTitle(rawType: String?): String = when (rawType) {
+    "image" -> "分享原图"
+    "voice" -> "分享语音"
+    else -> "分享原件"
+}
+
+/** 「无法在本机播放」的出路提示：按实际有的入口措辞，都没有就不承诺 */
+fun audioUnplayableHint(canDownload: Boolean, canShare: Boolean): String = when {
+    canDownload && canShare -> "，可分享或下载原件用其他应用打开"
+    canShare -> "，可分享给其他应用打开"
+    canDownload -> "，可下载原件用其他应用打开"
+    else -> ""
+}
+
 /** 语音卡文字：未播过只显示时长；播放 / 暂停中显示「已播 / 总长」 */
 fun audioClockLabel(playing: Boolean, inProgress: Boolean, position: String?, total: String?): String = when {
     inProgress && total != null -> "${if (playing) "播放中" else "已暂停"} ${position ?: "0:00"} / $total"

@@ -181,8 +181,8 @@ fun NoteImageAttachment(
 
 /**
  * 语音附件：鉴权拉取原音频到落盘缓存，交给进程级 [AudioPlayback] 播放（滑出屏幕不中断、同一时刻只放一段）；
- * 卡片只显示时长与本条的播放进度；本机播放器放不出来的文件给「下载原件」而不是重拉同一份缓存。
- * reloadKey 同 NoteImageAttachment。
+ * 卡片只显示时长与本条的播放进度，右侧「分享 / 下载原件」把缓存里的原件交给其他应用或存到下载目录；
+ * 本机播放器放不出来的文件同样给这两个出口而不是重拉同一份缓存。reloadKey 同 NoteImageAttachment。
  */
 @Composable
 fun NoteAudioAttachment(
@@ -192,6 +192,7 @@ fun NoteAudioAttachment(
     modifier: Modifier = Modifier,
     reloadKey: Int = 0,
     onDownload: (() -> Unit)? = null,
+    onShare: (() -> Unit)? = null,
 ) {
     val key = audioPlaybackKey(noteId, attachment.id)
     var audioFile by remember(key) { mutableStateOf<File?>(null) }
@@ -257,7 +258,7 @@ fun NoteAudioAttachment(
                     reason = failReason,
                     onRetry = retry,
                 )
-                playFailed -> AudioUnplayable(onDownload = onDownload)
+                playFailed -> AudioUnplayable(onDownload = onDownload, onShare = onShare)
                 audioFile == null -> {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
@@ -310,8 +311,34 @@ fun NoteAudioAttachment(
                             )
                         }
                     }
+                    AudioExportButtons(onDownload = onDownload, onShare = onShare)
                 }
             }
+        }
+    }
+}
+
+/** 语音卡右侧「分享」「下载原件」图标（与全屏看图工具条同一对出口） */
+@Composable
+private fun AudioExportButtons(onDownload: (() -> Unit)?, onShare: (() -> Unit)?) {
+    if (onShare != null) {
+        IconButton(onClick = onShare, modifier = Modifier.size(32.dp)) {
+            Icon(
+                Icons.Outlined.Share,
+                contentDescription = "分享语音",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+    if (onDownload != null) {
+        IconButton(onClick = onDownload, modifier = Modifier.size(32.dp)) {
+            Icon(
+                Icons.Outlined.Download,
+                contentDescription = "下载原件",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }
@@ -377,9 +404,9 @@ private fun FullscreenImage(
     }
 }
 
-/** 本机播放器放不出来（格式不受支持 / 文件损坏）：重拉同一份缓存没有意义，给「下载原件」换其他应用播 */
+/** 本机播放器放不出来（格式不受支持 / 文件损坏）：重拉同一份缓存没有意义，给「分享」「下载原件」换其他应用播 */
 @Composable
-private fun RowScope.AudioUnplayable(onDownload: (() -> Unit)?) {
+private fun RowScope.AudioUnplayable(onDownload: (() -> Unit)?, onShare: (() -> Unit)?) {
     Icon(
         Icons.Outlined.ErrorOutline,
         contentDescription = null,
@@ -394,10 +421,15 @@ private fun RowScope.AudioUnplayable(onDownload: (() -> Unit)?) {
             color = MaterialTheme.colorScheme.error,
         )
         Text(
-            "格式可能不受支持或文件已损坏" + if (onDownload != null) "，可下载原件用其他应用打开" else "",
+            "格式可能不受支持或文件已损坏" + audioUnplayableHint(onDownload != null, onShare != null),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+    if (onShare != null) {
+        IconButton(onClick = onShare, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Outlined.Share, contentDescription = "分享语音", modifier = Modifier.size(18.dp))
+        }
     }
     if (onDownload != null) {
         TextButton(onClick = onDownload, contentPadding = PaddingValues(horizontal = 8.dp)) {

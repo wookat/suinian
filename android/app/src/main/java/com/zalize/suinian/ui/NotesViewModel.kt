@@ -27,6 +27,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import com.zalize.suinian.ui.components.AudioPlayback
 import com.zalize.suinian.ui.components.attachmentDownloadName
+import com.zalize.suinian.ui.components.attachmentShareTitle
 import com.zalize.suinian.ui.components.mediaStatusLine
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.OutputStream
@@ -511,7 +512,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 语音 / 图片附件原件存到系统下载目录（语音：本机放不出来换其他应用打开；图片：保存原图）；命中落盘缓存不发网 */
+    /** 语音 / 图片附件原件存到系统下载目录（语音卡「下载原件」；图片全屏「保存原图」）；命中落盘缓存不发网 */
     fun downloadAttachment(note: Note, att: NoteAttachment) {
         val fileName = safeDownloadName(attachmentDownloadName(att.name, att.mime, note.id, if (note.rawType == "image") "image" else "voice"))
         _ui.value = _ui.value.copy(toast = "开始下载…")
@@ -556,7 +557,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                     putExtra(Intent.EXTRA_STREAM, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
-                launch(Intent.createChooser(send, "分享原图"))
+                launch(Intent.createChooser(send, attachmentShareTitle(note.rawType)))
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(toast = e.message ?: "分享失败")
             }
