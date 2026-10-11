@@ -188,3 +188,45 @@ description: How to run browser UI / accessibility / cache-identity tests agains
 - `复制我的 API token` click may show no visible "已复制" flip on this box before the state reverts — verify the write instead via `xclip -selection clipboard -o | wc -c` ≈ 48. Chrome auto-grants clipboard here; no permission prompt appeared.
 - The recovery-card confirm input collapses on last-4 verification, moving 已存好，开始记录 up ~32px — re-screenshot/re-locate before clicking or the click lands on the copy-icon area.
 - Settings 账号 card (post-43168d5): logged-in subtitle = `已登录：<name>。token 可复制给浏览器扩展 / MCP / API 集成使用`; logged-out/demo keeps 「还没有账号？…」. Quick assert: `document.body.innerText.includes('已登录：')`.
+
+## Verified R428 additions (prod push e2e)
+
+- **MAIN CHROME PROFILE (.browser_data_dir) SW 全坏（2026-10-11 确认）**：任何 origin 的 SW
+  都卡在「registration without worker」——registration 存在但 installing/waiting/active 全 null，
+  worker 进程起来但脚本不执行（global scope 里 caches 都没有），随后 worker 消失；有一次还把
+  渲染进程拖崩（Aw Snap code 9）。`navigator.serviceWorker.getRegistrations()` 本身也可能永久
+  pending。诊断法：起一个 3 行 trivial SW 的 localhost 页面对照——若同样挂住即 profile 级损坏。
+  同机新 profile（`--user-data-dir=/tmp/chrome-fresh` + `--remote-debugging-port=29230`）一切正常：
+  sw.js 秒级 activated + controller:true。**含义**：本机主 Chrome 上测不了任何 SW 依赖功能
+  （离线缓存、Web Push），需要第二实例干净 profile。
+  **【R428 收尾已修】**杀掉 Chrome → `rm -rf ~/.browser_data_dir/Default/{Service Worker,Download Service}` →
+  原 flag 重启（CDP 29229）→ suinian sw.js `activated` 验证通过。本机 profile 已恢复可用；
+  若再坏按同法处理，代价是丢登录态/站点数据。两个 Chrome 窗口标题相同时用
+  `wmctrl -i -a <hexid>` 指定窗口激活，否则点击会落到错窗口。
+
+- **Web Push 端到端验证步骤**：推送订阅挂在 PWA 主 SW（`/sw.js`，workbox 内
+  importScripts push-sw.js；push-sw.js 不是独立注册的 SW）。enablePush 前置要求
+  `sn_offline_cache=1`（设置→高级：离线与更新→开启离线缓存，切换后页面自动 reload 等 SW
+  activated）。流程：登录→设置→开离线缓存→`a:"activated",controller:true`→浏览器通知卡
+  点「开启浏览器通知」→权限弹窗 Allow→config.subscriptions 出现 endpoint
+  （FCM: jmt17.google.com/fcm/send/…，ua 形如 "Chrome · Linux"）。
+
+- **SW 侧取证（比截图硬）**：`curl localhost:<port>/json` 找 `service_worker` 目标 →
+  websocket Runtime.evaluate 装探针：
+  `self.__pushes=[];addEventListener('push',e=>__pushes.push({t:e.data.text(),at:Date.now()}))`
+  + 包装 `self.registration.showNotification` 记录参数。测试推送后读两数组 = push 事件确实
+  到达 + showNotification 确实调用的铁证。页面侧 `reg.getNotifications()` 还能列出仍显示的
+  系统通知（标题/正文/tag）。注意 SW 空闲会被杀，探针要在触发前最后装上。
+
+- **本机 Chrome 通知渲染**：Linux 下 Chrome 用自家 Aura 通知弹窗（右下角），不走
+  org.freedesktop.Notifications——dbus-monitor 抓不到任何东西（白等）。证据以截图 +
+  getNotifications + SW 探针为准。另：本机缺 emoji 字体，🔔 渲染成豆腐块 □（环境问题非产品 bug）。
+
+- **推送相关后端口径**：GET /api/push/config → {enabled, vapid_public_key, subscriptions[]}
+  （token 鉴权）；POST /api/push/test → {ok, delivered:N}，delivered=0 时 400
+  「没有可用订阅或推送失败」；订阅随账号 DELETE /api/auth/me 级联删。
+
+- **第二 Chrome 实例踩坑**：`pkill -f user-data-dir=` 会把 exec 命令本身（同一匹配）干掉导致
+  exit -1——用 `kill <pid>` 按 pid 杀；新实例 flag 要跟主 Chrome 一致
+  （--force-device-scale-factor=2 --window-size=1600,1122）否则窗口在录制坐标系里缩成一小块。
+  推荐写 /tmp/launch-fresh.sh 用 setsid 拉起。
