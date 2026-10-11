@@ -9,7 +9,7 @@ routes = [
 [[d1_databases]]
 binding = "DB"
 database_name = "suinian"
-database_id = "8a0a1fc0-c714-4822-a915-b1791f1599a1"
+database_id = "c221a7f1-5d9c-48d1-816f-be1ad773e5cb"
 
 [ai]
 binding = "AI"
