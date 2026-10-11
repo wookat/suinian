@@ -2600,8 +2600,12 @@ app.patch("/api/notes/:id", async (c) => {
     // remember the user's hand-set values so AI triage / cron never overwrites them
     const meta = patch.meta ?? parseNoteMeta(existing.meta) ?? {};
     meta.manual_override = { ...meta.manual_override, ...override };
-    // 用户显式取消敏感标记：拆条传播来的标注一并解除（否则 applyTriage 的粘性位会把它标回去）
-    if (patch.is_sensitive === false) delete meta.sensitive_continuation;
+    // 用户显式取消敏感标记：拆条传播来的标注、视觉模型的判敏位一并解除（否则 applyTriage 的粘性位会把它标回去；
+    // 视觉位尤其如此——图片没变，用户看过原图说不敏感，之后改正文放开 manual_override 时不能再由它把卡锁回去）
+    if (patch.is_sensitive === false) {
+      delete meta.sensitive_continuation;
+      delete meta.vision_sensitive;
+    }
     if (override.category) {
       // 手动定分类即离开分拣失败/待复判态（R170 P1-2）
       delete meta.triage_failed;
