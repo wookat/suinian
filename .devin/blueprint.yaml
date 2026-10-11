@@ -1,8 +1,22 @@
 # https://docs.devin.ai/onboard-devin/environment-yaml
 # Commands run from the repo root.
+initialize:
+  - name: android sdk (assembleDebug 需要)
+    run: |
+      mkdir -p ~/Android/Sdk/cmdline-tools
+      curl -sL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
+      rm -rf /tmp/cmdtools && unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools
+      mkdir -p ~/Android/Sdk/cmdline-tools/latest && cp -r /tmp/cmdtools/cmdline-tools/* ~/Android/Sdk/cmdline-tools/latest/
+      echo "ANDROID_HOME=$HOME/Android/Sdk" >> $ENVRC
+      echo "ANDROID_SDK_ROOT=$HOME/Android/Sdk" >> $ENVRC
+      yes | ~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/Android/Sdk --licenses >/dev/null 2>&1 || true
+      ~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/Android/Sdk "platforms;android-35" "build-tools;35.0.0" "build-tools;34.0.0" "platform-tools"
+      echo "sdk.dir=$HOME/Android/Sdk" > android/local.properties
 maintenance: |
   (cd backend && npm install)
   (cd web && npm install)
+  (cd extension && npm install)
+  (cd mcp && npm install)
 knowledge:
   - name: test
     contents: |
