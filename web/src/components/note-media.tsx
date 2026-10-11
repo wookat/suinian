@@ -116,6 +116,7 @@ export function NoteImage({
   const { url, error, failureText, retry } = useMediaUrl(noteId, attachment.id, !demo)
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
+  const downloadName = attachmentDownloadName(attachment.name, attachment.mime, `image-${noteId.slice(0, 8)}`)
 
   if (demo) return null
   if (error !== null) return <MediaLoadFailed label="原图加载失败" reason={failureText} onRetry={retry} className="mt-2" />
@@ -143,7 +144,7 @@ export function NoteImage({
           className="max-h-56 max-w-full cursor-zoom-in object-contain transition-opacity hover:opacity-90"
         />
       </button>
-      {open && <ImageLightbox src={url} alt={alt} downloadName={attachment.name} mime={attachment.mime} onClose={close} />}
+      {open && <ImageLightbox src={url} alt={alt} downloadName={downloadName} mime={attachment.mime} onClose={close} />}
     </>
   )
 }

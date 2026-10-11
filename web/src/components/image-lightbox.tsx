@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Download, Share2, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { clampPan, clampScale, nextDoubleTapScale, wheelScale, zoomAboutFocus } from "@/lib/zoom-math"
+import { shareFile, useShareFile } from "@/lib/use-share-file"
 
 /** 点按判定：手指 / 鼠标位移小于这个值才算「点」，否则是拖 */
 const TAP_SLOP_PX = 8
@@ -32,7 +33,7 @@ export function ImageLightbox({
   onClose: () => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const shareFile = useShareFile(src, downloadName, mime)
+  const shareable = useShareFile(src, downloadName, mime)
   const imgRef = useRef<HTMLImageElement>(null)
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState<[number, number]>([0, 0])
@@ -247,10 +248,10 @@ export function ImageLightbox({
         >
           <Download className="size-5" />
         </a>
-        {shareFile && (
+        {shareable && (
           <button
             type="button"
-            onClick={() => void navigator.share({ files: [shareFile] }).catch(() => undefined)}
+            onClick={() => shareFile(shareable, "分享原图")}
             aria-label="分享原图"
             title="分享原图"
             className={toolButtonClass}
@@ -268,26 +269,3 @@ export function ImageLightbox({
 
 const toolButtonClass = "rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
 
-/**
- * 系统分享（Web Share API Level 2，手机浏览器）：打开大图时就把 blob 读成 File，点分享时同步调用——
- * Safari 要求 share 在用户手势里直接触发，点了再 fetch 会丢手势。桌面浏览器多数没有 canShare，返回 null 不显示按钮。
- */
-function useShareFile(src: string, name: string, mime: string | null): File | null {
-  const [file, setFile] = useState<File | null>(null)
-  useEffect(() => {
-    if (typeof navigator.canShare !== "function" || typeof navigator.share !== "function") return
-    let alive = true
-    fetch(src)
-      .then((r) => r.blob())
-      .then((blob) => {
-        const f = new File([blob], name, { type: mime || blob.type })
-        if (alive && navigator.canShare({ files: [f] })) setFile(f)
-      })
-      .catch(() => undefined)
-    return () => {
-      alive = false
-      setFile(null)
-    }
-  }, [src, name, mime])
-  return file
-}
