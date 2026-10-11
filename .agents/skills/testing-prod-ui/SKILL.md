@@ -230,3 +230,26 @@ description: How to run browser UI / accessibility / cache-identity tests agains
   exit -1——用 `kill <pid>` 按 pid 杀；新实例 flag 要跟主 Chrome 一致
   （--force-device-scale-factor=2 --window-size=1600,1122）否则窗口在录制坐标系里缩成一小块。
   推荐写 /tmp/launch-fresh.sh 用 setsid 拉起。
+
+## Verified R429 additions (dogfood + SW 深度修复)
+
+- **主 profile SW 复发卡死 → 深度清理配方（R429 实测有效）**：R428 的清
+  `Service Worker`+`Download Service` 只修一次，之后又复 wedge（register() 永久挂起）。
+  R429 扩大清理面后复活：`~/.browser_data_dir/Default/` 下删
+  `{Service Worker, Download Service, SharedStorage, Shared Storage, Code Cache, blob_storage}`，
+  重启后 register→`activated`+controller:true 实测通过。判断 wedge 的探针：
+  CDP `navigator.serviceWorker.register('/sw.js')` awaitPromise 12s 超时即 wedge。
+  若再复发同样深度清；新实例启动脚本 `/tmp/launch-main.sh`（DISPLAY=:0 + 主
+  profile + CDP 29229）。
+
+- **表单 Tab 链输入陷阱**：注册/登录页用 Tab 跳字段再 type 会把内容接进
+  「用户名」字段（串联成一个值）——用按字段直接点击 + DOM `text=` 断言
+  逐项校验，别依赖 focus 假设。
+
+- **移动视口不用 CDP**：`wmctrl -e 0,0,0,375,900 -i -r <win>` 直接改窗宽，
+  <768px 响应式路径（侧栏→底栏导航）真实生效，比 CDP emulation 更接近真机。
+
+- **R429 狗粮三缺陷与去向**：①通知卡指引「上方」方向写反（PWA 区在下方）
+  → #518 已修；②单笔记双写法标签（#ServiceWorker/#Service Worker 并列）→
+  #518 已修（triage 层归一去重）；③敏感问答正文仍有「试图影响回答的内容」
+  残留措辞（R426 只换了无指令场景，本案应是有指令路径触发）→ 观察留档。
