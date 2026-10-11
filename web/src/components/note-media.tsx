@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react"
-import { CircleAlert, Download, Loader2, RefreshCw, Share2, X } from "lucide-react"
+import { CircleAlert, Download, Loader2, RefreshCw, Share2 } from "lucide-react"
 import { ImageLightbox } from "@/components/image-lightbox"
 import { fetchNoteMediaUrl } from "@/lib/api"
 import { loadSettings } from "@/lib/settings"

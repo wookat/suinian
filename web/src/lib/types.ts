@@ -43,6 +43,8 @@ export interface NoteMeta {
   is_question?: boolean
   /** 敏感预检仅疑似命中，待模型复判（R312 P0-3：卡片标「复判中」而非定论） */
   needs_retriage?: boolean
+  /** 图片笔记：由视觉模型判为「图中含密码 / 凭证类信息」而标敏（R188 粘性位，文本复判不解；用户「取消敏感标记」时服务端清除） */
+  vision_sensitive?: boolean
 }
 
 /** 附件元数据（R144 P1-1）：仅元信息，取件走鉴权 API，不含任何直链 */
