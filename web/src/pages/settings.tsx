@@ -977,6 +977,7 @@ export function SettingsPage() {
   const [restoring, setRestoring] = useState(false)
   const [restoreMsg, setRestoreMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [lastUsedAt, setLastUsedAt] = useState<string | null>(null)
+  const [meName, setMeName] = useState<string | null>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
   const restoreInputRef = useRef<HTMLInputElement>(null)
   const deleteMsgRef = useRef<HTMLParagraphElement>(null)
@@ -990,7 +991,10 @@ export function SettingsPage() {
     const s = loadSettings()
     if (s.useMock || !s.apiBaseUrl || !s.apiToken) return
     getMe()
-      .then((me) => setLastUsedAt(me.last_used_at))
+      .then((me) => {
+        setLastUsedAt(me.last_used_at)
+        setMeName(me.name)
+      })
       .catch(() => {})
   }, [])
 
@@ -1395,7 +1399,9 @@ export function SettingsPage() {
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             {demoOnly
               ? "当前是演示模式，数据只在本浏览器。注册 / 登录后自动配置 token，演示期间记的笔记可一键导入"
-              : "还没有账号？支持用户名 + 密码自助注册，注册后自动配置 token"}
+              : meName
+                ? `已登录：${meName}。token 可复制给浏览器扩展 / MCP / API 集成使用`
+                : "还没有账号？支持用户名 + 密码自助注册，注册后自动配置 token"}
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
