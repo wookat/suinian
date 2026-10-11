@@ -1859,6 +1859,20 @@ export function isolatedReferenceIndexes(
       if (typeof r.index === "number" && typeof r.note_id === "string" && flagged.has(r.note_id)) push(r.index);
     }
   }
+  // R425（生产实测）：护栏/审计把整答换成保守文案时，答案里的角标只是
+  // slice(0,3) 首召回序号——差集为空、判危引用也不存在，隔离来源其实是
+  // 正文被扣留、从未进入模型上下文的折叠/占位笔记。不归因会让前端按
+  // 「标记邻近第一个 [n]」错指首召回的善意笔记。
+  if (out.length === 0 && Array.isArray(body.references) && Array.isArray(body.notes)) {
+    const withheld = new Set(
+      (body.notes as Array<Record<string, unknown>>)
+        .filter((n) => (n.fold === true || n.content_withheld === true) && typeof n.id === "string")
+        .map((n) => n.id as string)
+    );
+    for (const r of body.references as Array<Record<string, unknown>>) {
+      if (typeof r.index === "number" && typeof r.note_id === "string" && withheld.has(r.note_id)) push(r.index);
+    }
+  }
   return out;
 }
 
