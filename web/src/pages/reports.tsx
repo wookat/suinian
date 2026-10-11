@@ -7,10 +7,11 @@ import { marked } from "marked"
 import { sanitizeGeneratedHtml } from "@/lib/safe-html"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Segmented } from "@/components/ui/segmented"
 import { parseServerTime } from "@/lib/utils"
-import { getReports, getReport, generateReport } from "@/lib/api"
+import { getReports, getReport, generateReport, NetworkError } from "@/lib/api"
 import { useSettingsVersion } from "@/lib/settings"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 import type { ReportPeriod, WeeklyReport } from "@/lib/types"
 
 function weekLabel(weekStart: string): string {
@@ -66,6 +67,17 @@ function stripLeadingH1(md: string): string {
   return md.replace(/^\s*#\s+[^\n]*\n+/, "")
 }
 
+// 列表卡摘要：去标题行（卡头已有标题、小节名无信息量）、去列表/强调标记，段落间用「·」分隔
+function reportPreview(md: string): string {
+  return md
+    .split("\n")
+    .filter((l) => l.trim() && !/^\s*#{1,6}\s/.test(l))
+    .map((l) => l.replace(/^\s*(?:[-*+]|\d+\.)\s+/, "").replace(/[*`>_~]+/g, "").trim())
+    .filter(Boolean)
+    .join(" · ")
+    .slice(0, 160)
+}
+
 function ReportBody({ md }: { md: string }) {
   const html = useMemo(() => sanitizeGeneratedHtml(marked.parse(md, { async: false })), [md])
   return (
@@ -80,10 +92,12 @@ export function ReportsPage() {
   const [reports, setReports] = useState<WeeklyReport[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [unreachable, setUnreachable] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selected, setSelected] = useState<WeeklyReport | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [detailAttempt, setDetailAttempt] = useState(0)
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
   const [generateNotice, setGenerateNotice] = useState<string | null>(null)
@@ -93,11 +107,13 @@ export function ReportsPage() {
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setUnreachable(false)
     try {
       const res = await getReports()
       setReports(res.reports)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      setUnreachable(e instanceof NetworkError)
     } finally {
       setLoading(false)
     }
@@ -106,6 +122,8 @@ export function ReportsPage() {
   useEffect(() => {
     void load()
   }, [load, settingsVersion])
+
+  useRetryOnReconnect(!loading && error !== null && unreachable, load)
 
   async function handleGenerate() {
     if (generating) return
@@ -181,7 +199,7 @@ export function ReportsPage() {
     return () => {
       cancelled = true
     }
-  }, [selectedId])
+  }, [selectedId, detailAttempt])
 
   if (selectedId)
     return (
@@ -194,6 +212,9 @@ export function ReportsPage() {
         ) : detailError ? (
           <Card className="flex flex-col items-center gap-3 p-8 text-center">
             <p className="text-sm text-destructive">{detailError}</p>
+            <Button size="sm" variant="outline" onClick={() => setDetailAttempt((n) => n + 1)}>
+              <RefreshCw className="size-3.5" /> 重试
+            </Button>
           </Card>
         ) : (
           selected && (
@@ -222,12 +243,16 @@ export function ReportsPage() {
   const visible = reports.filter((r) => reportPeriod(r) === periodTab)
 
   const periodTabs = (
-    <Tabs value={periodTab} onValueChange={(v) => setPeriodTab(v as ReportPeriod)}>
-      <TabsList aria-label="报告类型">
-        <TabsTrigger value="week">周报</TabsTrigger>
-        <TabsTrigger value="month">月报</TabsTrigger>
-      </TabsList>
-    </Tabs>
+    <Segmented<ReportPeriod>
+      aria-label="报告类型"
+      className="w-fit"
+      value={periodTab}
+      onValueChange={setPeriodTab}
+      options={[
+        { value: "week", label: "周报" },
+        { value: "month", label: "月报" },
+      ]}
+    />
   )
 
   if (loading) return <NoteListSkeleton />
@@ -235,7 +260,10 @@ export function ReportsPage() {
   if (error)
     return (
       <Card className="flex flex-col items-center gap-3 p-8 text-center">
-        <p className="text-sm text-destructive">{error}</p>
+        <p className="text-sm text-destructive">
+          {error}
+          {unreachable ? "（会自动重试）" : ""}
+        </p>
         <Button size="sm" variant="outline" onClick={() => void load()}>
           <RefreshCw className="size-3.5" /> 重试
         </Button>
@@ -302,7 +330,7 @@ export function ReportsPage() {
                   <p className="mt-0.5 text-xs text-muted-foreground">{reportRangeLabel(r)}</p>
                   {r.content_md && (
                     <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
-                      {r.content_md.replace(/[#*`>\-\n]+/g, " ").trim().slice(0, 120)}
+                      {reportPreview(r.content_md)}
                     </p>
                   )}
                 </div>

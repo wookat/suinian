@@ -1,21 +1,31 @@
-import { loadSettings } from "./settings"
+import { isOfficialApiBase, loadSettings } from "./settings"
 import { identityFingerprint, isCacheableApiPath, withIdentityParam } from "./api-cache"
 import { escapeSwWedgeForAuth } from "./sw-control"
+import { mutated } from "./notes-bus"
 import {
   mockAsk,
+  mockBatchNotes,
   mockCreateNote,
   mockDeleteNote,
+  mockDeleteTag,
+  mockEmptyTrash,
   mockGetNote,
+  mockGetTrash,
+  mockPurgeNotes,
+  mockRestoreNotes,
   mockGetNotes,
   mockGenerateReport,
   mockGetReport,
   mockGetReports,
   mockGetTodayReview,
+  mockGetTodosToday,
   mockGetThread,
   mockGetThreads,
   mockPatchNote,
   mockGetStats,
   mockGetRandomNote,
+  mockGetTags,
+  mockRenameTag,
 } from "./mock"
 import type {
   AskHistoryMessage,
@@ -65,13 +75,24 @@ async function realFetch<T>(
   }
 }
 
+export const NOT_LOGGED_IN_MESSAGE = "尚未登录，请先登录或注册"
+
+/** Settings for an authenticated real-API call. Fails locally (no round trip)
+ * when the page has no API base or no token, so callers see the same 401
+ * shape as an expired session instead of a network error. */
+function requireRealApi(): { apiBaseUrl: string; apiToken: string } {
+  const { apiBaseUrl, apiToken } = loadSettings()
+  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  if (!apiToken) throw new ApiError(401, NOT_LOGGED_IN_MESSAGE)
+  return { apiBaseUrl, apiToken }
+}
+
 async function realFetchOnce<T>(
   path: string,
   init: RequestInit | undefined,
   timeoutMs: number,
 ): Promise<T> {
-  const { apiBaseUrl, apiToken } = loadSettings()
-  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  const { apiBaseUrl, apiToken } = requireRealApi()
   // SW 会缓存这几条 GET 路由：URL 带上当前账号指纹，缓存按身份分区（R166 P1）
   const method = (init?.method ?? "GET").toUpperCase()
   const reqPath =
@@ -99,7 +120,7 @@ async function realFetchOnce<T>(
       if (timeoutSignal.aborted) throw new NetworkError("请求超时，请重试", true)
       throw e
     }
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -130,6 +151,21 @@ export class NetworkError extends Error {
     super(message)
     this.timeout = timeout
   }
+}
+
+/** Message for a fetch that failed before any response arrived (DNS / TLS /
+ * connection refused). Only blames the user's network when the browser is
+ * actually offline; otherwise the API side is the one that cannot be reached. */
+export function unreachableMessage(baseUrl: string): string {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return "网络已断开，请检查网络后重试"
+  if (isOfficialApiBase(baseUrl)) return "碎念服务暂时连不上（浏览器显示在线，多半是服务端故障），请稍后重试"
+  let host = baseUrl
+  try {
+    host = new URL(baseUrl).host
+  } catch {
+    /* keep raw value */
+  }
+  return `无法连接到 API 地址 ${host}，请确认地址正确且服务在线`
 }
 
 // Backend returns booleans for is_sensitive/todo_done and wraps single notes in {note}
@@ -183,7 +219,11 @@ export async function getNote(id: string): Promise<Note | null> {
   }
 }
 
-export async function createNote(payload: CreateNotePayload): Promise<Note> {
+export function createNote(payload: CreateNotePayload): Promise<Note> {
+  return mutated(createNoteRaw(payload))
+}
+
+async function createNoteRaw(payload: CreateNotePayload): Promise<Note> {
   if (loadSettings().useMock) return mockCreateNote(payload)
   const res = await realFetch<Record<string, unknown>>("/api/notes", {
     method: "POST",
@@ -203,7 +243,11 @@ export function mediaTooLargeText(kind: string, size: number): string {
 export const SUPPORTED_FILE_EXTS = ["pdf", "txt", "md", "markdown", "docx", "csv", "tsv", "xlsx"]
 
 /** 图片/文件/语音上传：走 /api/ingest/media，后端提取文字/转写/摘要后入库 */
-export async function ingestMedia(file: File, type: "image" | "file" | "audio", clientId?: string): Promise<Note> {
+export function ingestMedia(file: File, type: "image" | "file" | "audio", clientId?: string): Promise<Note> {
+  return mutated(ingestMediaRaw(file, type, clientId))
+}
+
+async function ingestMediaRaw(file: File, type: "image" | "file" | "audio", clientId?: string): Promise<Note> {
   if (loadSettings().useMock) {
     return mockCreateNote({
       source: "web",
@@ -216,8 +260,7 @@ export async function ingestMedia(file: File, type: "image" | "file" | "audio", 
             : `【文件】${file.name}（演示模式不做提取）`,
     })
   }
-  const { apiBaseUrl, apiToken } = loadSettings()
-  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  const { apiBaseUrl, apiToken } = requireRealApi()
   const form = new FormData()
   form.set("type", type)
   form.set("source", "web")
@@ -231,7 +274,7 @@ export async function ingestMedia(file: File, type: "image" | "file" | "audio", 
       body: form,
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -267,7 +310,7 @@ export function fetchNoteMediaUrl(noteId: string, attachmentId?: string): Promis
         headers: { Authorization: `Bearer ${apiToken}` },
       })
     } catch {
-      throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+      throw new NetworkError(unreachableMessage(apiBaseUrl))
     }
     if (!res.ok) {
       const text = await res.text().catch(() => "")
@@ -290,7 +333,7 @@ export async function downloadNoteFile(noteId: string, fileName: string): Promis
       headers: { Authorization: `Bearer ${apiToken}` },
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -328,7 +371,11 @@ export function patchPersisted(fresh: Note, patch: NotePatch): boolean {
   return true
 }
 
-export async function patchNote(id: string, patch: NotePatch, baseUpdatedAt?: string): Promise<Note> {
+export function patchNote(id: string, patch: NotePatch, baseUpdatedAt?: string): Promise<Note> {
+  return mutated(patchNoteRaw(id, patch, baseUpdatedAt))
+}
+
+async function patchNoteRaw(id: string, patch: NotePatch, baseUpdatedAt?: string): Promise<Note> {
   if (loadSettings().useMock) return mockPatchNote(id, patch)
   const body: Record<string, unknown> = { ...patch }
   if (patch.todo_done != null) body.todo_done = patch.todo_done === 1
@@ -362,14 +409,22 @@ export async function retryMedia(id: string): Promise<Note> {
   return normalizeNote((res.note ?? res) as Record<string, unknown>)
 }
 
-export async function deleteNote(id: string): Promise<void> {
+export function deleteNote(id: string): Promise<void> {
+  return mutated(deleteNoteRaw(id))
+}
+
+async function deleteNoteRaw(id: string): Promise<void> {
   if (loadSettings().useMock) return mockDeleteNote(id)
   await realFetch<{ ok: boolean }>(`/api/notes/${id}`, { method: "DELETE" })
 }
 
 /** 撤销删除：清除软删标记，恢复笔记（服务端单次上限 1000，超出自动分批） */
-export async function restoreNotes(ids: string[]): Promise<number> {
-  if (loadSettings().useMock) throw new Error("演示模式不支持恢复，请先配置真实 API")
+export function restoreNotes(ids: string[]): Promise<number> {
+  return mutated(restoreNotesRaw(ids))
+}
+
+async function restoreNotesRaw(ids: string[]): Promise<number> {
+  if (loadSettings().useMock) return mockRestoreNotes(ids)
   let restored = 0
   for (let i = 0; i < ids.length; i += 1000) {
     const res = await realFetch<{ ok: boolean; restored: number }>("/api/notes/restore", {
@@ -383,7 +438,7 @@ export async function restoreNotes(ids: string[]): Promise<number> {
 
 /** 最近删除列表：软删且未彻底清理的笔记（含剩余保留时间） */
 export async function getTrash(): Promise<TrashResponse> {
-  if (loadSettings().useMock) throw new Error("演示模式不支持最近删除，请先配置真实 API")
+  if (loadSettings().useMock) return mockGetTrash()
   const res = await realFetch<{ notes: Record<string, unknown>[]; retention_days: number }>("/api/notes/trash")
   return {
     notes: (res.notes ?? []).map((n) => ({
@@ -396,7 +451,12 @@ export async function getTrash(): Promise<TrashResponse> {
 }
 
 /** 立即彻底删除最近删除里的笔记（不可恢复） */
-export async function purgeNotes(ids: string[]): Promise<number> {
+export function purgeNotes(ids: string[]): Promise<number> {
+  return mutated(purgeNotesRaw(ids))
+}
+
+async function purgeNotesRaw(ids: string[]): Promise<number> {
+  if (loadSettings().useMock) return mockPurgeNotes(ids)
   const res = await realFetch<{ ok: boolean; purged: number }>("/api/notes/purge", {
     method: "POST",
     body: JSON.stringify({ ids }),
@@ -405,7 +465,12 @@ export async function purgeNotes(ids: string[]): Promise<number> {
 }
 
 /** 清空最近删除：彻底删除全部软删笔记（不可恢复） */
-export async function emptyTrash(): Promise<number> {
+export function emptyTrash(): Promise<number> {
+  return mutated(emptyTrashRaw())
+}
+
+async function emptyTrashRaw(): Promise<number> {
+  if (loadSettings().useMock) return mockEmptyTrash()
   const res = await realFetch<{ ok: boolean; purged: number }>("/api/notes/trash/empty", {
     method: "POST",
     body: JSON.stringify({}),
@@ -421,13 +486,31 @@ export interface BatchResult {
   prev?: PrevCategory[]
 }
 
+/** 批量请求体：ids 或 filter 二选一指定目标；restore_categories 用 entries */
+export interface BatchBody {
+  action: BatchAction
+  ids?: string[]
+  filter?: BatchFilter
+  entries?: PrevCategory[]
+  tags?: string[]
+  category?: string
+}
+
 /** NDJSON 批量流：{done,total} 进度行 + 最终 {ok,affected,remaining,ids?}（或 {error}） */
-async function batchStream(
-  body: Record<string, unknown>,
+function batchStream(
+  body: BatchBody,
+  onProgress?: (done: number, total: number) => void,
+): Promise<BatchResult> {
+  return mutated(batchStreamRaw(body, onProgress))
+}
+
+async function batchStreamRaw(
+  body: BatchBody,
   onProgress?: (done: number, total: number) => void,
 ): Promise<BatchResult> {
   const { apiBaseUrl, apiToken, useMock } = loadSettings()
-  if (useMock || !apiBaseUrl) throw new Error("演示模式不支持批量操作，请先配置真实 API")
+  if (useMock) return mockBatchNotes(body, onProgress)
+  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
   let res: Response
   try {
     res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/notes/batch?stream=1`, {
@@ -436,7 +519,7 @@ async function batchStream(
       body: JSON.stringify(body),
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -527,7 +610,7 @@ export async function restoreCategories(
 
 /** 全部标签 + 使用次数（按次数降序） */
 export async function getStats(days = 365, scope?: { tag?: string; scopeDays?: number }): Promise<StatsResponse> {
-  if (loadSettings().useMock) return mockGetStats()
+  if (loadSettings().useMock) return mockGetStats(days, scope)
   const tz = -new Date().getTimezoneOffset()
   let qs = `/api/stats?days=${days}&tz_offset=${tz}`
   if (scope?.tag) qs += `&tag=${encodeURIComponent(scope.tag)}`
@@ -548,27 +631,31 @@ export async function getRandomNote(): Promise<Note | null> {
 }
 
 export async function getTags(): Promise<TagCount[]> {
-  if (loadSettings().useMock) throw new Error("演示模式不支持标签管理，请先配置真实 API")
+  if (loadSettings().useMock) return mockGetTags()
   const res = await realFetch<{ tags: TagCount[] }>("/api/tags")
   return res.tags
 }
 
 /** 重命名标签（全局替换；改名到已有标签即合并），返回影响的笔记数 */
-export async function renameTag(from: string, to: string): Promise<number> {
-  const res = await realFetch<{ ok: boolean; affected: number }>("/api/tags/rename", {
-    method: "POST",
-    body: JSON.stringify({ from, to }),
-  })
-  return res.affected
+export function renameTag(from: string, to: string): Promise<number> {
+  if (loadSettings().useMock) return mutated(mockRenameTag(from, to))
+  return mutated(
+    realFetch<{ ok: boolean; affected: number }>("/api/tags/rename", {
+      method: "POST",
+      body: JSON.stringify({ from, to }),
+    }).then((res) => res.affected),
+  )
 }
 
 /** 从所有笔记移除标签，返回影响的笔记数 */
-export async function deleteTag(tag: string): Promise<number> {
-  const res = await realFetch<{ ok: boolean; affected: number }>("/api/tags/delete", {
-    method: "POST",
-    body: JSON.stringify({ tag }),
-  })
-  return res.affected
+export function deleteTag(tag: string): Promise<number> {
+  if (loadSettings().useMock) return mutated(mockDeleteTag(tag))
+  return mutated(
+    realFetch<{ ok: boolean; affected: number }>("/api/tags/delete", {
+      method: "POST",
+      body: JSON.stringify({ tag }),
+    }).then((res) => res.affected),
+  )
 }
 
 export async function ask(
@@ -623,8 +710,7 @@ export async function askStream(
   signal?: AbortSignal,
 ): Promise<AskResponse> {
   if (loadSettings().useMock) return mockAsk(question)
-  const { apiBaseUrl, apiToken } = loadSettings()
-  if (!apiBaseUrl) throw new Error("未配置 API Base URL，请到设置页填写或开启演示模式")
+  const { apiBaseUrl, apiToken } = requireRealApi()
   // 流式预算按「空闲」计：只要正文持续流动就不中断（长笔记 verbatim 回显
   // 可能远超 60s），仅在 60s 无任何字节到达时才判定断流。
   const idleCtrl = new AbortController()
@@ -749,34 +835,126 @@ export async function exportData(
       },
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) throw await blobFetchError(res)
-  const blob = await res.blob()
+  let blob: Blob
+  try {
+    blob = await res.blob()
+  } catch {
+    throw new NetworkError("导出下载中断，请重试")
+  }
   const date = new Date().toISOString().slice(0, 10)
   return { blob, filename: `suinian-export-${date}.${format === "markdown" ? "md" : "json"}` }
 }
 
-/** 下载完整备份 zip（notes.json 全字段 + media/ 原件 + manifest） */
-export async function downloadBackup(includeSensitive: boolean, password?: string): Promise<{ blob: Blob; filename: string }> {
+/**
+ * 大文件传输进度：total 为精确总长（Content-Length），null 表示服务端流式输出、总长未知；
+ * estimate 为服务端预估总长（X-Suinian-Backup-Estimate），只用于显示「约 n%」——
+ * 原件缺失被跳过时实际会少于预估、size 未知时可能超出，不得据此判断下载是否完整。
+ */
+export interface TransferProgress {
+  received: number
+  total: number | null
+  estimate: number | null
+}
+
+export const BACKUP_ESTIMATE_HEADER = "X-Suinian-Backup-Estimate"
+
+function positiveHeaderInt(res: Response, name: string): number | null {
+  const raw = res.headers.get(name)
+  if (raw === null || !/^\d+$/.test(raw.trim())) return null
+  const n = Number(raw)
+  return Number.isSafeInteger(n) && n > 0 ? n : null
+}
+
+/** 进度百分比：精确总长按实际；预估总长封顶 99（收完才算 100），已超出预估返回 null（只显示已接收字节） */
+export function transferPercent(p: TransferProgress): { value: number; approx: boolean } | null {
+  if (p.total) return { value: Math.min(100, Math.round((p.received / p.total) * 100)), approx: false }
+  if (p.estimate) {
+    if (p.received > p.estimate) return null
+    return { value: Math.min(99, Math.floor((p.received / p.estimate) * 100)), approx: true }
+  }
+  return null
+}
+
+export function transferLabel(p: TransferProgress): string {
+  const pct = transferPercent(p)
+  if (pct && p.total) return `下载中 ${formatMB(p.received)} / ${formatMB(p.total)}（${pct.value}%）`
+  if (pct && p.estimate) return `下载中 ${formatMB(p.received)} / 约 ${formatMB(p.estimate)}（约 ${pct.value}%）`
+  if (p.estimate) return `下载中，已接收 ${formatMB(p.received)}（预估约 ${formatMB(p.estimate)}）`
+  return `下载中，已接收 ${formatMB(p.received)}`
+}
+
+export class TransferCancelledError extends Error {
+  constructor() {
+    super("已取消")
+  }
+}
+
+export function formatMB(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`
+}
+
+/** 下载完整备份 zip（notes.json 全字段 + media/ 原件 + manifest）：边收边报进度，signal 取消即断开连接 */
+export async function downloadBackup(
+  includeSensitive: boolean,
+  password?: string,
+  opts: { signal?: AbortSignal; onProgress?: (p: TransferProgress) => void } = {},
+): Promise<{ blob: Blob; filename: string }> {
   const { apiBaseUrl, apiToken, useMock } = loadSettings()
   if (useMock || !apiBaseUrl) throw new Error("演示模式不支持备份，请先配置真实 API")
+  const { signal, onProgress } = opts
   const qs = includeSensitive ? "?include_sensitive=true" : ""
   let res: Response
   try {
     res = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/backup${qs}`, {
+      signal,
       headers: {
         Authorization: `Bearer ${apiToken}`,
         ...(includeSensitive && password ? { "X-Suinian-Password": encodeURIComponent(password) } : {}),
       },
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    if (signal?.aborted) throw new TransferCancelledError()
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) throw await blobFetchError(res)
-  const blob = await res.blob()
+  const total = positiveHeaderInt(res, "Content-Length")
+  const estimate = total ? null : positiveHeaderInt(res, BACKUP_ESTIMATE_HEADER)
+  const chunks: Uint8Array[] = []
+  let received = 0
+  onProgress?.({ received, total, estimate })
+  const reader = res.body?.getReader()
+  if (!reader) {
+    try {
+      const blob = await res.blob()
+      return { blob, filename: backupFilename(includeSensitive) }
+    } catch {
+      throw new NetworkError("备份下载中断，请重试")
+    }
+  }
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) {
+        chunks.push(value)
+        received += value.byteLength
+        onProgress?.({ received, total, estimate })
+      }
+    }
+  } catch {
+    if (signal?.aborted) throw new TransferCancelledError()
+    throw new NetworkError(`备份下载中断（已接收 ${formatMB(received)}），请重试`)
+  }
+  if (signal?.aborted) throw new TransferCancelledError()
+  return { blob: new Blob(chunks as BlobPart[], { type: "application/zip" }), filename: backupFilename(includeSensitive) }
+}
+
+function backupFilename(includeSensitive: boolean): string {
   const date = new Date().toISOString().slice(0, 10)
-  return { blob, filename: `suinian-backup-${date}${includeSensitive ? "-full" : ""}.zip` }
+  return `suinian-backup-${date}${includeSensitive ? "-full" : ""}.zip`
 }
 
 export interface RestoreStats {
@@ -796,6 +974,13 @@ export interface RestoreStats {
   /** 单个文件超过大小上限，服务端主动跳过未导入 */
   media_oversized: number
   media_failed: number
+  /** notes.json 声明了附件、zip 里却没有对应条目 */
+  media_missing?: number
+  /** 原件未随笔记恢复的笔记（最多 50 条）：笔记已入库并打上 meta.attachment_missing */
+  media_missing_notes?: { note_id: string; name: string; reason: "oversized" | "failed" | "missing" }[]
+  /** 备份里到期时间解析不出的待办条数：笔记已入库、到期清空并打上 meta.todo_due_invalid */
+  todo_due_invalid?: number
+  todo_due_invalid_notes?: { note_id: string; value: string }[]
 }
 
 export const MAX_RESTORE_BYTES = 200 * 1024 * 1024
@@ -815,7 +1000,7 @@ export async function restoreBackup(file: File): Promise<RestoreStats> {
       body: form,
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -880,7 +1065,7 @@ export async function importData(
       body: form,
     })
   } catch {
-    throw new NetworkError("网络连接失败，请检查网络或 API 地址")
+    throw new NetworkError(unreachableMessage(apiBaseUrl))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -979,7 +1164,12 @@ export async function generateReport(
   which: "this" | "last" = "this",
   period: "week" | "month" = "week",
 ): Promise<{ report: WeeklyReport | null; message?: string }> {
-  if (loadSettings().useMock) return { report: await mockGenerateReport() }
+  if (loadSettings().useMock) {
+    const report = await mockGenerateReport(period)
+    if (report) return { report }
+    const unit = period === "month" ? "本月" : "本周"
+    return { report: null, message: `${unit}还没有记录，随手记下第一条碎念，报告就有素材了` }
+  }
   const res = await realFetch<{ report: WeeklyReport | null; message?: string }>(
     "/api/reports/generate",
     {
@@ -991,10 +1181,14 @@ export async function generateReport(
 }
 
 /** 今日到期 + 已逾期的未完成待办（时间流顶部应用内提醒条） */
-export async function getTodosToday(): Promise<{ date: string; items: (Note & { overdue: boolean })[] }> {
-  if (loadSettings().useMock) return { date: "", items: [] }
-  const res = await realFetch<{ date: string; items: Record<string, unknown>[] }>("/api/todos/today")
-  return { date: res.date, items: res.items.map((r) => ({ ...normalizeNote(r), overdue: !!r.overdue })) }
+export async function getTodosToday(): Promise<{ date: string; items: (Note & { overdue: boolean })[]; overdue_total?: number }> {
+  if (loadSettings().useMock) return mockGetTodosToday()
+  const res = await realFetch<{ date: string; items: Record<string, unknown>[]; overdue_total?: number }>("/api/todos/today")
+  return {
+    date: res.date,
+    items: res.items.map((r) => ({ ...normalizeNote(r), overdue: !!r.overdue })),
+    overdue_total: res.overdue_total,
+  }
 }
 
 /** 今日回顾（那年今日 / 上月今日 / 久未回看） */
@@ -1174,10 +1368,10 @@ async function authPost(
       try {
         res = await authFetchOnce(baseUrl, path, body, AUTH_TIMEOUT_MS - AUTH_ATTEMPT_TIMEOUT_MS)
       } catch (e2) {
-        throw authFetchError(e2)
+        throw authFetchError(e2, baseUrl)
       }
     } else {
-      throw authFetchError(e)
+      throw authFetchError(e, baseUrl)
     }
   }
   if (!res.ok) {
@@ -1203,16 +1397,17 @@ function authFetchOnce(baseUrl: string, path: string, body: unknown, timeoutMs: 
   })
 }
 
-function authFetchError(e: unknown): NetworkError {
+function authFetchError(e: unknown, baseUrl: string): NetworkError {
   if (e instanceof DOMException && e.name === "TimeoutError") {
     const wedged = typeof navigator !== "undefined" && !!navigator.serviceWorker?.controller
     return new NetworkError(
       wedged
         ? "请求超时（浏览器离线缓存组件可能卡住）：请用相同用户名密码重试一次（不会重复创建账号）；仍失败可到设置页「关闭离线缓存」后重试"
         : "请求超时，请用相同用户名密码重试一次（不会重复创建账号）",
+      true,
     )
   }
-  return new NetworkError("网络连接失败，请检查网络或 API 地址")
+  return new NetworkError(unreachableMessage(baseUrl))
 }
 
 export function register(baseUrl: string, name: string, password: string, inviteCode?: string): Promise<AuthResult> {

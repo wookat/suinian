@@ -24,6 +24,21 @@ function loadDraft(): string {
   }
 }
 
+function useOnline(): boolean {
+  const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine !== false)
+  useEffect(() => {
+    const on = () => setOnline(true)
+    const off = () => setOnline(false)
+    window.addEventListener("online", on)
+    window.addEventListener("offline", off)
+    return () => {
+      window.removeEventListener("online", on)
+      window.removeEventListener("offline", off)
+    }
+  }, [])
+  return online
+}
+
 function saveDraft(value: string) {
   try {
     if (value) localStorage.setItem(DRAFT_KEY, value)
@@ -66,6 +81,7 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
   // R206 P3-3：横幅可展开查看排队中的具体内容，不再只有一个计数
   const [queueOpen, setQueueOpen] = useState(false)
   const [queueItems, setQueueItems] = useState<OutboxPreview[]>([])
+  const online = useOnline()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -348,7 +364,8 @@ export function QuickInput({ onCreated, onAsk }: { onCreated: (note: Note) => vo
               className="inline-flex items-center gap-1 transition-colors hover:text-foreground"
               title="展开查看排队中的内容"
             >
-              <CloudOff className="size-3.5" /> {pendingSync} 条离线记录（含图片/文件/录音）待同步，联网后自动补发
+              <CloudOff className="size-3.5" /> {pendingSync} 条记录（含图片/文件/录音）待同步，
+              {online ? "服务暂时连不上，会自动重试" : "联网后自动补发"}
               {queueOpen ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
             </button>
             <button

@@ -4,6 +4,7 @@ import {
   BookmarkPlus,
   Check,
   CircleHelp,
+  CloudOff,
   Loader2,
   RefreshCw,
   SendHorizontal,
@@ -68,6 +69,8 @@ export interface AskChatMessage {
   isolated?: boolean
   /** 危险代码判别器不可用，本轮为保守隔离（R288 P2-1：可重试拿到完整答案） */
   guardDegraded?: boolean
+  /** 模型暂不可用，本轮只给出相关记录的兜底（R339：服务端不缓存，重试可拿到完整回答） */
+  aiUnavailable?: boolean
   /** 被隔离段实际命中的引用序号（服务端按收口前后引用差集给出，R308 P1-1） */
   isolatedRefs?: number[]
   /** 消息产生时刻（epoch ms）；旧版本存量消息无此字段，一律按过期处理 */
@@ -290,6 +293,7 @@ export function AskChat({
           ...(res.instruction_isolated ? { isolated: true } : {}),
           ...(res.isolated_refs?.length ? { isolatedRefs: res.isolated_refs } : {}),
           ...(res.exec_guard_degraded ? { guardDegraded: true } : {}),
+          ...(res.ai_unavailable ? { aiUnavailable: true } : {}),
         },
       ])
     } catch (e) {
@@ -455,6 +459,26 @@ export function AskChat({
                         <div className="flex items-start gap-1.5">
                           <ShieldQuestion className="mt-0.5 size-3.5 shrink-0" />
                           <span>安全判别暂不可用，代码/命令已暂时隐去，稍后重试可看到完整内容。</span>
+                        </div>
+                        {m.question && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            disabled={asking}
+                            onClick={() => void send(m.question)}
+                          >
+                            <RefreshCw className="size-3.5" />
+                            重试本轮提问
+                          </Button>
+                        )}
+                      </div>
+                    ) : null}
+                    {m.aiUnavailable ? (
+                      <div className="min-w-0 space-y-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-800 [overflow-wrap:anywhere] dark:text-amber-300">
+                        <div className="flex items-start gap-1.5">
+                          <CloudOff className="mt-0.5 size-3.5 shrink-0" />
+                          <span>AI 模型暂不可用，本轮只列出了相关记录；稍后重试可获得完整回答。</span>
                         </div>
                         {m.question && (
                           <Button

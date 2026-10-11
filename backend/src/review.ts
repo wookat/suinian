@@ -1,13 +1,13 @@
 import type { Env, NoteRow } from "./types";
 import { chatComplete } from "./ai";
-import { DEFAULT_TZ, loadUserTz, tzOffsetMinutes, tzSqlModifier, zonedDate } from "./triage";
+import { DEFAULT_TZ, loadUserTz, tzOffsetMinutes, tzOffsetString, tzSqlModifier, zonedDate } from "./triage";
 import { localDateOf, parseCreatedAt } from "./stats";
 import {
   EXEC_OUTLET_WARN_TAG,
   BROAD_OUTLET_FOLD_TAG,
   AGGREGATE_TIER,
   finalizeAskAnswer,
-  redactGuardedLinesForModel,
+  redactGuardedViewForModel,
   noteRowContainsExecutableCommand,
   noteRowBroadFoldReason,
 } from "./prompt-armor";
@@ -126,18 +126,60 @@ async function recurringThemeCandidate(env: Env, userId: string, exclude: string
     .first<NoteRow>();
 }
 
-/** 临期（48h 内到期）或已过期、且未完成的待办，作为「悬置的待办」洞察。 */
-async function pendingTodoCandidate(env: Env, userId: string, exclude: string[]): Promise<NoteRow | null> {
+export const PENDING_TODO_WINDOW_MS = 48 * 3600_000;
+/** 粗筛多拿一天：历史裸时刻被 SQLite 当 UTC 比真实时刻晚 8h，纯日期按 09:00 用户本地最多差半天 */
+const PENDING_TODO_COARSE_LIMIT = 50;
+
+/**
+ * 待办到期的瞬间（epoch ms）：纯日期 = 当天 09:00 用户时区（与 push.ts 提醒同口径）；历史无偏移时刻按 Asia/Shanghai
+ * （与 normalizeStoredTodoDue 同口径）；带偏移按字面；非法 null。
+ */
+export function todoDueInstantMs(due: string, tz: string): number | null {
+  const s = due.trim().replace(" ", "T");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    let off = "+08:00";
+    try {
+      off = tzOffsetString(new Date(Date.parse(`${s}T09:00:00Z`)), tz);
+    } catch {
+      // 非法 tz：与 push.ts parseInTz 同样回落 Asia/Shanghai
+    }
+    const t = Date.parse(`${s}T09:00:00${off}`);
+    return Number.isNaN(t) ? null : t;
+  }
+  const v = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(s) ? `${s}+08:00` : s;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * 临期（48h 内到期）或已过期、且未完成的待办，作为「悬置的待办」洞察。SQL 只做放宽的粗筛，
+ * 窗口与排序由 todoDueInstantMs 在 TS 层按真实瞬间判定。
+ */
+async function pendingTodoCandidate(
+  env: Env,
+  userId: string,
+  exclude: string[],
+  tz: string = DEFAULT_TZ,
+  now: Date = new Date()
+): Promise<NoteRow | null> {
   const ph = exclude.map(() => "?").join(",");
-  return await env.DB.prepare(
+  const { results } = await env.DB.prepare(
     `SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL
        AND category = 'todo' AND (todo_done IS NULL OR todo_done = 0)
-       AND todo_due IS NOT NULL AND datetime(todo_due) <= datetime('now', '+2 days')
+       AND todo_due IS NOT NULL AND datetime(todo_due) <= datetime(?, '+3 days')
        ${exclude.length > 0 ? `AND id NOT IN (${ph})` : ""}
-     ORDER BY datetime(todo_due) ASC LIMIT 1`
+     ORDER BY datetime(todo_due) ASC LIMIT ${PENDING_TODO_COARSE_LIMIT}`
   )
-    .bind(userId, ...exclude)
-    .first<NoteRow>();
+    .bind(userId, now.toISOString(), ...exclude)
+    .all<NoteRow>();
+  const cutoff = now.getTime() + PENDING_TODO_WINDOW_MS;
+  let best: { row: NoteRow; at: number } | null = null;
+  for (const row of results ?? []) {
+    const at = row.todo_due ? todoDueInstantMs(row.todo_due, tz) : null;
+    if (at === null || at > cutoff) continue;
+    if (!best || at < best.at) best = { row, at };
+  }
+  return best?.row ?? null;
 }
 
 /** 危险笔记（含跨笔记分片）的回顾评语：固定警示，不进模型、不复述内容。 */
@@ -195,8 +237,8 @@ async function reviewComment(env: Env, note: NoteRow, kind: ReviewKind, tzOffset
         },
         {
           role: "user",
-          // R322 A：受守行不进评语模型上下文（与 /api/ask 同一套 redactGuardedLinesForModel）
-          content: `记录时间：${localReviewDate(note.created_at, tzOffsetMin)}（${KIND_LABEL[kind]}）\n内容：${redactGuardedLinesForModel(note.title || note.content, `${note.title ?? ""}\n${note.content}`).text.slice(0, 300)}`,
+          // R322 A：受守行不进评语模型上下文（与 /api/ask 同一套替换 + 归一化比对 fail-closed）
+          content: `记录时间：${localReviewDate(note.created_at, tzOffsetMin)}（${KIND_LABEL[kind]}）\n内容：${redactGuardedViewForModel(note.title || note.content, `${note.title ?? ""}\n${note.content}`).text.slice(0, 300)}`,
         },
       ],
     })
@@ -261,7 +303,7 @@ export async function generateDailyReviewDetailed(
     const cand =
       kind === "recurring_theme"
         ? await recurringThemeCandidate(env, userId, [])
-        : await pendingTodoCandidate(env, userId, []);
+        : await pendingTodoCandidate(env, userId, [], tz, now);
     if (cand) {
       insight = { note: cand, kind };
       break;

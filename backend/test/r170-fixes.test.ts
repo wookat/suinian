@@ -210,10 +210,10 @@ describe("daily review insight quota (R170 P2-4)", () => {
           },
           async first() {
             if (sql.includes("COUNT(*) AS n FROM daily_reviews")) return { n: 0 };
-            if (sql.includes("category = 'todo'")) return note("todo-due", "todo");
             return null;
           },
           async all() {
+            if (sql.includes("category = 'todo'")) return { results: [note("todo-due", "todo")] };
             if (sql.includes("datetime(created_at, ?) >=")) {
               anniv++;
               return { results: [note(`a${anniv}-1`), note(`a${anniv}-2`)].slice(0, binds[binds.length - 1] as number) };

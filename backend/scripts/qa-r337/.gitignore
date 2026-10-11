@@ -1,0 +1,8 @@
+# 运行时账号状态（含生产 token；cleanup 后 token 置空但仍不入库）
+out*/accounts.json
+out*/account.json
+out*/*.log
+out*/*.html
+# 浏览器原始截图：含 QA 载体原文卡 / 未遮盖中间态，只入库 test-report.md 引用的安全截图
+# 本机 mock AI 跑出的结果不入库（无真实嵌入/主模型，不能作证据）
+out-local/

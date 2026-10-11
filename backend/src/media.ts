@@ -1,6 +1,7 @@
 import type { Env, NoteMeta } from "./types";
 import { chatComplete, withTimeout } from "./ai";
 import { detectSensitive } from "./triage";
+import { isDegenerateLines, isDegenerateText } from "./text-quality";
 import { encryptBytes, decryptBytes, isEncryptedAttachment } from "./crypto";
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
@@ -113,6 +114,46 @@ export function resolveAttachmentMime(mime: string | null | undefined, fileName?
   const ext = /\.([A-Za-z0-9]{1,5})$/.exec(fileName || "")?.[1]?.toLowerCase();
   if (ext === "webm") return type === "audio" ? "audio/webm" : "video/webm";
   return (ext && EXT_MIME[ext]) || m || "application/octet-stream";
+}
+
+/** mime → 首选扩展名（EXT_MIME 反向，首个命中优先：audio/mp4→m4a、image/jpeg→jpg、audio/ogg→ogg）。 */
+const MIME_EXT: Record<string, string> = Object.assign(
+  Object.fromEntries(
+    Object.entries(EXT_MIME)
+      .reverse()
+      .map(([ext, mime]) => [mime, ext])
+  ),
+  {
+    "audio/webm": "webm",
+    "audio/x-m4a": "m4a",
+    "audio/mp3": "mp3",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+    "audio/opus": "opus",
+    "audio/3gpp": "3gp",
+    "audio/amr-wb": "awb",
+    "image/jpg": "jpg",
+    "image/heif": "heif",
+    "video/webm": "webm",
+  }
+);
+
+const R2_KEY_TS_PREFIX = /^\d{10,}-/;
+const HAS_EXT = /\.[A-Za-z0-9]{1,5}$/;
+
+/**
+ * User-facing file name of a stored original, derived from its R2 key
+ * (`media/<user>/<note>/<Date.now()>-<safeName>`): strip the timestamp, and
+ * when the name carries no extension (ingest paths without a file name —
+ * WeChat / WeCom media and JSON `/api/ingest/media` — store under the bare
+ * type word `audio` / `image`) append one from the recorded mime so every
+ * consumer (list, /file download, backup zip) sees `audio.amr`, not `audio`.
+ */
+export function attachmentDisplayName(r2Key: string, mime: string | null | undefined): string {
+  const base = (r2Key.split("/").pop() || "file").replace(R2_KEY_TS_PREFIX, "") || "file";
+  if (HAS_EXT.test(base)) return base;
+  const ext = MIME_EXT[(mime || "").toLowerCase().split(";")[0].trim()];
+  return ext ? `${base}.${ext}` : base;
 }
 
 export function mediaTooLargeMessage(size: number): string {
@@ -402,6 +443,7 @@ const IMAGE_PROMPT =
 /** Remove markdown emphasis/heading noise the vision model tends to emit. */
 export function stripMarkdown(text: string): string {
   return text
+    .replace(/^\s*`{3,}[^\n]*$/gm, "")
     .replace(/\*+/g, "")
     .replace(/^#{1,6}\s+/gm, "")
     .trim();
@@ -412,6 +454,8 @@ export interface ImageExtraction {
   content: string;
   /** Full vision description for metadata. */
   description: string;
+  /** 文字段是模型的生成循环（空白 / 全黑图常见），不是图中文字：调用方按抽取失败处理。 */
+  degenerate?: boolean;
   /** 图片含机密值（视觉模型判定 ∪ 文本敏感检测），作为敏感管道的入口提示。 */
   sensitive: boolean;
   /** 文字识别存疑（R212 P3-3）：视觉模型自评「清晰：否」，前端据此提示核对原图。 */
@@ -420,6 +464,16 @@ export interface ImageExtraction {
 
 /** 视觉判定含凭证但文字段未见凭证值时，正文附加的如实标注（不含任何秘密值）。 */
 export const IMAGE_CREDENTIAL_GAP_NOTICE = "（图中含密码/凭证类信息，文字可能未完整提取，可打开原图查看）";
+
+/** 用户取消敏感标记＝否定了视觉判定，正文里系统附加的那行标注随之撤掉（只删整行等于标注的行，用户自己的文字不动）。 */
+export function stripImageCredentialGapNotice(content: string): string {
+  if (!content.includes(IMAGE_CREDENTIAL_GAP_NOTICE)) return content;
+  return content
+    .split("\n")
+    .filter((line) => line.trim() !== IMAGE_CREDENTIAL_GAP_NOTICE)
+    .join("\n")
+    .replace(/\n+$/, "");
+}
 
 /** Parse the three-section vision output into content (text-first) + description + sensitive. */
 export function parseImageExtraction(raw: string): ImageExtraction {
@@ -430,8 +484,15 @@ export function parseImageExtraction(raw: string): ImageExtraction {
   const visionSensitive = /^(是|yes)$/i.test(flagMatch?.[1] ?? "");
   // 清晰段缺失或非「否」时 fail-open 按清晰处理（存疑只加提示，绝不影响入库）
   const clarityMatch = cleaned.match(/(?:^|\n)\s*清晰[:：]\s*[<《【「(（\[]*\s*(是|否|yes|no)/i);
-  const suspect = /^(否|no)$/i.test(clarityMatch?.[1] ?? "");
   const text = (textMatch?.[1] ?? "").trim();
+  // 文字段之后一个小节都没有 = 输出在 max_tokens 处被截断：文字可能不完整、
+  // 清晰段也没机会输出，按存疑标记（只加提示，不影响入库）
+  const truncated = textMatch !== null && !descMatch && !flagMatch && !clarityMatch;
+  const suspect = /^(否|no)$/i.test(clarityMatch?.[1] ?? "") || (truncated && text.length >= 40);
+  const probe = textMatch !== null ? text : cleaned;
+  if (isDegenerateText(probe) || isDegenerateLines(probe)) {
+    return { content: "", description: "", degenerate: true, sensitive: false, suspect: false };
+  }
   const desc = (descMatch?.[1] ?? "").trim();
   // models often echo the prompt's angle-bracket placeholder (e.g. "<无>");
   // strip wrapping brackets before deciding whether the image really has text
@@ -498,6 +559,10 @@ export async function describeImage(env: Pick<Env, "AI">, bytes: Uint8Array): Pr
     const text = (out.response ?? "").trim();
     if (!text) return null;
     const extraction = parseImageExtraction(text);
+    if (extraction.degenerate) {
+      console.warn("describeImage: degenerate vision output, dropping", text.slice(0, 120));
+      return null;
+    }
     // never let an empty/placeholder-only extraction become note content;
     // callers fall back to the honest failure placeholder instead
     return extraction.content ? extraction : null;

@@ -15,7 +15,9 @@ import {
   getThreadRebuildJob,
   getLatestThreadRebuildJob,
   getNotes,
+  NetworkError,
 } from "@/lib/api"
+import { useRetryOnReconnect } from "@/lib/use-retry-on-reconnect"
 import { loadSettings, useSettingsVersion } from "@/lib/settings"
 import { formatTime, parseServerTime } from "@/lib/utils"
 import type { Thread, ThreadDetail, ThreadJob } from "@/lib/types"
@@ -61,6 +63,7 @@ export function ThreadsPage() {
   const [threads, setThreads] = useState<Thread[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [unreachable, setUnreachable] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const [detail, setDetail] = useState<ThreadDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -75,11 +78,13 @@ export function ThreadsPage() {
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setUnreachable(false)
     try {
       const res = await getThreads()
       setThreads(res.threads)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      setUnreachable(e instanceof NetworkError)
     } finally {
       setLoading(false)
     }
@@ -88,6 +93,8 @@ export function ThreadsPage() {
   useEffect(() => {
     void load()
   }, [load, settingsVersion])
+
+  useRetryOnReconnect(!loading && error !== null && unreachable, load)
 
   // restore an in-flight rebuild job after a page refresh
   useEffect(() => {
@@ -431,7 +438,7 @@ export function ThreadsPage() {
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <h3 className="min-w-0 flex-1 text-[15px] font-semibold">{t.title}</h3>
+                  <h2 className="min-w-0 flex-1 text-[15px] font-semibold">{t.title}</h2>
                   {(t.week_new_count ?? 0) > 0 && (
                     <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
                       本周 +{t.week_new_count}

@@ -49,12 +49,12 @@ function fakeEnv(opts: { themeNote?: NoteRow; todoNote?: NoteRow }) {
           if (sql.includes("thread_id = ?")) {
             return opts.themeNote ?? null;
           }
-          if (sql.includes("datetime(todo_due)")) {
-            return opts.todoNote ?? null;
-          }
           return null;
         },
         async all() {
+          if (sql.includes("datetime(todo_due)")) {
+            return { results: opts.todoNote ? [opts.todoNote] : [] };
+          }
           return { results: [] };
         },
         async run() {

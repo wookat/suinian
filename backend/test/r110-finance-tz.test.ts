@@ -88,9 +88,13 @@ describe("todo due/reminder times follow the user timezone (R109 P2-2)", () => {
     expect(todoReminderEpochMs("2026-08-08", "America/New_York")).toBe(Date.parse("2026-08-08T08:00:00-04:00"));
     expect(todoDueEpochMs("2026-08-08", "Asia/Tokyo")).toBe(Date.parse("2026-08-08T09:00:00+09:00"));
   });
-  it("offset-less datetimes are user-local", () => {
-    expect(todoDueEpochMs("2026-08-08T14:30", "America/New_York")).toBe(Date.parse("2026-08-08T14:30:00-04:00"));
-    expect(todoReminderEpochMs("2026-08-08T14:30", "America/New_York")).toBe(Date.parse("2026-08-08T14:00:00-04:00"));
+  it("legacy offset-less datetimes are Asia/Shanghai regardless of tz (same instant the API serves)", () => {
+    // normalizeStoredTodoDue hands every client "…T14:30:00+08:00" for this row;
+    // the reminder must target that displayed instant, not a user-local reading.
+    expect(todoDueEpochMs("2026-08-08T14:30", "America/New_York")).toBe(Date.parse("2026-08-08T14:30:00+08:00"));
+    expect(todoReminderEpochMs("2026-08-08T14:30", "America/New_York")).toBe(Date.parse("2026-08-08T14:00:00+08:00"));
+    expect(todoDueEpochMs("2026-08-08T14:30:55", "UTC")).toBe(Date.parse("2026-08-08T14:30:55+08:00"));
+    expect(todoDueEpochMs("2026-08-08 14:30", "America/New_York")).toBe(Date.parse("2026-08-08T14:30:00+08:00"));
   });
   it("explicit offsets are respected regardless of tz", () => {
     expect(todoDueEpochMs("2026-08-08T14:30:00+08:00", "America/New_York")).toBe(Date.parse("2026-08-08T14:30:00+08:00"));

@@ -39,7 +39,14 @@ object FlexibleBooleanSerializer : KSerializer<Boolean> {
 /** notes.meta JSON：语音原稿 / 图片描述 / 链接站点与正文摘录 / 文件原件信息 */
 @Serializable
 data class NoteMeta(
+    /** 疑似敏感先加密、等 cron 文本复判（复判为普通内容会自动恢复明文） */
+    @SerialName("needs_retriage") val needsRetriage: Boolean? = null,
+    /** 图片笔记：由视觉模型判为「图中含密码 / 凭证类信息」而标敏（文本复判不解；用户「取消敏感标记」时服务端清除） */
+    @SerialName("vision_sensitive") val visionSensitive: Boolean? = null,
     @SerialName("raw_transcript") val rawTranscript: String? = null,
+    @SerialName("media_status") val mediaStatus: String? = null, // ok|extract_failed（voice / image）
+    @SerialName("transcript_suspect") val transcriptSuspect: Boolean? = null,
+    @SerialName("ocr_suspect") val ocrSuspect: Boolean? = null,
     @SerialName("image_description") val imageDescription: String? = null,
     @SerialName("link_site") val linkSite: String? = null,
     @SerialName("link_excerpt") val linkExcerpt: String? = null,
@@ -51,6 +58,10 @@ data class NoteMeta(
     @SerialName("file_excerpt") val fileExcerpt: String? = null,
     @SerialName("file_status") val fileStatus: String? = null, // ok|extract_failed
     @SerialName("finance_merchant") val financeMerchant: String? = null,
+    /** 备份恢复时原件没跟上：oversized|failed|missing（服务端无 attachment 行，/file 必 404） */
+    @SerialName("attachment_missing") val attachmentMissing: String? = null,
+    /** 备份恢复时 todo_due 解析不出的原文（≤40 字）：到期已清空，提示重新设置；设了到期后不再提示 */
+    @SerialName("todo_due_invalid") val todoDueInvalid: String? = null,
 )
 
 /** 附件元信息（不含 R2 key）；原件通过 GET /api/notes/:id/file?att= 鉴权获取 */
@@ -91,6 +102,13 @@ data class Note(
     val attachments: List<NoteAttachment>? = null,
     /** 搜索召回方式（与 Web 一致）：keyword|semantic|both */
     val match: String? = null,
+    /** 搜索命中 / 问答引用的敏感或受守笔记：content 是服务端占位串而非原文，原文需按 id 经 GET /api/notes/:id 取回（与 Web 一致） */
+    @SerialName("content_withheld")
+    @Serializable(with = FlexibleBooleanSerializer::class)
+    val contentWithheld: Boolean? = null,
+    /** 未标注敏感、但正文带口令 / 密钥一类称谓的问答引用卡（content_withheld 同为 true） */
+    @Serializable(with = FlexibleBooleanSerializer::class)
+    val guarded: Boolean? = null,
     @SerialName("deleted_at") val deletedAt: String? = null,
     /** 最近删除列表项：预计彻底清理时间（UTC） */
     @SerialName("purge_at") val purgeAt: String? = null,
@@ -295,15 +313,41 @@ data class TodosTodayResponse(
     val items: List<Note> = emptyList(),
 )
 
-/** POST /api/backup/restore 响应：恢复统计 */
+/** POST /api/backup/restore 响应：恢复统计（字段与 backend RestoreStats 一致） */
 @Serializable
 data class RestoreStats(
     @SerialName("notes_total") val notesTotal: Int = 0,
     @SerialName("notes_imported") val notesImported: Int = 0,
     @SerialName("notes_skipped") val notesSkipped: Int = 0,
+    /** 脱敏备份里的「[已加密内容]」占位壳：无明文可恢复，跳过不导入 */
+    @SerialName("sensitive_skipped") val sensitiveSkipped: Int = 0,
+    @SerialName("reports_imported") val reportsImported: Int = 0,
+    @SerialName("reports_skipped") val reportsSkipped: Int = 0,
+    @SerialName("threads_rebuilt") val threadsRebuilt: Int = 0,
     @SerialName("media_imported") val mediaImported: Int = 0,
     @SerialName("media_skipped") val mediaSkipped: Int = 0,
+    @SerialName("media_oversized") val mediaOversized: Int = 0,
     @SerialName("media_failed") val mediaFailed: Int = 0,
+    @SerialName("media_missing") val mediaMissing: Int = 0,
+    @SerialName("media_missing_notes") val mediaMissingNotes: List<RestoreMissingMedia> = emptyList(),
+    /** notes.json 里 todo_due 解析不出的待办条数：笔记已入库、到期清空并打上 meta.todo_due_invalid */
+    @SerialName("todo_due_invalid") val todoDueInvalid: Int = 0,
+    @SerialName("todo_due_invalid_notes") val todoDueInvalidNotes: List<RestoreInvalidDue> = emptyList(),
+)
+
+/** 到期时间无法识别的待办：value 为备份里的原文（≤40 字） */
+@Serializable
+data class RestoreInvalidDue(
+    @SerialName("note_id") val noteId: String,
+    val value: String = "",
+)
+
+/** 原件未随笔记恢复的附件：笔记已入库并打上 meta.attachment_missing */
+@Serializable
+data class RestoreMissingMedia(
+    @SerialName("note_id") val noteId: String,
+    val name: String = "",
+    val reason: String = "missing", // oversized|failed|missing
 )
 
 /** GET /api/notes/trash：最近删除（软删且未彻底清理） */

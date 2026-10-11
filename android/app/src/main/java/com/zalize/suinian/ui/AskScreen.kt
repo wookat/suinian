@@ -92,7 +92,7 @@ fun AskScreen(vm: AskViewModel, modifier: Modifier = Modifier) {
                     color = MaterialTheme.colorScheme.primary,
                 )
                 Spacer(Modifier.height(8.dp))
-                NoteCard(note)
+                NoteCard(note, fetchNote = vm::fetchNote)
             }
         }
     }

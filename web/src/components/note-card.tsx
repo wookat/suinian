@@ -367,8 +367,13 @@ export function NoteCard({
   const sensitive = note.is_sensitive === 1
   // R334：未标注但驻留口令 / 密钥称谓的问答引用卡只带占位体（guarded + content_withheld），与敏感卡同一条点开取回路径
   const guardedCard = !sensitive && note.content_withheld === true
-  // 敏感预检命中但尚待模型复判（R312 P0-3：R311 T2「加密卡→明文卡」的翻转就是这个状态被当成定论展示）
-  const sensitiveRejudging = sensitive && note.meta?.needs_retriage === true
+  // 敏感预检命中但尚待模型复判（R312 P0-3：R311 T2「加密卡→明文卡」的翻转就是这个状态被当成定论展示）；
+  // 用户手动定的敏感位服务端锁住降级方向（manual_override.is_sensitive），复判不会恢复明文，不按待复判展示
+  const sensitiveRejudging =
+    sensitive && note.meta?.needs_retriage === true && note.meta?.manual_override?.is_sensitive !== true
+  // 图片笔记由视觉模型判敏（R188 粘性位）：模型只看像素，对文字密集的资料照片 / 含「密码」「凭据」字样的普通内容会误判，
+  // 且文本复判不会解开——遮罩上如实说清判定来源与唯一出路（菜单「取消敏感标记」），不与预检复判态混为一谈
+  const visionSensitive = sensitive && !sensitiveRejudging && note.meta?.vision_sensitive === true
   // 可执行载荷折叠（R304 P0-A → R312 P0-3）：数据面标记 → strict/broad 默认折叠 + 警示，
   // code（日常命令备忘）展示但复制前确认。敏感遮罩优先（遮罩本身已隐藏原文）；编辑态直接编辑原文不折叠。
   const foldLevel = sensitive ? null : noteFoldLevel(note)
@@ -496,6 +501,16 @@ export function NoteCard({
     (note.raw_type === "voice" && (note.meta?.media_status === "extract_failed" || note.content.startsWith("【语音】转写失败"))) ||
     (note.raw_type === "image" && (note.meta?.media_status === "extract_failed" || note.content.startsWith("【图片】文字提取失败"))) ||
     (note.raw_type === "file" && note.meta?.file_status === "extract_failed")
+
+  const dueInvalidText =
+    note.category === "todo" && !note.todo_due && note.meta?.todo_due_invalid
+      ? `备份里的到期时间「${note.meta.todo_due_invalid}」无法识别，已按无到期时间恢复，请重新设置`
+      : null
+  // 备份恢复后原件没跟上：服务端没有 attachment 行，下载 / 原地重试必然 404，只给原因与重新上传提示
+  const attachmentMissing = note.meta?.attachment_missing
+  const attachmentMissingText = attachmentMissing
+    ? `原件未随备份恢复（${attachmentMissing === "oversized" ? "超过单文件大小上限" : attachmentMissing === "failed" ? "存档失败" : "备份包里没有这个文件"}），需要原件请重新上传`
+    : null
 
   async function retryMediaExtract() {
     if (retryingMedia) return
@@ -940,7 +955,13 @@ export function NoteCard({
             </span>
             <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border bg-secondary px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
               {revealing ? <Loader2 className="size-3 animate-spin" /> : <Eye className="size-3" />}
-              {revealing ? "取回原文中…" : guardedCard ? "含口令 / 密钥一类内容，点击查看原文" : "敏感内容，点击查看"}
+              {revealing
+                ? "取回原文中…"
+                : guardedCard
+                  ? "含口令 / 密钥一类内容，点击查看原文"
+                  : visionSensitive
+                    ? "图片被判为含密码 / 凭证，点击查看"
+                    : "敏感内容，点击查看"}
             </span>
             <span className="w-full text-xs leading-relaxed text-muted-foreground">
               {revealError
@@ -949,6 +970,8 @@ export function NoteCard({
                   ? "这条未标注敏感，但正文带口令 / 密钥一类称谓：问答引用卡不回传原文，点开后按登录态取回；取回后可在菜单「标记为敏感」加密保护"
                   : sensitiveRejudging
                   ? "疑似密码/凭据类信息，已先加密保护，AI 复判中；若复判为普通内容会自动恢复明文展示"
+                  : visionSensitive
+                  ? "图片识别模型判断图中含密码 / 凭证类信息，已加密保护（搜索仍能搜到、问答仍会引用这张卡片，但 AI 只拿到占位符，原图与识别文字只在你点开时显示）。模型只看图片、不会因后续文字复判而改判，对文字密集的资料照片、提到「密码」「凭据」等字样但没有实际取值的普通内容也可能误判——点开核对原图，若不是凭据，请在右上角菜单「取消敏感标记」恢复明文展示"
                   : "已加密保护：搜索仍能搜到、问答仍会引用这张卡片，但 AI 只拿到占位符，原文只在你点开时显示；若属误判，可在右上角菜单「取消敏感标记」（取消后不再加密遮罩、卡片 / 详情可直接看原文——含口令密钥的行仍按惯例默认折叠、一键展开；AI 回答对其中带口令 / 操作语境的短码取值仍按出口兜底占位，无任何称谓的短值不保证）"}
             </span>
           </button>
@@ -1100,7 +1123,19 @@ export function NoteCard({
             )}
             {imageAtt && <NoteImage noteId={note.id} attachment={imageAtt} alt={note.title || "笔记图片"} />}
             {audioAtt && <NoteAudio noteId={note.id} attachment={audioAtt} className="mt-2" />}
-            {mediaFailed && (
+            {attachmentMissingText && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <CircleAlert className="size-3.5 shrink-0" />
+                <span>{attachmentMissingText}</span>
+              </div>
+            )}
+            {dueInvalidText && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <CircleAlert className="size-3.5 shrink-0" />
+                <span>{dueInvalidText}</span>
+              </div>
+            )}
+            {mediaFailed && !attachmentMissingText && (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <CircleAlert className="size-3.5 shrink-0" />
                 <span>{note.raw_type === "voice" ? "转写失败，原件已存档" : note.raw_type === "image" ? "文字提取失败，原件已存档" : "文本提取失败，原件已存档"}</span>
@@ -1115,7 +1150,7 @@ export function NoteCard({
                 {retryMediaError && <span className="w-full text-destructive">{retryMediaError}</span>}
               </div>
             )}
-            {!mediaFailed && mediaSuspect && (
+            {!mediaFailed && !attachmentMissingText && mediaSuspect && (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-700 dark:text-amber-500">
                 <CircleAlert className="size-3.5 shrink-0" />
                 <span>{note.raw_type === "voice" ? "转写可能不准，建议核对" : "文字识别可能不准，建议核对原图"}</span>
@@ -1149,15 +1184,17 @@ export function NoteCard({
                       {fileMeta.file_kind}
                     </span>
                   )}
-                  <button
-                    onClick={() => void downloadFile()}
-                    disabled={downloading}
-                    aria-label="下载原件"
-                    title="下载原件"
-                    className="-my-2 shrink-0 rounded-md p-3.5 text-muted-foreground hover:bg-accent hover:text-foreground md:-my-0.5 md:p-1.5"
-                  >
-                    {downloading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-                  </button>
+                  {!attachmentMissingText && (
+                    <button
+                      onClick={() => void downloadFile()}
+                      disabled={downloading}
+                      aria-label="下载原件"
+                      title="下载原件"
+                      className="-my-2 shrink-0 rounded-md p-3.5 text-muted-foreground hover:bg-accent hover:text-foreground md:-my-0.5 md:p-1.5"
+                    >
+                      {downloading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+                    </button>
+                  )}
                 </div>
                 {downloadError && <p className="mt-1 text-xs text-destructive">{downloadError}</p>}
                 {fileMeta.file_excerpt && (

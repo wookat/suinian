@@ -2,7 +2,7 @@
 // (all fields) + threads/reports + media/ (R2 originals), and the reverse
 // restore path (dedup, media re-upload, background pipeline backfill).
 import { Zip, ZipDeflate, ZipPassThrough, Unzip, UnzipInflate, strToU8, strFromU8 } from "fflate";
-import type { Env, NoteMeta, NoteRow, ThreadRow, WeeklyReportRow } from "./types";
+import type { AttachmentMissingReason, Env, NoteMeta, NoteRow, ThreadRow, WeeklyReportRow } from "./types";
 import { decryptContent, decryptBytes, isEncryptedAttachment, ENC_PLACEHOLDER } from "./crypto";
 import { prepareNoteInsert } from "./note-store";
 import { backfillEmbeddings } from "./semantic";
@@ -11,7 +11,7 @@ import { clusterNote, UNTITLED_THREAD } from "./threads";
 import { SENSITIVE_EXPORT_PLACEHOLDER } from "./constants";
 import { maybeSensitive } from "./triage";
 import { scrubDerivedMeta } from "./ingest";
-import { storeOriginal, type MediaType } from "./media";
+import { storeOriginal, attachmentDisplayName, type MediaType } from "./media";
 import {
   noteContainsExecutableCommand,
   noteMetaExecFragment,
@@ -46,9 +46,47 @@ interface AttachmentRow {
   size: number | null;
 }
 
+/**
+ * 备份 zip 的预估总字节。zip 边打边发（TransformStream），开流前给不出精确
+ * Content-Length；但 JSON 条目在开流前已整体压完、按实际字节计，媒体条目是
+ * STORE（不压缩）按 attachments.size 计，所以预估与实际只差「R2 缺对象 / 敏感
+ * 附件解密失败被跳过」的部分——实际只会 ≤ 预估，客户端用来显示「约 n%」。
+ * 不是 Content-Length：对不上不能当传输中断。
+ */
+export const BACKUP_ESTIMATE_HEADER = "X-Suinian-Backup-Estimate";
+
+// fflate Zip 流式条目的固定开销：本地头 30 + 数据描述符 16 + 中央目录项 46，
+// 文件名在本地头与中央目录各写一遍（无 extra / comment）
+const ZIP_LOCAL_HEADER_BYTES = 30;
+const ZIP_DATA_DESCRIPTOR_BYTES = 16;
+const ZIP_CENTRAL_ENTRY_BYTES = 46;
+const ZIP_EOCD_BYTES = 22;
+
+/** 一个 STORE 条目从本地头到中央目录项占的总字节 */
+export function zipStoredEntryBytes(path: string, size: number): number {
+  const nameLen = strToU8(path).length;
+  return ZIP_LOCAL_HEADER_BYTES + nameLen + size + ZIP_DATA_DESCRIPTOR_BYTES + ZIP_CENTRAL_ENTRY_BYTES + nameLen;
+}
+
+/**
+ * 开流前已发出的字节（JSON 条目本地头 + 压缩体 + 描述符）+ 这些条目的中央目录项
+ * + 媒体 STORE 条目 + EOCD。
+ */
+export function estimateBackupBytes(
+  emittedBeforeMedia: number,
+  jsonEntryPaths: readonly string[],
+  media: readonly { path: string; size: number | null }[]
+): number {
+  let total = emittedBeforeMedia + ZIP_EOCD_BYTES;
+  for (const p of jsonEntryPaths) total += ZIP_CENTRAL_ENTRY_BYTES + strToU8(p).length;
+  for (const m of media) total += zipStoredEntryBytes(m.path, m.size ?? 0);
+  return total;
+}
+
 export interface BackupAttachment {
   /** Entry path inside the zip, e.g. media/<note_id>/0-voice.ogg */
   path: string;
+  /** Original file name (no zip index prefix), restored as the attachment's display / download name */
   name: string;
   mime: string | null;
   size: number | null;
@@ -180,9 +218,19 @@ function safeParse<T>(raw: string | null): T | null {
   }
 }
 
-function attachmentName(r2Key: string, idx: number): string {
-  const base = (r2Key.split("/").pop() || "file").replace(/^\d+-/, "");
-  return `${idx}-${base}`;
+/**
+ * File name to re-upload a backup attachment under. Backups written before
+ * `name` carried the bare file name used the zip entry name (`<idx>-<file>`)
+ * for both fields; strip that index once so restores don't accumulate `0-`.
+ */
+export function restoreFileName(att: Pick<BackupAttachment, "path" | "name">): string {
+  const entry = att.path.split("/").pop() || "";
+  const name = typeof att.name === "string" && att.name ? att.name : entry;
+  if (name === entry) {
+    const m = /^\d+-(.+)$/.exec(name);
+    if (m) return m[1];
+  }
+  return name || "file";
 }
 
 /**
@@ -221,7 +269,7 @@ export async function buildBackupZip(
 
   const threadTitle = new Map(threads.map((t) => [t.id, t.title]));
   const backupNotes: BackupNote[] = [];
-  const mediaEntries: { path: string; r2_key: string }[] = [];
+  const mediaEntries: { path: string; r2_key: string; size: number | null }[] = [];
   let attachmentsRedacted = 0;
   let execMarked = 0;
   let broadMarked = 0;
@@ -270,9 +318,9 @@ export async function buildBackupZip(
       attachmentsRedacted += noteAtts.length;
     } else {
       backupAtts = noteAtts.map((a, i) => {
-        const name = attachmentName(a.r2_key, i);
-        const path = `media/${n.id}/${name}`;
-        mediaEntries.push({ path, r2_key: a.r2_key });
+        const name = attachmentDisplayName(a.r2_key, a.mime);
+        const path = `media/${n.id}/${i}-${name}`;
+        mediaEntries.push({ path, r2_key: a.r2_key, size: a.size });
         return { path, name, mime: a.mime, size: a.size };
       });
     }
@@ -364,6 +412,7 @@ export async function buildBackupZip(
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();
   let failed = false;
+  let emitted = 0;
   const zip = new Zip((err, dat, final) => {
     if (failed) return;
     if (err) {
@@ -371,35 +420,39 @@ export async function buildBackupZip(
       void writer.abort(err);
       return;
     }
+    emitted += dat.length;
     void writer.write(dat).catch(() => {
       failed = true;
     });
     if (final) void writer.close().catch(() => undefined);
   });
 
-  const addJson = (name: string, obj: unknown) => {
+  // JSON 条目同步压完并进入流的队列（fflate 非 async 变体 push 即回调），
+  // 之后 emitted 就是它们的精确字节，用来算预估总长
+  const jsonPaths: string[] = [];
+  const addText = (name: string, text: string) => {
     const f = new ZipDeflate(name, { level: 6 });
     zip.add(f);
-    f.push(strToU8(JSON.stringify(obj, null, 1)), true);
+    f.push(strToU8(text), true);
+    jsonPaths.push(name);
   };
+  const addJson = (name: string, obj: unknown) => addText(name, JSON.stringify(obj, null, 1));
+
+  addJson("manifest.json", manifest);
+  if (manifest.content_risk) {
+    // 打开 ZIP 的人（或代理）第一眼能看到的纯文本声明，不依赖解析 manifest
+    addText(
+      "README-CONTENT-RISK.txt",
+      `${manifest.content_risk.notice}\n\n宽判据折叠：${manifest.content_risk.broad_fold_notes} 条；严判据判危：${manifest.content_risk.strict_marked_notes} 条。\n逐条标记见 notes.json 的 fold / fold_reason / exec_warning 字段。\n`
+    );
+  }
+  addJson("notes.json", backupNotes);
+  addJson("threads.json", closedThreads);
+  addJson("reports.json", closedReports);
+  const estimate = estimateBackupBytes(emitted, jsonPaths, mediaEntries);
 
   const drive = async () => {
     try {
-      addJson("manifest.json", manifest);
-      if (manifest.content_risk) {
-        // 打开 ZIP 的人（或代理）第一眼能看到的纯文本声明，不依赖解析 manifest
-        const f = new ZipDeflate("README-CONTENT-RISK.txt", { level: 6 });
-        zip.add(f);
-        f.push(
-          strToU8(
-            `${manifest.content_risk.notice}\n\n宽判据折叠：${manifest.content_risk.broad_fold_notes} 条；严判据判危：${manifest.content_risk.strict_marked_notes} 条。\n逐条标记见 notes.json 的 fold / fold_reason / exec_warning 字段。\n`
-          ),
-          true
-        );
-      }
-      addJson("notes.json", backupNotes);
-      addJson("threads.json", closedThreads);
-      addJson("reports.json", closedReports);
       for (const m of mediaEntries) {
         if (failed || !env.MEDIA) break;
         const obj = await env.MEDIA.get(m.r2_key);
@@ -446,6 +499,7 @@ export async function buildBackupZip(
       // 明文包文件名带 -full 后缀，桌面上与脱敏包肉眼可分
       "Content-Disposition": `attachment; filename="suinian-backup-${date}${includeSensitive ? "-full" : ""}.zip"`,
       "Cache-Control": "private, no-store",
+      [BACKUP_ESTIMATE_HEADER]: String(estimate),
       ...(manifest.content_risk ? { [OUTLET_GLOBAL_RISK_HEADER]: OUTLET_GLOBAL_RISK_HEADER_VALUE } : {}),
     },
   });
@@ -471,6 +525,43 @@ export interface RestoreStats {
   /** 单个文件超过大小上限，主动跳过未导入（区别于真正的导入失败） */
   media_oversized: number;
   media_failed: number;
+  /** notes.json 声明了附件、zip 里却没有对应条目（手工改过 / 不完整的备份包） */
+  media_missing: number;
+  /** 原件未随笔记恢复的附件（每个附件一条，≤ MEDIA_MISSING_LIST_MAX 条）：笔记已入库并打上
+   * meta.attachment_missing，前端据此定位补传而不是给一个 404 的下载 / 重试按钮 */
+  media_missing_notes: { note_id: string; name: string; reason: AttachmentMissingReason }[];
+  /** notes.json 里 todo_due 解析不出（手工改过 / 外来包）的笔记条数：笔记仍导入、到期清空并打上
+   * meta.todo_due_invalid，与 PATCH 的 400 同一口径，不让非法值落库后在所有客户端显示成 Invalid Date */
+  todo_due_invalid: number;
+  todo_due_invalid_notes: { note_id: string; value: string }[];
+}
+
+const MEDIA_MISSING_LIST_MAX = 50;
+const TODO_DUE_INVALID_LIST_MAX = 50;
+const TODO_DUE_INVALID_VALUE_MAX = 40;
+
+const RESTORE_DUE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const RESTORE_DUE_BARE_RE = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?$/;
+const RESTORE_DUE_OFFSET_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/**
+ * 备份里的 todo_due：纯日期 / 带偏移时刻原样；无偏移历史时刻按 Asia/Shanghai 补 +08:00
+ * （与 normalizeStoredTodoDue 读路径同口径，落库后不再有裸值）；其余形态 invalid。
+ */
+export function restoreTodoDue(v: unknown): { due: string | null; invalid: string | null } {
+  if (typeof v !== "string" || v.trim() === "") return { due: null, invalid: null };
+  const s = v.trim();
+  const bare = s.match(RESTORE_DUE_BARE_RE);
+  const candidate = RESTORE_DUE_DATE_RE.test(s)
+    ? s
+    : bare
+      ? `${bare[1]}T${bare[2]}:00+08:00`
+      : RESTORE_DUE_OFFSET_RE.test(s)
+        ? s.replace(" ", "T")
+        : null;
+  if (candidate === null || Number.isNaN(Date.parse(candidate)))
+    return { due: null, invalid: s.slice(0, TODO_DUE_INVALID_VALUE_MAX) };
+  return { due: candidate, invalid: null };
 }
 
 function sanitizeMetaForRestore(meta: NoteMeta | null): NoteMeta | null {
@@ -533,6 +624,10 @@ export async function restoreBackup(
     media_skipped: 0,
     media_oversized: 0,
     media_failed: 0,
+    media_missing: 0,
+    media_missing_notes: [],
+    todo_due_invalid: 0,
+    todo_due_invalid_notes: [],
   };
 
   // old note id -> new note id (only for imported, non-duplicate notes)
@@ -542,6 +637,10 @@ export async function restoreBackup(
   const ideaIds: string[] = [];
   // zip path -> attachment info from notes.json
   const attByPath = new Map<string, { oldNoteId: string; att: BackupAttachment }>();
+  // zip 条目路径 → 结局，恢复结束后与 attByPath 对账找出原件没跟上的笔记
+  const importedPaths = new Set<string>();
+  const oversizedPaths = new Set<string>();
+  const failedPaths = new Set<string>();
   let notesSeen = false;
   let unzipError: string | null = null;
   const completed: ZipEntry[] = [];
@@ -553,8 +652,11 @@ export async function restoreBackup(
     const isNotes = name === "notes.json";
     const isMedia = name.startsWith("media/");
     if (!isNotes && !isMedia && name !== "reports.json" && name !== "threads.json") return;
+    // 手工重新打包的 zip 带目录条目（media/、media/<id>/）：不是附件，不计 skipped
+    if (name.endsWith("/")) return;
     if (isMedia && file.originalSize !== undefined && file.originalSize > MAX_MEDIA_ENTRY_BYTES) {
       stats.media_oversized++;
+      oversizedPaths.add(name);
       return;
     }
     const bufs: Uint8Array[] = [];
@@ -568,6 +670,7 @@ export async function restoreBackup(
       if (isMedia && size > MAX_MEDIA_ENTRY_BYTES) {
         // oversized single media: drop it, keep going
         stats.media_oversized++;
+        oversizedPaths.add(name);
         file.terminate();
         return;
       }
@@ -647,6 +750,14 @@ export async function restoreBackup(
         const newId = crypto.randomUUID();
         if (typeof n.id === "string") idMap.set(n.id, newId);
         if (n.category === "idea") ideaIds.push(newId);
+        const due = restoreTodoDue(n.todo_due);
+        let meta = sanitizeMetaForRestore(typeof n.meta === "object" ? n.meta : null);
+        if (due.invalid !== null) {
+          stats.todo_due_invalid++;
+          if (stats.todo_due_invalid_notes.length < TODO_DUE_INVALID_LIST_MAX)
+            stats.todo_due_invalid_notes.push({ note_id: newId, value: due.invalid });
+          meta = { ...(meta ?? {}), todo_due_invalid: due.invalid };
+        }
         for (const a of n.attachments ?? []) {
           if (a && typeof a.path === "string") attByPath.set(a.path, { oldNoteId: n.id, att: a });
         }
@@ -667,12 +778,12 @@ export async function restoreBackup(
           tags: Array.isArray(n.tags) ? n.tags.filter((t): t is string => typeof t === "string").slice(0, 6) : [],
           title: typeof n.title === "string" ? n.title : null,
           is_sensitive: n.is_sensitive === true,
-          todo_due: typeof n.todo_due === "string" ? n.todo_due : null,
+          todo_due: due.due,
           todo_done: n.todo_done === true,
           done_at: typeof n.done_at === "string" ? n.done_at : null,
           amount: typeof n.amount === "number" ? n.amount : null,
           currency: typeof n.currency === "string" ? n.currency : null,
-          meta: sanitizeMetaForRestore(typeof n.meta === "object" ? n.meta : null),
+          meta,
           created_at: n.created_at,
           updated_at: DATETIME_RE.test(n.updated_at ?? "") ? n.updated_at : n.created_at,
         });
@@ -733,6 +844,7 @@ export async function restoreBackup(
     }
     if (!env.MEDIA) {
       stats.media_failed++;
+      failedPaths.add(entry.name);
       return;
     }
     // 恢复路径统一走 storeOriginal 入库管道（mime 兜底、敏感加密信封均在边界内）
@@ -742,10 +854,45 @@ export async function restoreBackup(
       type,
       bytes: entry.data,
       mime,
-      fileName: info.att.name,
+      fileName: restoreFileName(info.att),
     });
-    if (key) stats.media_imported++;
-    else stats.media_failed++;
+    if (key) {
+      stats.media_imported++;
+      importedPaths.add(entry.name);
+    } else {
+      stats.media_failed++;
+      failedPaths.add(entry.name);
+    }
+  };
+
+  // 笔记已入库、声明的原件却没跟上（超限 / 存档失败 / 包里根本没有）：
+  // 不改正文（用户数据），只在 meta 打标并列进统计，避免恢复后卡片挂着
+  // 一个必然 404 的「下载原件 / 原地重试」按钮而用户不知道该补传哪条
+  const markMissingMedia = async (): Promise<void> => {
+    const byNote = new Map<string, { name: string; reason: AttachmentMissingReason }[]>();
+    for (const [path, info] of attByPath) {
+      const newNoteId = idMap.get(info.oldNoteId);
+      if (!newNoteId || importedPaths.has(path)) continue;
+      const reason: AttachmentMissingReason = oversizedPaths.has(path) ? "oversized" : failedPaths.has(path) ? "failed" : "missing";
+      if (reason === "missing") stats.media_missing++;
+      const list = byNote.get(newNoteId) ?? [];
+      list.push({ name: restoreFileName(info.att), reason });
+      byNote.set(newNoteId, list);
+    }
+    if (byNote.size === 0) return;
+    const stmts: D1PreparedStatement[] = [];
+    for (const [noteId, items] of byNote) {
+      const first = items[0];
+      stmts.push(
+        env.DB.prepare("UPDATE notes SET meta = json_patch(coalesce(meta, '{}'), ?) WHERE id = ? AND user_id = ?")
+          .bind(JSON.stringify({ attachment_missing: first.reason }), noteId, userId)
+      );
+      for (const item of items) {
+        if (stats.media_missing_notes.length >= MEDIA_MISSING_LIST_MAX) break;
+        stats.media_missing_notes.push({ note_id: noteId, name: item.name, reason: item.reason });
+      }
+    }
+    await env.DB.batch(stmts);
   };
 
   const drain = async (): Promise<{ error: string; status: 400 | 413 } | null> => {
@@ -804,6 +951,7 @@ export async function restoreBackup(
   const err = await drain();
   if (err) return err;
   if (!notesSeen) return { error: "备份包里没有 notes.json，请确认是碎念导出的完整备份 zip", status: 400 };
+  await markMissingMedia();
 
   // kick the pipeline for a first batch right away; the 10-minute cron
   // backfills (embeddings / graph / link extracts) cover the rest gradually

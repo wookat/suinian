@@ -23,6 +23,31 @@ describe('formatTodoMessage', () => {
   it('returns null when there are no todos', () => {
     expect(formatTodoMessage({ date: '2026-08-07', items: [] })).toBeNull()
   })
+  // R385：积压逾期多于 10 行时当天到期的优先列出，余下行给最近的逾期项；「还有 N 条」按服务端逾期总数
+  it('lists due-today items first, then the most recent overdue, and counts the rest from overdue_total', () => {
+    // 48 条逾期按到期升序（与服务端 items 一致）：逾期 0 最早、逾期 47 最近（09-08）
+    const overdue = Array.from({ length: 48 }, (_, i) => {
+      const day = new Date(Date.UTC(2026, 8, 8) - (47 - i) * 86400000).toISOString().slice(0, 10)
+      return { id: `o-${i}`, title: null, content: `逾期 ${i}`, todo_due: `${day}T09:00:00+08:00`, overdue: true }
+    })
+    const msg = formatTodoMessage({
+      date: '2026-09-10',
+      overdue_total: 52,
+      items: [
+        ...overdue,
+        { id: 'a', title: '今天 A', content: '', todo_due: '2026-09-10T09:00:00+08:00', overdue: false },
+        { id: 'b', title: '今天 B', content: '', todo_due: '2026-09-10T18:00:00+08:00', overdue: false },
+      ],
+    })!
+    const body = msg.split('\n').slice(2, 12)
+    expect(body[0]).toBe('· 今天 A（2026-09-10 09:00）')
+    expect(body[1]).toBe('· 今天 B（2026-09-10 18:00）')
+    expect(body[2]).toBe('⚠️已过期 逾期 40（2026-09-01 09:00）')
+    expect(body[9]).toBe('⚠️已过期 逾期 47（2026-09-08 09:00）')
+    // 2 今天 + 52 逾期 = 54 条，列出 10 条
+    expect(msg).toContain('…还有 44 条')
+    expect(msg).not.toContain('逾期 39')
+  })
 })
 
 function makePusher(sent: { userId: string; text: string }[], todoReminderPush = true) {
