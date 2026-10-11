@@ -499,9 +499,21 @@ export function isAntiFraudAdviceNote(content: string): boolean {
 
 const TAG_SECRET_RE = /^(?=.*\d)[A-Za-z0-9_\-@#$%.]{6,}$|^\d{6,}$|^sk-/i;
 
+// 模型偶发同一语义两种写法（"ServiceWorker" 与 "Service Worker"、"AI" 与 "ai"）：
+// 归一化（去空白、小写）后相同即视为同标签，保留首个原始写法。
+function dedupeNearIdenticalTags(tags: string[]): string[] {
+  const seen = new Set<string>();
+  return tags.filter((t) => {
+    const key = t.replace(/\s+/g, "").toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /** Drop tags that look like sensitive values (long alnum strings, digit runs, key prefixes). */
 export function sanitizeTags(tags: string[]): string[] {
-  return tags.filter((t) => !TAG_SECRET_RE.test(t.trim())).slice(0, 3);
+  return dedupeNearIdenticalTags(tags.filter((t) => !TAG_SECRET_RE.test(t.trim()))).slice(0, 3);
 }
 
 // 敏感笔记派生字段口径（R120 P1-1）：content 加密后，title/tags 绝不能把秘密
@@ -511,7 +523,7 @@ const SENSITIVE_TAG_VALUE_RE = /\d{3,}|[A-Za-z]\d|\d[A-Za-z]|[A-Za-z0-9_\-@#$%.]
 
 /** Strict tag filter for sensitive notes: drop anything that could be (part of) a secret value. */
 export function sanitizeSensitiveTags(tags: string[]): string[] {
-  return tags.filter((t) => !SENSITIVE_TAG_VALUE_RE.test(t.trim())).slice(0, 3);
+  return dedupeNearIdenticalTags(tags.filter((t) => !SENSITIVE_TAG_VALUE_RE.test(t.trim()))).slice(0, 3);
 }
 
 // Leading [xxx] / 【xxx】 marker prefixes (issue keys, QA markers, 【草稿】-style
