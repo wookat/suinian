@@ -467,6 +467,16 @@ export interface ImageExtraction {
 /** 视觉判定含凭证但文字段未见凭证值时，正文附加的如实标注（不含任何秘密值）。 */
 export const IMAGE_CREDENTIAL_GAP_NOTICE = "（图中含密码/凭证类信息，文字可能未完整提取，可打开原图查看）";
 
+/** 用户取消敏感标记＝否定了视觉判定，正文里系统附加的那行标注随之撤掉（只删整行等于标注的行，用户自己的文字不动）。 */
+export function stripImageCredentialGapNotice(content: string): string {
+  if (!content.includes(IMAGE_CREDENTIAL_GAP_NOTICE)) return content;
+  return content
+    .split("\n")
+    .filter((line) => line.trim() !== IMAGE_CREDENTIAL_GAP_NOTICE)
+    .join("\n")
+    .replace(/\n+$/, "");
+}
+
 /** Parse the three-section vision output into content (text-first) + description + sensitive. */
 export function parseImageExtraction(raw: string): ImageExtraction {
   const cleaned = stripMarkdown(raw);
