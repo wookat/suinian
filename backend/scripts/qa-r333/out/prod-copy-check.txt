@@ -1,4 +1,0 @@
-# prod copy check 2026-09-08T04:34:22Z (Pages 0aca6fe8 / main a038f79)
-SAFETY_PROMISE (R332 改写句) 存在于 https://suinian.zalize.com/assets/api-CUhZ-C1N.js: 仍按出口兜底占位（无任何称谓的短值不保证）=YES; 什么都能丢：我们不保证认得出每一种危险内容=YES
-/known-issues R332 改写句（不保证兜住 / 生产复测结果以 docs/audit-r332 为准）: prod=1/1, 与 docs/known-issues.md@a038f79 一致
-R332 两句改写 diff（ca91bee~1..ca91bee）: (1) SAFETY_PROMISE 「但 AI 回答仍不会复述它里的口令/短码一类取值」→「AI 回答对它里带口令 / 操作语境的短码取值仍按出口兜底占位（无任何称谓的短值不保证）」; (2) known-issues §1.1 「…AI 回答仍然不会复述（R330）」→「兜底只对『出口能构造出比对候选』的取值负责…按精确值比对占位…没有任何称谓 / 操作线索的短值（一行只有 kq48 这类）不保证兜住」
