@@ -1,4 +1,0 @@
-ui-a /api/auth/me -> HTTP 401
-ui-b /api/auth/me -> HTTP 401
-ui-c /api/auth/me -> HTTP 401
-ui-d /api/auth/me -> HTTP 401
