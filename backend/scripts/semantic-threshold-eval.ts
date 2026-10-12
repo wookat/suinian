@@ -17,7 +17,11 @@
 
 import { hasSemanticSignal } from "../src/semantic";
 
-const ACCOUNT = process.env.CLOUDFLARE_ACCOUNT_ID ?? "ddff52d24ee44e21a021c15eaffcc86d";
+const ACCOUNT = process.env.CLOUDFLARE_ACCOUNT_ID;
+if (!ACCOUNT) {
+  console.error("CLOUDFLARE_ACCOUNT_ID required");
+  process.exit(1);
+}
 const TOKEN = process.env.CLOUDFLARE_API_TOKEN;
 if (!TOKEN) {
   console.error("CLOUDFLARE_API_TOKEN required");
